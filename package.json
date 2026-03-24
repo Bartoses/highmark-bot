@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --env-file=.env --watch index.js",
+    "dev:test": "TEST_MODE=true node --env-file=.env --watch index.js",
+    "test": "node test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",

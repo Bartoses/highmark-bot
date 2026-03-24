@@ -334,6 +334,11 @@ app.post("/sms", async (req, res) => {
       sentiment: "neutral",
     });
 
+    // In TEST_MODE skip Twilio and return reply as JSON so test.js can read it
+    if (process.env.TEST_MODE === "true") {
+      return res.json({ reply: replyText });
+    }
+
     // Send via Twilio
     await twilioClient.messages.create({
       body: replyText,
@@ -343,6 +348,10 @@ app.post("/sms", async (req, res) => {
 
   } catch (error) {
     console.error("Error handling SMS:", error);
+
+    if (process.env.TEST_MODE === "true") {
+      return res.json({ reply: "Error: " + error.message });
+    }
 
     // Fallback so the guest is never left hanging
     try {
@@ -358,6 +367,22 @@ app.post("/sms", async (req, res) => {
 
   res.set("Content-Type", "text/xml");
   res.send("<Response></Response>");
+});
+
+// Reset endpoint — TEST_MODE only, clears conversation history for a phone number
+// Usage: POST /reset  { "from": "+15550001234" }  or omit "from" to clear all
+app.post("/reset", (req, res) => {
+  if (process.env.TEST_MODE !== "true") {
+    return res.status(403).json({ error: "Only available in TEST_MODE" });
+  }
+  const from = req.body.from;
+  if (from) {
+    delete conversations[from];
+    res.json({ cleared: from });
+  } else {
+    Object.keys(conversations).forEach((k) => delete conversations[k]);
+    res.json({ cleared: "all" });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
