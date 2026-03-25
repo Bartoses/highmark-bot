@@ -528,6 +528,51 @@ async function test15() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 16: HELP keyword + Opted-Out Gate (requires running server + CRM DB)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test16() {
+  console.log("\nTEST 16: HELP keyword + Opted-Out Gate");
+
+  // HELP keyword
+  const helpReply = await sendSms("HELP", TEST_PHONE2, TO_PHONE);
+  helpReply.length > 0
+    ? pass(`HELP reply: ${helpReply.length} chars`)
+    : fail("HELP: no reply");
+  /stop/i.test(helpReply)
+    ? pass("HELP reply contains STOP instruction")
+    : fail("HELP reply missing STOP instruction", helpReply);
+  helpReply.length <= 320
+    ? pass("HELP reply within 320 chars")
+    : fail("HELP reply too long", `${helpReply.length} chars`);
+
+  // Opted-out gate — opted-out numbers must be silently dropped
+  if (!crmSupabase) {
+    fail("OPTED-OUT GATE: CRM DB unavailable");
+    return;
+  }
+  const optOutPhone = "+15550007777";
+  try {
+    // Insert into opt_outs to simulate an opted-out user
+    await crmSupabase.from("opt_outs").upsert({ phone: optOutPhone, reason: "test" }, { onConflict: "phone" });
+
+    // Send a message from that phone — should get TwiML back, not a bot reply
+    const res = await httpPost("/sms", { Body: "Hey there", From: optOutPhone, To: TO_PHONE });
+    const contentType = res.headers.get("content-type") ?? "";
+    const body = await res.text();
+
+    contentType.includes("text/xml")
+      ? pass("Opted-out: response is TwiML (not JSON)")
+      : fail("Opted-out: wrong content-type", contentType);
+    body.includes("<Response>")
+      ? pass("Opted-out: empty TwiML returned")
+      : fail("Opted-out: unexpected response body", body.slice(0, 80));
+  } finally {
+    await crmSupabase.from("opt_outs").delete().eq("phone", optOutPhone);
+    pass("Opted-out gate test cleaned up");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -557,6 +602,7 @@ async function main() {
     console.log("[Server] Ready.\n");
     await test11();
     await test14();
+    await test16();
   } catch (e) {
     fail("Test server", e.message);
   } finally {

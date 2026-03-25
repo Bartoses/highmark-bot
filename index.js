@@ -420,7 +420,26 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     return res.send("<Response></Response>");
   }
 
-  // 5. DEMO triggers — reset conversation and send appropriate opener
+  // 4.5. HELP keyword — required by TCPA/CTIA. Works even if opted out.
+  if (msgUpper === "HELP") {
+    const helpText = `${CLIENT_NAME} SMS: booking help & trail info. Msg freq varies. Msg & data rates may apply. Reply STOP to unsubscribe. Support: ${CLIENT_PHONE}`;
+    if (process.env.TEST_MODE === "true") return res.json({ reply: helpText });
+    await twilioClient.messages.create({ body: helpText, from: toNumber, to: fromNumber });
+    res.set("Content-Type", "text/xml");
+    return res.send("<Response></Response>");
+  }
+
+  // 5. Opted-out gate — drop silently if this number has opted out
+  if (crmSupabase) {
+    const isOptedOut = await checkOptOut(fromNumber, crmSupabase);
+    if (isOptedOut) {
+      console.log(`[OPT-OUT] Dropping message from opted-out number ${fromNumber}`);
+      res.set("Content-Type", "text/xml");
+      return res.send("<Response></Response>");
+    }
+  }
+
+  // 6. DEMO triggers — reset conversation and send appropriate opener
   //    DEMO: public keyword (on website), introduces Highmark by name for prospects
   //    SUMMITDEMO: internal keyword for owner use, sends straight into Summit persona
   if (msgUpper === "DEMO" || msgUpper === "SUMMITDEMO") {
