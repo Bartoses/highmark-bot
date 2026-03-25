@@ -2,16 +2,24 @@
 // KNOWLEDGE BASE — FareHarbor refresh + website scraper
 // Keeps Summit's knowledge fresh. Runs on startup and on cron schedule.
 // All functions fail gracefully — never crash the server.
+//
+// Token strategy:
+//   FH items (24hr)      — zero Claude, JS-built summary from structured API data
+//   FH availability (3hr) — zero Claude, JS-built from minimal availability endpoint
+//   Website (7 days)     — single Haiku call, hash-gated (skips Claude if unchanged)
+//   Weather (1hr)        — zero Claude, JS-built from OpenWeather JSON
 // ─────────────────────────────────────────────────────────────────────────────
 import fetch from "node-fetch";
+import { createHash } from "crypto";
 import { parse as parseHtml } from "node-html-parser";
 import cron from "node-cron";
 
-const FAREHARBOR_BASE  = "https://fareharbor.com/api/external/v1";
-const OPENWEATHER_BASE = "https://api.openweathermap.org/data/2.5";
-const SIX_HOURS_MS     = 6 * 60 * 60 * 1000;
-const ONE_HOUR_MS      = 60 * 60 * 1000;
-const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+const FAREHARBOR_BASE     = "https://fareharbor.com/api/external/v1";
+const OPENWEATHER_BASE    = "https://api.openweathermap.org/data/2.5";
+const THREE_HOURS_MS      = 3 * 60 * 60 * 1000;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const ONE_HOUR_MS         = 60 * 60 * 1000;
+const SEVEN_DAYS_MS       = 7 * 24 * 60 * 60 * 1000;
 
 // CLIENT_CONFIG — one entry per company the client operates
 const COMPANIES = [
@@ -59,10 +67,99 @@ async function fhGet(path, company) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REFRESH FAREHARBOR KNOWLEDGE
-// Fetches items + 14-day availability per company, summarizes with Claude.
+// FAREHARBOR SUMMARY BUILDER — zero Claude tokens
+// Builds context string directly from structured FH API data.
 // ─────────────────────────────────────────────────────────────────────────────
-async function refreshFareHarborKnowledge(supabase, anthropic) {
+
+// Extract price range from item's customer_type_rates (returns "$X" or "$X–$Y" or null)
+function getPriceRange(item) {
+  const rates = item.customer_type_rates ?? [];
+  const prices = rates
+    .map((r) => r.total_including_tax)
+    .filter((p) => typeof p === "number" && p > 0)
+    .map((p) => Math.round(p));
+  if (!prices.length) return null;
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  return min === max ? `$${min}` : `$${min}–$${max}`;
+}
+
+// Build availability + item summary string without Claude
+function buildFhSummary(companyName, items, availabilityData) {
+  const lines = [];
+  for (const item of items.slice(0, 10)) {
+    const avail = availabilityData[item.name];
+    if (!avail) continue;
+    const price     = getPriceRange(item);
+    const priceNote = price ? ` (${price}/person)` : "";
+    const next      = avail.next_open
+      ? new Date(avail.next_open).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      : null;
+    const slotNote  = avail.open_days > 0
+      ? `${avail.open_days} days open${next ? ", next " + next : ""}`
+      : "no availability";
+    lines.push(`${item.name}${priceNote}: ${slotNote}`);
+  }
+  return lines.length
+    ? `${companyName}: ${lines.join("; ")}`.slice(0, 400)
+    : `${companyName}: availability unknown`;
+}
+
+// Build item catalog summary (descriptions + pricing) — used in ITEMS section of context
+function buildItemDetailsSummary(companyName, items) {
+  const lines = items.slice(0, 10).map((item) => {
+    const price    = getPriceRange(item);
+    const headline = item.headline ?? item.description ?? "";
+    const desc     = headline.replace(/\s+/g, " ").trim().slice(0, 80);
+    return `${item.name}${price ? " " + price + "/person" : ""}${desc ? " — " + desc : ""}`;
+  });
+  return `${companyName} tours: ${lines.join(" | ")}`.slice(0, 500);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REFRESH FAREHARBOR ITEMS — zero Claude, runs every 24 hours
+// Fetches item catalog (names, PKs, descriptions, pricing). Preserves existing avail.
+// ─────────────────────────────────────────────────────────────────────────────
+async function refreshFareHarborItems(supabase) {
+  if (process.env.FAREHARBOR_ENABLED !== "true") return;
+
+  for (const company of COMPANIES) {
+    try {
+      const { items } = await fhGet(`/companies/${company.shortname}/items/`, company);
+
+      // Preserve existing availability data while updating item catalog
+      const { data: existing } = await supabase
+        .from("knowledge_base")
+        .select("data")
+        .eq("key", `${company.id}_fareharbor`)
+        .single();
+      const availabilityData = existing?.data?.availabilityData ?? {};
+
+      const summary      = buildFhSummary(company.name, items, availabilityData);
+      const itemsSummary = buildItemDetailsSummary(company.name, items);
+
+      await supabase.from("knowledge_base").upsert({
+        client_id:       "csr_rea",
+        type:            "fareharbor",
+        key:             `${company.id}_fareharbor`,
+        data:            { items, availabilityData, itemsSummary },
+        summary,
+        fetched_at:      new Date().toISOString(),
+        next_refresh_at: new Date(Date.now() + TWENTY_FOUR_HOURS_MS).toISOString(),
+      });
+
+      console.log(`[KB] FH items refreshed: ${company.name} (${items.length} items)`);
+    } catch (err) {
+      console.error(`[KB] FH items refresh failed for ${company.name}:`, err.message);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REFRESH FAREHARBOR AVAILABILITY — zero Claude, runs every 3 hours
+// Reads cached items, fetches minimal availability, rebuilds summary in JS.
+// ─────────────────────────────────────────────────────────────────────────────
+async function refreshFareHarborAvailability(supabase) {
   if (process.env.FAREHARBOR_ENABLED !== "true") return;
 
   const today = new Date();
@@ -73,10 +170,19 @@ async function refreshFareHarborKnowledge(supabase, anthropic) {
 
   for (const company of COMPANIES) {
     try {
-      // 1. Fetch items
-      const { items } = await fhGet(`/companies/${company.shortname}/items/`, company);
+      // Load cached items — if not yet fetched, skip
+      const { data: row } = await supabase
+        .from("knowledge_base")
+        .select("data")
+        .eq("key", `${company.id}_fareharbor`)
+        .single();
 
-      // 2. Fetch availability for each item (cap at 10 items to avoid rate limiting)
+      const items = row?.data?.items ?? [];
+      if (!items.length) {
+        console.warn(`[KB] No cached items for ${company.name} — skipping avail refresh`);
+        continue;
+      }
+
       const availabilityData = {};
       for (const item of items.slice(0, 10)) {
         try {
@@ -97,33 +203,22 @@ async function refreshFareHarborKnowledge(supabase, anthropic) {
         }
       }
 
-      // 3. Summarize with Claude
-      const summaryPrompt = `Summarize this FareHarbor availability data for an SMS bot in max 250 chars.
-Which tours have slots this week? Any sold out? Be specific about dates if notable.
-Company: ${company.name}
-Data: ${JSON.stringify(availabilityData)}`;
+      const summary      = buildFhSummary(company.name, items, availabilityData);
+      const itemsSummary = row?.data?.itemsSummary ?? buildItemDetailsSummary(company.name, items);
 
-      const claudeRes = await anthropic.messages.create({
-        model:      "claude-sonnet-4-6",
-        max_tokens: 150,
-        messages:   [{ role: "user", content: summaryPrompt }],
-      });
-      const summary = claudeRes.content[0].text.slice(0, 250);
-
-      // 4. Upsert into knowledge_base
       await supabase.from("knowledge_base").upsert({
-        client_id:      "csr_rea",
-        type:           "fareharbor",
-        key:            `${company.id}_fareharbor`,
-        data:           { items, availabilityData },
+        client_id:       "csr_rea",
+        type:            "fareharbor",
+        key:             `${company.id}_fareharbor`,
+        data:            { items, availabilityData, itemsSummary },
         summary,
-        fetched_at:     new Date().toISOString(),
-        next_refresh_at: new Date(Date.now() + SIX_HOURS_MS).toISOString(),
+        fetched_at:      new Date().toISOString(),
+        next_refresh_at: new Date(Date.now() + THREE_HOURS_MS).toISOString(),
       });
 
-      console.log(`[KB] FareHarbor refreshed: ${company.name}`);
+      console.log(`[KB] FH availability refreshed: ${company.name}`);
     } catch (err) {
-      console.error(`[KB] FareHarbor refresh failed for ${company.name}:`, err.message);
+      console.error(`[KB] FH avail refresh failed for ${company.name}:`, err.message);
     }
   }
 }
@@ -219,8 +314,54 @@ async function refreshWeatherKnowledge(supabase) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// WEBSITE SCRAPER HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Extract meaningful text from HTML — targets content elements, deprioritizes noise.
+// Returns pre-filtered plain text ready for Claude (much smaller than raw .text).
+function extractMeaningfulText(html) {
+  const root = parseHtml(html);
+
+  // Remove noise elements
+  root
+    .querySelectorAll("script, style, nav, footer, header, [aria-hidden], .cookie, .banner, .popup")
+    .forEach((el) => el.remove());
+
+  // Try to find the main content container
+  const contentCandidates = ["main", "article", '[role="main"]', ".content", ".entry-content", "#content", ".page-content"];
+  let container = null;
+  for (const sel of contentCandidates) {
+    container = root.querySelector(sel);
+    if (container) break;
+  }
+  if (!container) container = root;
+
+  // Pull text from meaningful elements only
+  const elements = container.querySelectorAll("h1, h2, h3, p, li, td, th, .price, .rate");
+  const lines = [];
+  for (const el of elements) {
+    const text = el.text.replace(/\s+/g, " ").trim();
+    if (text.length > 25) lines.push(text);
+  }
+
+  // Bubble up pricing/policy lines to the top so they're never cut off
+  const PRIORITY = /\$[\d,]+|\bpric(e|ing)\b|\brat(e|es)\b|\bpolic(y|ies)\b|\bcancel|\bage\b|\bweight\b|\brequir|\binclude|\bdeposit|\bminimum|\bhour|\bseason|\bsummer|\bwinter|\brzr|\bsled/i;
+  const priority = lines.filter((l) => PRIORITY.test(l));
+  const rest     = lines.filter((l) => !PRIORITY.test(l));
+
+  return [...priority, ...rest].join("\n");
+}
+
+// SHA-256 hash of text content — used to skip Claude when pages haven't changed
+function hashContent(text) {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // REFRESH WEBSITE KNOWLEDGE
-// Scrapes client pages, extracts business info, summarizes with Claude.
+// Scrapes pages, extracts business info with a single Haiku call.
+// Hash-gated: skips Claude entirely if page content hasn't changed since last run.
+// Runs every 7 days.
 // ─────────────────────────────────────────────────────────────────────────────
 async function refreshWebsiteKnowledge(supabase, anthropic) {
   const pageTexts = [];
@@ -229,15 +370,7 @@ async function refreshWebsiteKnowledge(supabase, anthropic) {
     try {
       const res  = await fetch(url, { timeout: 10000 });
       const html = await res.text();
-      const root = parseHtml(html);
-
-      // Strip nav, footer, scripts, styles
-      root
-        .querySelectorAll("script, style, nav, footer, header, [aria-hidden]")
-        .forEach((el) => el.remove());
-
-      const text = root.text.replace(/\s+/g, " ").trim().slice(0, 2000);
-      pageTexts.push(`--- ${url} ---\n${text}`);
+      pageTexts.push(`--- ${url} ---\n${extractMeaningfulText(html)}`);
     } catch (err) {
       console.error(`[KB] Scrape failed for ${url}:`, err.message);
     }
@@ -248,62 +381,85 @@ async function refreshWebsiteKnowledge(supabase, anthropic) {
     return;
   }
 
-  try {
-    const combined = pageTexts.join("\n\n").slice(0, 10000);
+  // Cap total input at 4000 chars (priority lines were bubbled up, so key info survives)
+  const combinedText = pageTexts.join("\n\n").slice(0, 4000);
+  const contentHash  = hashContent(combinedText);
 
-    const extractRes = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
-      max_tokens: 1200,
-      messages:   [
-        {
-          role:    "user",
-          content: `Extract business info from this website content and return JSON only:
-{ "offerings": string, "pricing": string, "policies": string, "seasonal_notes": string, "hours": string, "faq": string[] }
-Be concise but complete — this feeds an SMS bot. Max 150 chars per string field, max 8 FAQ items.
-Include summer/winter offerings, RZR tours, prices, cancellation policy, age/weight limits.
-Content: ${combined}`,
-        },
-      ],
+  // Hash gate — skip Claude if content is identical to last run
+  const { data: hashRow } = await supabase
+    .from("settings")
+    .select("value")
+    .eq("key", "website_content_hash")
+    .single();
+
+  if (hashRow?.value === contentHash) {
+    // Bump the timestamp so the staleness check doesn't fire again for 7 days
+    await supabase
+      .from("settings")
+      .upsert({ key: "last_website_scrape", value: new Date().toISOString() });
+    console.log("[KB] Website unchanged (hash match) — skipped Claude.");
+    return;
+  }
+
+  // Content changed — run single Haiku call (extract + summarize in one pass)
+  try {
+    const claudeRes = await anthropic.messages.create({
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 600,
+      messages: [{
+        role:    "user",
+        content: `You are extracting business info for an AI SMS concierge. Read these website pages and return ONLY a JSON object — no other text:
+{
+  "offerings": "what experiences are offered (winter sleds, summer RZR, guided tours, rentals)",
+  "pricing": "price ranges and what's included",
+  "policies": "age/weight limits, cancellation policy, deposit, what to bring",
+  "seasonal": "seasonal availability, when each activity runs",
+  "hours": "operating hours or how to book",
+  "faq": "2-3 key guest questions and short answers"
+}
+Rules: max 150 chars per field, plain text only, null if not found on pages.
+Pages:\n${combinedText}`,
+      }],
     });
 
     let data = {};
     try {
-      const raw = extractRes.content[0].text.trim();
+      const raw       = claudeRes.content[0].text.trim();
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      data = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      data            = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
     } catch {
-      data = { raw: extractRes.content[0].text.slice(0, 500) };
+      data = { raw: claudeRes.content[0].text.slice(0, 600) };
     }
 
-    const summaryRes = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
-      max_tokens: 400,
-      messages:   [
-        {
-          role:    "user",
-          content: `Summarize this business data for an SMS bot in max 700 plain-text chars. Cover: what they offer (winter + summer), pricing, key policies (age/weight limits, cancellation), hours. No bullet points — write continuous plain text: ${JSON.stringify(data)}`,
-        },
-      ],
-    });
-    const summary = summaryRes.content[0].text.slice(0, 700);
+    // Build summary in JS from the structured extraction — no second Claude call
+    const parts = [
+      data.offerings   && `Offerings: ${data.offerings}`,
+      data.pricing     && `Pricing: ${data.pricing}`,
+      data.policies    && `Policies: ${data.policies}`,
+      data.seasonal    && `Seasonal: ${data.seasonal}`,
+      data.hours       && `Hours: ${data.hours}`,
+      data.faq         && `FAQ: ${data.faq}`,
+    ].filter(Boolean);
+    const summary = parts.join(" | ").slice(0, 700);
 
     await supabase.from("knowledge_base").upsert({
-      client_id:      "csr_rea",
-      type:           "website",
-      key:            "website_knowledge",
+      client_id:       "csr_rea",
+      type:            "website",
+      key:             "website_knowledge",
       data,
       summary,
-      fetched_at:     new Date().toISOString(),
-      next_refresh_at: new Date(Date.now() + FOURTEEN_DAYS_MS).toISOString(),
+      fetched_at:      new Date().toISOString(),
+      next_refresh_at: new Date(Date.now() + SEVEN_DAYS_MS).toISOString(),
     });
 
-    await supabase
-      .from("settings")
-      .upsert({ key: "last_website_scrape", value: new Date().toISOString() });
+    await supabase.from("settings").upsert([
+      { key: "last_website_scrape",  value: new Date().toISOString() },
+      { key: "website_content_hash", value: contentHash },
+    ]);
 
-    console.log("[KB] Website knowledge refreshed.");
+    console.log("[KB] Website knowledge refreshed (content changed).");
   } catch (err) {
-    console.error("[KB] Website knowledge summarization failed:", err.message);
+    console.error("[KB] Website knowledge refresh failed:", err.message);
   }
 }
 
@@ -314,21 +470,27 @@ Content: ${combined}`,
 // Called at server startup. Checks if refresh is needed, runs it, sets up crons.
 export async function initKnowledgeBase(supabase, anthropic) {
   try {
-    // Check FH freshness
+    // Check FH items freshness (24hr threshold)
     const { data: fhRow } = await supabase
       .from("knowledge_base")
-      .select("fetched_at")
+      .select("fetched_at, data")
       .eq("key", "csr_fareharbor")
       .single();
 
-    const fhStale =
-      !fhRow || Date.now() - new Date(fhRow.fetched_at).getTime() > SIX_HOURS_MS;
+    const fhItemsStale =
+      !fhRow || Date.now() - new Date(fhRow.fetched_at).getTime() > TWENTY_FOUR_HOURS_MS;
+    const fhHasItems = fhRow?.data?.items?.length > 0;
 
-    if (fhStale) {
-      await refreshFareHarborKnowledge(supabase, anthropic);
+    if (fhItemsStale) {
+      await refreshFareHarborItems(supabase);
     }
 
-    // Check weather freshness (refresh if >1hr old)
+    // Always refresh availability on startup if items exist (3hr cadence means it's stale after restart)
+    if (fhHasItems || fhItemsStale) {
+      await refreshFareHarborAvailability(supabase);
+    }
+
+    // Check weather freshness (1hr threshold)
     const { data: weatherRow } = await supabase
       .from("knowledge_base")
       .select("fetched_at")
@@ -342,7 +504,7 @@ export async function initKnowledgeBase(supabase, anthropic) {
       await refreshWeatherKnowledge(supabase);
     }
 
-    // Check website freshness
+    // Check website freshness (7 day threshold)
     const { data: webRow } = await supabase
       .from("settings")
       .select("value")
@@ -352,7 +514,7 @@ export async function initKnowledgeBase(supabase, anthropic) {
     const webStale =
       !webRow ||
       webRow.value === "1970-01-01T00:00:00Z" ||
-      Date.now() - new Date(webRow.value).getTime() > FOURTEEN_DAYS_MS;
+      Date.now() - new Date(webRow.value).getTime() > SEVEN_DAYS_MS;
 
     if (webStale) {
       await refreshWebsiteKnowledge(supabase, anthropic);
@@ -361,18 +523,23 @@ export async function initKnowledgeBase(supabase, anthropic) {
     console.error("[KB] Init failed (non-fatal):", err.message);
   }
 
-  // Schedule FH refresh every 6 hours
-  cron.schedule("0 */6 * * *", () => {
-    refreshFareHarborKnowledge(supabase, anthropic);
+  // FH items: refresh every 24 hours (catalog rarely changes)
+  cron.schedule("0 2 * * *", () => {
+    refreshFareHarborItems(supabase);
   });
 
-  // Schedule weather refresh every hour
+  // FH availability: refresh every 3 hours (slots change throughout the day)
+  cron.schedule("0 */3 * * *", () => {
+    refreshFareHarborAvailability(supabase);
+  });
+
+  // Weather: refresh every hour (cheap, zero Claude)
   cron.schedule("0 * * * *", () => {
     refreshWeatherKnowledge(supabase);
   });
 
-  // Schedule website scrape every 14 days
-  cron.schedule("0 0 */14 * *", () => {
+  // Website: check every 7 days (hash-gated, Haiku only when content changes)
+  cron.schedule("0 3 * * 1", () => {
     refreshWebsiteKnowledge(supabase, anthropic);
   });
 
@@ -397,13 +564,19 @@ export async function getKnowledgeContext(supabase) {
     // Weather is always included first so it never gets truncated out
     const weatherSummary = byKey["weather_steamboat"]?.summary ?? "";
 
-    // FH availability summaries (capped tightly — just slot status)
+    // FH availability summaries (slot counts + next open dates)
     const fhParts = ["csr_fareharbor", "rea_fareharbor"]
       .map((k) => byKey[k]?.summary)
       .filter(Boolean);
-    const availSummary = fhParts.join(" | ").slice(0, 350);
+    const availSummary = fhParts.join(" | ").slice(0, 400);
 
-    // Website knowledge — larger budget since it covers pricing, policies, seasonal info
+    // FH item details (descriptions + pricing from API — no Claude cost)
+    const itemDetailParts = ["csr_fareharbor", "rea_fareharbor"]
+      .map((k) => byKey[k]?.data?.itemsSummary)
+      .filter(Boolean);
+    const itemsSummary = itemDetailParts.join(" | ").slice(0, 600);
+
+    // Website knowledge — policies, seasonal info, FAQ
     const websiteSummary = byKey["website_knowledge"]?.summary ?? "";
 
     // Build booking URLs from cached item PKs — auto-includes any new FH items
@@ -422,11 +595,12 @@ export async function getKnowledgeContext(supabase) {
       ? `\nDYNAMIC BOOKING LINKS (prefer these over hardcoded):\n${linkLines.join("\n")}`
       : "";
 
-    const weatherSection  = weatherSummary  ? `WEATHER (${date}): ${weatherSummary}\n`  : "";
-    const availSection    = availSummary    ? `AVAILABILITY: ${availSummary}\n`          : "";
-    const websiteSection  = websiteSummary  ? `BUSINESS INFO: ${websiteSummary}\n`       : "";
+    const weatherSection = weatherSummary ? `WEATHER (${date}): ${weatherSummary}\n`       : "";
+    const availSection   = availSummary   ? `AVAILABILITY: ${availSummary}\n`              : "";
+    const itemsSection   = itemsSummary   ? `TOUR DETAILS: ${itemsSummary}\n`              : "";
+    const websiteSection = websiteSummary ? `BUSINESS INFO: ${websiteSummary}\n`           : "";
 
-    return `${weatherSection}${availSection}${websiteSection}${linkSection}`.trim();
+    return `${weatherSection}${availSection}${itemsSection}${websiteSection}${linkSection}`.trim();
   } catch {
     return "";
   }
