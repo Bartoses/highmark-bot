@@ -7,8 +7,10 @@ import fetch from "node-fetch";
 import { parse as parseHtml } from "node-html-parser";
 import cron from "node-cron";
 
-const FAREHARBOR_BASE = "https://fareharbor.com/api/external/v1";
-const SIX_HOURS_MS    = 6 * 60 * 60 * 1000;
+const FAREHARBOR_BASE  = "https://fareharbor.com/api/external/v1";
+const OPENWEATHER_BASE = "https://api.openweathermap.org/data/2.5";
+const SIX_HOURS_MS     = 6 * 60 * 60 * 1000;
+const ONE_HOUR_MS      = 60 * 60 * 1000;
 const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 
 // CLIENT_CONFIG — one entry per company the client operates
@@ -125,6 +127,96 @@ Data: ${JSON.stringify(availabilityData)}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// REFRESH WEATHER KNOWLEDGE
+// Fetches current conditions + 3-day forecast for Steamboat Springs.
+// Also fetches Rabbit Ears Pass (higher elevation) for more accurate snow data.
+// Refreshes every hour.
+// ─────────────────────────────────────────────────────────────────────────────
+async function refreshWeatherKnowledge(supabase) {
+  const apiKey = process.env.OPENWEATHER_API_KEY;
+  if (!apiKey) return;
+
+  try {
+    // Steamboat Springs town (6,695 ft) — for general conditions
+    const [currentRes, forecastRes, passRes] = await Promise.all([
+      fetch(`${OPENWEATHER_BASE}/weather?q=Steamboat+Springs,CO,US&appid=${apiKey}&units=imperial`),
+      fetch(`${OPENWEATHER_BASE}/forecast?q=Steamboat+Springs,CO,US&appid=${apiKey}&units=imperial&cnt=24`),
+      // Rabbit Ears Pass (9,426 ft) — where tours actually run
+      fetch(`${OPENWEATHER_BASE}/weather?lat=40.38&lon=-106.60&appid=${apiKey}&units=imperial`),
+    ]);
+
+    if (!currentRes.ok) throw new Error(`Weather API ${currentRes.status}`);
+
+    const [current, forecastData, pass] = await Promise.all([
+      currentRes.json(),
+      forecastRes.json(),
+      passRes.ok ? passRes.json() : null,
+    ]);
+
+    // Build daily forecast summaries (prefer noon reading per day)
+    const days = {};
+    for (const item of forecastData.list ?? []) {
+      const date = item.dt_txt.slice(0, 10);
+      if (!days[date] || item.dt_txt.includes("12:00")) {
+        days[date] = {
+          high:  Math.round(item.main.temp_max),
+          low:   Math.round(item.main.temp_min),
+          desc:  item.weather[0].description,
+          snow:  (item.snow?.["3h"] ?? 0) / 25.4,  // mm → inches
+        };
+      }
+    }
+
+    const data = {
+      steamboat: {
+        temp:      Math.round(current.main.temp),
+        feels_like: Math.round(current.main.feels_like),
+        desc:      current.weather[0].description,
+        wind_mph:  Math.round(current.wind.speed),
+        snow_1h:   ((current.snow?.["1h"] ?? 0) / 25.4).toFixed(2),  // mm → inches
+      },
+      rabbit_ears_pass: pass ? {
+        temp:     Math.round(pass.main.temp),
+        desc:     pass.weather[0].description,
+        wind_mph: Math.round(pass.wind.speed),
+        snow_1h:  ((pass.snow?.["1h"] ?? 0) / 25.4).toFixed(2),  // mm → inches
+      } : null,
+      forecast: days,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Build compact summary for system prompt injection
+    const passNote = data.rabbit_ears_pass
+      ? ` | Rabbit Ears Pass: ${data.rabbit_ears_pass.temp}°F, ${data.rabbit_ears_pass.desc}`
+      : "";
+
+    const dayLines = Object.entries(days).slice(0, 3).map(([date, d]) => {
+      const label = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
+        weekday: "short", month: "short", day: "numeric",
+      });
+      const snowNote = d.snow > 0 ? ` +${d.snow.toFixed(1)}"` : "";
+      return `${label}: ${d.low}-${d.high}°F ${d.desc}${snowNote}`;
+    });
+
+    const summary = `Steamboat: ${data.steamboat.temp}°F, ${data.steamboat.desc}, wind ${data.steamboat.wind_mph}mph${passNote}. Forecast: ${dayLines.join(" | ")}`.slice(0, 350);
+
+    await supabase.from("knowledge_base").upsert({
+      client_id:       "csr_rea",
+      type:            "weather",
+      key:             "weather_steamboat",
+      data,
+      summary,
+      fetched_at:      new Date().toISOString(),
+      next_refresh_at: new Date(Date.now() + ONE_HOUR_MS).toISOString(),
+    });
+
+    console.log(`[KB] Weather refreshed: ${summary.slice(0, 100)}…`);
+  } catch (err) {
+    console.error("[KB] Weather refresh failed (non-fatal):", err.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // REFRESH WEBSITE KNOWLEDGE
 // Scrapes client pages, extracts business info, summarizes with Claude.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -233,6 +325,20 @@ export async function initKnowledgeBase(supabase, anthropic) {
       await refreshFareHarborKnowledge(supabase, anthropic);
     }
 
+    // Check weather freshness (refresh if >1hr old)
+    const { data: weatherRow } = await supabase
+      .from("knowledge_base")
+      .select("fetched_at")
+      .eq("key", "weather_steamboat")
+      .single();
+
+    const weatherStale =
+      !weatherRow || Date.now() - new Date(weatherRow.fetched_at).getTime() > ONE_HOUR_MS;
+
+    if (weatherStale) {
+      await refreshWeatherKnowledge(supabase);
+    }
+
     // Check website freshness
     const { data: webRow } = await supabase
       .from("settings")
@@ -257,6 +363,11 @@ export async function initKnowledgeBase(supabase, anthropic) {
     refreshFareHarborKnowledge(supabase, anthropic);
   });
 
+  // Schedule weather refresh every hour
+  cron.schedule("0 * * * *", () => {
+    refreshWeatherKnowledge(supabase);
+  });
+
   // Schedule website scrape every 14 days
   cron.schedule("0 0 */14 * *", () => {
     refreshWebsiteKnowledge(supabase, anthropic);
@@ -266,24 +377,38 @@ export async function initKnowledgeBase(supabase, anthropic) {
 }
 
 // Returns a combined context string for injection into the system prompt.
-// Max ~400 chars. Returns '' if nothing available.
+// Includes availability summaries + dynamic booking links built from cached FH item PKs.
+// New items added in FareHarbor appear here automatically on next refresh (6hr).
 export async function getKnowledgeContext(supabase) {
   try {
     const { data: rows } = await supabase
       .from("knowledge_base")
-      .select("key, summary")
-      .in("key", ["csr_fareharbor", "rea_fareharbor", "website_knowledge"]);
+      .select("key, summary, data")
+      .in("key", ["csr_fareharbor", "rea_fareharbor", "website_knowledge", "weather_steamboat"]);
 
     if (!rows || !rows.length) return "";
 
     const parts = rows.map((r) => r.summary).filter(Boolean);
     const combined = parts.join(" | ").slice(0, 400);
-    const date = new Date().toLocaleDateString("en-US", {
-      month: "short",
-      day:   "numeric",
-    });
+    const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-    return `LIVE DATA (${date}): ${combined}`;
+    // Build booking URLs from cached item PKs — auto-includes any new FH items
+    const linkLines = [];
+    for (const row of rows) {
+      const company = COMPANIES.find((c) => `${c.id}_fareharbor` === row.key);
+      if (!company || !row.data?.items?.length) continue;
+      for (const item of row.data.items.slice(0, 15)) {
+        linkLines.push(
+          `${item.name}: https://fareharbor.com/embeds/book/${company.shortname}/items/${item.pk}/?ref=highmark&full-items=yes`
+        );
+      }
+    }
+
+    const linkSection = linkLines.length
+      ? `\nDYNAMIC BOOKING LINKS (prefer these over hardcoded):\n${linkLines.join("\n")}`
+      : "";
+
+    return `LIVE DATA (${date}): ${combined}${linkSection}`;
   } catch {
     return "";
   }

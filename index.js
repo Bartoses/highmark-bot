@@ -36,15 +36,15 @@ const FAREHARBOR_ENABLED  = process.env.FAREHARBOR_ENABLED === "true";          
 
 // CLIENT_CONFIG — booking URLs keyed by offering type
 const BOOKING_URLS = {
-  csr_steamboat_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=homepage&full-items=yes&flow=1262221",
-  csr_kremmling_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=homepage%20card&full-items=yes&flow=1262222",
-  csr_proride_guided:     "https://fareharbor.com/embeds/book/coloradosledrentals/items/?flow=1470754&full-items=yes",
-  rea_2hr_tour:           "https://fareharbor.com/embeds/book/rabbitearsadventures/?ref=homepage&full-items=yes&flow=1539483",
-  rea_3hr_tour:           "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673348/?ref=homepage&full-items=yes&flow=1491038",
-  rea_private_tour:       "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673358/?ref=homepage&full-items=yes&flow=1491038",
-  all_winter:             "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=homepage%20hero&full-items=yes&flow=276228",
-  rzr_steamboat:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV",
-  rzr_kremmling:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV",
+  csr_steamboat_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=highmark&full-items=yes&flow=1262221",
+  csr_kremmling_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=highmark&full-items=yes&flow=1262222",
+  csr_proride_guided:     "https://fareharbor.com/embeds/book/coloradosledrentals/items/?ref=highmark&flow=1470754&full-items=yes",
+  rea_2hr_tour:           "https://fareharbor.com/embeds/book/rabbitearsadventures/?ref=highmark&full-items=yes&flow=1539483",
+  rea_3hr_tour:           "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673348/?ref=highmark&full-items=yes&flow=1491038",
+  rea_private_tour:       "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673358/?ref=highmark&full-items=yes&flow=1491038",
+  all_winter:             "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=highmark&full-items=yes&flow=276228",
+  rzr_steamboat:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV?ref=highmark",
+  rzr_kremmling:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV?ref=highmark",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -336,7 +336,10 @@ async function getClaudeReply(convo, season, knowledgeContext, extraInstruction)
     messages,
   });
 
-  return enforceLength(response.content[0].text);
+  const text = response.content[0].text;
+  // Never truncate replies containing URLs — the link must arrive intact
+  if (/https?:\/\//.test(text)) return text;
+  return enforceLength(text);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -371,15 +374,48 @@ app.post("/sms", async (req, res) => {
     return res.send("<Response></Response>");
   }
 
-  // 5. DEMO MODE — resets conversation, sends seasonal opener
-  if (msgUpper === "SUMMITDEMO") {
+  // 5. DEMO triggers — reset conversation and send appropriate opener
+  //    DEMO: public keyword (on website), introduces Highmark by name for prospects
+  //    SUMMITDEMO: internal keyword for owner use, sends straight into Summit persona
+  if (msgUpper === "DEMO" || msgUpper === "SUMMITDEMO") {
     await supabase.from("conversations").delete().eq("from_number", fromNumber);
-    const opener = enforceLength(getSeasonalOpener());
-    console.log(`[DEMO] Reset + opener sent to ${fromNumber}`);
+
+    let opener;
+    if (msgUpper === "DEMO") {
+      const season = getCurrentSeason();
+      if (season === "winter") {
+        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about snowmobiling, conditions, or booking in Steamboat. Go ahead!";
+      } else if (season === "summer") {
+        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about RZR adventures, trails, or booking in Steamboat. Go ahead!";
+      } else {
+        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about adventures, conditions, or booking in Steamboat. Go ahead!";
+      }
+      opener = enforceLength(opener, 320);
+    } else {
+      opener = enforceLength(getSeasonalOpener());
+    }
+
+    console.log(`[DEMO] ${msgUpper} — reset + opener sent to ${fromNumber}`);
 
     if (process.env.TEST_MODE === "true") return res.json({ reply: opener });
 
     await twilioClient.messages.create({ body: opener, from: toNumber, to: fromNumber });
+
+    // Notify owner when a prospect triggers DEMO (not SUMMITDEMO)
+    if (msgUpper === "DEMO" && process.env.CONFIRMATIONS_TEST_PHONE) {
+      await twilioClient.messages.create({
+        body: `Highmark lead 🏔 ${fromNumber} just texted DEMO. Follow up when ready!`,
+        from: toNumber,
+        to:   process.env.CONFIRMATIONS_TEST_PHONE,
+      }).catch((err) => console.error("[DEMO] Owner notify failed:", err.message));
+
+      // Tag in CRM as demo lead
+      if (crmSupabase) {
+        await upsertContact(fromNumber, { source: "demo", tags: ["demo_lead"] }, crmSupabase)
+          .catch(() => {});
+      }
+    }
+
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
