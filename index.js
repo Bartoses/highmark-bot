@@ -135,8 +135,7 @@ Warm, stoked, genuinely local. Like a guide who loves their job. Never robotic. 
 Never mention Whiteout Solutions or Highmark to guests.
 
 ━━━ SMS RULES (hard limits) ━━━
-- Every reply: 160 chars max (1 text). No exceptions unless guest explicitly asks for more detail.
-- Max 320 chars only if guest explicitly asks "tell me more" or similar.
+- Every reply: 320 chars max (2 texts). Use as much as needed to give complete, useful info.
 - No bullets, dashes, markdown, or formatting. Plain text only.
 - Emojis: max 1-2 per message. Use sparingly.
 - Never send 2 texts in a row without a guest reply.
@@ -311,6 +310,76 @@ Message: "${message}"`,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TOUR MENU BUILDER
+// Builds a numbered list of available tours for the guest to choose from.
+// Checks FH availability per item if a date string is provided.
+// ─────────────────────────────────────────────────────────────────────────────
+async function buildTourMenu(season, dateStr) {
+  const reaItems = await getFareHarborItems("rea", supabase);
+  const csrItems = await getFareHarborItems("csr", supabase);
+
+  // Key tour categories to present (not every individual sled model)
+  const options = [];
+
+  if (season !== "summer") {
+    // REA guided tours (up to 4)
+    for (const item of reaItems.slice(0, 4)) {
+      options.push({ label: item.name, company: "rea", pk: item.pk,
+        url: `https://fareharbor.com/embeds/book/rabbitearsadventures/items/${item.pk}/?ref=highmark&full-items=yes` });
+    }
+    // CSR rentals as categories (not individual sled models)
+    options.push({ label: "Self-guided sled rental (Steamboat)",  company: "csr", url: BOOKING_URLS.csr_steamboat_unguided });
+    options.push({ label: "Self-guided sled rental (Kremmling)",  company: "csr", url: BOOKING_URLS.csr_kremmling_unguided });
+    options.push({ label: "Pro-Ride backcountry guided (experts)", company: "csr", url: BOOKING_URLS.csr_proride_guided });
+  }
+
+  if (season !== "winter") {
+    options.push({ label: "RZR off-road adventure (Steamboat)", company: "csr", url: BOOKING_URLS.rzr_steamboat });
+    options.push({ label: "RZR off-road adventure (Kremmling)", company: "csr", url: BOOKING_URLS.rzr_kremmling });
+  }
+
+  // Check availability per item if a date was given
+  if (dateStr && FAREHARBOR_ENABLED) {
+    await Promise.all(options.map(async (opt) => {
+      if (!opt.pk) { opt.available = null; return; } // rental/category — no FH item PK
+      try {
+        const avail = await getFareHarborAvailability(opt.company, opt.pk, dateStr);
+        const open  = (avail ?? []).filter((a) => a.capacity > 0);
+        opt.available = open.length > 0;
+        opt.times     = open.slice(0, 2).map((a) =>
+          new Date(a.start_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+        );
+      } catch {
+        opt.available = null; // unknown — don't claim either way
+      }
+    }));
+  }
+
+  return options;
+}
+
+// Formats the tour menu as a Claude instruction string
+function formatMenuInstruction(options, dateStr) {
+  const numbered = options.map((opt, i) => {
+    let line = `${i + 1}) ${opt.label}`;
+    if (dateStr) {
+      if (opt.available === true)  line += ` (${opt.times?.join(" or ") || "available"})`;
+      if (opt.available === false) line += " (no availability)";
+    }
+    return line;
+  }).join(", ");
+
+  const dateNote = dateStr ? ` for ${dateStr}` : "";
+  const allUnavailable = dateStr && options.every((o) => o.available === false);
+
+  if (allUnavailable) {
+    return `No availability found${dateNote}. Tell the guest clearly there are no open slots and ask if they'd like a different date or to call ${HANDOFF_PHONE}.`;
+  }
+
+  return `Present these tour options${dateNote} and ask the guest to pick one (reply with a number). Also ask how many people. Options: ${numbered}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SUPABASE CONVERSATION STORE
 // ─────────────────────────────────────────────────────────────────────────────
 async function getConversation(fromNumber, toNumber) {
@@ -368,7 +437,7 @@ async function saveConversation(fromNumber, toNumber, convo) {
 // ─────────────────────────────────────────────────────────────────────────────
 // CLAUDE CALL
 // ─────────────────────────────────────────────────────────────────────────────
-async function getClaudeReply(convo, season, knowledgeContext, extraInstruction, maxLength = 160) {
+async function getClaudeReply(convo, season, knowledgeContext, extraInstruction, maxLength = 320) {
   const messages = convo.messages.map(({ role, content }) => ({ role, content }));
   const system   = extraInstruction
     ? `${buildSystemPrompt(season, knowledgeContext)}\n\nCURRENT CONTEXT: ${extraInstruction}`
@@ -558,27 +627,34 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
 
     // BOOKING FLOW — state machine
-    // Step trigger: booking intent with no active flow
+    // Step null → 1: Show tour menu, ask guest to pick
     else if (intent === "booking" && convo.bookingStep === null) {
       convo.bookingStep = 1;
 
-      // Check availability if date was mentioned (Tier 2)
-      const availCtx = await checkAvailabilityIfNeeded(rawBody, convo);
-      const knowledgeCtx = await getKnowledgeContext(supabase);
+      // Extract date from message if present (for availability check)
+      const dateExtract = await anthropic.messages.create({
+        model: "claude-sonnet-4-6", max_tokens: 30,
+        messages: [{ role: "user", content: `Extract date as YYYY-MM-DD or null. Today is ${new Date().toISOString().slice(0,10)}. Message: "${rawBody}". Reply with JSON: {"date":"YYYY-MM-DD or null"}` }],
+      }).catch(() => null);
+      let extractedDate = null;
+      try {
+        const raw = dateExtract?.content[0]?.text ?? "";
+        const m = raw.match(/\{[\s\S]*\}/);
+        const parsed = m ? JSON.parse(m[0]) : {};
+        if (parsed.date && parsed.date !== "null") extractedDate = parsed.date;
+      } catch { /* ignore */ }
 
-      replyText = await getClaudeReply(
-        convo,
-        season,
-        knowledgeCtx,
-        `Guest wants to book. Ask about their experience level and group size so you can route them correctly. One casual sentence. 160 chars max.${availCtx ? ` Availability note: ${availCtx}` : ""}`
-      );
+      const menuOptions  = await buildTourMenu(season, extractedDate);
+      convo.bookingData.menuOptions = menuOptions; // save for step 1
+      const menuInstruction = formatMenuInstruction(menuOptions, extractedDate);
+      const knowledgeCtx   = await getKnowledgeContext(supabase);
+
+      replyText = await getClaudeReply(convo, season, knowledgeCtx, menuInstruction);
     }
 
-    // Step 1 → 2: got experience + group size, send booking link
+    // Step 1 → 2: Guest picked a tour — route to its booking link
     else if (convo.bookingStep === 1) {
-      const t = rawBody.toLowerCase();
-
-      // Detect group size >= 6 → handoff
+      // Group size >= 6 → handoff
       const groupMatch = rawBody.match(/\b([6-9]|[1-9]\d+)\b/);
       if (groupMatch && parseInt(groupMatch[1]) >= 6) {
         convo.handoff = true;
@@ -586,45 +662,34 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           `Great question for our team! Give us a call at ${HANDOFF_PHONE} and we'll get you sorted 🤙`
         );
       } else {
-        // Store experience + group in bookingData
         convo.bookingData.groupSize = groupMatch ? parseInt(groupMatch[1]) : null;
 
-        // Route to correct URL
-        let url;
-        if (season === "summer" || /rzr|atv|off.?road/.test(t)) {
-          url = BOOKING_URLS.rzr_steamboat;
-          convo.bookingData.company = "csr";
-          convo.bookingData.activity = "RZR adventure";
-        } else if (/beginner|first.?time|never|kid|child|family|guided/.test(t)) {
-          url = BOOKING_URLS.rea_3hr_tour;
-          convo.bookingData.company = "rea";
-          convo.bookingData.activity = "snowmobile tour";
-        } else if (/pro|advance|expert|backcountry|pro.?ride/.test(t)) {
-          url = BOOKING_URLS.csr_proride_guided;
-          convo.bookingData.company = "csr";
-          convo.bookingData.activity = "Pro-Ride guided tour";
-        } else if (/kremmling/.test(t)) {
-          url = BOOKING_URLS.csr_kremmling_unguided;
-          convo.bookingData.company = "csr";
-          convo.bookingData.activity = "self-guided sled rental";
-        } else {
-          // Default: experienced rider → CSR Steamboat unguided
-          url = BOOKING_URLS.csr_steamboat_unguided;
-          convo.bookingData.company = "csr";
-          convo.bookingData.activity = "self-guided sled rental";
+        // Match the guest's reply to a menu option by number or keyword
+        const options = convo.bookingData.menuOptions ?? [];
+        let chosen = null;
+
+        const numMatch = rawBody.match(/\b([1-9])\b/);
+        if (numMatch) {
+          const idx = parseInt(numMatch[1]) - 1;
+          if (idx >= 0 && idx < options.length) chosen = options[idx];
         }
 
-        // Check availability for their preferred date if any (Tier 2)
-        const availCtx = await checkAvailabilityIfNeeded(rawBody, convo);
-        const knowledgeCtx = await getKnowledgeContext(supabase);
+        if (!chosen) {
+          const t = rawBody.toLowerCase();
+          chosen = options.find((o) => {
+            const label = o.label.toLowerCase();
+            return label.split(" ").some((word) => word.length > 4 && t.includes(word));
+          }) ?? options[0];
+        }
 
+        convo.bookingData.activity = chosen?.label ?? "tour";
+        convo.bookingData.company  = chosen?.company ?? "csr";
         convo.bookingStep = 2;
 
+        const knowledgeCtx = await getKnowledgeContext(supabase);
         replyText = await getClaudeReply(
-          convo,
-          season,
-          knowledgeCtx,
-          `Route guest to this booking URL: ${url}. Include the full URL in your reply. Keep it casual and under 160 chars.${availCtx ? ` Live availability: ${availCtx}` : ""}`
+          convo, season, knowledgeCtx,
+          `Guest chose: "${chosen?.label}". Send them this booking link: ${chosen?.url}. Include the full URL. Keep it warm and under 320 chars.`
         );
       }
     }

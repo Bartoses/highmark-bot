@@ -399,7 +399,7 @@ async function test11() {
   }
 
   const r2 = await sendSms("snowmobiling for 2 people this weekend, first time");
-  r2.length <= 160
+  r2.length <= 320
     ? pass(`Message 2: ${r2.length} chars`)
     : fail("Message 2 too long", `${r2.length} chars`);
   /rea|rabbit ears|beginner|guided|first|tour|fareharbor/i.test(r2)
@@ -414,7 +414,7 @@ async function test11() {
   }
 
   const r3 = await sendSms("how do we get there from Steamboat");
-  r3.length <= 160
+  r3.length <= 320
     ? pass(`Message 3: ${r3.length} chars`)
     : fail("Message 3 too long", `${r3.length} chars`);
   /location|shuttle|drive|walden|steamboat|highway|hwy|14|pass|4492/i.test(r3)
