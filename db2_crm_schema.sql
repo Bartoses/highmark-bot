@@ -61,3 +61,11 @@ CREATE TABLE IF NOT EXISTS opt_outs (
 );
 
 CREATE INDEX IF NOT EXISTS opt_outs_phone_idx ON opt_outs (phone);
+
+-- ── ROW LEVEL SECURITY ────────────────────────────────────────────────────────
+-- Enable RLS on all tables. The bot uses the service role key which bypasses
+-- RLS automatically — no policies needed for bot access.
+ALTER TABLE contacts       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE campaigns      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE campaign_sends ENABLE ROW LEVEL SECURITY;
+ALTER TABLE opt_outs       ENABLE ROW LEVEL SECURITY;
