@@ -184,9 +184,15 @@ When `TEST_MODE=true` (local only, never set on Railway):
 - `/sms` returns `{ reply: "..." }` JSON instead of TwiML
 - `/reset` endpoint becomes available
 
-### Booking Follow-up
-30-min follow-up uses `setTimeout` — does NOT survive Railway restarts.
-TODO: replace with Supabase Edge Function before production.
+### Scheduled Messages (scheduler.js)
+30-min follow-up and all future delayed SMS use the `scheduled_messages` Supabase table.
+- `scheduleMessage(supabase, { phone, body, message_type, send_at, ... })` — inserts a row
+- `processScheduledMessages(supabase, twilioClient, crmSupabase)` — worker: claim → opt-out check → send → update status
+- Retry backoff: 5 min after attempt 1, 15 min after attempt 2, then `failed`
+- Opt-out check: cancels with reason before Twilio call (TCPA safe)
+- Stale lock recovery: rows stuck in `processing` > 5 min are reclaimed on next worker run
+- Railway cron: `POST /cron/scheduled-messages` every minute (set `CRON_SECRET` + `x-cron-secret` header)
+- Table: `scheduled_messages` in DB1 — see `db1_scheduled_messages.sql`
 
 ### Special Triggers
 - `DEMO` — sends Highmark-branded opener + notifies owner (+17202892483)
@@ -255,7 +261,7 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 
 ## Known TODOs (Before Full Production)
 
-1. **Booking follow-up `setTimeout`** — replace with Supabase Edge Function (survives restarts)
+1. ~~**Booking follow-up `setTimeout`**~~ — DONE. Replaced with durable `scheduled_messages` + Railway cron.
 2. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
 3. **Confirmations live test** — run real FareHarbor test booking, verify confirmation text arrives
 4. **REA availability 403** — fixed (minimal endpoint), but verify with real REA API key in prod
