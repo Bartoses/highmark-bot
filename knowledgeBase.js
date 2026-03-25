@@ -388,9 +388,17 @@ export async function getKnowledgeContext(supabase) {
 
     if (!rows || !rows.length) return "";
 
-    const parts = rows.map((r) => r.summary).filter(Boolean);
-    const combined = parts.join(" | ").slice(0, 400);
-    const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
+    const date  = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+    // Weather is always included first so it never gets truncated out
+    const weatherSummary = byKey["weather_steamboat"]?.summary ?? "";
+
+    // Availability + website summaries (capped so they don't crowd out weather)
+    const otherParts = ["csr_fareharbor", "rea_fareharbor", "website_knowledge"]
+      .map((k) => byKey[k]?.summary)
+      .filter(Boolean);
+    const availSummary = otherParts.join(" | ").slice(0, 350);
 
     // Build booking URLs from cached item PKs — auto-includes any new FH items
     const linkLines = [];
@@ -408,7 +416,10 @@ export async function getKnowledgeContext(supabase) {
       ? `\nDYNAMIC BOOKING LINKS (prefer these over hardcoded):\n${linkLines.join("\n")}`
       : "";
 
-    return `LIVE DATA (${date}): ${combined}${linkSection}`;
+    const weatherSection = weatherSummary ? `WEATHER (${date}): ${weatherSummary}\n` : "";
+    const availSection   = availSummary   ? `AVAILABILITY: ${availSummary}\n`        : "";
+
+    return `${weatherSection}${availSection}${linkSection}`.trim();
   } catch {
     return "";
   }
