@@ -20,16 +20,17 @@ Summit is an AI SMS concierge built by Whiteout Solutions as a POC to demo to St
 
 ## File Structure
 ```
-index.js               — main Express server, SMS webhook, all bot logic
-knowledgeBase.js       — FareHarbor API refresh (6hr cron) + weather (1hr cron) + website scraper (14-day cron)
+index.js               — main Express server, SMS webhook, all bot logic, booking state machine
+knowledgeBase.js       — FH items (24hr cron) + FH availability (3hr cron) + weather (1hr cron) + website (7-day cron, hash-gated)
 bookingConfirmations.js — FareHarbor webhook receiver + 30min polling + confirmation texts
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging
 chat.js                — interactive terminal chat simulator (no Twilio cost)
-test.js                — automated test suite, spawns its own server on port 3099
+test.js                — automated test suite (79 tests), spawns its own server on port 3099
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
 db2_crm_schema.sql     — DB2 CRM schema (Supabase Project 2 SQL editor)
 railway.json           — Railway deployment config
+PROMPTS.md             — Session starter prompts
 .env                   — local secrets (never commit)
 ```
 
@@ -60,7 +61,7 @@ Commands: `/reset` (fresh conversation), `/quit`
 ```bash
 npm test
 ```
-Spawns its own server on port 3099. Runs all scenarios automatically.
+Spawns its own server on port 3099. Runs all 79 scenarios automatically.
 
 ### Server + curl tests (TEST_MODE)
 **Terminal 1:**
@@ -106,11 +107,13 @@ Scenarios: 1=greeting, 2=snow conditions, 3=beginner booking, 4=experienced ride
 3. **Booking menu** — "I want to book a tour" → numbered list of REA tours + CSR browse link
 4. **Tour pick** — reply "2" → correct individual booking link sent
 5. **No availability** — date with no slots → explicit message + browse-all links
-6. **Handoff** — "I want to speak to a person" returns handoff with CLIENT_NAME
-7. **HELP** — returns program info + STOP instruction + phone number
-8. **STOP** — opt-out confirmation sent, subsequent messages dropped
-9. **Reset** — `/reset` clears conversation and greeting fires again
-10. **Rate limiting** — 11th message from same phone in 1 min returns 429
+6. **Same-day** — "can I book for today" → policy message + next available date
+7. **Handoff** — "I want to speak to a person" returns handoff with CLIENT_NAME
+8. **Booking after handoff** — asking about tours after handoff re-engages (does NOT get redirect)
+9. **HELP** — returns program info + STOP instruction + phone number
+10. **STOP** — opt-out confirmation sent, subsequent messages dropped
+11. **Reset** — `/reset` clears conversation and greeting fires again
+12. **Rate limiting** — 11th message from same phone in 1 min returns 429
 
 ---
 
@@ -130,6 +133,18 @@ Expected: `{"status":"Highmark running ✅", ...}`
 
 ## Architecture Notes
 
+### SMS Flow (per message, in order)
+1. Rate limiting (IP + phone)
+2. STOP/HELP/START keywords (TCPA — processed before anything else)
+3. Opted-out gate (silently drop)
+4. Load conversation from Supabase
+5. Intent + sentiment classification
+6. Booking state machine steps
+7. Handoff gate — blocks non-booking/conditions intents when `convo.handoff=true`
+   - booking and conditions intents BYPASS the handoff gate (re-engage the guest)
+8. Claude called with system prompt + KB context
+9. Save conversation to Supabase, return TwiML
+
 ### Rate Limiting
 Two layers on `/sms`:
 - **IP limiter** — 30 req/min per IP (express-rate-limit)
@@ -142,7 +157,7 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
 {
   messages:               [{ role, content, timestamp, intent, sentiment }],
   booking_step:           null | 1 | 2 | 3 | 4,
-  booking_data:           { activity, date, groupSize, company, booking_pk },
+  booking_data:           { activity, date, groupSize, company, booking_pk, menuOptions },
   handoff:                false,
   consecutive_frustrated: 0,
   session_type:           "live" | "test",
@@ -150,12 +165,18 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
 }
 ```
 
-### Booking Step State Machine
+### Booking State Machine
 - `null` — not started
 - `1` — tour menu shown, waiting for guest to pick (menuOptions stored in bookingData)
 - `2` — booking link sent
-- `3` — confirmation text sent
+- `3` — confirmation text sent (pre-seeded by bookingConfirmations.js)
 - `4` — 30-min follow-up sent
+
+### Booking Rules
+- Same-day bookings NOT allowed — minimum 1 day advance booking required
+- Availability window always starts from tomorrow in both KB refresh and real-time checks
+- Groups 6+ always handoff
+- Booking/conditions intents bypass handoff gate so re-engaging guests get real answers
 
 ### TEST_MODE
 When `TEST_MODE=true` (local only, never set on Railway):
@@ -182,18 +203,40 @@ TODO: replace with Supabase Edge Function before production.
 5. All other processing
 
 ### Message Length
-Default 320 chars (2 texts) for all Claude replies. `enforceLength(text, max)` — never truncates URLs.
+Default 320 chars (2 texts) for all replies. `enforceLength(text, max=320)` — never truncates URLs.
+
+### Knowledge Base Context (4 sections injected into every Claude call)
+```
+WEATHER (date): <Steamboat + Rabbit Ears Pass conditions, 3-day forecast>
+AVAILABILITY: <open slot counts + next open date per tour>
+TOUR DETAILS: <item names, descriptions, price ranges from FH items API>
+BUSINESS INFO: <policies, seasonal, FAQ from website>
+DYNAMIC BOOKING LINKS: <per-item FH URLs, auto-updated from cached PKs>
+```
+
+### Knowledge Base Refresh (zero Claude tokens for FH + weather)
+| Data | Cron | Method |
+|---|---|---|
+| FH items (catalog, pricing) | Daily at 2am | JS from FH API — no Claude |
+| FH availability (slots) | Every 3hr | JS from FH minimal endpoint — no Claude |
+| Weather | Every 1hr | JS from OpenWeather JSON — no Claude |
+| Website (policies, FAQ) | Monday 3am | Single Haiku call, hash-gated — skips if content unchanged |
+
+- `buildFhSummary()` formats availability string directly in JS
+- `getPriceRange()` reads `customer_type_rates[].total_including_tax` from FH API
+- `extractMeaningfulText()` pre-filters HTML to pricing/policy content before Claude
+- `hashContent()` SHA-256s the pre-processed text — Claude skipped if hash matches last run
+
+### FareHarbor API Notes
+- Items endpoint: `/companies/{shortname}/items/` — returns catalog with pricing
+- Availability: `/companies/{shortname}/items/{pk}/minimal/availabilities/date-range/{start}/{end}/`
+  - Must use `minimal` endpoint (full date-range endpoint returns 403 for REA key)
+  - Open slots: filter by `capacity > 0 || is_available === true`
 
 ### Booking URLs
-- `csr_browse_all` — guest browses all CSR sled options themselves (use for general/ambiguous requests)
-- `rea_browse_all` — guest browses all REA tour options themselves
+- `csr_browse_all` — guest browses all CSR sled options (use for general requests)
+- `rea_browse_all` — guest browses all REA tour options
 - Individual item URLs built dynamically from FH item PKs cached in knowledge_base table
-
-### Knowledge Base Refresh
-- FareHarbor items: every 6 hours (cron) — individual booking URLs stay current automatically
-- Weather (Steamboat + Rabbit Ears Pass): every 1 hour (cron)
-- Website scrape: every 14 days (cron)
-- Weather always leads the context string so it's never truncated out by availability summaries
 
 ### DB2 CRM Security
 - RLS enabled on all 4 tables: contacts, campaigns, campaign_sends, opt_outs
@@ -207,3 +250,12 @@ Default 320 chars (2 texts) for all Claude replies. `enforceLength(text, max)` �
 Currently one Railway deployment = one client. When managing 4+ clients:
 - `clients` table in Supabase keyed by `to_number`
 - Load config at request time, no redeploy needed
+
+---
+
+## Known TODOs (Before Full Production)
+
+1. **Booking follow-up `setTimeout`** — replace with Supabase Edge Function (survives restarts)
+2. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
+3. **Confirmations live test** — run real FareHarbor test booking, verify confirmation text arrives
+4. **REA availability 403** — fixed (minimal endpoint), but verify with real REA API key in prod
