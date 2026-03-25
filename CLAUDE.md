@@ -21,7 +21,7 @@ Summit is an AI SMS concierge built by Whiteout Solutions as a POC to demo to St
 ## File Structure
 ```
 index.js               — main Express server, SMS webhook, all bot logic
-knowledgeBase.js       — FareHarbor API refresh (6hr cron) + website scraper (14-day cron)
+knowledgeBase.js       — FareHarbor API refresh (6hr cron) + weather (1hr cron) + website scraper (14-day cron)
 bookingConfirmations.js — FareHarbor webhook receiver + 30min polling + confirmation texts
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging
 chat.js                — interactive terminal chat simulator (no Twilio cost)
@@ -102,11 +102,15 @@ Scenarios: 1=greeting, 2=snow conditions, 3=beginner booking, 4=experienced ride
 
 ### Key scenarios to verify after every change
 1. **Greeting** — fresh number gets the seasonal hardcoded opener
-2. **Conditions question** — follow-up reply stays under 160 chars
-3. **Booking flow** — "I want to book" → activity → date/group → confirm + link
-4. **Handoff** — "I want to speak to a person" returns handoff with CLIENT_NAME
-5. **Reset** — `/reset` clears conversation and greeting fires again
-6. **Rate limiting** — 11th message from same phone in 1 min returns 429
+2. **Weather/forecast** — "snow forecast" returns live temps + 3-day forecast from LIVE DATA
+3. **Booking menu** — "I want to book a tour" → numbered list of REA tours + CSR browse link
+4. **Tour pick** — reply "2" → correct individual booking link sent
+5. **No availability** — date with no slots → explicit message + browse-all links
+6. **Handoff** — "I want to speak to a person" returns handoff with CLIENT_NAME
+7. **HELP** — returns program info + STOP instruction + phone number
+8. **STOP** — opt-out confirmation sent, subsequent messages dropped
+9. **Reset** — `/reset` clears conversation and greeting fires again
+10. **Rate limiting** — 11th message from same phone in 1 min returns 429
 
 ---
 
@@ -148,8 +152,8 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
 
 ### Booking Step State Machine
 - `null` — not started
-- `1` — asked experience + group size
-- `2` — sent booking link
+- `1` — tour menu shown, waiting for guest to pick (menuOptions stored in bookingData)
+- `2` — booking link sent
 - `3` — confirmation text sent
 - `4` — 30-min follow-up sent
 
@@ -168,9 +172,32 @@ TODO: replace with Supabase Edge Function before production.
 - `SUMMITDEMO` — resets conversation + sends seasonal opener (internal demos)
 - `STOP / UNSUBSCRIBE / QUIT / END / CANCEL` — TCPA opt-out (processed first)
 - `START / UNSTOP` — opt-in
+- `HELP` — returns program name, msg frequency notice, STOP instruction, support phone
+
+### TCPA Compliance Order (in /sms)
+1. STOP keywords → opt-out + confirmation text
+2. START keywords → opt-in
+3. HELP → compliance response (works even for opted-out numbers)
+4. Opted-out gate → silently drop message
+5. All other processing
 
 ### Message Length
-Enforced via system prompt (320 chars for first reply, 160 for follow-ups).
+Default 320 chars (2 texts) for all Claude replies. `enforceLength(text, max)` — never truncates URLs.
+
+### Booking URLs
+- `csr_browse_all` — guest browses all CSR sled options themselves (use for general/ambiguous requests)
+- `rea_browse_all` — guest browses all REA tour options themselves
+- Individual item URLs built dynamically from FH item PKs cached in knowledge_base table
+
+### Knowledge Base Refresh
+- FareHarbor items: every 6 hours (cron) — individual booking URLs stay current automatically
+- Weather (Steamboat + Rabbit Ears Pass): every 1 hour (cron)
+- Website scrape: every 14 days (cron)
+- Weather always leads the context string so it's never truncated out by availability summaries
+
+### DB2 CRM Security
+- RLS enabled on all 4 tables: contacts, campaigns, campaign_sends, opt_outs
+- Service role key bypasses RLS automatically — bot is unaffected
 
 ### Tier Model
 - **Tier 1** ($200-300/mo): `FAREHARBOR_ENABLED=false` — bot Q&A + booking links
