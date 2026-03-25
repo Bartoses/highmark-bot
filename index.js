@@ -200,12 +200,12 @@ Any RZR/ATV question → summer options` : ""}
 Waterproof/windproof outer layer, warm waterproof gloves, wool socks (no cotton), goggles (helmets provided). Water, snacks, camera. Leave jewelry at home.
 
 ━━━ GRACEFUL UNKNOWNS ━━━
-When you don't have live data (snow depth, wait times, live availability):
-- Be honest: "I don't have live snow data but Steamboat.com has today's report."
+Only applies when LIVE DATA section below is empty or doesn't cover the question:
+- Snow depth / trail grooming not in live data: "Steamboat.com has today's report."
 - Never make up specific numbers or conditions.
 - Offer next step: "Want help with anything else?" or "I can have the team follow up."
 
-${knowledgeContext ? `━━━ LIVE DATA (use this over hardcoded info when they conflict) ━━━\n${knowledgeContext}` : ""}`;
+${knowledgeContext ? `━━━ LIVE DATA — answer weather and conditions questions directly from this ━━━\n${knowledgeContext}` : ""}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
