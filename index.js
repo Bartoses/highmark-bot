@@ -199,13 +199,12 @@ Any RZR/ATV question → summer options` : ""}
 ━━━ WHAT TO WEAR (all seasons) ━━━
 Waterproof/windproof outer layer, warm waterproof gloves, wool socks (no cotton), goggles (helmets provided). Water, snacks, camera. Leave jewelry at home.
 
-━━━ GRACEFUL UNKNOWNS ━━━
-Only applies when LIVE DATA section below is empty or doesn't cover the question:
-- Snow depth / trail grooming not in live data: "Steamboat.com has today's report."
-- Never make up specific numbers or conditions.
-- Offer next step: "Want help with anything else?" or "I can have the team follow up."
+━━━ WEATHER + CONDITIONS RULES ━━━
+- If LIVE DATA below has a WEATHER section: answer weather and forecast questions directly from it. Share the actual temps and forecast. Do NOT redirect to Steamboat.com.
+- If LIVE DATA has no weather: "Steamboat.com has today's report."
+- Never make up snow depth, grooming, or trail conditions not in LIVE DATA.
 
-${knowledgeContext ? `━━━ LIVE DATA — answer weather and conditions questions directly from this ━━━\n${knowledgeContext}` : ""}`;
+${knowledgeContext ? `━━━ LIVE DATA ━━━\n${knowledgeContext}` : ""}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
