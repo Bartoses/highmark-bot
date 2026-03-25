@@ -12,6 +12,7 @@
 import "dotenv/config";
 import { fileURLToPath } from "url";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import twilio from "twilio";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
@@ -23,6 +24,51 @@ import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertCo
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RATE LIMITING
+// ─────────────────────────────────────────────────────────────────────────────
+
+// IP limiter: 30 requests / minute per IP (catches bots hitting the endpoint)
+const ipLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    console.warn(`[RATE] IP blocked: ${req.ip}`);
+    res.set("Content-Type", "text/xml");
+    res.status(429).send("<Response></Response>");
+  },
+});
+
+// Per-phone limiter: 10 messages / minute per phone number
+const phoneWindows = new Map(); // phone -> { count, resetAt }
+function phoneRateLimit(req, res, next) {
+  const phone = req.body?.From;
+  if (!phone) return next();
+  const now = Date.now();
+  const window = phoneWindows.get(phone);
+  if (!window || now > window.resetAt) {
+    phoneWindows.set(phone, { count: 1, resetAt: now + 60 * 1000 });
+    return next();
+  }
+  if (window.count >= 10) {
+    console.warn(`[RATE] Phone throttled: ${phone}`);
+    res.set("Content-Type", "text/xml");
+    return res.status(429).send("<Response></Response>");
+  }
+  window.count++;
+  next();
+}
+
+// Prune stale phone windows every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [phone, w] of phoneWindows) {
+    if (now > w.resetAt) phoneWindows.delete(phone);
+  }
+}, 5 * 60 * 1000);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT CONFIG
@@ -346,7 +392,7 @@ async function getClaudeReply(convo, season, knowledgeContext, extraInstruction)
 // SMS WEBHOOK — Twilio calls this on every inbound text
 // Processing order is intentional — do not reorder.
 // ─────────────────────────────────────────────────────────────────────────────
-app.post("/sms", async (req, res) => {
+app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   const rawBody    = req.body.Body?.trim() ?? "";
   const fromNumber = req.body.From;
   const toNumber   = req.body.To;
