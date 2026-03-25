@@ -16,6 +16,12 @@ const FAREHARBOR_BASE = "https://fareharbor.com/api/external/v1";
 // CLIENT_CONFIG
 const HANDOFF_PHONE = process.env.HANDOFF_PHONE || "(970) 439-1707";
 
+// CONFIRMATIONS_ENABLED=false keeps the webhook/polling running but redirects
+// all texts to CONFIRMATIONS_TEST_PHONE so you can verify the format before
+// going live. Flip to true when you're ready to text real guests.
+const CONFIRMATIONS_ENABLED   = process.env.CONFIRMATIONS_ENABLED !== "false"; // default ON
+const CONFIRMATIONS_TEST_PHONE = process.env.CONFIRMATIONS_TEST_PHONE || "";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TEXT BUILDERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,16 +132,20 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
     return;
   }
 
+  // Determine send target — test mode redirects to your phone, never guests
+  const testMode  = !CONFIRMATIONS_ENABLED || process.env.TEST_MODE === "true";
+  const sendTo    = testMode && CONFIRMATIONS_TEST_PHONE ? CONFIRMATIONS_TEST_PHONE : guestPhone;
+
+  if (testMode) {
+    console.log(`[CONFIRM] TEST MODE — redirecting ${bookingPk} from ${guestPhone} → ${sendTo}`);
+  }
+
   // Handle cancellation
   if (status === "cancelled") {
     const cancelText = buildCancellationText(booking);
     try {
-      await twilioClient.messages.create({
-        body: cancelText,
-        from: fromNumber,
-        to:   guestPhone,
-      });
-      console.log(`[CONFIRM] Cancellation sent to ${guestPhone} for booking ${bookingPk}`);
+      await twilioClient.messages.create({ body: cancelText, from: fromNumber, to: sendTo });
+      console.log(`[CONFIRM] Cancellation sent to ${sendTo} for booking ${bookingPk}`);
     } catch (err) {
       console.error(`[CONFIRM] Cancellation send failed:`, err.message);
     }
@@ -161,12 +171,8 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
 
   // Send confirmation
   try {
-    await twilioClient.messages.create({
-      body: confirmText,
-      from: fromNumber,
-      to:   guestPhone,
-    });
-    console.log(`[CONFIRM] Confirmation sent to ${guestPhone} for booking ${bookingPk}`);
+    await twilioClient.messages.create({ body: confirmText, from: fromNumber, to: sendTo });
+    console.log(`[CONFIRM] Confirmation sent to ${sendTo} for booking ${bookingPk}${testMode ? " [TEST MODE]" : ""}`);
   } catch (err) {
     console.error(`[CONFIRM] Confirmation send failed:`, err.message);
     return;
