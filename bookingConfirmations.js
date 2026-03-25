@@ -10,6 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import fetch from "node-fetch";
 import cron from "node-cron";
+import { scheduleMessage } from "./scheduler.js";
 
 const FAREHARBOR_BASE = "https://fareharbor.com/api/external/v1";
 
@@ -51,6 +52,13 @@ export function buildConfirmationText(booking) {
   const text = `Hey ${firstName}! Your ${itemName} with ${company} is confirmed for ${dateStr} at ${timeStr} 🏔 Reply here with any questions!`;
 
   // Cap at 320 chars
+  return text.length <= 320 ? text : text.slice(0, 317) + "...";
+}
+
+export function buildFollowUpText(booking) {
+  const firstName = (booking.contact?.name ?? "there").split(" ")[0];
+  const itemName  = booking.availability?.item?.name ?? "your tour";
+  const text = `Hey ${firstName}! All set for ${itemName}? Any last-minute questions before your adventure? We're here — just reply!`;
   return text.length <= 320 ? text : text.slice(0, 317) + "...";
 }
 
@@ -191,6 +199,25 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
 
   // Pre-seed conversation so Summit has context when guest replies
   await preSeedConversation(booking, confirmText, supabase, fromNumber);
+
+  // Schedule 30-minute follow-up via durable scheduler (survives Railway restarts)
+  try {
+    const followUpAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    await scheduleMessage(supabase, {
+      phone:        sendTo,
+      body:         buildFollowUpText(booking),
+      message_type: "booking_followup",
+      send_at:      followUpAt,
+      metadata:     {
+        booking_pk:  bookingPk,
+        guest_phone: guestPhone,
+        test_mode:   testMode,
+      },
+    });
+  } catch (err) {
+    // Non-fatal — confirmation already sent, follow-up scheduling failure shouldn't crash
+    console.error("[CONFIRM] Follow-up scheduling failed:", err.message);
+  }
 
   // Upsert guest to CRM
   if (crmSupabase) {

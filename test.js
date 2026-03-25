@@ -19,9 +19,10 @@ import {
   isReturningGuest,
 } from "./index.js";
 
-import { buildConfirmationText } from "./bookingConfirmations.js";
+import { buildConfirmationText, buildFollowUpText } from "./bookingConfirmations.js";
 import { checkOptOut, upsertContact, addTagsToContact, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { getKnowledgeContext } from "./knowledgeBase.js";
+import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -581,6 +582,110 @@ async function test16() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 17: Scheduler — scheduleMessage + processScheduledMessages
+// ─────────────────────────────────────────────────────────────────────────────
+async function test17() {
+  console.log("\nTEST 17: Scheduler");
+  if (!supabase) { console.log("  ⚠ SKIP — no SUPABASE_URL"); return; }
+
+  const testPhone  = "+15550017777";
+  const optPhone   = "+15550017888";
+  const mockSid    = "SMTEST17MOCK";
+  const sendAt     = new Date(Date.now() - 1000).toISOString(); // 1 second in the past = due now
+
+  // Mock Twilio client — no real SMS sent
+  const mockTwilio = {
+    messages: {
+      create: async ({ to }) => {
+        if (to === optPhone) throw new Error("Should have been cancelled before Twilio call");
+        return { sid: mockSid };
+      },
+    },
+  };
+
+  // --- Sub-test A: scheduleMessage inserts a row ---
+  let rowId;
+  try {
+    const row = await scheduleMessage(supabase, {
+      phone:        testPhone,
+      body:         "Test follow-up — scheduler test",
+      message_type: "test_followup",
+      send_at:      sendAt,
+      metadata:     { test: true },
+    });
+    rowId = row.id;
+    row.status === "pending"     ? pass("scheduleMessage: status=pending")    : fail("scheduleMessage: status wrong", row.status);
+    row.phone  === testPhone     ? pass("scheduleMessage: phone correct")      : fail("scheduleMessage: phone wrong", row.phone);
+    row.message_type === "test_followup" ? pass("scheduleMessage: message_type correct") : fail("scheduleMessage: message_type wrong");
+  } catch (err) {
+    fail("scheduleMessage insert", err.message);
+    return;
+  }
+
+  // --- Sub-test B: scheduleMessage for opted-out number ---
+  let optRowId;
+  if (crmSupabase) {
+    try {
+      // Insert opt-out record
+      await crmSupabase.from("opt_outs").upsert({ phone: optPhone, reason: "scheduler test" });
+
+      const optRow = await scheduleMessage(supabase, {
+        phone:        optPhone,
+        body:         "Should never be sent",
+        message_type: "test_optout",
+        send_at:      sendAt,
+      });
+      optRowId = optRow.id;
+      pass("scheduleMessage: opted-out row inserted");
+    } catch (err) {
+      fail("scheduleMessage: opted-out insert", err.message);
+    }
+  }
+
+  // --- Sub-test C: processScheduledMessages sends the due row ---
+  try {
+    const result = await processScheduledMessages(supabase, mockTwilio, crmSupabase);
+    result.processed >= 1 ? pass(`processScheduledMessages: processed ${result.processed}`) : fail("processScheduledMessages: nothing processed");
+    result.sent >= 1       ? pass(`processScheduledMessages: sent ${result.sent}`)           : fail("processScheduledMessages: nothing sent");
+    if (crmSupabase) {
+      result.cancelled >= 1 ? pass(`processScheduledMessages: cancelled opted-out`)         : fail("processScheduledMessages: opted-out not cancelled");
+    }
+  } catch (err) {
+    fail("processScheduledMessages run", err.message);
+  }
+
+  // --- Sub-test D: verify DB state after processing ---
+  if (rowId) {
+    const { data: sent } = await supabase.from("scheduled_messages").select("status,twilio_sid,sent_at").eq("id", rowId).single();
+    sent?.status === "sent"   ? pass("DB: row marked sent")       : fail("DB: row not marked sent", sent?.status);
+    sent?.twilio_sid === mockSid ? pass("DB: twilio_sid stored")  : fail("DB: twilio_sid missing", sent?.twilio_sid);
+    sent?.sent_at             ? pass("DB: sent_at recorded")       : fail("DB: sent_at missing");
+  }
+
+  if (optRowId) {
+    const { data: optSent } = await supabase.from("scheduled_messages").select("status,error").eq("id", optRowId).single();
+    optSent?.status === "cancelled" ? pass("DB: opted-out row cancelled") : fail("DB: opted-out row status wrong", optSent?.status);
+    optSent?.error?.includes("opted out") ? pass("DB: opt-out reason recorded") : fail("DB: opt-out reason missing", optSent?.error);
+  }
+
+  // --- Sub-test E: buildFollowUpText produces valid output ---
+  const mockBooking = {
+    contact:      { name: "Alex Johnson", phone: testPhone },
+    availability: { item: { name: "3-Hour Snowmobile Tour" } },
+  };
+  const followUp = buildFollowUpText(mockBooking);
+  followUp.includes("Alex")           ? pass("buildFollowUpText: contains first name") : fail("buildFollowUpText: missing name");
+  followUp.includes("3-Hour")         ? pass("buildFollowUpText: contains item name")  : fail("buildFollowUpText: missing item");
+  followUp.length <= 320              ? pass(`buildFollowUpText: ${followUp.length} chars <= 320`) : fail("buildFollowUpText: too long");
+
+  // --- Cleanup ---
+  if (rowId)    await supabase.from("scheduled_messages").delete().eq("id", rowId);
+  if (optRowId) await supabase.from("scheduled_messages").delete().eq("id", optRowId);
+  if (crmSupabase) await crmSupabase.from("opt_outs").delete().eq("phone", optPhone);
+  pass("Scheduler test cleaned up");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -602,6 +707,7 @@ async function main() {
   await test12();
   await test13();
   await test15();
+  await test17();
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");

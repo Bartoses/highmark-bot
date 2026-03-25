@@ -20,6 +20,7 @@ import { createClient } from "@supabase/supabase-js";
 import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborAvailability } from "./knowledgeBase.js";
 import { initBookingConfirmations } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
+import { processScheduledMessages } from "./scheduler.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -799,6 +800,27 @@ app.post("/reset", async (req, res) => {
   } else {
     await supabase.from("conversations").delete().neq("from_number", "");
     res.json({ cleared: "all" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCHEDULED MESSAGES WORKER — called by Railway cron every minute
+// POST /cron/scheduled-messages
+// Set CRON_SECRET env var and pass as x-cron-secret header to protect the route.
+// Railway cron config: every minute → POST /cron/scheduled-messages
+// ─────────────────────────────────────────────────────────────────────────────
+app.post("/cron/scheduled-messages", async (req, res) => {
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && req.headers["x-cron-secret"] !== cronSecret) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const result = await processScheduledMessages(supabase, twilioClient, crmSupabase);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[CRON] processScheduledMessages error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
