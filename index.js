@@ -237,7 +237,7 @@ export function detectSentiment(message) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Hard truncates at last word boundary before max, adds '…'
-export function enforceLength(text, max = 160) {
+export function enforceLength(text, max = 320) {
   if (text.length <= max) return text;
   const truncated = text.slice(0, max - 1);
   const lastSpace = truncated.lastIndexOf(" ");
@@ -603,8 +603,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       );
     }
 
-    // 12. Already in handoff — gentle redirect, stop answering
-    else if (convo.handoff) {
+    // 12. Already in handoff — re-engage for booking/conditions, redirect everything else
+    else if (convo.handoff && intent !== "booking" && intent !== "conditions") {
       replyText = enforceLength(
         `Still here if you have quick questions! For detailed stuff call ${HANDOFF_PHONE} 🤙`
       );

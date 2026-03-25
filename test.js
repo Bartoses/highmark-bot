@@ -330,20 +330,28 @@ async function test8() {
 // ─────────────────────────────────────────────────────────────────────────────
 async function test9() {
   console.log("\nTEST 9: enforceLength");
-  const short = "A".repeat(80);
-  const exact = "A".repeat(160);
-  const over  = "Hello world this is a test sentence that keeps going and going until it exceeds one hundred and sixty characters total yes it does because I made it long enough on purpose here.";
+  const short   = "A".repeat(80);
+  const exact   = "A".repeat(160);
+  const over320 = "Hello world ".repeat(35); // ~420 chars — exceeds 320-char default
+  const over160 = "Hello world this is a test sentence that keeps going and going until it exceeds one hundred and sixty characters total yes it does because I made it long enough on purpose here.";
 
-  enforceLength(short).length === 80 ? pass("Short string unchanged") : fail("Short string changed");
-  enforceLength(exact).length === 160 ? pass("Exact 160 unchanged") : fail("Exact 160 changed");
+  enforceLength(short).length === 80  ? pass("Short string unchanged")  : fail("Short string changed");
+  enforceLength(exact).length === 160 ? pass("Exact 160 unchanged")     : fail("Exact 160 changed");
 
-  const truncated = enforceLength(over);
-  truncated.length <= 160
+  // Default max is now 320
+  const truncated = enforceLength(over320);
+  truncated.length <= 320
     ? pass(`Over-limit truncated to ${truncated.length} chars`)
     : fail("Not truncated", `${truncated.length} chars`);
   truncated.endsWith("…")
     ? pass("Ends with '…'")
     : fail("Missing '…'", truncated.slice(-5));
+
+  // Explicit max still works
+  const truncated160 = enforceLength(over160, 160);
+  truncated160.length <= 160
+    ? pass("Explicit max=160 respected")
+    : fail("Explicit max=160 not respected", `${truncated160.length} chars`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
