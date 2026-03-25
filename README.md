@@ -1,17 +1,76 @@
-# Highmark Bot — Deploy Guide
+# Highmark Bot
 
-## What this is
 AI-powered SMS concierge for outdoor businesses in Steamboat Springs.
 Built by Whiteout Solutions.
 
+**Live:** https://highmark-bot-production.up.railway.app
+**Twilio number:** +18668906657
+
 ---
 
-## Deploy to Railway in 10 minutes
+## Stack
+- **Bot:** Node.js + Express on Railway (auto-deploy from GitHub `main`)
+- **SMS:** Twilio
+- **AI:** Claude (claude-sonnet-4-6) via Anthropic SDK
+- **DB1:** Supabase — conversations + knowledge base
+- **DB2:** Supabase CRM — contacts, campaigns, opt-outs
+- **Bookings:** FareHarbor API (Tier 2 clients)
 
-### Step 1 — Push to GitHub
-1. Create a new repo on github.com (call it `highmark-bot`)
-2. In your terminal:
+---
+
+## File Structure
 ```
+index.js                — Express server, SMS webhook, all bot logic
+knowledgeBase.js        — FareHarbor + website scraper, KB caching
+bookingConfirmations.js — FareHarbor webhook + confirmation texts
+crm.js                  — contacts, campaigns, TCPA opt-out/opt-in
+chat.js                 — local terminal chat simulator
+test.js                 — automated test suite (port 3099)
+virtual-test.sh         — Twilio Virtual Phone test runner
+db1_schema.sql          — Supabase DB1 migration
+db2_crm_schema.sql      — Supabase DB2 CRM migration
+railway.json            — Railway config
+```
+
+---
+
+## Local Development
+
+```bash
+npm install
+
+# Interactive chat (no Twilio cost)
+npm run chat
+
+# Full automated test suite
+npm test
+
+# Server in test mode (for curl tests)
+npm run dev:test
+```
+
+---
+
+## Twilio Virtual Phone Testing
+
+1. Make sure `TEST_MODE` is NOT set on Railway
+2. Set webhook on `+18668906657` → `https://highmark-bot-production.up.railway.app/sms` (HTTP POST)
+3. Run a scenario:
+
+```bash
+chmod +x virtual-test.sh
+./virtual-test.sh        # menu
+./virtual-test.sh 1      # new guest greeting
+```
+
+Watch replies appear in the Virtual Phone UI at console.twilio.com/us1/develop/sms/virtual-phone.
+
+---
+
+## Deploy to Railway (new instance)
+
+### 1 — Push to GitHub
+```bash
 git init
 git add .
 git commit -m "Initial Highmark bot"
@@ -19,66 +78,76 @@ git remote add origin https://github.com/YOURUSERNAME/highmark-bot.git
 git push -u origin main
 ```
 
-### Step 2 — Deploy on Railway
-1. Go to railway.app and sign in with GitHub
-2. Click "New Project" → "Deploy from GitHub repo"
-3. Select your `highmark-bot` repo
-4. Railway will detect Node.js and deploy automatically
+### 2 — Create Railway project
+1. railway.app → New Project → Deploy from GitHub repo
+2. Select `highmark-bot`
 
-### Step 3 — Add environment variables on Railway
-In your Railway project → Settings → Variables, add:
+### 3 — Set environment variables on Railway
 ```
-TWILIO_ACCOUNT_SID=your_sid
-TWILIO_AUTH_TOKEN=your_auth_token
-TWILIO_PHONE_NUMBER=+18668906657
-ANTHROPIC_API_KEY=your_anthropic_key
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_PHONE_NUMBER=
+ANTHROPIC_API_KEY=
+SUPABASE_URL=
+SUPABASE_KEY=
+CRM_SUPABASE_URL=
+CRM_SUPABASE_KEY=
+CLIENT_NAME=
+CLIENT_PHONE=
+HANDOFF_PHONE=
+CLIENT_EMAIL=
+CLIENT_ID=
+FAREHARBOR_ENABLED=false
+FAREHARBOR_APP_KEY=
+FAREHARBOR_USER_KEY_CSR=
+CONFIRMATIONS_ENABLED=false
+CONFIRMATIONS_TEST_PHONE=
+OPENWEATHER_API_KEY=
 ```
 
-### Step 4 — Get your live URL
-Railway gives you a URL like:
-`https://highmark-bot-production.up.railway.app`
+### 4 — Connect Twilio
+Twilio Console → Phone Numbers → your number → Messaging:
+- "A message comes in" → Webhook → `https://your-railway-url.up.railway.app/sms`
+- Method: HTTP POST
 
-### Step 5 — Connect to Twilio
-1. Go to Twilio → Phone Numbers → Active Numbers → your 866 number
-2. Under Messaging Configuration
-3. Set "A message comes in" → Webhook → your Railway URL + `/sms`
-   Example: `https://highmark-bot-production.up.railway.app/sms`
-4. Method: HTTP POST
-5. Save
-
-### Step 6 — Test it
-Text "Hello" to +1 (866) 890-6657
-You should get a response within 3-5 seconds.
+### 5 — Health check
+```bash
+curl https://your-railway-url.up.railway.app/
+```
+Expected: `{"status":"Highmark running ✅", ...}`
 
 ---
 
-## Customizing for a client
+## Onboarding a New Client
 
-When you onboard a new client:
-1. Buy them a new Twilio number ($1.15/mo)
-2. Update the SYSTEM_PROMPT in index.js with their specific business info
-3. Point their number's webhook to the same Railway URL
-4. Or deploy a separate instance with their custom prompt
-
----
-
-## File structure
-```
-highmark-bot/
-├── index.js         ← bot logic + system prompt
-├── package.json     ← dependencies
-├── .env.example     ← environment variable template
-├── .gitignore       ← keeps .env out of GitHub
-└── README.md        ← this file
-```
+1. Buy a Twilio number ($1.15/mo)
+2. Deploy a new Railway instance (or use multi-client Supabase table — see CLAUDE.md)
+3. Set `CLIENT_CONFIG` env vars for the new business
+4. Point the Twilio number webhook to the Railway URL
+5. Run `virtual-test.sh 1` to verify the greeting
 
 ---
 
-## Costs (monthly estimate)
-- Railway hobby plan: $5/mo
-- Twilio per message: ~$0.0079 sent + $0.0079 received
-- Claude API: ~$0.003 per conversation
-- At 500 conversations/mo: roughly $10-15 total running cost
+## Rate Limiting
+- **IP:** 30 requests/min per IP
+- **Phone:** 10 messages/min per phone number
+- Both return valid TwiML 429 so Twilio doesn't retry
+
+---
+
+## Tier Model
+| Tier | Price | Features |
+|------|-------|----------|
+| Tier 1 | $200-300/mo | Bot Q&A + booking links (`FAREHARBOR_ENABLED=false`) |
+| Tier 2 | $400-500/mo | Real-time availability + live KB refresh (`FAREHARBOR_ENABLED=true`) |
+
+---
+
+## Running Costs (estimate)
+- Railway: $5/mo
+- Twilio: ~$0.0079/msg sent + received
+- Claude API: ~$0.003/conversation
+- At 500 conversations/mo: ~$10-15 total
 
 ---
 
