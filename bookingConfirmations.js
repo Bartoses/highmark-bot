@@ -126,12 +126,22 @@ async function preSeedConversation(booking, confirmationText, supabase, toNumber
   );
 }
 
+// Normalize FareHarbor phone numbers to E.164 format (+1XXXXXXXXXX for US)
+// FH sometimes returns 10-digit numbers without country code.
+function normalizePhone(phone) {
+  if (!phone) return phone;
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return phone; // already normalized or international
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PROCESS A SINGLE BOOKING EVENT
 // ─────────────────────────────────────────────────────────────────────────────
 async function processBookingEvent(booking, source, twilioClient, supabase, crmSupabase) {
   const status     = booking.status;
-  const guestPhone = booking.contact?.phone;
+  const guestPhone = normalizePhone(booking.contact?.phone);
   const bookingPk  = String(booking.pk);
   const fromNumber = process.env.TWILIO_PHONE_NUMBER;
 
