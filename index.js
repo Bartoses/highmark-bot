@@ -368,7 +368,7 @@ async function saveConversation(fromNumber, toNumber, convo) {
 // ─────────────────────────────────────────────────────────────────────────────
 // CLAUDE CALL
 // ─────────────────────────────────────────────────────────────────────────────
-async function getClaudeReply(convo, season, knowledgeContext, extraInstruction) {
+async function getClaudeReply(convo, season, knowledgeContext, extraInstruction, maxLength = 160) {
   const messages = convo.messages.map(({ role, content }) => ({ role, content }));
   const system   = extraInstruction
     ? `${buildSystemPrompt(season, knowledgeContext)}\n\nCURRENT CONTEXT: ${extraInstruction}`
@@ -384,7 +384,7 @@ async function getClaudeReply(convo, season, knowledgeContext, extraInstruction)
   const text = response.content[0].text;
   // Never truncate replies containing URLs — the link must arrive intact
   if (/https?:\/\//.test(text)) return text;
-  return enforceLength(text);
+  return enforceLength(text, maxLength);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -634,11 +634,14 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo);
       const knowledgeCtx = await getKnowledgeContext(supabase);
 
+      // Conditions/weather get 320 chars (2 texts) — forecast data needs the room
+      const replyMax = intent === "conditions" ? 320 : 160;
       replyText = await getClaudeReply(
         convo,
         season,
         knowledgeCtx,
-        availCtx ? `Live availability data: ${availCtx}` : null
+        availCtx ? `Live availability data: ${availCtx}` : null,
+        replyMax
       );
 
       // Detect if Claude's reply triggers a handoff
