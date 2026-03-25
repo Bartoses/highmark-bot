@@ -162,9 +162,10 @@ async function refreshFareHarborItems(supabase) {
 async function refreshFareHarborAvailability(supabase) {
   if (process.env.FAREHARBOR_ENABLED !== "true") return;
 
-  const today = new Date();
-  const start = today.toISOString().slice(0, 10);
-  const end   = new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000)
+  // Same-day bookings not allowed — start availability window from tomorrow
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const start    = tomorrow.toISOString().slice(0, 10);
+  const end      = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000)
     .toISOString()
     .slice(0, 10);
 
@@ -630,12 +631,18 @@ export async function getFareHarborAvailability(companyId, itemPk, date) {
   if (!company) return null;
 
   try {
-    const nextDay = new Date(date + "T12:00:00Z");
+    // Same-day bookings not allowed — if requested date is today or past, use tomorrow
+    const today     = new Date().toISOString().slice(0, 10);
+    const startDate = date <= today
+      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+      : date;
+
+    const nextDay = new Date(startDate + "T12:00:00Z");
     nextDay.setDate(nextDay.getDate() + 1);
     const end = nextDay.toISOString().slice(0, 10);
 
     const { availabilities } = await fhGet(
-      `/companies/${company.shortname}/items/${itemPk}/minimal/availabilities/date-range/${date}/${end}/`,
+      `/companies/${company.shortname}/items/${itemPk}/minimal/availabilities/date-range/${startDate}/${end}/`,
       company
     );
 
