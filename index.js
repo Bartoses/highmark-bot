@@ -1,233 +1,333 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   HIGHMARK — AI SMS Concierge by Whiteout Solutions
+   ─────────────────────────────────────────────────────────────────────────────
+   Tier 1 ($200-300/mo): FAREHARBOR_ENABLED=false
+     Bot answers questions + routes to booking links
+   Tier 2 ($400-500/mo): FAREHARBOR_ENABLED=true
+     Real-time availability + live knowledge base refresh
+
+   Search "CLIENT_CONFIG" to find every client-specific value.
+   ─────────────────────────────────────────────────────────────────────────────
+*/
+import "dotenv/config";
+import { fileURLToPath } from "url";
 import express from "express";
 import twilio from "twilio";
 import Anthropic from "@anthropic-ai/sdk";
+import { createClient } from "@supabase/supabase-js";
+
+import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborAvailability } from "./knowledgeBase.js";
+import { initBookingConfirmations } from "./bookingConfirmations.js";
+import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT CONFIG
-// Search "CLIENT_CONFIG" to find every value to update when onboarding a new
-// business. These are the only things you should need to change per client.
+// Search "CLIENT_CONFIG" to find every value that changes per business.
+// Set these as environment variables in Railway (or .env locally).
 // ─────────────────────────────────────────────────────────────────────────────
-const BUSINESS_NAME = "Whiteout Solutions";             // CLIENT_CONFIG
-const BOOKING_LINK  = "[BOOKING_LINK]";                 // CLIENT_CONFIG: replace with actual URL
-const BOT_SERVICES  = "tours, rentals, and activities"; // CLIENT_CONFIG: what this business offers
+const CLIENT_NAME         = process.env.CLIENT_NAME        || "our team";                     // CLIENT_CONFIG
+const CLIENT_PHONE        = process.env.CLIENT_PHONE       || "(970) 439-1707";               // CLIENT_CONFIG
+const HANDOFF_PHONE       = process.env.HANDOFF_PHONE      || CLIENT_PHONE;                   // CLIENT_CONFIG
+const FAREHARBOR_ENABLED  = process.env.FAREHARBOR_ENABLED === "true";                        // CLIENT_CONFIG
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SUMMIT — SYSTEM PROMPT
-// Summit is the bot's name and persona. Keep Summit consistent across clients;
-// only the CLIENT_CONFIG values above change per business.
-// ─────────────────────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are Summit — the SMS concierge for ${BUSINESS_NAME} in Steamboat Springs, Colorado.
-
-You're a knowledgeable Steamboat local: part ski bum, part insider guide. Casual, warm, genuinely helpful. You text like a friend who knows everything about Steamboat — not like a customer service bot.
-
-━━━ SMS LENGTH — follow these rules exactly ━━━
-- First reply of a new conversation: max 320 characters (2 texts)
-- All follow-up replies: max 160 characters (1 text)
-- Only go longer if the guest explicitly asks for more detail
-- Cut ruthlessly. Skip filler like "Great question!" or "Of course!" — just answer
-- No markdown, dashes, bullet points, or asterisks. Plain text only.
-- Emojis ok but use sparingly: snow crystal, skis, mountain, snowboarder, pine tree
-
-━━━ YOUR SERVICES ━━━
-You represent ${BUSINESS_NAME}, offering ${BOT_SERVICES}.
-Tie recommendations back to what ${BUSINESS_NAME} offers when it's natural.
-
-━━━ BOOKING FLOW ━━━
-When someone wants to book, follow this exact 3-step flow — one text per step:
-  Step 1: Ask what activity they want to do
-  Step 2: Ask what date and how many people
-  Step 3: Confirm details and send the booking link
-Keep each step to one casual sentence. Don't rush ahead.
-
-━━━ HANDOFF ━━━
-If someone asks something you truly can't answer — very specific pricing, complaints,
-custom group requests, special accommodations — respond with exactly:
-"Let me get ${BUSINESS_NAME} to reach out directly — what's the best time to call you?"
-Do not guess or make up specific prices or availability.
-
-━━━ STEAMBOAT KNOWLEDGE ━━━
-
-Seasonal conditions (typical):
-- Nov–Dec: Early season. Lower mountain open, limited terrain, great deals. Can be thin.
-- Jan–Mar: Peak winter. Champagne Powder at its best. Best snow, coldest temps.
-- April: Spring skiing. Warm, soft snow, long days, usually still great coverage.
-- May–Oct: Summer and fall. Hiking, biking, fishing, wildflowers peak in July.
-
-Steamboat Ski Resort:
-- 169 trails, 18 lifts, 3,000 acres, summit at 10,568 ft (Storm Peak)
-- Champagne Powder: Steamboat's trademark — ultra-dry, low-density snow unique to the Yampa Valley
-- Yampa Valley averages 349 inches of snow per year
-- Beginner trails: Preview, Yoo Hoo, Rudi's Run
-- Intermediate: Morningside Park, Why Not, Rainbow
-- Advanced: Chute 1, Twilight, Shadows
-- Expert and glades: Christmas Tree Bowl, Pony Express, Mail Chute
-- Most popular lift: Sunshine Express high-speed quad
-- Gondola connects base village to mid-mountain (free)
-
-Backcountry near Steamboat:
-- Flattops Wilderness: expansive high plateau, deep snowpack, popular with splitboarders and skiers
-- Buffalo Pass: 30 min from town, incredible tree skiing and snowshoeing
-- Rabbit Ears Pass: closest backcountry zone to town, also the #1 snowmobile area in the region
-
-Snowmobiling:
-- Rabbit Ears Pass is the main hub — hundreds of miles of groomed trails
-- Also popular: Lynx Pass, Buffalo Pass (more advanced terrain)
-
-Other winter activities:
-- Howelsen Hill: oldest ski area in Colorado, right in town — night skiing, Nordic, ski jumps
-- Strawberry Park Hot Springs: 30 min drive, rustic, clothing optional after dark, 4WD recommended in winter
-- Old Town Hot Springs: in town, family friendly, open daily
-- Fish Creek Falls: 1-mile hike to a 283-ft waterfall, frozen and stunning in winter
-- Sleigh rides, dog sledding, and snowshoeing available locally
-
-Summer and fall activities:
-- Emerald Mountain: trail network right in town, excellent mountain biking and running
-- Fish Creek Falls trail: great hike spring through fall
-- Yampa River: fly fishing, rafting, stand-up paddleboarding
-- Steamboat Lake State Park: 45 min north, kayaking, paddleboarding, camping
-
-Dining:
-- Breakfast: Creekside Cafe, The Egg and I
-- Lunch and casual: Salt and Lime (Mexican, local favorite), Carl's Tavern (burgers, great bar)
-- Dinner: Cafe Diva (upscale, date night), Ore House (steaks, old-school Steamboat), Rex's American Grill, Mambo Italiano, The Laundry
-- Apres: Schmiggity's, The Tap House, Bear River Bar and Grill
-
-Logistics:
-- Rabbit Ears Pass (US-40) is the main route from Denver — about 3 hours, check CDOT for road conditions
-- Steamboat Springs Airport (HDN) has seasonal direct flights
-- Free bus system (SST) runs frequently in season
-- Town is walkable
-
-Events:
-- Winter Carnival (February): 100+ year tradition, street events, ski jumping off Howelsen Hill
-- Steamboat Ski Town USA: on-mountain competitions and events throughout ski season
-- Strings Music Festival (summer): nationally recognized outdoor concert series
-- Hot Air Balloon Rodeo (July): one of the largest balloon events in the US
-- Yampa Valley Crane Festival (fall): birding event along the Yampa River
-
-When you don't have live data (current snow depth, today's wait times):
-- Be honest, don't make it up
-- Point to steamboat.com for live conditions
-- Offer to have ${BUSINESS_NAME} follow up directly`;
+// CLIENT_CONFIG — booking URLs keyed by offering type
+const BOOKING_URLS = {
+  csr_steamboat_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=homepage&full-items=yes&flow=1262221",
+  csr_kremmling_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=homepage%20card&full-items=yes&flow=1262222",
+  csr_proride_guided:     "https://fareharbor.com/embeds/book/coloradosledrentals/items/?flow=1470754&full-items=yes",
+  rea_2hr_tour:           "https://fareharbor.com/embeds/book/rabbitearsadventures/?ref=homepage&full-items=yes&flow=1539483",
+  rea_3hr_tour:           "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673348/?ref=homepage&full-items=yes&flow=1491038",
+  rea_private_tour:       "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673358/?ref=homepage&full-items=yes&flow=1491038",
+  all_winter:             "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=homepage%20hero&full-items=yes&flow=276228",
+  rzr_steamboat:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV",
+  rzr_kremmling:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV",
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONVERSATION STORE — keyed by phone number, in-memory for now
-// TODO: migrate to Supabase (each conversation object maps cleanly to a row)
-//
-// Shape per number:
-// {
-//   messages:    [{ role, content, timestamp, intent, sentiment }],
-//   bookingStep: null | "ask_activity" | "ask_date_group" | "confirm" | "followup_sent",
-//   bookingData: { activity: null, date: null, groupSize: null },
-//   handoff:     false   — set true when guest requests human contact
-// }
+// SERVICE CLIENTS
 // ─────────────────────────────────────────────────────────────────────────────
-const conversations = {};
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const anthropic    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const supabase     = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const crmSupabase  = process.env.CRM_SUPABASE_URL
+  ? createClient(process.env.CRM_SUPABASE_URL, process.env.CRM_SUPABASE_KEY)
+  : null;
 
-function initConversation() {
-  return {
-    messages: [],
-    bookingStep: null,
-    bookingData: { activity: null, date: null, groupSize: null },
-    handoff: false,
-  };
+// ─────────────────────────────────────────────────────────────────────────────
+// SEASON DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+export function getCurrentSeason() {
+  const month = new Date().getMonth() + 1; // 1-12
+  if ([11, 12, 1, 2, 3].includes(month)) return "winter";
+  if ([4, 5].includes(month))             return "shoulder";
+  return "summer";
+}
+
+export function getSeasonalOpener() {
+  const season = getCurrentSeason();
+  if (season === "winter")   return "Hey! I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?";
+  if (season === "summer")   return "Hey! I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?";
+  return "Hey! I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CLASSIFIERS — lightweight keyword-based, no extra API call
-// TODO: replace with Claude-based classification when piping to Supabase
+// SYSTEM PROMPT
 // ─────────────────────────────────────────────────────────────────────────────
+export function buildSystemPrompt(season, knowledgeContext) {
+  const isWinter   = season === "winter" || season === "shoulder";
+  const isSummer   = season === "summer" || season === "shoulder";
+  const bookingRef = Object.entries(BOOKING_URLS)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("\n");
 
-function classifyIntent(text) {
-  const t = text.toLowerCase();
-  if (/book|reserv|sign.?up|schedul/i.test(t))                       return "booking";
-  if (/snow|powder|condition|grooming|report|depth|weather/i.test(t)) return "conditions";
-  if (/price|cost|how much|rate|fee|charge/i.test(t))                return "pricing";
-  if (/where|direction|park|location|address|hours|open|close/i.test(t)) return "logistics";
+  return `You are Summit — AI SMS concierge for Colorado Sled Rentals and Rabbit Ears Adventures, Steamboat Springs CO.
+Warm, stoked, genuinely local. Like a guide who loves their job. Never robotic. Never a FAQ page.
+Never mention Whiteout Solutions or Highmark to guests.
+
+━━━ SMS RULES (hard limits) ━━━
+- Every reply: 160 chars max (1 text). No exceptions unless guest explicitly asks for more detail.
+- Max 320 chars only if guest explicitly asks "tell me more" or similar.
+- No bullets, dashes, markdown, or formatting. Plain text only.
+- Emojis: max 1-2 per message. Use sparingly.
+- Never send 2 texts in a row without a guest reply.
+
+━━━ BOOKING RULES ━━━
+- Never quote specific pricing — always send the booking link instead.
+- Never confirm availability unless told to by LIVE DATA below.
+- Never make up snow depth or trail conditions.
+- Groups 6+: always handoff — never try to book via text.
+- When routing to a booking link, pick the most relevant one and include it directly in your reply.
+Available booking links:
+${bookingRef}
+
+━━━ HANDOFF — send this message and stop when: ━━━
+- Group of 6 or more people
+- Complaint or problem
+- Injury, accident, or insurance question
+- Custom pricing request
+HANDOFF MESSAGE: "Great question for our team! Give us a call at ${HANDOFF_PHONE} and we'll get you sorted 🤙"
+If guest texts again after handoff: "Still here if you have quick questions! For detailed stuff call ${HANDOFF_PHONE} 🤙"
+
+${isWinter ? `━━━ WINTER KNOWLEDGE ━━━
+CSR — Colorado Sled Rentals:
+- Steamboat: 2151 Downhill Dr | Kremmling: 1606 Park Ave
+- Fleet: 2026 Polaris Boost 850s, 9R Khaos, 650 RMK SP, Pro-RMKs
+- Includes: full tank, helmet, avalanche gear (BCA pack, beacon, shovel, probe, radio), $1k damage cap
+- NOT ride-from: needs CSR trailer or own tow vehicle. Delivery to Columbine Trailhead Clark CO (included guided, extra fee unguided)
+- TOBE monosuits + boots rentable (extra cost). 18+ to rent, 16+ to drive (valid license required).
+
+CSR Pro-Ride Guided: Experienced riders only — deep powder, tree lines, steep climbs. Half-day + full-day available.
+
+REA — Rabbit Ears Adventures:
+- Location: 4492 HWY 14, Walden CO (Rabbit Ears Pass)
+- Polaris Trail snowmobiles OR 4-seat tracked Polaris UTV
+- 285" average annual snowfall at pass. FREE shuttle from most Steamboat lodging.
+- Hot cocoa, tea, coffee after the ride. Helmet included. $1k damage cap.
+- 5-star avg, 1000s of first-timers guided. Tours: 2hr public | 3hr public | Private.
+
+WINTER ROUTING:
+Beginner / has kids / wants guided → REA tours (use rea_2hr_tour or rea_3hr_tour link)
+Experienced / own pace → CSR unguided Steamboat or Kremmling (use csr_steamboat_unguided or csr_kremmling_unguided)
+Advanced / backcountry → CSR Pro-Ride (use csr_proride_guided)
+Unsure → ask experience level + group size first` : ""}
+
+${isSummer ? `━━━ SUMMER KNOWLEDGE ━━━
+CSR Summer RZR:
+- Steamboat: 2151 Downhill Dr | Kremmling: 1606 Park Ave
+- Self-guided, up to 8 hours, pre-loaded GPS on Ride Command
+- Trailheads: Buffalo Pass, North Fork, Rabbit Ears, North Routt
+- Turbo PRO S 4-Seater: 168HP turbo — thrill seekers (use rzr_steamboat or rzr_kremmling)
+- General 1000 4-Seater: 100HP — families, extra storage (use rzr_steamboat or rzr_kremmling)
+- Both seat 4 adults, trailer rental available. Books via Polaris Adventures (NOT FareHarbor).
+Trail highlights: Buffalo Pass (alpine, moderate), North Routt (remote, rugged), Rabbit Ears (divide views).
+
+SUMMER ROUTING:
+Family + summer → General 1000 + relaxed trails
+Thrill seeker + summer → Turbo PRO S
+Any RZR/ATV question → summer options` : ""}
+
+━━━ WHAT TO WEAR (all seasons) ━━━
+Waterproof/windproof outer layer, warm waterproof gloves, wool socks (no cotton), goggles (helmets provided). Water, snacks, camera. Leave jewelry at home.
+
+━━━ GRACEFUL UNKNOWNS ━━━
+When you don't have live data (snow depth, wait times, live availability):
+- Be honest: "I don't have live snow data but Steamboat.com has today's report."
+- Never make up specific numbers or conditions.
+- Offer next step: "Want help with anything else?" or "I can have the team follow up."
+
+${knowledgeContext ? `━━━ LIVE DATA (use this over hardcoded info when they conflict) ━━━\n${knowledgeContext}` : ""}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTENT + SENTIMENT DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+export function detectIntent(message) {
+  const t = message.toLowerCase();
+  if (/\b(hi+|hey+|hello|howdy|sup|what'?s up|thanks|thank you|thx|ty|np|sounds good|ok|okay|got it|perfect)\b/i.test(t)) return "smalltalk";
+  if (/my (booking|reserv|order|ticket|confirmation)|look.?up|check my reservation|reservation #|confirm.*(number|code)/i.test(t)) return "lookup";
+  if (/\bbook\b|availability|available|sign.?up|schedule|when can|how do (i|we) book|get a spot|for \d+ (people|person|guests|adults)|this (weekend|saturday|sunday|friday|thursday)|want to (ride|go|do|try)/i.test(t)) return "booking";
+  if (/snow|powder|condition|grooming|report|depth|weather|trail.*open|base|fresh pow|road condition/i.test(t))            return "conditions";
+  if (/complaint|problem|refund|injury|wrong|not working|terrible|worst|annoying|upset|angry|disappointed|too expensive/i.test(t)) return "handoff";
   return "info";
 }
 
-function classifySentiment(text) {
-  const t = text.toLowerCase();
-  if (/thank|awesome|great|perfect|love|amazing|appreciate|stoked|sick|rad/i.test(t)) return "positive";
-  if (/wrong|problem|issue|cancel|refund|angry|disappoint|frustrat|terrible|worst|sucks/i.test(t)) return "frustrated";
+export function detectSentiment(message) {
+  const t = message.toLowerCase();
+  if (/excited|great|awesome|love|thanks|perfect|amazing|stoked|can'?t wait|so fun|best/i.test(t))                        return "positive";
+  if (/problem|terrible|wrong|not working|worst|annoying|wtf|ridiculous|upset|angry|disappointed|sucks/i.test(t))         return "frustrated";
   return "neutral";
 }
 
-// Returns true if the guest is asking for a human or escalating
-function needsHandoff(text) {
-  return /speak.*(human|person|manager|someone|rep)|call me back|complaint|refund|cancel.*booking/i.test(
-    text.toLowerCase()
-  );
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Hard truncates at last word boundary before max, adds '…'
+export function enforceLength(text, max = 160) {
+  if (text.length <= max) return text;
+  const truncated = text.slice(0, max - 1);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return (lastSpace > max * 0.7 ? truncated.slice(0, lastSpace) : truncated) + "…";
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGGER — structured JSON to console; pipe to Supabase later
-// ─────────────────────────────────────────────────────────────────────────────
-function logMessage({ from, role, content, intent, sentiment }) {
-  console.log(
-    JSON.stringify({
-      ts:        new Date().toISOString(),
-      from,
-      role,
-      intent,
-      sentiment,
-      content,
-    })
-  );
+// True if conversation exists and last message was more than 24h ago
+export function isReturningGuest(conversation) {
+  if (!conversation?.messages?.length) return false;
+  const lastTs = conversation.messages[conversation.messages.length - 1].timestamp;
+  return Date.now() - new Date(lastTs).getTime() > 24 * 60 * 60 * 1000;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BOOKING FOLLOW-UP — fires 30 min after booking link is sent
-// TODO: replace setTimeout with a Supabase-backed scheduled job so this
-//       survives Railway restarts. For POC, setTimeout is fine.
-// ─────────────────────────────────────────────────────────────────────────────
-function scheduleBookingFollowUp(fromNumber, toNumber) {
-  const THIRTY_MINUTES = 30 * 60 * 1000;
+// Checks FareHarbor availability if message mentions a date (Tier 2 only)
+async function checkAvailabilityIfNeeded(message, convo) {
+  if (!FAREHARBOR_ENABLED) return null;
 
-  setTimeout(async () => {
-    const convo = conversations[fromNumber];
-    if (!convo || convo.bookingStep !== "confirm") return; // already resolved
+  const datePatterns = [
+    /\b(this )?(saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b/i,
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}\b/i,
+    /\b(next week|this weekend|tomorrow)\b/i,
+    /\b\d{1,2}\/\d{1,2}\b/,
+  ];
 
-    const followUpText = `Hey! Did you get a chance to finish your booking? Lmk if you hit any snags.`;
+  const hasDate = datePatterns.some((p) => p.test(message));
+  if (!hasDate) return null;
 
+  try {
+    // Ask Claude to extract structured date info
+    const extractRes = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 80,
+      messages:   [
+        {
+          role:    "user",
+          content: `Extract booking details from this message. Return JSON only, no explanation:
+{"date":"YYYY-MM-DD or null","company":"csr or rea or null","itemType":"snowmobile or rzr or null"}
+Today is ${new Date().toISOString().slice(0, 10)}.
+Message: "${message}"`,
+        },
+      ],
+    });
+
+    let extracted = {};
     try {
-      await twilioClient.messages.create({
-        body: followUpText,
-        from: toNumber,
-        to:   fromNumber,
-      });
-      convo.bookingStep = "followup_sent";
-      console.log(`📬 Follow-up sent to ${fromNumber}`);
-    } catch (err) {
-      console.error("Follow-up send failed:", err.message);
+      const raw = extractRes.content[0].text.trim();
+      const match = raw.match(/\{[\s\S]*\}/);
+      extracted = match ? JSON.parse(match[0]) : {};
+    } catch {
+      return null;
     }
-  }, THIRTY_MINUTES);
+
+    if (!extracted.date || extracted.date === "null") return null;
+
+    // Default to REA for winter, CSR for summer if no company specified
+    const company  = extracted.company ?? (getCurrentSeason() === "summer" ? "csr" : "rea");
+    const items    = await getFareHarborItems(company, supabase);
+    const firstItem = items[0];
+    if (!firstItem) return null;
+
+    const availability = await getFareHarborAvailability(company, firstItem.pk, extracted.date);
+    if (!availability?.length) return null;
+
+    const openSlots = availability.filter((a) => a.capacity > 0);
+    if (!openSlots.length) return `No open slots on ${extracted.date} — check booking link for other dates.`;
+
+    const times = openSlots
+      .slice(0, 3)
+      .map((a) => new Date(a.start_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }))
+      .join(", ");
+
+    return `${extracted.date}: ${openSlots.length} slot(s) open — ${times}`.slice(0, 120);
+  } catch {
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CLAUDE CALL — strips metadata fields before sending messages to the API
+// SUPABASE CONVERSATION STORE
 // ─────────────────────────────────────────────────────────────────────────────
-async function getClaudeReply(convo, extraInstruction) {
-  // Claude only receives role + content; timestamp/intent/sentiment are ours
-  const messages = convo.messages.map(({ role, content }) => ({ role, content }));
+async function getConversation(fromNumber, toNumber) {
+  const { data } = await supabase
+    .from("conversations")
+    .select("*")
+    .eq("from_number", fromNumber)
+    .eq("to_number", toNumber)
+    .single();
 
-  const system = extraInstruction
-    ? `${SYSTEM_PROMPT}\n\nCURRENT CONTEXT: ${extraInstruction}`
-    : SYSTEM_PROMPT;
+  if (data) {
+    return {
+      isNew: false,
+      convo: {
+        messages:              data.messages               ?? [],
+        bookingStep:           data.booking_step           ?? null,
+        bookingData:           data.booking_data           ?? { activity: null, date: null, groupSize: null, company: null, booking_pk: null },
+        handoff:               data.handoff                ?? false,
+        consecutiveFrustrated: data.consecutive_frustrated ?? 0,
+        sessionType:           data.session_type           ?? "live",
+      },
+    };
+  }
+
+  return {
+    isNew: true,
+    convo: {
+      messages:              [],
+      bookingStep:           null,
+      bookingData:           { activity: null, date: null, groupSize: null, company: null, booking_pk: null },
+      handoff:               false,
+      consecutiveFrustrated: 0,
+      sessionType:           "live",
+    },
+  };
+}
+
+async function saveConversation(fromNumber, toNumber, convo) {
+  await supabase.from("conversations").upsert(
+    {
+      from_number:            fromNumber,
+      to_number:              toNumber,
+      messages:               convo.messages,
+      booking_step:           convo.bookingStep,
+      booking_data:           convo.bookingData,
+      handoff:                convo.handoff,
+      consecutive_frustrated: convo.consecutiveFrustrated,
+      session_type:           convo.sessionType,
+      updated_at:             new Date().toISOString(),
+    },
+    { onConflict: "from_number,to_number" }
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLAUDE CALL
+// ─────────────────────────────────────────────────────────────────────────────
+async function getClaudeReply(convo, season, knowledgeContext, extraInstruction) {
+  const messages = convo.messages.map(({ role, content }) => ({ role, content }));
+  const system   = extraInstruction
+    ? `${buildSystemPrompt(season, knowledgeContext)}\n\nCURRENT CONTEXT: ${extraInstruction}`
+    : buildSystemPrompt(season, knowledgeContext);
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-6",
@@ -236,96 +336,225 @@ async function getClaudeReply(convo, extraInstruction) {
     messages,
   });
 
-  return response.content[0].text;
+  return enforceLength(response.content[0].text);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SMS WEBHOOK — Twilio calls this on every inbound text
+// Processing order is intentional — do not reorder.
 // ─────────────────────────────────────────────────────────────────────────────
 app.post("/sms", async (req, res) => {
-  const incomingMsg = req.body.Body?.trim();
-  const fromNumber  = req.body.From;
-  const toNumber    = req.body.To;
+  const rawBody    = req.body.Body?.trim() ?? "";
+  const fromNumber = req.body.From;
+  const toNumber   = req.body.To;
 
-  // Bail on empty/malformed requests
-  if (!incomingMsg || !fromNumber) {
+  // 1. Parse + validate
+  if (!rawBody || !fromNumber) {
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
 
-  const isFirstMessage = !conversations[fromNumber];
-  if (isFirstMessage) conversations[fromNumber] = initConversation();
+  // 2. Normalize for keyword checks
+  const msgUpper = rawBody.toUpperCase().trim();
 
-  const convo     = conversations[fromNumber];
-  const intent    = classifyIntent(incomingMsg);
-  const sentiment = classifySentiment(incomingMsg);
+  // 3. OPT-OUT check — MUST be first (TCPA legal requirement)
+  if (OPT_OUT_KEYWORDS.includes(msgUpper) && crmSupabase) {
+    await handleOptOutKeyword(fromNumber, toNumber, twilioClient, crmSupabase);
+    res.set("Content-Type", "text/xml");
+    return res.send("<Response></Response>");
+  }
 
-  // Log and store the incoming message
-  logMessage({ from: fromNumber, role: "user", content: incomingMsg, intent, sentiment });
+  // 4. OPT-IN check
+  if (OPT_IN_KEYWORDS.includes(msgUpper) && crmSupabase) {
+    await handleOptInKeyword(fromNumber, toNumber, twilioClient, crmSupabase);
+    res.set("Content-Type", "text/xml");
+    return res.send("<Response></Response>");
+  }
+
+  // 5. DEMO MODE — resets conversation, sends seasonal opener
+  if (msgUpper === "SUMMITDEMO") {
+    await supabase.from("conversations").delete().eq("from_number", fromNumber);
+    const opener = enforceLength(getSeasonalOpener());
+    console.log(`[DEMO] Reset + opener sent to ${fromNumber}`);
+
+    if (process.env.TEST_MODE === "true") return res.json({ reply: opener });
+
+    await twilioClient.messages.create({ body: opener, from: toNumber, to: fromNumber });
+    res.set("Content-Type", "text/xml");
+    return res.send("<Response></Response>");
+  }
+
+  // 6. Load conversation from Supabase
+  const { isNew, convo } = await getConversation(fromNumber, toNumber);
+
+  // 7-9. Classify
+  const season    = getCurrentSeason();
+  const intent    = detectIntent(rawBody);
+  const sentiment = detectSentiment(rawBody);
+  const returning = !isNew && isReturningGuest(convo);
+
+  // 10. Update consecutive frustrated counter
+  if (sentiment === "frustrated") {
+    convo.consecutiveFrustrated = (convo.consecutiveFrustrated ?? 0) + 1;
+  } else {
+    convo.consecutiveFrustrated = 0;
+  }
+
+  // Push user message to history
   convo.messages.push({
     role:      "user",
-    content:   incomingMsg,
+    content:   rawBody,
     timestamp: new Date().toISOString(),
     intent,
     sentiment,
   });
 
-  // Keep last 20 messages (~10 exchanges) to stay within token limits
-  if (convo.messages.length > 20) {
-    convo.messages = convo.messages.slice(-20);
-  }
+  // Keep last 10 messages to stay within token limits
+  if (convo.messages.length > 10) convo.messages = convo.messages.slice(-10);
 
   let replyText;
 
   try {
-    // ── 1. FIRST MESSAGE: fixed greeting, no Claude call needed ──────────────
-    if (isFirstMessage) {
-      replyText = `Hey! I'm Summit your Steamboat concierge. Ask me about snow, activities, or booking — I got you.`;
-    }
-
-    // ── 2. HANDOFF: guest needs a human ──────────────────────────────────────
-    else if (needsHandoff(incomingMsg) && !convo.handoff) {
+    // 11. Sentiment escalation → auto-handoff after 2 consecutive frustrated messages
+    if (convo.consecutiveFrustrated >= 2 && !convo.handoff) {
       convo.handoff = true;
-      console.log(`HANDOFF requested — from: ${fromNumber}`);
-      replyText = `Let me get ${BUSINESS_NAME} to reach out directly — what's the best time to call you?`;
+      console.log(`[HANDOFF] Auto-escalation (frustrated x${convo.consecutiveFrustrated}) — ${fromNumber}`);
+      replyText = enforceLength(
+        `I want to make sure you get the best help — give our team a call at ${HANDOFF_PHONE} and they'll sort you out 🤙`
+      );
     }
 
-    // ── 3. BOOKING FLOW — state machine ──────────────────────────────────────
+    // 12. Already in handoff — gentle redirect, stop answering
+    else if (convo.handoff) {
+      replyText = enforceLength(
+        `Still here if you have quick questions! For detailed stuff call ${HANDOFF_PHONE} 🤙`
+      );
+    }
 
-    // Trigger: guest expresses booking intent and we're not already mid-flow
+    // 13. Explicit handoff intent
+    else if (intent === "handoff") {
+      convo.handoff = true;
+      console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
+      replyText = enforceLength(
+        `Great question for our team! Give us a call at ${HANDOFF_PHONE} and we'll get you sorted 🤙`
+      );
+    }
+
+    // FIRST MESSAGE
+    else if (isNew) {
+      // Check if confirmed guest (pre-seeded by booking confirmation)
+      if (convo.sessionType === "confirmed_guest" && convo.bookingData?.activity) {
+        replyText = enforceLength(
+          `Hey! You're all set for ${convo.bookingData.activity} on ${convo.bookingData.date}. Any questions before your adventure? 🏔`
+        );
+      } else {
+        replyText = enforceLength(getSeasonalOpener());
+      }
+    }
+
+    // RETURNING AFTER 24H — light re-intro
+    else if (returning && convo.bookingStep === null && !convo.handoff) {
+      replyText = enforceLength(`Hey, Summit again — welcome back to Steamboat! What can I help with?`);
+    }
+
+    // BOOKING FLOW — state machine
+    // Step trigger: booking intent with no active flow
     else if (intent === "booking" && convo.bookingStep === null) {
-      convo.bookingStep = "ask_activity";
+      convo.bookingStep = 1;
+
+      // Check availability if date was mentioned (Tier 2)
+      const availCtx = await checkAvailabilityIfNeeded(rawBody, convo);
+      const knowledgeCtx = await getKnowledgeContext(supabase);
+
       replyText = await getClaudeReply(
         convo,
-        "The guest wants to book. Ask them what activity they're looking to do. One casual sentence, 160 chars max."
+        season,
+        knowledgeCtx,
+        `Guest wants to book. Ask about their experience level and group size so you can route them correctly. One casual sentence. 160 chars max.${availCtx ? ` Availability note: ${availCtx}` : ""}`
       );
     }
 
-    // Step 1 → 2: received activity, now ask for date + group size
-    else if (convo.bookingStep === "ask_activity") {
-      convo.bookingData.activity = incomingMsg;
-      convo.bookingStep          = "ask_date_group";
-      replyText = await getClaudeReply(
-        convo,
-        `Guest wants to do: "${incomingMsg}". Ask for their preferred date and group size. One casual sentence, 160 chars max.`
-      );
+    // Step 1 → 2: got experience + group size, send booking link
+    else if (convo.bookingStep === 1) {
+      const t = rawBody.toLowerCase();
+
+      // Detect group size >= 6 → handoff
+      const groupMatch = rawBody.match(/\b([6-9]|[1-9]\d+)\b/);
+      if (groupMatch && parseInt(groupMatch[1]) >= 6) {
+        convo.handoff = true;
+        replyText = enforceLength(
+          `Great question for our team! Give us a call at ${HANDOFF_PHONE} and we'll get you sorted 🤙`
+        );
+      } else {
+        // Store experience + group in bookingData
+        convo.bookingData.groupSize = groupMatch ? parseInt(groupMatch[1]) : null;
+
+        // Route to correct URL
+        let url;
+        if (season === "summer" || /rzr|atv|off.?road/.test(t)) {
+          url = BOOKING_URLS.rzr_steamboat;
+          convo.bookingData.company = "csr";
+          convo.bookingData.activity = "RZR adventure";
+        } else if (/beginner|first.?time|never|kid|child|family|guided/.test(t)) {
+          url = BOOKING_URLS.rea_3hr_tour;
+          convo.bookingData.company = "rea";
+          convo.bookingData.activity = "snowmobile tour";
+        } else if (/pro|advance|expert|backcountry|pro.?ride/.test(t)) {
+          url = BOOKING_URLS.csr_proride_guided;
+          convo.bookingData.company = "csr";
+          convo.bookingData.activity = "Pro-Ride guided tour";
+        } else if (/kremmling/.test(t)) {
+          url = BOOKING_URLS.csr_kremmling_unguided;
+          convo.bookingData.company = "csr";
+          convo.bookingData.activity = "self-guided sled rental";
+        } else {
+          // Default: experienced rider → CSR Steamboat unguided
+          url = BOOKING_URLS.csr_steamboat_unguided;
+          convo.bookingData.company = "csr";
+          convo.bookingData.activity = "self-guided sled rental";
+        }
+
+        // Check availability for their preferred date if any (Tier 2)
+        const availCtx = await checkAvailabilityIfNeeded(rawBody, convo);
+        const knowledgeCtx = await getKnowledgeContext(supabase);
+
+        convo.bookingStep = 2;
+
+        replyText = await getClaudeReply(
+          convo,
+          season,
+          knowledgeCtx,
+          `Route guest to this booking URL: ${url}. Include the full URL in your reply. Keep it casual and under 160 chars.${availCtx ? ` Live availability: ${availCtx}` : ""}`
+        );
+      }
     }
 
-    // Step 2 → 3: received date/group, confirm and send booking link
-    else if (convo.bookingStep === "ask_date_group") {
-      convo.bookingData.date     = incomingMsg; // raw input, parse later if needed
-      convo.bookingStep          = "confirm";
-      replyText = `Perfect! Here's your link to book ${convo.bookingData.activity}: ${BOOKING_LINK} — let me know if you need anything else!`;
-      scheduleBookingFollowUp(fromNumber, toNumber);
-    }
-
-    // ── 4. DEFAULT: Claude handles everything else ────────────────────────────
+    // DEFAULT: Claude handles everything else
     else {
-      replyText = await getClaudeReply(convo, null);
+      const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo);
+      const knowledgeCtx = await getKnowledgeContext(supabase);
+
+      replyText = await getClaudeReply(
+        convo,
+        season,
+        knowledgeCtx,
+        availCtx ? `Live availability data: ${availCtx}` : null
+      );
+
+      // Detect if Claude's reply triggers a handoff
+      if (/give us a call at|call.*439-1707/i.test(replyText)) {
+        convo.handoff = true;
+        console.log(`[HANDOFF] Claude triggered handoff for ${fromNumber}`);
+      }
     }
 
-    // Log and store the outgoing reply
-    logMessage({ from: fromNumber, role: "assistant", content: replyText, intent, sentiment: "neutral" });
+    // Log and store reply
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(), from: fromNumber,
+      role: "assistant", intent, sentiment,
+      chars: replyText.length, content: replyText,
+    }));
+
     convo.messages.push({
       role:      "assistant",
       content:   replyText,
@@ -334,53 +563,62 @@ app.post("/sms", async (req, res) => {
       sentiment: "neutral",
     });
 
-    // In TEST_MODE skip Twilio and return reply as JSON so test.js can read it
+    // 23. Save conversation to Supabase
+    await saveConversation(fromNumber, toNumber, convo);
+
+    // 24. Upsert contact to CRM + auto-tag
+    if (crmSupabase) {
+      const tags = deriveTagsFromMessage(rawBody, intent, season);
+      if (returning) tags.push("repeat");
+      await upsertContact(fromNumber, { source: "sms_conversation", tags }, crmSupabase);
+    }
+
+    // 25. Track campaign reply
+    if (crmSupabase) await trackCampaignReply(fromNumber, crmSupabase);
+
+    // 26. Send via Twilio (or return JSON in TEST_MODE)
     if (process.env.TEST_MODE === "true") {
       return res.json({ reply: replyText });
     }
 
-    // Send via Twilio
-    await twilioClient.messages.create({
-      body: replyText,
-      from: toNumber,
-      to:   fromNumber,
-    });
+    await twilioClient.messages.create({ body: replyText, from: toNumber, to: fromNumber });
 
   } catch (error) {
-    console.error("Error handling SMS:", error);
+    console.error("[SMS] Error:", error.message);
 
     if (process.env.TEST_MODE === "true") {
       return res.json({ reply: "Error: " + error.message });
     }
 
-    // Fallback so the guest is never left hanging
     try {
       await twilioClient.messages.create({
-        body: "Having a quick tech issue — try again in a sec or call us directly. Sorry!",
+        body: `Hey! Having a quick issue. Give us a call at ${HANDOFF_PHONE} and we'll help right away. Sorry!`,
         from: toNumber,
         to:   fromNumber,
       });
     } catch (sendErr) {
-      console.error("Fallback send also failed:", sendErr.message);
+      console.error("[SMS] Fallback send failed:", sendErr.message);
     }
   }
 
+  // 27. Respond to Twilio
   res.set("Content-Type", "text/xml");
   res.send("<Response></Response>");
 });
 
-// Reset endpoint — TEST_MODE only, clears conversation history for a phone number
-// Usage: POST /reset  { "from": "+15550001234" }  or omit "from" to clear all
-app.post("/reset", (req, res) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// RESET — TEST_MODE only
+// ─────────────────────────────────────────────────────────────────────────────
+app.post("/reset", async (req, res) => {
   if (process.env.TEST_MODE !== "true") {
     return res.status(403).json({ error: "Only available in TEST_MODE" });
   }
   const from = req.body.from;
   if (from) {
-    delete conversations[from];
+    await supabase.from("conversations").delete().eq("from_number", from);
     res.json({ cleared: from });
   } else {
-    Object.keys(conversations).forEach((k) => delete conversations[k]);
+    await supabase.from("conversations").delete().neq("from_number", "");
     res.json({ cleared: "all" });
   }
 });
@@ -390,13 +628,35 @@ app.post("/reset", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({
-    status:   "Summit is running",
-    business: BUSINESS_NAME,          // CLIENT_CONFIG
-    number:   process.env.TWILIO_PHONE_NUMBER,
+    status:              "Highmark running ✅",
+    version:             "1.0.0",
+    season:              getCurrentSeason(),
+    fareharbor_enabled:  FAREHARBOR_ENABLED,
+    phone:               process.env.TWILIO_PHONE_NUMBER,
+    uptime_seconds:      Math.floor(process.uptime()),
   });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Summit (${BUSINESS_NAME}) running on port ${PORT}`);
-});
+// ─────────────────────────────────────────────────────────────────────────────
+// STARTUP — only runs when executed directly (not when imported by test.js)
+// ─────────────────────────────────────────────────────────────────────────────
+async function main() {
+  // Listen first so Railway/tests get a fast response, then init in background
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`🏔 Highmark (${CLIENT_NAME}) running on port ${PORT} | Season: ${getCurrentSeason()} | FH: ${FAREHARBOR_ENABLED}`);
+  });
+
+  // Init runs after listen — FareHarbor fetches can take several seconds
+  initBookingConfirmations(app, twilioClient, supabase, crmSupabase).catch(console.error);
+  initCRM(app, crmSupabase).catch(console.error);
+  initKnowledgeBase(supabase, anthropic).catch(console.error);
+}
+
+const __filename = fileURLToPath(import.meta.url);
+if (process.argv[1] === __filename) {
+  main().catch(console.error);
+}
+
+// Export for test.js
+export { app, supabase, crmSupabase, twilioClient, anthropic };
