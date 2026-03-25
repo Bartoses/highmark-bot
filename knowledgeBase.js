@@ -81,10 +81,12 @@ async function refreshFareHarborKnowledge(supabase, anthropic) {
       for (const item of items.slice(0, 10)) {
         try {
           const { availabilities } = await fhGet(
-            `/companies/${company.shortname}/items/${item.pk}/availabilities/date-range/${start}/${end}/`,
+            `/companies/${company.shortname}/items/${item.pk}/minimal/availabilities/date-range/${start}/${end}/`,
             company
           );
-          const openSlots = availabilities.filter((a) => a.capacity > 0);
+          const openSlots = availabilities.filter(
+            (a) => a.capacity > 0 || a.is_available === true
+          );
           availabilityData[item.name] = {
             pk:        item.pk,
             open_days: openSlots.length,
@@ -251,13 +253,14 @@ async function refreshWebsiteKnowledge(supabase, anthropic) {
 
     const extractRes = await anthropic.messages.create({
       model:      "claude-sonnet-4-6",
-      max_tokens: 600,
+      max_tokens: 1200,
       messages:   [
         {
           role:    "user",
           content: `Extract business info from this website content and return JSON only:
-{ "offerings": string, "policies": string, "seasonal_notes": string, "hours": string, "faq": string[] }
-Be very concise — this feeds an SMS bot. Max 50 chars per field, max 5 FAQ items.
+{ "offerings": string, "pricing": string, "policies": string, "seasonal_notes": string, "hours": string, "faq": string[] }
+Be concise but complete — this feeds an SMS bot. Max 150 chars per string field, max 8 FAQ items.
+Include summer/winter offerings, RZR tours, prices, cancellation policy, age/weight limits.
 Content: ${combined}`,
         },
       ],
@@ -274,15 +277,15 @@ Content: ${combined}`,
 
     const summaryRes = await anthropic.messages.create({
       model:      "claude-sonnet-4-6",
-      max_tokens: 100,
+      max_tokens: 400,
       messages:   [
         {
           role:    "user",
-          content: `Summarize this business data for an SMS bot in max 250 plain-text chars: ${JSON.stringify(data)}`,
+          content: `Summarize this business data for an SMS bot in max 700 plain-text chars. Cover: what they offer (winter + summer), pricing, key policies (age/weight limits, cancellation), hours. No bullet points — write continuous plain text: ${JSON.stringify(data)}`,
         },
       ],
     });
-    const summary = summaryRes.content[0].text.slice(0, 250);
+    const summary = summaryRes.content[0].text.slice(0, 700);
 
     await supabase.from("knowledge_base").upsert({
       client_id:      "csr_rea",
@@ -394,11 +397,14 @@ export async function getKnowledgeContext(supabase) {
     // Weather is always included first so it never gets truncated out
     const weatherSummary = byKey["weather_steamboat"]?.summary ?? "";
 
-    // Availability + website summaries (capped so they don't crowd out weather)
-    const otherParts = ["csr_fareharbor", "rea_fareharbor", "website_knowledge"]
+    // FH availability summaries (capped tightly — just slot status)
+    const fhParts = ["csr_fareharbor", "rea_fareharbor"]
       .map((k) => byKey[k]?.summary)
       .filter(Boolean);
-    const availSummary = otherParts.join(" | ").slice(0, 350);
+    const availSummary = fhParts.join(" | ").slice(0, 350);
+
+    // Website knowledge — larger budget since it covers pricing, policies, seasonal info
+    const websiteSummary = byKey["website_knowledge"]?.summary ?? "";
 
     // Build booking URLs from cached item PKs — auto-includes any new FH items
     const linkLines = [];
@@ -416,10 +422,11 @@ export async function getKnowledgeContext(supabase) {
       ? `\nDYNAMIC BOOKING LINKS (prefer these over hardcoded):\n${linkLines.join("\n")}`
       : "";
 
-    const weatherSection = weatherSummary ? `WEATHER (${date}): ${weatherSummary}\n` : "";
-    const availSection   = availSummary   ? `AVAILABILITY: ${availSummary}\n`        : "";
+    const weatherSection  = weatherSummary  ? `WEATHER (${date}): ${weatherSummary}\n`  : "";
+    const availSection    = availSummary    ? `AVAILABILITY: ${availSummary}\n`          : "";
+    const websiteSection  = websiteSummary  ? `BUSINESS INFO: ${websiteSummary}\n`       : "";
 
-    return `${weatherSection}${availSection}${linkSection}`.trim();
+    return `${weatherSection}${availSection}${websiteSection}${linkSection}`.trim();
   } catch {
     return "";
   }
@@ -454,7 +461,7 @@ export async function getFareHarborAvailability(companyId, itemPk, date) {
     const end = nextDay.toISOString().slice(0, 10);
 
     const { availabilities } = await fhGet(
-      `/companies/${company.shortname}/items/${itemPk}/availabilities/date-range/${date}/${end}/`,
+      `/companies/${company.shortname}/items/${itemPk}/minimal/availabilities/date-range/${date}/${end}/`,
       company
     );
 
