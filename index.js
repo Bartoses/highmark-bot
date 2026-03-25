@@ -82,6 +82,10 @@ const FAREHARBOR_ENABLED  = process.env.FAREHARBOR_ENABLED === "true";          
 
 // CLIENT_CONFIG — booking URLs keyed by offering type
 const BOOKING_URLS = {
+  // General browse links — guest picks their own item (use for ambiguous/general requests)
+  csr_browse_all:         "https://fareharbor.com/embeds/book/coloradosledrentals/items/?flow=1262218&full-items=yes&ref=highmark",
+  rea_browse_all:         "https://fareharbor.com/embeds/book/rabbitearsadventures/items/?flow=1491038&full-items=yes&ref=homepage",
+  // Specific flows — use when guest has stated experience level or tour preference
   csr_steamboat_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=highmark&full-items=yes&flow=1262221",
   csr_kremmling_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=highmark&full-items=yes&flow=1262222",
   csr_proride_guided:     "https://fareharbor.com/embeds/book/coloradosledrentals/items/?ref=highmark&flow=1470754&full-items=yes",
@@ -145,7 +149,9 @@ Never mention Whiteout Solutions or Highmark to guests.
 - Never confirm availability unless told to by LIVE DATA below.
 - Never make up snow depth or trail conditions.
 - Groups 6+: always handoff — never try to book via text.
-- When routing to a booking link, pick the most relevant one and include it directly in your reply.
+- For general/ambiguous booking requests: use the browse-all links so the guest picks their own item.
+- For specific tour choices: use the individual item link.
+- Always include the full URL directly in your reply — never say "click here" without the link.
 Available booking links:
 ${bookingRef}
 
@@ -316,21 +322,20 @@ Message: "${message}"`,
 // ─────────────────────────────────────────────────────────────────────────────
 async function buildTourMenu(season, dateStr) {
   const reaItems = await getFareHarborItems("rea", supabase);
-  const csrItems = await getFareHarborItems("csr", supabase);
 
-  // Key tour categories to present (not every individual sled model)
+  // Individual items listed — REA guided tours (freshest from KB cache, up to 4)
   const options = [];
 
   if (season !== "summer") {
-    // REA guided tours (up to 4)
     for (const item of reaItems.slice(0, 4)) {
       options.push({ label: item.name, company: "rea", pk: item.pk,
         url: `https://fareharbor.com/embeds/book/rabbitearsadventures/items/${item.pk}/?ref=highmark&full-items=yes` });
     }
-    // CSR rentals as categories (not individual sled models)
-    options.push({ label: "Self-guided sled rental (Steamboat)",  company: "csr", url: BOOKING_URLS.csr_steamboat_unguided });
-    options.push({ label: "Self-guided sled rental (Kremmling)",  company: "csr", url: BOOKING_URLS.csr_kremmling_unguided });
-    options.push({ label: "Pro-Ride backcountry guided (experts)", company: "csr", url: BOOKING_URLS.csr_proride_guided });
+    // CSR: one "browse all" link covers all sled models (too many to list individually)
+    options.push({ label: "CSR self-guided sled rental (browse all sleds)", company: "csr",
+      url: BOOKING_URLS.csr_browse_all });
+    options.push({ label: "CSR Pro-Ride backcountry guided (expert riders)", company: "csr",
+      url: BOOKING_URLS.csr_proride_guided });
   }
 
   if (season !== "winter") {
@@ -338,10 +343,10 @@ async function buildTourMenu(season, dateStr) {
     options.push({ label: "RZR off-road adventure (Kremmling)", company: "csr", url: BOOKING_URLS.rzr_kremmling });
   }
 
-  // Check availability per item if a date was given
+  // Check FH availability per item if a date was given
   if (dateStr && FAREHARBOR_ENABLED) {
     await Promise.all(options.map(async (opt) => {
-      if (!opt.pk) { opt.available = null; return; } // rental/category — no FH item PK
+      if (!opt.pk) { opt.available = null; return; } // browse-all links have no single PK
       try {
         const avail = await getFareHarborAvailability(opt.company, opt.pk, dateStr);
         const open  = (avail ?? []).filter((a) => a.capacity > 0);
@@ -370,13 +375,18 @@ function formatMenuInstruction(options, dateStr) {
   }).join(", ");
 
   const dateNote = dateStr ? ` for ${dateStr}` : "";
-  const allUnavailable = dateStr && options.every((o) => o.available === false);
+  const guidedBrowse = BOOKING_URLS.rea_browse_all;
+  const rentalBrowse = BOOKING_URLS.csr_browse_all;
+
+  const allUnavailable = dateStr
+    && options.filter((o) => o.available !== null).length > 0
+    && options.every((o) => o.available === false);
 
   if (allUnavailable) {
-    return `No availability found${dateNote}. Tell the guest clearly there are no open slots and ask if they'd like a different date or to call ${HANDOFF_PHONE}.`;
+    return `No availability found${dateNote}. Tell the guest clearly — no open slots on that date. Suggest a different date or call ${HANDOFF_PHONE}. Also share these browse links so they can check other dates themselves: Guided tours: ${guidedBrowse} | Rentals: ${rentalBrowse}`;
   }
 
-  return `Present these tour options${dateNote} and ask the guest to pick one (reply with a number). Also ask how many people. Options: ${numbered}`;
+  return `List these options${dateNote} and ask the guest to pick one by number. Also ask how many people. After the list, add: "Or browse everything yourself: Guided: ${guidedBrowse} | Rentals: ${rentalBrowse}" Options: ${numbered}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
