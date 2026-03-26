@@ -162,10 +162,12 @@ Warm, stoked, genuinely local. Like a guide who loves their job. Never robotic. 
 Never mention Whiteout Solutions or Highmark to guests.
 
 ━━━ SMS RULES (hard limits) ━━━
-- Every reply: 320 chars max (2 texts). Use as much as needed to give complete, useful info.
+- Standard replies: 320 chars max (2 texts). Use as much as needed, never cut off mid-thought.
+- Conditions/snow replies: up to 480 chars (3 texts) — enough room to cover all stations + a closing question.
 - No bullets, dashes, markdown, or formatting. Plain text only.
 - Emojis: max 1-2 per message. Use sparingly.
 - Never send 2 texts in a row without a guest reply.
+- Always end conditions replies with a natural follow-up question to keep the guest engaged (e.g. "Want to get out this weekend?" or "Want to be first to know when we reopen?").
 
 ━━━ BOOKING RULES ━━━
 - Same-day bookings are NOT available — minimum 1 day advance booking required. If a guest asks about today, let them know and offer the next available date.
@@ -566,7 +568,7 @@ async function getClaudeReply(convo, season, knowledgeContext, extraInstruction,
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-6",
-    max_tokens: 300,
+    max_tokens: 450,
     system,
     messages,
   });
@@ -829,9 +831,9 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo);
       const knowledgeCtx = await getKnowledgeContext(supabase);
 
-      // 320 chars (2 texts) for all intents — system prompt instructs Claude to use
-      // as much as needed; enforceLength hard-caps so replies never get cut mid-sentence
-      const replyMax = 320;
+      // Conditions get 480 chars (3 texts) — enough for 4 SNOTEL stations + avalanche + CTA
+      // All other intents: 320 chars (2 texts)
+      const replyMax = intent === "conditions" ? 480 : 320;
       replyText = await getClaudeReply(
         convo,
         season,
