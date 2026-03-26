@@ -741,6 +741,20 @@ export async function getKnowledgeContext(supabase) {
     // Website knowledge — policies, seasonal info, FAQ
     const websiteSummary = byKey["website_knowledge"]?.summary ?? "";
 
+    // Compute operational status — check if any items have confirmed online availability
+    let anyOnlineAvailable = false;
+    let knownItemCount = 0;
+    for (const k of ["csr_fareharbor", "rea_fareharbor"]) {
+      const avail = byKey[k]?.data?.availabilityData ?? {};
+      for (const v of Object.values(avail)) {
+        knownItemCount++;
+        if (v.open_days > 0) anyOnlineAvailable = true;
+      }
+    }
+    const opsSection = (knownItemCount > 0 && !anyOnlineAvailable)
+      ? `OPERATIONAL STATUS: No tours or rentals currently have online availability. Snowmobile operations are paused due to warm temperatures and low snow base. Do NOT show a booking menu, suggest booking dates, or imply tours are available. Be warm and honest — let guests know operations are paused for now, that summer RZR off-road adventures are coming soon (April/May), and they can call or check back for updates.\n`
+      : "";
+
     // Build booking URLs from cached item PKs — auto-includes any new FH items
     const linkLines = [];
     for (const row of rows) {
@@ -753,17 +767,19 @@ export async function getKnowledgeContext(supabase) {
       }
     }
 
-    const linkSection = linkLines.length
+    // Only include booking links when there's actual availability to send guests to
+    const linkSection = (linkLines.length && anyOnlineAvailable)
       ? `\nDYNAMIC BOOKING LINKS (prefer these over hardcoded):\n${linkLines.join("\n")}`
       : "";
 
-    const weatherSection = weatherSummary ? `WEATHER (${date}): ${weatherSummary}\n`       : "";
-    const snowSection    = snowSummary    ? `SNOW CONDITIONS (${date}): ${snowSummary}\n`  : "";
-    const availSection   = availSummary   ? `AVAILABILITY: ${availSummary}\n`              : "";
-    const itemsSection   = itemsSummary   ? `TOUR DETAILS: ${itemsSummary}\n`              : "";
-    const websiteSection = websiteSummary ? `BUSINESS INFO: ${websiteSummary}\n`           : "";
+    const opsStatusSection = opsSection;
+    const weatherSection   = weatherSummary ? `WEATHER (${date}): ${weatherSummary}\n`       : "";
+    const snowSection      = snowSummary    ? `SNOW CONDITIONS (${date}): ${snowSummary}\n`  : "";
+    const availSection     = availSummary   ? `AVAILABILITY: ${availSummary}\n`              : "";
+    const itemsSection     = itemsSummary   ? `TOUR DETAILS: ${itemsSummary}\n`              : "";
+    const websiteSection   = websiteSummary ? `BUSINESS INFO: ${websiteSummary}\n`           : "";
 
-    return `${weatherSection}${snowSection}${availSection}${itemsSection}${websiteSection}${linkSection}`.trim();
+    return `${opsStatusSection}${weatherSection}${snowSection}${availSection}${itemsSection}${websiteSection}${linkSection}`.trim();
   } catch {
     return "";
   }

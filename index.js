@@ -766,11 +766,20 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       } catch { /* ignore */ }
 
       const menuOptions  = await buildTourMenu(season, extractedDate);
-      convo.bookingData.menuOptions = menuOptions; // save for step 1
-      const menuInstruction = formatMenuInstruction(menuOptions, extractedDate);
-      const knowledgeCtx   = await getKnowledgeContext(supabase);
+      const knowledgeCtx = await getKnowledgeContext(supabase);
 
-      replyText = await getClaudeReply(convo, season, knowledgeCtx, menuInstruction);
+      if (menuOptions.length === 0) {
+        // No items available for online booking — don't enter step 1
+        convo.bookingStep = null;
+        replyText = await getClaudeReply(convo, season, knowledgeCtx,
+          `Guest wants to book but there are currently no tours or rentals available for online booking. Respond warmly and honestly — snowmobile operations are paused due to warm temps and low snow base. Mention summer RZR adventures are coming soon. Do NOT suggest any booking links or dates. Offer to have the team follow up: ${HANDOFF_PHONE}.`
+        );
+      } else {
+        convo.bookingStep = 1;
+        convo.bookingData.menuOptions = menuOptions; // save for step 1
+        const menuInstruction = formatMenuInstruction(menuOptions, extractedDate);
+        replyText = await getClaudeReply(convo, season, knowledgeCtx, menuInstruction);
+      }
     }
 
     // Step 1 → 2: Guest picked a tour — route to its booking link
