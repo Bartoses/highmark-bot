@@ -300,7 +300,7 @@ export function detectIntent(message) {
   if (/\b(hi+|hey+|hello|howdy|sup|what'?s up|thanks|thank you|thx|ty|np|sounds good|ok|okay|got it|perfect)\b/i.test(t)) return "smalltalk";
   if (/my (booking|reserv|order|ticket|confirmation)|look.?up|check my reservation|reservation #|confirm.*(number|code)/i.test(t)) return "lookup";
   if (/\bbook\b|availability|available|sign.?up|schedule|when can|how do (i|we) book|get a spot|for \d+ (people|person|guests|adults)|this (weekend|saturday|sunday|friday|thursday)|want to (ride|go|do|try)/i.test(t)) return "booking";
-  if (/snow|powder|condition|grooming|report|depth|weather|trail.*open|base|fresh pow|road condition/i.test(t))            return "conditions";
+  if (/snow|powder|condition|grooming|report|depth|weather|trail.*open|base|fresh pow|road condition|avalanche|avy|snotel|snowpack|danger|forecast/i.test(t)) return "conditions";
   if (/complaint|problem|refund|injury|wrong|not working|terrible|worst|annoying|upset|angry|disappointed|too expensive/i.test(t)) return "handoff";
   return "info";
 }

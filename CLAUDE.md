@@ -232,12 +232,21 @@ BUSINESS INFO: <policies, seasonal, FAQ from website>
 DYNAMIC BOOKING LINKS: <per-item FH URLs, auto-updated from cached PKs>
 ```
 
+### Season Detection
+- `getCurrentSeason()` → `winter` (Nov-Mar), `shoulder` (Apr-May), `summer` (Jun-Oct)
+- `isWinter = season === "winter" || season === "shoulder"` → injects winter snowmobile knowledge
+- `isSummer = season === "summer" || season === "shoulder"` → injects summer RZR knowledge
+- In `shoulder`, BOTH knowledge blocks are included (season transition overlap)
+- Summer RZR knowledge includes: 4 trail areas (Buffalo Pass, North Routt, Rabbit Ears Pass, Kremmling BLM), OHV rules, safety tips, fire restrictions, riding advice
+- RZR does NOT use FareHarbor — books via Polaris Adventures platform
+
 ### Knowledge Base Refresh (zero Claude tokens for FH + weather)
 | Data | Cron | Method |
 |---|---|---|
 | FH items (catalog, pricing) | Daily at 2am | JS from FH API — no Claude |
 | FH availability (slots) | Every 3hr | JS from FH minimal endpoint — no Claude |
-| Weather | Every 1hr | JS from OpenWeather JSON — no Claude |
+| Weather | Every 1hr | JS from OpenWeather (Steamboat + Rabbit Ears Pass + Storm Peak summit) — no Claude |
+| Snow conditions | Every 3hr (offset :30) | SNOTEL 4 stations + CAIC avalanche danger — no Claude |
 | Website (policies, FAQ) | Monday 3am | Single Haiku call, hash-gated — skips if content unchanged |
 
 - `buildFhSummary()` formats availability string directly in JS
