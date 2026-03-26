@@ -820,8 +820,9 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo);
       const knowledgeCtx = await getKnowledgeContext(supabase);
 
-      // Conditions/weather get 320 chars (2 texts) — forecast data needs the room
-      const replyMax = intent === "conditions" ? 320 : 160;
+      // 320 chars (2 texts) for all intents — system prompt instructs Claude to use
+      // as much as needed; enforceLength hard-caps so replies never get cut mid-sentence
+      const replyMax = 320;
       replyText = await getClaudeReply(
         convo,
         season,
