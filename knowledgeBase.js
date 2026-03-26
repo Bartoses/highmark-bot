@@ -25,9 +25,10 @@ const ONE_HOUR_MS         = 60 * 60 * 1000;
 // CLIENT_CONFIG — SNOTEL stations for trail-level snow depth (free, no API key)
 // These are the official USDA monitoring stations at the elevations guests actually ride.
 const SNOTEL_STATIONS = [
-  { id: "713:CO:SNTL", name: "Rabbit Ears Pass", elevation: "9,426 ft", relevance: "REA tours" },
-  { id: "335:CO:SNTL", name: "Buffalo Pass",     elevation: "10,300 ft", relevance: "CSR backcountry / North Routt" },
-  { id: "369:CO:SNTL", name: "Columbine",        elevation: "8,540 ft", relevance: "CSR Columbine trailhead" },
+  { id: "713:CO:SNTL", name: "Rabbit Ears Pass",    elevation: "9,426 ft",  relevance: "REA tours" },
+  { id: "335:CO:SNTL", name: "Buffalo Pass",         elevation: "10,300 ft", relevance: "CSR backcountry / North Routt" },
+  { id: "369:CO:SNTL", name: "Columbine",            elevation: "8,540 ft",  relevance: "CSR Columbine trailhead" },
+  { id: "457:CO:SNTL", name: "Steamboat Ski Resort", elevation: "8,240 ft",  relevance: "Steamboat ski area base" },
 ];
 const SEVEN_DAYS_MS       = 7 * 24 * 60 * 60 * 1000;
 
@@ -356,29 +357,32 @@ async function fetchSnotelStation(stationId) {
 }
 
 async function fetchCaicDanger() {
-  // Steamboat Springs zone avalanche forecast
-  // Returns danger ratings: 1=Low 2=Moderate 3=Considerable 4=High 5=Extreme
+  // Steamboat Springs zone — CAIC JSON API
+  // Endpoint: /api-proxy/avid with properly encoded inner query
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const url   = `${CAIC_BASE}?_api_proxy_uri=/products/all?datetime=${today}`;
+    const inner = encodeURIComponent(`/products/all?datetime=${today}`);
+    const url   = `${CAIC_BASE}?_api_proxy_uri=${inner}`;
     const res   = await fetch(url, { headers: { "User-Agent": "Highmark-Bot/1.0" } });
     if (!res.ok) return null;
 
     const products = await res.json();
-    const steamboat = (products ?? []).find(
-      (p) => p.type === "avalancheforecast" &&
-             (p.area?.id === "steamboat-springs" || p.area?.name?.toLowerCase().includes("steamboat"))
+    if (!Array.isArray(products)) return null;
+
+    const steamboat = products.find(
+      (p) => p?.type === "avalancheforecast" &&
+             (p?.area?.id === "steamboat-springs" || p?.area?.name?.toLowerCase().includes("steamboat"))
     );
     if (!steamboat) return null;
 
     const DANGER_LABELS = ["", "Low", "Moderate", "Considerable", "High", "Extreme"];
     const danger = steamboat.dangerRatings ?? steamboat.danger;
-    if (!danger) return null;
+    if (!Array.isArray(danger) || !danger.length) return null;
 
-    // Prefer above-treeline danger as the headline number
-    const aboveTreeline = danger.find?.((d) => /above/i.test(d.position)) ?? danger[0];
+    const aboveTreeline = danger.find((d) => /above/i.test(d.position ?? d.elevation ?? "")) ?? danger[0];
     const level = aboveTreeline?.level ?? aboveTreeline?.rating ?? null;
-    return level ? `${DANGER_LABELS[level] ?? level} (${level}/5) above treeline` : null;
+    if (!level || level < 1 || level > 5) return null;
+    return `${DANGER_LABELS[level]} (${level}/5) above treeline — see avalanche.state.co.us for full forecast`;
   } catch {
     return null;
   }
