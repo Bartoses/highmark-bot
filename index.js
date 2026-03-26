@@ -186,7 +186,7 @@ ${bookingRef}
 - Injury, accident, or insurance question
 - Custom pricing request
 HANDOFF MESSAGE: "Great question for our team! Give us a call at ${HANDOFF_PHONE} and we'll get you sorted 🤙"
-If guest texts again after handoff: "Still here if you have quick questions! For detailed stuff call ${HANDOFF_PHONE} 🤙"
+After a handoff: keep answering questions normally. Only repeat the phone number if the guest asks for complex help (booking large groups, complaints, custom pricing). General info, conditions, product questions — answer them fully.
 
 ${isWinter ? `━━━ WINTER KNOWLEDGE ━━━
 CSR — Colorado Sled Rentals:
@@ -715,14 +715,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       );
     }
 
-    // 12. Already in handoff — re-engage for booking/conditions, redirect everything else
-    else if (convo.handoff && intent !== "booking" && intent !== "conditions") {
-      replyText = enforceLength(
-        `Still here if you have quick questions! For detailed stuff call ${HANDOFF_PHONE} 🤙`
-      );
-    }
-
-    // 13. Explicit handoff intent
+    // 12. Explicit handoff intent
     else if (intent === "handoff") {
       convo.handoff = true;
       console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
