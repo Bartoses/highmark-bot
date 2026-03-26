@@ -16,9 +16,19 @@ import cron from "node-cron";
 
 const FAREHARBOR_BASE     = "https://fareharbor.com/api/external/v1";
 const OPENWEATHER_BASE    = "https://api.openweathermap.org/data/2.5";
+const SNOTEL_BASE         = "https://wcc.sc.egov.usda.gov/reportGenerator/view_csv/customSingleStationReport/daily";
+const CAIC_BASE           = "https://avalanche.state.co.us/api-proxy/avid";
 const THREE_HOURS_MS      = 3 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS         = 60 * 60 * 1000;
+
+// CLIENT_CONFIG — SNOTEL stations for trail-level snow depth (free, no API key)
+// These are the official USDA monitoring stations at the elevations guests actually ride.
+const SNOTEL_STATIONS = [
+  { id: "713:CO:SNTL", name: "Rabbit Ears Pass", elevation: "9,426 ft", relevance: "REA tours" },
+  { id: "335:CO:SNTL", name: "Buffalo Pass",     elevation: "10,300 ft", relevance: "CSR backcountry / North Routt" },
+  { id: "369:CO:SNTL", name: "Columbine",        elevation: "8,540 ft", relevance: "CSR Columbine trailhead" },
+];
 const SEVEN_DAYS_MS       = 7 * 24 * 60 * 60 * 1000;
 
 // CLIENT_CONFIG — one entry per company the client operates
@@ -315,6 +325,113 @@ async function refreshWeatherKnowledge(supabase) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SNOW CONDITIONS — SNOTEL (snow depth) + CAIC (avalanche danger)
+// Refreshes every 3 hours. Zero Claude tokens — pure JS from structured data.
+// SNOTEL: USDA NRCS official stations, free, no API key required.
+// CAIC:   Colorado Avalanche Information Center, free public API.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function fetchSnotelStation(stationId) {
+  // NRCS report generator: returns CSV with today's snow depth, SWE, temp
+  // Date offset -0,0 = today only (start of day values)
+  const stationPart = encodeURIComponent(`${stationId}|id=""|name`);
+  const url = `${SNOTEL_BASE}/${stationPart}/-0,0/SNWD::value,WTEQ::value,TOBS::value`;
+  const res = await fetch(url, { headers: { "User-Agent": "Highmark-Bot/1.0" } });
+  if (!res.ok) throw new Error(`SNOTEL ${stationId}: HTTP ${res.status}`);
+  const text = await res.text();
+
+  // Skip comment lines (start with #), find first data row
+  const dataLine = text.split("\n").find(
+    (l) => l.trim() && !l.startsWith("#") && /^\d{4}-\d{2}-\d{2}/.test(l.trim())
+  );
+  if (!dataLine) return null;
+
+  const [date, snwd, wteq, tobs] = dataLine.split(",").map((v) => v.trim());
+  return {
+    date:          date,
+    snow_depth_in: snwd && snwd !== "" ? parseFloat(snwd) : null,
+    swe_in:        wteq && wteq !== "" ? parseFloat(wteq) : null,
+    temp_f:        tobs && tobs !== "" ? parseFloat(tobs) : null,
+  };
+}
+
+async function fetchCaicDanger() {
+  // Steamboat Springs zone avalanche forecast
+  // Returns danger ratings: 1=Low 2=Moderate 3=Considerable 4=High 5=Extreme
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const url   = `${CAIC_BASE}?_api_proxy_uri=/products/all?datetime=${today}`;
+    const res   = await fetch(url, { headers: { "User-Agent": "Highmark-Bot/1.0" } });
+    if (!res.ok) return null;
+
+    const products = await res.json();
+    const steamboat = (products ?? []).find(
+      (p) => p.type === "avalancheforecast" &&
+             (p.area?.id === "steamboat-springs" || p.area?.name?.toLowerCase().includes("steamboat"))
+    );
+    if (!steamboat) return null;
+
+    const DANGER_LABELS = ["", "Low", "Moderate", "Considerable", "High", "Extreme"];
+    const danger = steamboat.dangerRatings ?? steamboat.danger;
+    if (!danger) return null;
+
+    // Prefer above-treeline danger as the headline number
+    const aboveTreeline = danger.find?.((d) => /above/i.test(d.position)) ?? danger[0];
+    const level = aboveTreeline?.level ?? aboveTreeline?.rating ?? null;
+    return level ? `${DANGER_LABELS[level] ?? level} (${level}/5) above treeline` : null;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshSnowConditions(supabase) {
+  try {
+    const stationResults = {};
+    await Promise.all(
+      SNOTEL_STATIONS.map(async (station) => {
+        try {
+          const reading = await fetchSnotelStation(station.id);
+          if (reading) stationResults[station.name] = { ...station, ...reading };
+        } catch (err) {
+          console.warn(`[KB] SNOTEL ${station.name} failed (non-fatal):`, err.message);
+        }
+      })
+    );
+
+    const avalancheDanger = await fetchCaicDanger();
+
+    // Build human-readable summary
+    const stationLines = Object.values(stationResults).map((s) => {
+      const depth = s.snow_depth_in !== null ? `${s.snow_depth_in}"` : "N/A";
+      const swe   = s.swe_in       !== null ? ` SWE: ${s.swe_in}"` : "";
+      const temp  = s.temp_f       !== null ? ` ${s.temp_f}°F` : "";
+      return `${s.name} (${s.elevation}): ${depth} snow depth${swe}${temp}`;
+    });
+
+    const avalancheLine = avalancheDanger
+      ? `Avalanche danger (Steamboat zone): ${avalancheDanger}`
+      : "";
+
+    const allLines = [...stationLines, avalancheLine].filter(Boolean);
+    const summary  = allLines.join(" | ").slice(0, 500);
+
+    await supabase.from("knowledge_base").upsert({
+      client_id:       "csr_rea",
+      type:            "snow_conditions",
+      key:             "snow_conditions",
+      data:            { stations: stationResults, avalanche_danger: avalancheDanger },
+      summary,
+      fetched_at:      new Date().toISOString(),
+      next_refresh_at: new Date(Date.now() + THREE_HOURS_MS).toISOString(),
+    });
+
+    console.log(`[KB] Snow conditions refreshed: ${summary.slice(0, 120)}…`);
+  } catch (err) {
+    console.error("[KB] Snow conditions refresh failed (non-fatal):", err.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // WEBSITE SCRAPER HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -505,6 +622,20 @@ export async function initKnowledgeBase(supabase, anthropic) {
       await refreshWeatherKnowledge(supabase);
     }
 
+    // Check snow conditions freshness (3hr threshold)
+    const { data: snowRow } = await supabase
+      .from("knowledge_base")
+      .select("fetched_at")
+      .eq("key", "snow_conditions")
+      .single();
+
+    const snowStale =
+      !snowRow || Date.now() - new Date(snowRow.fetched_at).getTime() > THREE_HOURS_MS;
+
+    if (snowStale) {
+      await refreshSnowConditions(supabase);
+    }
+
     // Check website freshness (7 day threshold)
     const { data: webRow } = await supabase
       .from("settings")
@@ -539,6 +670,11 @@ export async function initKnowledgeBase(supabase, anthropic) {
     refreshWeatherKnowledge(supabase);
   });
 
+  // Snow conditions (SNOTEL + CAIC): refresh every 3 hours
+  cron.schedule("30 */3 * * *", () => {
+    refreshSnowConditions(supabase);
+  });
+
   // Website: check every 7 days (hash-gated, Haiku only when content changes)
   cron.schedule("0 3 * * 1", () => {
     refreshWebsiteKnowledge(supabase, anthropic);
@@ -555,15 +691,16 @@ export async function getKnowledgeContext(supabase) {
     const { data: rows } = await supabase
       .from("knowledge_base")
       .select("key, summary, data")
-      .in("key", ["csr_fareharbor", "rea_fareharbor", "website_knowledge", "weather_steamboat"]);
+      .in("key", ["csr_fareharbor", "rea_fareharbor", "website_knowledge", "weather_steamboat", "snow_conditions"]);
 
     if (!rows || !rows.length) return "";
 
     const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
     const date  = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-    // Weather is always included first so it never gets truncated out
+    // Weather + snow conditions always first so they're never truncated
     const weatherSummary = byKey["weather_steamboat"]?.summary ?? "";
+    const snowSummary    = byKey["snow_conditions"]?.summary    ?? "";
 
     // FH availability summaries (slot counts + next open dates)
     const fhParts = ["csr_fareharbor", "rea_fareharbor"]
@@ -597,11 +734,12 @@ export async function getKnowledgeContext(supabase) {
       : "";
 
     const weatherSection = weatherSummary ? `WEATHER (${date}): ${weatherSummary}\n`       : "";
+    const snowSection    = snowSummary    ? `SNOW CONDITIONS (${date}): ${snowSummary}\n`  : "";
     const availSection   = availSummary   ? `AVAILABILITY: ${availSummary}\n`              : "";
     const itemsSection   = itemsSummary   ? `TOUR DETAILS: ${itemsSummary}\n`              : "";
     const websiteSection = websiteSummary ? `BUSINESS INFO: ${websiteSummary}\n`           : "";
 
-    return `${weatherSection}${availSection}${itemsSection}${websiteSection}${linkSection}`.trim();
+    return `${weatherSection}${snowSection}${availSection}${itemsSection}${websiteSection}${linkSection}`.trim();
   } catch {
     return "";
   }
