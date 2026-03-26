@@ -25,7 +25,10 @@ knowledgeBase.js       — FH items (24hr cron) + FH availability (3hr cron) + w
 bookingConfirmations.js — FareHarbor webhook receiver + 30min polling + confirmation texts
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging
 chat.js                — interactive terminal chat simulator (no Twilio cost)
-test.js                — automated test suite (79 tests), spawns its own server on port 3099
+scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
+cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
+test.js                — automated test suite (97 tests), spawns its own server on port 3099
+db1_cancellation_sent.sql — migration: adds cancellation_sent column to confirmations_sent
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
 db2_crm_schema.sql     — DB2 CRM schema (Supabase Project 2 SQL editor)
@@ -61,7 +64,7 @@ Commands: `/reset` (fresh conversation), `/quit`
 ```bash
 npm test
 ```
-Spawns its own server on port 3099. Runs all 79 scenarios automatically.
+Spawns its own server on port 3099. Runs all 97 scenarios automatically.
 
 ### Server + curl tests (TEST_MODE)
 **Terminal 1:**
@@ -191,8 +194,17 @@ When `TEST_MODE=true` (local only, never set on Railway):
 - Retry backoff: 5 min after attempt 1, 15 min after attempt 2, then `failed`
 - Opt-out check: cancels with reason before Twilio call (TCPA safe)
 - Stale lock recovery: rows stuck in `processing` > 5 min are reclaimed on next worker run
-- Railway cron: `POST /cron/scheduled-messages` every minute (set `CRON_SECRET` + `x-cron-secret` header)
+- Railway cron: separate `highmark-cron` service running `node cron-worker.js` every 5 min
 - Table: `scheduled_messages` in DB1 — see `db1_scheduled_messages.sql`
+
+### Booking Confirmations (bookingConfirmations.js)
+- Confirmation text includes FareHarbor booking link: `fareharbor.com/embeds/book/{shortname}/items/{item_pk}/booking/{uuid}/`
+  - Uses `booking.uuid` + `booking.availability.item.pk` from FH webhook payload
+  - Falls back gracefully (no link) if `uuid` is absent
+- Cancellation texts are idempotent — `cancellation_sent` boolean in `confirmations_sent` prevents duplicate texts
+- Poller catches missed cancellations: scans `confirmations_sent` for rows where FH status is now `cancelled` but `cancellation_sent=false`
+- Rebooking flow: cancel text for old booking + confirmation text for new booking, resilient to downtime
+- DB1 migration required: `db1_cancellation_sent.sql` (adds `cancellation_sent` column)
 
 ### Special Triggers
 - `DEMO` — sends Highmark-branded opener + notifies owner (+17202892483)
@@ -261,7 +273,8 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 
 ## Known TODOs (Before Full Production)
 
-1. ~~**Booking follow-up `setTimeout`**~~ — DONE. Replaced with durable `scheduled_messages` + Railway cron.
-2. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
-3. **Confirmations live test** — run real FareHarbor test booking, verify confirmation text arrives
-4. **REA availability 403** — fixed (minimal endpoint), but verify with real REA API key in prod
+1. ~~**Booking follow-up `setTimeout`**~~ — DONE. Durable `scheduled_messages` + `highmark-cron` Railway service (every 5 min).
+2. ~~**Rebooking cancellations**~~ — DONE. Idempotent cancel texts, poller catches missed cancellations, `cancellation_sent` column tracks state.
+3. ~~**Booking link in confirmation**~~ — DONE. Uses `booking.uuid` + `item.pk` from FH payload.
+4. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
+5. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
