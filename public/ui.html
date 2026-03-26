@@ -204,6 +204,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .msg-meta .tag.handoff  { color: var(--danger); border-color: #3f0a0a; background: #1a0505; }
 
 .msg-chars { font-size: 10px; color: var(--text3); margin-top: 2px; }
+.msg-link { color: var(--accent); text-decoration: underline; word-break: break-all; }
+.msg-link:hover { color: #34d399; }
 
 .typing-indicator {
   display: flex; align-items: center; gap: 4px;
@@ -888,7 +890,7 @@ function appendUserMsg(text) {
   row.className = "msg-row user";
   const ts = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   row.innerHTML = `
-    <div class="msg-bubble">${escHtml(text)}</div>
+    <div class="msg-bubble">${linkify(text)}</div>
     <div class="msg-chars">${ts}</div>
   `;
   thread.appendChild(row);
@@ -914,7 +916,7 @@ function appendBotMsg(text, meta = {}) {
       <div class="msg-avatar">S</div>
       <div class="msg-sender">Summit</div>
     </div>
-    <div class="msg-bubble">${escHtml(text)}</div>
+    <div class="msg-bubble">${linkify(text)}</div>
     <div class="msg-meta">${metaTags}</div>
     <div class="msg-chars">${text.length} chars · ${texts} SMS · ${ts}</div>
   `;
@@ -1052,6 +1054,15 @@ function escHtml(str) {
   return String(str)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;")
     .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// Escape HTML then wrap URLs in clickable links
+function linkify(str) {
+  const escaped = escHtml(str);
+  return escaped.replace(
+    /(https?:\/\/[^\s&"<>]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer" class="msg-link">$1</a>'
+  );
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
