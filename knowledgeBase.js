@@ -25,10 +25,10 @@ const ONE_HOUR_MS         = 60 * 60 * 1000;
 // CLIENT_CONFIG — SNOTEL stations for trail-level snow depth (free, no API key)
 // These are the official USDA monitoring stations at the elevations guests actually ride.
 const SNOTEL_STATIONS = [
-  { id: "713:CO:SNTL", name: "Rabbit Ears Pass",    elevation: "9,426 ft",  relevance: "REA tours" },
-  { id: "335:CO:SNTL", name: "Buffalo Pass",         elevation: "10,300 ft", relevance: "CSR backcountry / North Routt" },
-  { id: "369:CO:SNTL", name: "Columbine",            elevation: "8,540 ft",  relevance: "CSR Columbine trailhead" },
-  { id: "457:CO:SNTL", name: "Steamboat Ski Resort", elevation: "8,240 ft",  relevance: "Steamboat ski area base" },
+  { id: "713:CO:SNTL", name: "Rabbit Ears Pass",          elevation: "9,426 ft",  relevance: "REA tours" },
+  { id: "825:CO:SNTL", name: "Buffalo Pass (Tower)",       elevation: "10,610 ft", relevance: "CSR backcountry / North Routt / Buff Pass" },
+  { id: "369:CO:SNTL", name: "Columbine",                  elevation: "8,540 ft",  relevance: "CSR Columbine trailhead" },
+  { id: "457:CO:SNTL", name: "Steamboat Ski Resort (base)", elevation: "8,240 ft", relevance: "Steamboat ski area base (3mi from Storm Peak summit)" },
 ];
 const SEVEN_DAYS_MS       = 7 * 24 * 60 * 60 * 1000;
 
@@ -247,19 +247,22 @@ async function refreshWeatherKnowledge(supabase) {
 
   try {
     // Steamboat Springs town (6,695 ft) — for general conditions
-    const [currentRes, forecastRes, passRes] = await Promise.all([
+    const [currentRes, forecastRes, passRes, stormPeakRes] = await Promise.all([
       fetch(`${OPENWEATHER_BASE}/weather?q=Steamboat+Springs,CO,US&appid=${apiKey}&units=imperial`),
       fetch(`${OPENWEATHER_BASE}/forecast?q=Steamboat+Springs,CO,US&appid=${apiKey}&units=imperial&cnt=24`),
-      // Rabbit Ears Pass (9,426 ft) — where tours actually run
+      // Rabbit Ears Pass (9,426 ft) — where REA tours actually run
       fetch(`${OPENWEATHER_BASE}/weather?lat=40.38&lon=-106.60&appid=${apiKey}&units=imperial`),
+      // Storm Peak / Steamboat Ski Resort summit (10,568 ft)
+      fetch(`${OPENWEATHER_BASE}/weather?lat=40.457&lon=-106.804&appid=${apiKey}&units=imperial`),
     ]);
 
     if (!currentRes.ok) throw new Error(`Weather API ${currentRes.status}`);
 
-    const [current, forecastData, pass] = await Promise.all([
+    const [current, forecastData, pass, stormPeak] = await Promise.all([
       currentRes.json(),
       forecastRes.json(),
       passRes.ok ? passRes.json() : null,
+      stormPeakRes.ok ? stormPeakRes.json() : null,
     ]);
 
     // Build daily forecast summaries (prefer noon reading per day)
@@ -290,6 +293,12 @@ async function refreshWeatherKnowledge(supabase) {
         wind_mph: Math.round(pass.wind.speed),
         snow_1h:  ((pass.snow?.["1h"] ?? 0) / 25.4).toFixed(2),  // mm → inches
       } : null,
+      storm_peak: stormPeak ? {
+        temp:     Math.round(stormPeak.main.temp),
+        desc:     stormPeak.weather[0].description,
+        wind_mph: Math.round(stormPeak.wind.speed),
+        snow_1h:  ((stormPeak.snow?.["1h"] ?? 0) / 25.4).toFixed(2),
+      } : null,
       forecast: days,
       updated_at: new Date().toISOString(),
     };
@@ -297,6 +306,9 @@ async function refreshWeatherKnowledge(supabase) {
     // Build compact summary for system prompt injection
     const passNote = data.rabbit_ears_pass
       ? ` | Rabbit Ears Pass: ${data.rabbit_ears_pass.temp}°F, ${data.rabbit_ears_pass.desc}`
+      : "";
+    const stormPeakNote = data.storm_peak
+      ? ` | Storm Peak summit: ${data.storm_peak.temp}°F, ${data.storm_peak.desc}, wind ${data.storm_peak.wind_mph}mph`
       : "";
 
     const dayLines = Object.entries(days).slice(0, 3).map(([date, d]) => {
@@ -307,7 +319,7 @@ async function refreshWeatherKnowledge(supabase) {
       return `${label}: ${d.low}-${d.high}°F ${d.desc}${snowNote}`;
     });
 
-    const summary = `Steamboat: ${data.steamboat.temp}°F, ${data.steamboat.desc}, wind ${data.steamboat.wind_mph}mph${passNote}. Forecast: ${dayLines.join(" | ")}`.slice(0, 350);
+    const summary = `Steamboat: ${data.steamboat.temp}°F, ${data.steamboat.desc}, wind ${data.steamboat.wind_mph}mph${passNote}${stormPeakNote}. Forecast: ${dayLines.join(" | ")}`.slice(0, 400);
 
     await supabase.from("knowledge_base").upsert({
       client_id:       "csr_rea",
