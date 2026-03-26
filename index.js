@@ -162,8 +162,7 @@ Warm, stoked, genuinely local. Like a guide who loves their job. Never robotic. 
 Never mention Whiteout Solutions or Highmark to guests.
 
 ━━━ SMS RULES (hard limits) ━━━
-- Standard replies: 320 chars max (2 texts). Use as much as needed, never cut off mid-thought.
-- Conditions/snow replies: up to 480 chars (3 texts) — enough room to cover all stations + a closing question.
+- Every reply: up to 480 chars max (3 texts). Use as much as needed, never cut off mid-thought.
 - No bullets, dashes, markdown, or formatting. Plain text only.
 - Emojis: max 1-2 per message. Use sparingly.
 - Never send 2 texts in a row without a guest reply.
@@ -831,9 +830,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo);
       const knowledgeCtx = await getKnowledgeContext(supabase);
 
-      // Conditions get 480 chars (3 texts) — enough for 4 SNOTEL stations + avalanche + CTA
-      // All other intents: 320 chars (2 texts)
-      const replyMax = intent === "conditions" ? 480 : 320;
+      // 480 chars (3 texts) for all intents — never cut off mid-thought
+      const replyMax = 480;
       replyText = await getClaudeReply(
         convo,
         season,
