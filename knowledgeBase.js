@@ -157,7 +157,7 @@ async function refreshFareHarborItems(supabase) {
         summary,
         fetched_at:      new Date().toISOString(),
         next_refresh_at: new Date(Date.now() + TWENTY_FOUR_HOURS_MS).toISOString(),
-      });
+      }, { onConflict: "key" });
 
       console.log(`[KB] FH items refreshed: ${company.name} (${items.length} items)`);
     } catch (err) {
@@ -226,7 +226,7 @@ async function refreshFareHarborAvailability(supabase) {
         summary,
         fetched_at:      new Date().toISOString(),
         next_refresh_at: new Date(Date.now() + THREE_HOURS_MS).toISOString(),
-      });
+      }, { onConflict: "key" });
 
       console.log(`[KB] FH availability refreshed: ${company.name}`);
     } catch (err) {
@@ -329,7 +329,7 @@ async function refreshWeatherKnowledge(supabase) {
       summary,
       fetched_at:      new Date().toISOString(),
       next_refresh_at: new Date(Date.now() + ONE_HOUR_MS).toISOString(),
-    });
+    }, { onConflict: "key" });
 
     console.log(`[KB] Weather refreshed: ${summary.slice(0, 100)}…`);
   } catch (err) {
@@ -447,7 +447,7 @@ async function refreshSnowConditions(supabase) {
       summary,
       fetched_at:      new Date().toISOString(),
       next_refresh_at: new Date(Date.now() + THREE_HOURS_MS).toISOString(),
-    });
+    }, { onConflict: "key" });
 
     console.log(`[KB] Snow conditions refreshed: ${summary.slice(0, 120)}…`);
   } catch (err) {
@@ -592,7 +592,7 @@ Pages:\n${combinedText}`,
       summary,
       fetched_at:      new Date().toISOString(),
       next_refresh_at: new Date(Date.now() + SEVEN_DAYS_MS).toISOString(),
-    });
+    }, { onConflict: "key" });
 
     await supabase.from("settings").upsert([
       { key: "last_website_scrape",  value: new Date().toISOString() },
