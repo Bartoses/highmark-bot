@@ -369,32 +369,40 @@ async function fetchSnotelStation(stationId) {
 }
 
 async function fetchCaicDanger() {
-  // Steamboat Springs zone — CAIC JSON API
-  // Endpoint: /api-proxy/avid with properly encoded inner query
+  // Steamboat & Flat Tops zone — CAIC AVID API
+  // The AVID API requires datetime in ISO format with ms + includeExpired=true
+  // Steamboat zone uses AVID areaId: e828f0f1db0a4fc927c33ea4078cb2f4466a9fd8dcde6db4f28ddea15d07b742
+  // (publicName "21-24-38-39-9" — zone 38 = Steamboat in AVID polygon numbering)
+  const STEAMBOAT_AREA_ID = "e828f0f1db0a4fc927c33ea4078cb2f4466a9fd8dcde6db4f28ddea15d07b742";
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    const inner = encodeURIComponent(`/products/all?datetime=${today}`);
-    const url   = `${CAIC_BASE}?_api_proxy_uri=${inner}`;
-    const res   = await fetch(url, { headers: { "User-Agent": "Highmark-Bot/1.0" } });
+    const datetime = new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
+    const innerRaw = `/products/all?datetime=${datetime}&includeExpired=true`;
+    const url = `${CAIC_BASE}?_api_proxy_uri=${encodeURIComponent(innerRaw)}`;
+    const res = await fetch(url, { headers: { "User-Agent": "Highmark-Bot/1.0" } });
     if (!res.ok) return null;
 
     const products = await res.json();
     if (!Array.isArray(products)) return null;
 
+    // Match by hardcoded areaId for Steamboat & Flat Tops
     const steamboat = products.find(
-      (p) => p?.type === "avalancheforecast" &&
-             (p?.area?.id === "steamboat-springs" || p?.area?.name?.toLowerCase().includes("steamboat"))
+      (p) => p?.areaId === STEAMBOAT_AREA_ID
     );
     if (!steamboat) return null;
 
-    const DANGER_LABELS = ["", "Low", "Moderate", "Considerable", "High", "Extreme"];
-    const danger = steamboat.dangerRatings ?? steamboat.danger;
-    if (!Array.isArray(danger) || !danger.length) return null;
+    // dangerRatings.days[0] = today's forecast: { alp, tln, btl, date }
+    const days = steamboat.dangerRatings?.days ?? [];
+    if (!days.length) return null;
+    const today = days[0];
+    const alp = today.alp;  // e.g. "low", "moderate", "considerable", "high", "veryHigh", "noRating"
 
-    const aboveTreeline = danger.find((d) => /above/i.test(d.position ?? d.elevation ?? "")) ?? danger[0];
-    const level = aboveTreeline?.level ?? aboveTreeline?.rating ?? null;
-    if (!level || level < 1 || level > 5) return null;
-    return `${DANGER_LABELS[level]} (${level}/5) above treeline — see avalanche.state.co.us for full forecast`;
+    if (!alp || alp === "noRating" || alp === "noForecast") return null;
+
+    const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+    const alpLabel = alp === "veryHigh" ? "Very High" : capitalize(alp);
+    const tlnLabel = today.tln === "veryHigh" ? "Very High" : capitalize(today.tln ?? "");
+    const btlLabel = today.btl === "veryHigh" ? "Very High" : capitalize(today.btl ?? "");
+    return `Alpine: ${alpLabel} | Treeline: ${tlnLabel} | Below: ${btlLabel} — avalanche.state.co.us`;
   } catch {
     return null;
   }
