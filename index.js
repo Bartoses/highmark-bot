@@ -47,6 +47,7 @@ const ipLimiter = rateLimit({
 // Per-phone limiter: 10 messages / minute per phone number
 const phoneWindows = new Map(); // phone -> { count, resetAt }
 function phoneRateLimit(req, res, next) {
+  if (isUiReq(req)) return next(); // UI requests skip phone rate limit
   const phone = req.body?.From;
   if (!phone) return next();
   const now = Date.now();
@@ -71,6 +72,26 @@ setInterval(() => {
     if (now > w.resetAt) phoneWindows.delete(phone);
   }
 }, 5 * 60 * 1000);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERNAL UI AUTH
+// Set UI_SECRET env var in Railway to enable the /ui console on the live URL.
+// Access via: https://your-railway-url/ui?key=YOUR_SECRET
+// ─────────────────────────────────────────────────────────────────────────────
+const UI_SECRET = process.env.UI_SECRET || "";
+
+// Returns true if the request carries a valid UI key header (set by ui.html)
+function isUiReq(req) {
+  if (!UI_SECRET) return false;
+  return req.headers["x-internal-key"] === UI_SECRET;
+}
+
+// Middleware: allow if TEST_MODE OR valid UI key (query param for initial GET, header for API calls)
+function requireUiAccess(req, res, next) {
+  if (process.env.TEST_MODE === "true") return next();
+  if (UI_SECRET && (req.query.key === UI_SECRET || isUiReq(req))) return next();
+  res.status(401).send("Unauthorized — add ?key=UI_SECRET to URL");
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT CONFIG
@@ -840,8 +861,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     // 25. Track campaign reply
     if (crmSupabase) await trackCampaignReply(fromNumber, crmSupabase);
 
-    // 26. Send via Twilio (or return JSON in TEST_MODE)
-    if (process.env.TEST_MODE === "true") {
+    // 26. Send via Twilio (or return JSON in TEST_MODE / UI mode)
+    if (process.env.TEST_MODE === "true" || isUiReq(req)) {
       return res.json({
         reply: replyText,
         meta: { intent, sentiment, bookingStep: convo.bookingStep, handoff: convo.handoff },
@@ -853,7 +874,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   } catch (error) {
     console.error("[SMS] Error:", error.message);
 
-    if (process.env.TEST_MODE === "true") {
+    if (process.env.TEST_MODE === "true" || isUiReq(req)) {
       return res.json({ reply: "Error: " + error.message });
     }
 
@@ -877,8 +898,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 // RESET — TEST_MODE only
 // ─────────────────────────────────────────────────────────────────────────────
 app.post("/reset", async (req, res) => {
-  if (process.env.TEST_MODE !== "true") {
-    return res.status(403).json({ error: "Only available in TEST_MODE" });
+  if (process.env.TEST_MODE !== "true" && !isUiReq(req)) {
+    return res.status(403).json({ error: "Unauthorized" });
   }
   const from = req.body.from;
   if (from) {
@@ -895,11 +916,11 @@ app.post("/reset", async (req, res) => {
 // Browser-based QA console. Run with: npm run ui
 // ─────────────────────────────────────────────────────────────────────────────
 const __uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
-app.use("/public", express.static(__uiDir));
-app.get("/ui", (_req, res) => res.sendFile(path.join(__uiDir, "ui.html")));
+app.use("/public", requireUiAccess, express.static(__uiDir));
+app.get("/ui", requireUiAccess, (_req, res) => res.sendFile(path.join(__uiDir, "ui.html")));
 
 // Session state — used by UI inspector panel
-app.get("/internal/session", async (req, res) => {
+app.get("/internal/session", requireUiAccess, async (req, res) => {
   const { from } = req.query;
   if (!from) return res.json(null);
   const { data } = await supabase
@@ -911,7 +932,7 @@ app.get("/internal/session", async (req, res) => {
 });
 
 // Preset test scenarios
-app.get("/internal/scenarios", (_req, res) => {
+app.get("/internal/scenarios", requireUiAccess, (_req, res) => {
   res.json([
     { id: "greeting",    label: "New guest greeting",        steps: ["hey"] },
     { id: "snow",        label: "Snow conditions",           steps: ["hey", "how much snow is up there?"] },
@@ -931,7 +952,7 @@ app.get("/internal/scenarios", (_req, res) => {
 
 // Preview: build the exact text that would be sent — uses real production builders
 // POST body: { type: "confirmation"|"followup"|"cancellation", booking: {...} }
-app.post("/internal/preview", (req, res) => {
+app.post("/internal/preview", requireUiAccess, (req, res) => {
   const { type, booking } = req.body;
   let text;
   if (type === "confirmation")  text = buildConfirmationText(booking);
@@ -942,7 +963,7 @@ app.post("/internal/preview", (req, res) => {
 });
 
 // Server info — UI reads this to know the phone number and season
-app.get("/internal/info", (_req, res) => {
+app.get("/internal/info", requireUiAccess, (_req, res) => {
   res.json({
     toPhone:  process.env.TWILIO_PHONE_NUMBER || "+18668906657",
     season:   getCurrentSeason(),

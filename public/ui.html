@@ -452,6 +452,19 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 </div><!-- end layout -->
 
 <script>
+// ─── Auth key ─────────────────────────────────────────────────────────────────
+// Read from ?key= on first load, persist in sessionStorage for API calls
+(function() {
+  const urlKey = new URLSearchParams(location.search).get("key");
+  if (urlKey) sessionStorage.setItem("_uikey", urlKey);
+})();
+function uiKey() { return sessionStorage.getItem("_uikey") || ""; }
+function uiHeaders(extra = {}) {
+  const h = { ...extra };
+  if (uiKey()) h["X-Internal-Key"] = uiKey();
+  return h;
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 const State = {
   safeMode:    true,
@@ -516,7 +529,10 @@ async function init() {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 async function apiFetch(url, opts = {}) {
-  const res = await fetch(url, opts);
+  const res = await fetch(url, {
+    ...opts,
+    headers: uiHeaders(opts.headers ?? {}),
+  });
   if (!res.ok) throw new Error(`${res.status} ${url}`);
   return res.json();
 }
@@ -531,7 +547,7 @@ async function sendToBot(body) {
   updatePayload("sms");
   const res = await fetch("/sms", {
     method:  "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: uiHeaders({ "Content-Type": "application/x-www-form-urlencoded" }),
     body:    new URLSearchParams(payload),
   });
   const data = await res.json();
@@ -541,7 +557,7 @@ async function sendToBot(body) {
 async function resetSession() {
   await fetch("/reset", {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: uiHeaders({ "Content-Type": "application/json" }),
     body:    JSON.stringify({ from: State.fromPhone }),
   });
 }
