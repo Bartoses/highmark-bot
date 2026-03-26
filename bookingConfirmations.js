@@ -49,10 +49,28 @@ export function buildConfirmationText(booking) {
     timeZoneName: "short",
   });
 
-  const text = `Hey ${firstName}! Your ${itemName} with ${company} is confirmed for ${dateStr} at ${timeStr} 🏔 Reply here with any questions!`;
+  const shortname = booking.company?.shortname;
+  const itemPk    = booking.availability?.item?.pk;
+  const bookingUuid = booking.uuid;
+  const bookingLink = shortname && itemPk && bookingUuid
+    ? `https://fareharbor.com/embeds/book/${shortname}/items/${itemPk}/booking/${bookingUuid}/`
+    : null;
 
-  // Cap at 320 chars
-  return text.length <= 320 ? text : text.slice(0, 317) + "...";
+  const body = `Hey ${firstName}! Your ${itemName} with ${company} is confirmed for ${dateStr} at ${timeStr} 🏔`;
+  const suffix = bookingLink
+    ? ` View booking: ${bookingLink} Reply with any questions!`
+    : ` Reply here with any questions!`;
+
+  const text = body + suffix;
+
+  // Never truncate mid-URL — if over 320 chars, drop the suffix and keep the URL intact
+  if (text.length <= 320) return text;
+  if (bookingLink) {
+    // Try without the trailing "Reply" line — URL always survives
+    const compact = `${body} ${bookingLink}`;
+    return compact.length <= 320 ? compact : body.slice(0, 317) + "...";
+  }
+  return text.slice(0, 317) + "...";
 }
 
 export function buildFollowUpText(booking) {

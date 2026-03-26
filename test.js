@@ -464,8 +464,18 @@ async function test12() {
   text.includes("3 Hour Public Tour")  ? pass("Contains item name")          : fail("Missing item name", text);
   /march 29|mar 29|saturday/i.test(text) ? pass("Contains date reference")   : fail("Missing date", text);
   text.length <= 320
-    ? pass(`Confirmation text: ${text.length} chars`)
+    ? pass(`Confirmation text (no uuid): ${text.length} chars`)
     : fail("Confirmation text too long", `${text.length} chars`);
+
+  // With booking UUID — link should appear
+  const mockWithUuid = { ...mock, uuid: "706e380e-5f8d-40b8-8da7-87a1a533d563" };
+  const textWithLink = buildConfirmationText(mockWithUuid);
+  textWithLink.includes("fareharbor.com/embeds/book/rabbitearsadventures/items/673348/booking/706e380e")
+    ? pass("Booking link present in confirmation text")
+    : fail("Booking link missing", textWithLink);
+  textWithLink.length <= 320
+    ? pass(`Confirmation text (with link): ${textWithLink.length} chars`)
+    : fail("Confirmation text with link too long", `${textWithLink.length} chars`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
