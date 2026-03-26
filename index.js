@@ -11,6 +11,7 @@
 */
 import "dotenv/config";
 import { fileURLToPath } from "url";
+import path from "path";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import twilio from "twilio";
@@ -18,7 +19,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
 import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborAvailability } from "./knowledgeBase.js";
-import { initBookingConfirmations } from "./bookingConfirmations.js";
+import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
 
@@ -841,7 +842,10 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
     // 26. Send via Twilio (or return JSON in TEST_MODE)
     if (process.env.TEST_MODE === "true") {
-      return res.json({ reply: replyText });
+      return res.json({
+        reply: replyText,
+        meta: { intent, sentiment, bookingStep: convo.bookingStep, handoff: convo.handoff },
+      });
     }
 
     await twilioClient.messages.create({ body: replyText, from: toNumber, to: fromNumber });
@@ -884,6 +888,67 @@ app.post("/reset", async (req, res) => {
     await supabase.from("conversations").delete().neq("from_number", "");
     res.json({ cleared: "all" });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERNAL TEST UI — TEST_MODE only
+// Browser-based QA console. Run with: npm run ui
+// ─────────────────────────────────────────────────────────────────────────────
+const __uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
+app.use("/public", express.static(__uiDir));
+app.get("/ui", (_req, res) => res.sendFile(path.join(__uiDir, "ui.html")));
+
+// Session state — used by UI inspector panel
+app.get("/internal/session", async (req, res) => {
+  const { from } = req.query;
+  if (!from) return res.json(null);
+  const { data } = await supabase
+    .from("conversations")
+    .select("messages, booking_step, booking_data, handoff, consecutive_frustrated, session_type")
+    .eq("from_number", from)
+    .maybeSingle();
+  res.json(data ?? null);
+});
+
+// Preset test scenarios
+app.get("/internal/scenarios", (_req, res) => {
+  res.json([
+    { id: "greeting",    label: "New guest greeting",        steps: ["hey"] },
+    { id: "snow",        label: "Snow conditions",           steps: ["hey", "how much snow is up there?"] },
+    { id: "avalanche",   label: "Avalanche forecast",        steps: ["hey", "what's the avalanche forecast?"] },
+    { id: "weather",     label: "Weather forecast",          steps: ["hey", "what's the weather like?"] },
+    { id: "beginner",    label: "Beginner booking",          steps: ["hey", "I want to book a snowmobile tour — first timer"] },
+    { id: "experienced", label: "Experienced rider",         steps: ["hey", "I'm experienced, looking for advanced backcountry"] },
+    { id: "group",       label: "Group handoff (7 people)",  steps: ["hey", "we have a group of 7, can we all book together?"] },
+    { id: "handoff",     label: "Explicit handoff",          steps: ["hey", "I want to speak to a real person"] },
+    { id: "sentiment",   label: "Sentiment escalation",      steps: ["hey", "this is terrible service", "worst experience ever"] },
+    { id: "rzr",         label: "RZR summer inquiry",        steps: ["hey", "we want to rent a RZR for the day, where should we ride?"] },
+    { id: "demo",        label: "DEMO trigger",              steps: ["DEMO"] },
+    { id: "summitdemo",  label: "SUMMITDEMO trigger",        steps: ["SUMMITDEMO"] },
+    { id: "stop",        label: "STOP opt-out",              steps: ["hey", "STOP"] },
+  ]);
+});
+
+// Preview: build the exact text that would be sent — uses real production builders
+// POST body: { type: "confirmation"|"followup"|"cancellation", booking: {...} }
+app.post("/internal/preview", (req, res) => {
+  const { type, booking } = req.body;
+  let text;
+  if (type === "confirmation")  text = buildConfirmationText(booking);
+  else if (type === "followup") text = buildFollowUpText(booking);
+  else if (type === "cancellation") text = buildCancellationText(booking);
+  else return res.status(400).json({ error: "Unknown preview type" });
+  res.json({ text, chars: text.length, texts: Math.ceil(text.length / 160) });
+});
+
+// Server info — UI reads this to know the phone number and season
+app.get("/internal/info", (_req, res) => {
+  res.json({
+    toPhone:  process.env.TWILIO_PHONE_NUMBER || "+18668906657",
+    season:   getCurrentSeason(),
+    testMode: process.env.TEST_MODE === "true",
+    clientName: CLIENT_NAME,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

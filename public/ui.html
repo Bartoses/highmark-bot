@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Highmark Test Console</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d0d0d;
+  --panel:     #131313;
+  --panel2:    #1a1a1a;
+  --border:    #252525;
+  --border2:   #2e2e2e;
+  --text:      #e0e0e0;
+  --text2:     #888;
+  --text3:     #555;
+  --accent:    #10b981;
+  --accent2:   #059669;
+  --warn:      #f59e0b;
+  --danger:    #ef4444;
+  --bot-bg:    #1a2320;
+  --user-bg:   #1a2030;
+  --radius:    8px;
+  --font:      -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono:      "SF Mono", "Fira Mono", "Consolas", monospace;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+#header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  background: var(--panel); height: 48px; flex-shrink: 0;
+  position: sticky; top: 0; z-index: 10;
+}
+#header .logo { font-weight: 700; font-size: 14px; letter-spacing: .03em; }
+#header .logo span { color: var(--accent); }
+#header .right { display: flex; align-items: center; gap: 12px; }
+
+.mode-badge {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+  cursor: pointer; user-select: none; border: 1px solid;
+  transition: all .15s;
+}
+.mode-badge.safe  { background: #0a2a1a; border-color: var(--accent);  color: var(--accent); }
+.mode-badge.live  { background: #2a0a0a; border-color: var(--danger);  color: var(--danger); }
+.mode-badge .dot  { width: 6px; height: 6px; border-radius: 50%; }
+.mode-badge.safe .dot { background: var(--accent); }
+.mode-badge.live .dot { background: var(--danger); animation: blink 1s infinite; }
+@keyframes blink { 0%,100% { opacity:1 } 50% { opacity:.3 } }
+
+.info-chip { font-size: 11px; color: var(--text2); font-family: var(--mono); }
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+#layout {
+  display: grid;
+  grid-template-columns: 240px 1fr 300px;
+  height: calc(100vh - 48px);
+  overflow: hidden;
+}
+
+/* ── Panels ──────────────────────────────────────────────────────────────── */
+.panel {
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.panel:last-child { border-right: none; }
+
+.panel-section {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-section:last-child { border-bottom: none; }
+
+.panel-scroll {
+  overflow-y: auto;
+  flex: 1;
+}
+.panel-scroll::-webkit-scrollbar { width: 4px; }
+.panel-scroll::-webkit-scrollbar-track { background: transparent; }
+.panel-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.section-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text3); margin-bottom: 8px;
+}
+
+/* ── Left panel ──────────────────────────────────────────────────────────── */
+#left { }
+
+.phone-input {
+  width: 100%; background: var(--bg); border: 1px solid var(--border2);
+  color: var(--text); padding: 6px 8px; border-radius: 5px;
+  font-family: var(--mono); font-size: 12px; margin-bottom: 6px;
+}
+.phone-input:focus { outline: none; border-color: var(--accent); }
+.phone-input::placeholder { color: var(--text3); }
+
+.scenario-btn {
+  display: block; width: 100%; text-align: left;
+  background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text2); padding: 6px 9px; border-radius: 5px;
+  cursor: pointer; font-size: 12px; margin-bottom: 4px;
+  transition: all .12s;
+}
+.scenario-btn:hover { border-color: var(--accent); color: var(--text); background: var(--bot-bg); }
+.scenario-btn.running { border-color: var(--accent); color: var(--accent); }
+
+.sim-btn {
+  display: block; width: 100%; text-align: left;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text2); padding: 6px 9px; border-radius: 5px;
+  cursor: pointer; font-size: 12px; margin-bottom: 4px;
+  transition: all .12s;
+}
+.sim-btn:hover { border-color: var(--warn); color: var(--warn); }
+
+.sim-form { margin-top: 8px; }
+.form-row { margin-bottom: 6px; }
+.form-label { font-size: 10px; color: var(--text3); margin-bottom: 2px; display: block; }
+.form-input {
+  width: 100%; background: var(--bg); border: 1px solid var(--border2);
+  color: var(--text); padding: 5px 7px; border-radius: 4px;
+  font-size: 12px;
+}
+.form-input:focus { outline: none; border-color: var(--warn); }
+.form-select {
+  width: 100%; background: var(--bg); border: 1px solid var(--border2);
+  color: var(--text); padding: 5px 7px; border-radius: 4px;
+  font-size: 12px;
+}
+.form-select:focus { outline: none; border-color: var(--warn); }
+
+/* ── Center: chat ────────────────────────────────────────────────────────── */
+#center { border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+
+#chat-thread {
+  flex: 1; overflow-y: auto; padding: 16px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+#chat-thread::-webkit-scrollbar { width: 4px; }
+#chat-thread::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.msg-row { display: flex; flex-direction: column; max-width: 78%; }
+.msg-row.bot  { align-self: flex-start; }
+.msg-row.user { align-self: flex-end; align-items: flex-end; }
+
+.msg-header { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+.msg-avatar {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent2); display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+.msg-sender { font-size: 11px; font-weight: 600; color: var(--text2); }
+
+.msg-bubble {
+  padding: 9px 12px; border-radius: var(--radius); line-height: 1.5;
+  font-size: 13px; white-space: pre-wrap; word-break: break-word;
+}
+.bot  .msg-bubble { background: var(--bot-bg);  border: 1px solid #1e3028; color: var(--text); border-top-left-radius: 2px; }
+.user .msg-bubble { background: var(--user-bg); border: 1px solid #1e2840; color: var(--text); border-top-right-radius: 2px; }
+
+.msg-meta {
+  font-size: 10px; color: var(--text3); margin-top: 3px;
+  font-family: var(--mono);
+}
+.msg-meta .tag {
+  display: inline-block; padding: 1px 5px; border-radius: 3px;
+  background: var(--panel2); border: 1px solid var(--border); margin-right: 3px;
+}
+.msg-meta .tag.intent   { color: #60a5fa; border-color: #1e3a5f; background: #0f1e30; }
+.msg-meta .tag.sentiment{ color: #a78bfa; border-color: #2d1e5f; background: #150f30; }
+.msg-meta .tag.step     { color: var(--accent); border-color: #0a3020; background: #050f0a; }
+.msg-meta .tag.handoff  { color: var(--danger); border-color: #3f0a0a; background: #1a0505; }
+
+.msg-chars { font-size: 10px; color: var(--text3); margin-top: 2px; }
+
+.typing-indicator {
+  display: flex; align-items: center; gap: 4px;
+  padding: 10px 14px; background: var(--bot-bg); border-radius: var(--radius);
+  border: 1px solid #1e3028; width: fit-content;
+}
+.typing-dot {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--accent);
+  animation: typing-bounce 1.2s infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: .2s; }
+.typing-dot:nth-child(3) { animation-delay: .4s; }
+@keyframes typing-bounce { 0%,80%,100% { transform:scale(.6);opacity:.5 } 40% { transform:scale(1);opacity:1 } }
+
+.preview-bubble {
+  padding: 10px 14px; border-radius: var(--radius);
+  background: #1a1810; border: 1px solid #3a3010;
+  color: var(--warn); font-size: 12px; white-space: pre-wrap;
+  line-height: 1.5;
+}
+.preview-bubble .preview-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--warn); opacity: .7; margin-bottom: 5px;
+}
+
+.empty-state {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: var(--text3); text-align: center; gap: 8px;
+  pointer-events: none; user-select: none;
+}
+.empty-state .empty-icon { font-size: 36px; opacity: .4; }
+.empty-state .empty-text { font-size: 13px; }
+.empty-state .empty-hint { font-size: 11px; opacity: .6; }
+
+#chat-input-area {
+  padding: 12px 16px; border-top: 1px solid var(--border);
+  display: flex; gap: 8px; align-items: flex-end;
+}
+#chat-input {
+  flex: 1; background: var(--panel2); border: 1px solid var(--border2);
+  color: var(--text); padding: 8px 12px; border-radius: 6px;
+  font-family: var(--font); font-size: 13px; resize: none;
+  min-height: 38px; max-height: 100px; line-height: 1.4;
+}
+#chat-input:focus { outline: none; border-color: var(--accent); }
+#chat-input::placeholder { color: var(--text3); }
+
+#send-btn {
+  padding: 8px 16px; background: var(--accent); border: none;
+  color: #fff; border-radius: 6px; font-size: 13px; font-weight: 600;
+  cursor: pointer; height: 38px; flex-shrink: 0; transition: background .12s;
+}
+#send-btn:hover { background: var(--accent2); }
+#send-btn:disabled { background: var(--text3); cursor: not-allowed; }
+
+#reset-btn {
+  padding: 7px 10px; background: transparent; border: 1px solid var(--border2);
+  color: var(--text2); border-radius: 6px; font-size: 12px;
+  cursor: pointer; height: 38px; flex-shrink: 0; transition: all .12s;
+}
+#reset-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+/* ── Right panel ─────────────────────────────────────────────────────────── */
+#right { }
+
+.state-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.state-cell {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 5px;
+  padding: 6px 8px;
+}
+.state-cell .sc-label { font-size: 10px; color: var(--text3); margin-bottom: 2px; }
+.state-cell .sc-val   { font-size: 12px; font-family: var(--mono); color: var(--text); }
+.state-cell .sc-val.accent  { color: var(--accent); }
+.state-cell .sc-val.warn    { color: var(--warn); }
+.state-cell .sc-val.danger  { color: var(--danger); }
+
+.transcript-row {
+  padding: 7px 0; border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.transcript-row:last-child { border-bottom: none; }
+.tr-role { font-weight: 700; font-family: var(--mono); margin-bottom: 2px; }
+.tr-role.bot  { color: var(--accent); }
+.tr-role.user { color: #60a5fa; }
+.tr-text { color: var(--text2); line-height: 1.4; }
+.tr-tags { margin-top: 3px; }
+.tr-time { font-size: 10px; color: var(--text3); }
+
+.payload-pre {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 5px; padding: 8px; font-family: var(--mono);
+  font-size: 10px; color: var(--text2); white-space: pre-wrap;
+  word-break: break-all; max-height: 180px; overflow-y: auto;
+}
+.payload-pre::-webkit-scrollbar { width: 3px; }
+.payload-pre::-webkit-scrollbar-thumb { background: var(--border2); }
+
+.tab-row { display: flex; gap: 4px; margin-bottom: 8px; }
+.tab-btn {
+  padding: 4px 10px; background: transparent; border: 1px solid var(--border);
+  color: var(--text2); border-radius: 4px; font-size: 11px; cursor: pointer;
+  transition: all .1s;
+}
+.tab-btn:hover { border-color: var(--text2); color: var(--text); }
+.tab-btn.active { background: var(--panel2); border-color: var(--accent); color: var(--accent); }
+
+.export-btn {
+  width: 100%; padding: 7px; background: transparent;
+  border: 1px solid var(--border2); color: var(--text2);
+  border-radius: 5px; font-size: 12px; cursor: pointer; transition: all .12s;
+}
+.export-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.notice { font-size: 11px; color: var(--text3); line-height: 1.5; }
+.notice.ok { color: var(--accent); }
+.notice.warn { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<div id="header">
+  <div class="logo">HIGHMARK <span>TEST CONSOLE</span></div>
+  <div class="right">
+    <span class="info-chip" id="header-info">loading...</span>
+    <div class="mode-badge safe" id="mode-toggle" onclick="toggleMode()">
+      <div class="dot"></div>
+      <span id="mode-label">SAFE MODE</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Layout ─────────────────────────────────────────────────────────────── -->
+<div id="layout">
+
+  <!-- ── Left panel ──────────────────────────────────────────────────────── -->
+  <div class="panel" id="left">
+    <div class="panel-scroll">
+
+      <!-- Guest identity -->
+      <div class="panel-section">
+        <div class="section-label">Guest identity</div>
+        <label class="form-label">From phone (simulated guest)</label>
+        <input class="phone-input" id="from-phone" value="+15550000099" placeholder="+15550000099"
+               oninput="State.fromPhone = this.value">
+        <label class="form-label" style="margin-top:4px">Name (for booking previews)</label>
+        <input class="form-input" id="guest-name" value="Test Guest"
+               oninput="State.booking.contactName = this.value">
+      </div>
+
+      <!-- Scenarios -->
+      <div class="panel-section">
+        <div class="section-label">Scenarios</div>
+        <div id="scenario-list"></div>
+      </div>
+
+      <!-- Simulate events -->
+      <div class="panel-section">
+        <div class="section-label">Simulate events</div>
+
+        <button class="sim-btn" onclick="showPreview('confirmation')">📋 Booking confirmation</button>
+        <button class="sim-btn" onclick="showPreview('followup')">⏰ Follow-up (30 min)</button>
+        <button class="sim-btn" onclick="showPreview('cancellation')">❌ Cancellation</button>
+
+        <!-- Booking form -->
+        <div class="sim-form">
+          <div class="form-row">
+            <label class="form-label">Company</label>
+            <select class="form-select" id="sim-company" oninput="State.booking.company = this.value">
+              <option value="coloradosledrentals">Colorado Sled Rentals</option>
+              <option value="rabbitearsadventures">Rabbit Ears Adventures</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Tour name</label>
+            <input class="form-input" id="sim-tour" value="Pro-Ride Guided Adventure"
+                   oninput="State.booking.tourName = this.value">
+          </div>
+          <div class="form-row">
+            <label class="form-label">Date &amp; time</label>
+            <input class="form-input" type="datetime-local" id="sim-date"
+                   oninput="State.booking.startAt = this.value">
+          </div>
+          <div class="form-row">
+            <label class="form-label">Booking UUID (optional)</label>
+            <input class="form-input" id="sim-uuid" placeholder="leave blank for no link"
+                   oninput="State.booking.uuid = this.value">
+          </div>
+          <div class="form-row">
+            <label class="form-label">Item PK (optional)</label>
+            <input class="form-input" id="sim-pk" placeholder="e.g. 662221"
+                   oninput="State.booking.itemPk = this.value">
+          </div>
+        </div>
+      </div>
+
+    </div><!-- end panel-scroll -->
+  </div><!-- end left -->
+
+  <!-- ── Center: chat ─────────────────────────────────────────────────────── -->
+  <div id="center">
+    <div id="chat-thread">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon">🏔</div>
+        <div class="empty-text">Highmark Test Console</div>
+        <div class="empty-hint">Type a message or click a scenario to begin</div>
+      </div>
+    </div>
+    <div id="chat-input-area">
+      <textarea id="chat-input" rows="1" placeholder="Type a message…" onkeydown="handleKey(event)"></textarea>
+      <button id="reset-btn" onclick="resetChat()" title="Reset conversation">↺ Reset</button>
+      <button id="send-btn" onclick="sendUserMessage()">Send</button>
+    </div>
+  </div>
+
+  <!-- ── Right panel ──────────────────────────────────────────────────────── -->
+  <div class="panel" id="right">
+    <div class="panel-scroll">
+
+      <!-- Session state -->
+      <div class="panel-section">
+        <div class="section-label">Session state</div>
+        <div class="state-grid" id="state-grid">
+          <div class="state-cell"><div class="sc-label">intent</div><div class="sc-val" id="s-intent">—</div></div>
+          <div class="state-cell"><div class="sc-label">sentiment</div><div class="sc-val" id="s-sentiment">—</div></div>
+          <div class="state-cell"><div class="sc-label">booking step</div><div class="sc-val" id="s-step">—</div></div>
+          <div class="state-cell"><div class="sc-label">handoff</div><div class="sc-val" id="s-handoff">—</div></div>
+          <div class="state-cell"><div class="sc-label">messages</div><div class="sc-val" id="s-msgs">0</div></div>
+          <div class="state-cell"><div class="sc-label">session type</div><div class="sc-val" id="s-session">—</div></div>
+        </div>
+      </div>
+
+      <!-- Transcript -->
+      <div class="panel-section">
+        <div class="section-label">Transcript</div>
+        <div id="transcript-list">
+          <div class="notice">No messages yet.</div>
+        </div>
+      </div>
+
+      <!-- Preview output -->
+      <div class="panel-section" id="preview-section" style="display:none">
+        <div class="section-label">Message preview</div>
+        <div id="preview-output"></div>
+      </div>
+
+      <!-- Raw payloads -->
+      <div class="panel-section">
+        <div class="section-label">Raw payloads</div>
+        <div class="tab-row">
+          <button class="tab-btn active" onclick="showPayloadTab('sms',this)">SMS</button>
+          <button class="tab-btn" onclick="showPayloadTab('fh',this)">FH Webhook</button>
+          <button class="tab-btn" onclick="showPayloadTab('session',this)">Session</button>
+        </div>
+        <pre class="payload-pre" id="payload-display">{ }</pre>
+      </div>
+
+      <!-- Export -->
+      <div class="panel-section">
+        <div class="section-label">Export</div>
+        <button class="export-btn" onclick="exportTranscript()">⬇ Export transcript (JSON)</button>
+        <div style="margin-top:6px">
+          <button class="export-btn" onclick="copyTranscript()">⎘ Copy as text</button>
+        </div>
+      </div>
+
+    </div><!-- end panel-scroll -->
+  </div><!-- end right -->
+
+</div><!-- end layout -->
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+const State = {
+  safeMode:    true,
+  fromPhone:   "+15550000099",
+  toPhone:     "+18668906657",
+  clientName:  "Colorado Sled Rentals",
+  season:      "winter",
+  running:     false,
+  transcript:  [],
+  lastMeta:    null,
+  currentPayloads: { sms: {}, fh: {}, session: {} },
+  booking: {
+    company:     "coloradosledrentals",
+    contactName: "Test Guest",
+    tourName:    "Pro-Ride Guided Adventure",
+    startAt:     "",
+    uuid:        "",
+    itemPk:      "",
+  },
+};
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+async function init() {
+  // Default sim date: tomorrow 9am
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  const simDate = tomorrow.toISOString().slice(0, 16);
+  document.getElementById("sim-date").value = simDate;
+  State.booking.startAt = simDate;
+
+  // Load server info
+  try {
+    const info = await apiFetch("/internal/info");
+    State.toPhone    = info.toPhone;
+    State.clientName = info.clientName;
+    State.season     = info.season;
+    document.getElementById("header-info").textContent =
+      `${info.clientName}  ·  ${info.season}  ·  ${info.toPhone}`;
+    if (!info.testMode) {
+      document.getElementById("header-info").textContent += "  ·  ⚠ NOT TEST_MODE";
+    }
+  } catch(e) {
+    document.getElementById("header-info").textContent = "⚠ server unreachable";
+  }
+
+  // Load scenarios
+  const scenarios = await apiFetch("/internal/scenarios");
+  const list = document.getElementById("scenario-list");
+  list.innerHTML = "";
+  for (const s of scenarios) {
+    const btn = document.createElement("button");
+    btn.className = "scenario-btn";
+    btn.id = `scenario-${s.id}`;
+    btn.textContent = s.label;
+    btn.onclick = () => runScenario(s);
+    list.appendChild(btn);
+  }
+
+  updatePayload("sms");
+}
+
+// ─── API helpers ──────────────────────────────────────────────────────────────
+async function apiFetch(url, opts = {}) {
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(`${res.status} ${url}`);
+  return res.json();
+}
+
+function buildSmsPayload(body) {
+  return { Body: body, From: State.fromPhone, To: State.toPhone };
+}
+
+async function sendToBot(body) {
+  const payload = buildSmsPayload(body);
+  State.currentPayloads.sms = payload;
+  updatePayload("sms");
+  const res = await fetch("/sms", {
+    method:  "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:    new URLSearchParams(payload),
+  });
+  const data = await res.json();
+  return data; // { reply, meta? }
+}
+
+async function resetSession() {
+  await fetch("/reset", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ from: State.fromPhone }),
+  });
+}
+
+async function fetchSession() {
+  try {
+    const s = await apiFetch(`/internal/session?from=${encodeURIComponent(State.fromPhone)}`);
+    State.currentPayloads.session = s ?? {};
+    return s;
+  } catch { return null; }
+}
+
+// ─── Chat ─────────────────────────────────────────────────────────────────────
+async function sendUserMessage() {
+  const input  = document.getElementById("chat-input");
+  const body   = input.value.trim();
+  if (!body || State.running) return;
+  input.value  = "";
+  autoResize(input);
+  await sendAndRender(body);
+}
+
+async function sendAndRender(body) {
+  State.running = true;
+  setSendEnabled(false);
+  hideEmpty();
+
+  appendUserMsg(body);
+  const indicator = appendTyping();
+
+  let data;
+  try {
+    data = await sendToBot(body);
+  } catch(e) {
+    removeEl(indicator);
+    appendError("Request failed: " + e.message);
+    State.running = false; setSendEnabled(true); return;
+  }
+
+  removeEl(indicator);
+  const meta = data.meta ?? {};
+  State.lastMeta = meta;
+
+  appendBotMsg(data.reply ?? "(no reply)", meta);
+  updateInspector(meta);
+  addToTranscript("user", body, {});
+  addToTranscript("bot", data.reply ?? "", meta);
+
+  // Refresh full session from DB for accurate booking_step/handoff
+  const session = await fetchSession();
+  if (session) {
+    updateInspectorFromSession(session, meta);
+    State.currentPayloads.session = session;
+  }
+
+  State.running = false; setSendEnabled(true);
+  scrollToBottom();
+}
+
+async function resetChat() {
+  if (State.running) return;
+  await resetSession();
+  State.transcript = [];
+  State.lastMeta   = null;
+  clearChat();
+  clearInspector();
+  clearTranscript();
+  updatePayload("sms");
+}
+
+// ─── Scenarios ────────────────────────────────────────────────────────────────
+async function runScenario(scenario) {
+  if (State.running) return;
+  await resetChat();
+
+  const btn = document.getElementById(`scenario-${scenario.id}`);
+  if (btn) btn.classList.add("running");
+
+  for (let i = 0; i < scenario.steps.length; i++) {
+    const step = scenario.steps[i];
+    await sendAndRender(step);
+    if (i < scenario.steps.length - 1) {
+      await delay(900);
+    }
+  }
+
+  if (btn) btn.classList.remove("running");
+}
+
+// ─── Simulate previews ───────────────────────────────────────────────────────
+async function showPreview(type) {
+  const booking = buildBookingObject();
+  const label   = { confirmation: "Booking confirmation", followup: "30-min follow-up", cancellation: "Cancellation" }[type];
+  State.currentPayloads.fh = booking;
+  updatePayload("fh");
+
+  let result;
+  try {
+    result = await apiFetch("/internal/preview", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ type, booking }),
+    });
+  } catch(e) {
+    appendError("Preview error: " + e.message);
+    return;
+  }
+
+  hideEmpty();
+  const section = document.getElementById("preview-section");
+  const output  = document.getElementById("preview-output");
+  section.style.display = "";
+
+  output.innerHTML = `
+    <div class="preview-bubble">
+      <div class="preview-label">${label}</div>
+      ${escHtml(result.text)}
+    </div>
+    <div class="msg-chars" style="margin-top:4px">${result.chars} chars · ${result.texts} SMS</div>
+  `;
+
+  // Also show in chat thread
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+    <div class="preview-bubble">
+      <div class="preview-label">Preview: ${label}</div>
+      ${escHtml(result.text)}
+    </div>
+    <div class="msg-chars">${result.chars} chars · ${result.texts} SMS</div>
+  `;
+  document.getElementById("chat-thread").appendChild(wrap);
+  scrollToBottom();
+}
+
+function buildBookingObject() {
+  const b = State.booking;
+  const start = b.startAt
+    ? new Date(b.startAt).toISOString()
+    : (() => { const d = new Date(); d.setDate(d.getDate()+1); d.setHours(9,0,0,0); return d.toISOString(); })();
+
+  return {
+    company:     { shortname: b.company },
+    contact:     { name: b.contactName || document.getElementById("guest-name").value || "Test Guest", phone: State.fromPhone },
+    availability: {
+      item: { name: b.tourName, pk: b.itemPk ? parseInt(b.itemPk) : null },
+      start_at: start,
+    },
+    uuid: b.uuid || null,
+  };
+}
+
+// ─── Inspector ────────────────────────────────────────────────────────────────
+function updateInspector(meta) {
+  setStateCell("s-intent",   meta.intent    ?? "—", "intent");
+  setStateCell("s-sentiment",meta.sentiment ?? "—", "sentiment");
+  setStateCell("s-step",     meta.bookingStep != null ? String(meta.bookingStep) : "—", "step");
+  setStateCell("s-handoff",  meta.handoff    != null ? String(meta.handoff) : "—", "handoff");
+}
+
+function updateInspectorFromSession(session, meta) {
+  updateInspector(meta);
+  if (session) {
+    setVal("s-step",    session.booking_step != null ? String(session.booking_step) : "—");
+    setVal("s-handoff", String(session.handoff ?? false));
+    setVal("s-msgs",    String(session.messages?.length ?? 0));
+    setVal("s-session", session.session_type ?? "—");
+  }
+}
+
+function clearInspector() {
+  ["s-intent","s-sentiment","s-step","s-handoff","s-msgs","s-session"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = "—"; el.className = "sc-val"; }
+  });
+}
+
+function setStateCell(id, val, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = val;
+  el.className = "sc-val";
+  if (type === "intent") {
+    if (["booking","conditions"].includes(val)) el.classList.add("accent");
+  } else if (type === "sentiment") {
+    if (val === "frustrated") el.classList.add("danger");
+    else if (val === "positive") el.classList.add("accent");
+  } else if (type === "step") {
+    if (val !== "—" && val !== "null") el.classList.add("accent");
+  } else if (type === "handoff") {
+    if (val === "true") el.classList.add("danger");
+  }
+}
+
+function setVal(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+// ─── Transcript ───────────────────────────────────────────────────────────────
+function addToTranscript(role, text, meta) {
+  const entry = { role, text, meta, ts: new Date().toISOString() };
+  State.transcript.push(entry);
+  renderTranscript();
+}
+
+function renderTranscript() {
+  const list = document.getElementById("transcript-list");
+  list.innerHTML = "";
+  for (const e of State.transcript) {
+    const div = document.createElement("div");
+    div.className = "transcript-row";
+    const time = new Date(e.ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    const tags = e.role === "user" && e.meta
+      ? `<div class="tr-tags">${tagHtml(e.meta.intent,"intent")}${tagHtml(e.meta.sentiment,"sentiment")}</div>` : "";
+    div.innerHTML = `
+      <div class="tr-role ${e.role}">${e.role === "bot" ? "SUMMIT" : "GUEST"}</div>
+      <div class="tr-text">${escHtml(e.text)}</div>
+      ${tags}
+      <div class="tr-time">${time}</div>
+    `;
+    list.appendChild(div);
+  }
+  // Scroll transcript to bottom
+  const parent = list.closest(".panel-scroll");
+  if (parent) parent.scrollTop = parent.scrollHeight;
+}
+
+function clearTranscript() {
+  State.transcript = [];
+  document.getElementById("transcript-list").innerHTML = '<div class="notice">No messages yet.</div>';
+}
+
+function tagHtml(val, type) {
+  if (!val) return "";
+  return `<span class="tag ${type}">${escHtml(String(val))}</span>`;
+}
+
+// ─── Payloads ─────────────────────────────────────────────────────────────────
+let activePayloadTab = "sms";
+
+function showPayloadTab(tab, btn) {
+  activePayloadTab = tab;
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  if (btn) btn.classList.add("active");
+  updatePayload(tab);
+}
+
+function updatePayload(tab) {
+  const display = document.getElementById("payload-display");
+  const data    = State.currentPayloads[tab ?? activePayloadTab] ?? {};
+  display.textContent = JSON.stringify(data, null, 2);
+  if (tab) activePayloadTab = tab;
+}
+
+// ─── DOM helpers ──────────────────────────────────────────────────────────────
+function appendUserMsg(text) {
+  const thread = document.getElementById("chat-thread");
+  const row = document.createElement("div");
+  row.className = "msg-row user";
+  const ts = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  row.innerHTML = `
+    <div class="msg-bubble">${escHtml(text)}</div>
+    <div class="msg-chars">${ts}</div>
+  `;
+  thread.appendChild(row);
+  scrollToBottom();
+  return row;
+}
+
+function appendBotMsg(text, meta = {}) {
+  const thread = document.getElementById("chat-thread");
+  const row = document.createElement("div");
+  row.className = "msg-row bot";
+  const ts = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const texts = Math.ceil(text.length / 160);
+  const metaTags = [
+    meta.intent    ? `<span class="tag intent">${escHtml(meta.intent)}</span>` : "",
+    meta.sentiment ? `<span class="tag sentiment">${escHtml(meta.sentiment)}</span>` : "",
+    meta.bookingStep != null ? `<span class="tag step">step ${meta.bookingStep}</span>` : "",
+    meta.handoff ? `<span class="tag handoff">handoff</span>` : "",
+  ].filter(Boolean).join("");
+
+  row.innerHTML = `
+    <div class="msg-header">
+      <div class="msg-avatar">S</div>
+      <div class="msg-sender">Summit</div>
+    </div>
+    <div class="msg-bubble">${escHtml(text)}</div>
+    <div class="msg-meta">${metaTags}</div>
+    <div class="msg-chars">${text.length} chars · ${texts} SMS · ${ts}</div>
+  `;
+  thread.appendChild(row);
+  scrollToBottom();
+  return row;
+}
+
+function appendTyping() {
+  const thread = document.getElementById("chat-thread");
+  const row = document.createElement("div");
+  row.className = "msg-row bot";
+  row.innerHTML = `
+    <div class="msg-header">
+      <div class="msg-avatar">S</div>
+      <div class="msg-sender">Summit</div>
+    </div>
+    <div class="typing-indicator">
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+    </div>
+  `;
+  thread.appendChild(row);
+  scrollToBottom();
+  return row;
+}
+
+function appendError(msg) {
+  const thread = document.getElementById("chat-thread");
+  const div = document.createElement("div");
+  div.style.cssText = "font-size:11px;color:var(--danger);text-align:center;padding:6px;font-family:var(--mono)";
+  div.textContent = msg;
+  thread.appendChild(div);
+  scrollToBottom();
+}
+
+function clearChat() {
+  const thread = document.getElementById("chat-thread");
+  thread.innerHTML = `
+    <div class="empty-state" id="empty-state">
+      <div class="empty-icon">🏔</div>
+      <div class="empty-text">Highmark Test Console</div>
+      <div class="empty-hint">Type a message or click a scenario to begin</div>
+    </div>
+  `;
+  document.getElementById("preview-section").style.display = "none";
+}
+
+function hideEmpty() {
+  const e = document.getElementById("empty-state");
+  if (e) e.style.display = "none";
+}
+
+function removeEl(el) { if (el && el.parentNode) el.parentNode.removeChild(el); }
+function scrollToBottom() {
+  const t = document.getElementById("chat-thread");
+  t.scrollTop = t.scrollHeight;
+}
+
+// ─── Mode toggle ──────────────────────────────────────────────────────────────
+function toggleMode() {
+  State.safeMode = !State.safeMode;
+  const badge = document.getElementById("mode-toggle");
+  const label = document.getElementById("mode-label");
+  if (State.safeMode) {
+    badge.className = "mode-badge safe";
+    label.textContent = "SAFE MODE";
+  } else {
+    badge.className = "mode-badge live";
+    label.textContent = "LIVE MODE";
+    if (!confirm("⚠ LIVE MODE: booking confirmation previews will attempt real Twilio sends if CONFIRMATIONS_ENABLED=true on the server.\n\nAre you sure?")) {
+      State.safeMode = true;
+      badge.className = "mode-badge safe";
+      label.textContent = "SAFE MODE";
+    }
+  }
+}
+
+// ─── Export ───────────────────────────────────────────────────────────────────
+function exportTranscript() {
+  const data = {
+    exportedAt:  new Date().toISOString(),
+    client:      State.clientName,
+    season:      State.season,
+    fromPhone:   State.fromPhone,
+    transcript:  State.transcript,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `highmark-transcript-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function copyTranscript() {
+  const lines = State.transcript.map(e => {
+    const role = e.role === "bot" ? "Summit" : "Guest";
+    const ts   = new Date(e.ts).toLocaleTimeString();
+    return `[${ts}] ${role}: ${e.text}`;
+  });
+  navigator.clipboard.writeText(lines.join("\n")).then(() => {
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = "✓ Copied!";
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
+// ─── Misc ─────────────────────────────────────────────────────────────────────
+function handleKey(e) {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendUserMessage(); }
+  setTimeout(() => autoResize(e.target), 0);
+}
+
+function autoResize(el) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 100) + "px";
+}
+
+function setSendEnabled(v) {
+  document.getElementById("send-btn").disabled = !v;
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Boot
+init();
+</script>
+</body>
+</html>
