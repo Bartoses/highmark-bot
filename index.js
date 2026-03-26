@@ -189,18 +189,84 @@ Advanced / backcountry → CSR Pro-Ride (use csr_proride_guided)
 Unsure → ask experience level + group size first` : ""}
 
 ${isSummer ? `━━━ SUMMER KNOWLEDGE ━━━
-CSR Summer RZR:
+CSR Summer RZR Rentals:
 - Steamboat: 2151 Downhill Dr | Kremmling: 1606 Park Ave
-- Self-guided, up to 8 hours, pre-loaded GPS on Ride Command
-- Trailheads: Buffalo Pass, North Fork, Rabbit Ears, North Routt
-- Turbo PRO S 4-Seater: 168HP turbo — thrill seekers (use rzr_steamboat or rzr_kremmling)
-- General 1000 4-Seater: 100HP — families, extra storage (use rzr_steamboat or rzr_kremmling)
-- Both seat 4 adults, trailer rental available. Books via Polaris Adventures (NOT FareHarbor).
-Trail highlights: Buffalo Pass (alpine, moderate), North Routt (remote, rugged), Rabbit Ears (divide views).
+- Self-guided, up to 8 hours, pre-loaded GPS with Polaris Ride Command
+- Turbo PRO S 4-Seater: 168HP turbo — thrill seekers, experienced riders (use rzr_steamboat or rzr_kremmling)
+- General 1000 4-Seater: 100HP — families, beginner-friendly, extra storage (use rzr_steamboat or rzr_kremmling)
+- Both seat 4 adults. Trailer rental available. Books via Polaris Adventures (NOT FareHarbor).
+- Season: roughly late June–September depending on snow melt at Buffalo Pass (10,000+ ft)
+
+━━━ RZR TRAIL AREAS ━━━
+BUFFALO PASS TRAIL SYSTEM (out of Steamboat, ~10mi north)
+- Trailhead: Buffalo Pass Rd / Forest Rd 60, top of Buffalo Pass (elev 10,180 ft)
+- Riding: Mix of alpine meadows, forested ridge lines, technical rock sections. 50+ miles of interconnected Forest Service roads and trails.
+- Highlights: Continental Divide views, Fishhook Lake, South Fork trail, North Fork trail
+- Difficulty: Moderate to Advanced. Narrow shelf roads, creek crossings. Perfect for Turbo PRO S.
+- Access: Forest Rd 60 from Steamboat. Road typically opens late June / July depending on snowpack.
+
+NORTH ROUTT / STEAMBOAT LAKE AREA (~25mi north of Steamboat)
+- Trailheads: Dry Lake, Bear River, Pearl Lake area, Forest Rd 400
+- Riding: Remote, wide-open ranching valleys, forested ridges, less technical than Buffalo Pass. Great for families.
+- Highlights: Steamboat Lake views, Hahns Peak (14 miles of open ridge), Elk hunting country feel
+- Difficulty: Easy to Moderate. Good for General 1000, wide roads.
+- Access: HWY 129 north through Clark, then forest service roads
+
+RABBIT EARS PASS / GORE PASS AREA (~20mi SE of Steamboat)
+- Trailheads: Muddy Pass, Gore Pass, Lynx Pass, HWY 40 pulloffs
+- Riding: Continental Divide trails, alpine tundra above treeline, panoramic views
+- Highlights: Divide ridgeline, Yampa Valley views, Storm Peak sightlines, access to Kremmling trails
+- Difficulty: Moderate. Some rocky alpine terrain near the Divide. Good mix for both RZR models.
+- Access: HWY 40 east to top of Rabbit Ears Pass, then forest roads south
+
+KREMMLING / MIDDLE PARK BLM AREA (out of Kremmling location)
+- Riding: Wide-open BLM high desert terrain, much drier than Steamboat. Views of Gore Range and Williams Fork mountains.
+- Highlights: Radium OHV Area, Trough Road, Pumphouse Recreation Area, Colorado River canyon views
+- Difficulty: Easy to Moderate. Excellent for first-timers, families, longer mileage days.
+- Access: Out of CSR's Kremmling location directly. 100,000+ acres of accessible BLM.
+
+TRAIL ROUTING RECOMMENDATIONS:
+- First-timers / families → North Routt or Kremmling BLM. Wider roads, less technical.
+- Experienced / want adrenaline → Buffalo Pass. Shelf roads, steep climbs, alpine exposure.
+- Scenic / photo opportunity → Rabbit Ears Pass ridge. Views in every direction.
+- Want all-day miles → Kremmling. Endless BLM roads, can link to Gore Pass loop.
+
+━━━ OHV / RZR RULES (Colorado + Routt National Forest) ━━━
+REGISTRATION:
+- Colorado OHV registration required for all ATVs/UTVs on public lands ($25.25/year — CSR handles this for rental units)
+- Rental units are registered — guests do NOT need their own OHV sticker
+- Street-legal UTVs with plates can use public roads; RZR rentals are OHV-only (Forest roads and trails)
+
+ON TRAIL:
+- Stay on designated Forest Service roads and OHV trails ONLY — off-trail travel is illegal and destroys habitat
+- Yield to equestrians and hikers — horses have right of way, stop and move to the downhill side
+- Speed limit: 15 mph near trailheads and campgrounds, check posted limits on Forest roads (typically 25–35 mph)
+- No riding in designated Wilderness Areas (Zirkel Wilderness, Flat Tops Wilderness are closed to OHV)
+- No riding on private land — stay on marked public land routes
+- Spark arrester required (all CSR rental units are equipped)
+- No riding after dark unless unit has proper lighting
+
+SAFETY:
+- Helmets: strongly recommended for all riders, required under 18 (CSR provides helmets)
+- Seat belts: buckle in always — rollover risk on steep terrain
+- Slow down on hills: brake before, not during descent — engine brake in low gear
+- Creek crossings: check depth before crossing, go slow, don't stall the engine
+- Do not ride alone in remote areas without communication — Routt National Forest has limited cell service
+- Bring water, snacks, basic first aid kit, and a paper map (GPS can lose signal)
+- File a float plan: tell someone where you're going and when you'll be back
+- Weather changes fast at altitude — always have a rain layer even on sunny mornings
+
+FIRE & ENVIRONMENT:
+- Campfires only in designated fire rings — fire restrictions common in August/September (check fs.usda.gov/arp)
+- Pack out all trash — Leave No Trace
+- Avoid muddy trails after rain (causes lasting damage to soils)
+- Routt National Forest fire restriction status: fs.usda.gov/arp or call Hahns Peak / Bears Ears District (970) 870-2299
 
 SUMMER ROUTING:
-Family + summer → General 1000 + relaxed trails
-Thrill seeker + summer → Turbo PRO S
+Family + summer → General 1000 + North Routt or Kremmling BLM
+Thrill seeker + summer → Turbo PRO S + Buffalo Pass
+First-timer / beginner → General 1000 + Kremmling BLM
+Experienced + wants epic scenery → Turbo PRO S + Rabbit Ears Pass / Buffalo Pass loop
 Any RZR/ATV question → summer options` : ""}
 
 ━━━ WHAT TO WEAR (all seasons) ━━━
