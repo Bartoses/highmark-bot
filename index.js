@@ -386,7 +386,7 @@ Message: "${message}"`,
     const availability = await getFareHarborAvailability(company, firstItem.pk, extracted.date);
     if (!availability?.length) return null;
 
-    const openSlots = availability.filter((a) => a.capacity > 0);
+    const openSlots = availability.filter((a) => a.online_booking_status === "open" && a.capacity > 0);
     if (!openSlots.length) return `No open slots on ${extracted.date} — check booking link for other dates.`;
 
     const times = openSlots
@@ -434,7 +434,7 @@ async function buildTourMenu(season, dateStr) {
       if (!opt.pk) { opt.available = null; return; } // browse-all links have no single PK
       try {
         const avail = await getFareHarborAvailability(opt.company, opt.pk, dateStr);
-        const open  = (avail ?? []).filter((a) => a.capacity > 0);
+        const open  = (avail ?? []).filter((a) => a.online_booking_status === "open" && a.capacity > 0);
         opt.available = open.length > 0;
         opt.times     = open.slice(0, 2).map((a) =>
           new Date(a.start_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })

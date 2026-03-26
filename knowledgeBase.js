@@ -203,7 +203,7 @@ async function refreshFareHarborAvailability(supabase) {
             company
           );
           const openSlots = availabilities.filter(
-            (a) => a.capacity > 0 || a.is_available === true
+            (a) => a.online_booking_status === "open" && a.capacity > 0
           );
           availabilityData[item.name] = {
             pk:        item.pk,
