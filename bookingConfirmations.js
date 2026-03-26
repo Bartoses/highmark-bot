@@ -160,13 +160,41 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
 
   // Handle cancellation
   if (status === "cancelled") {
+    // Idempotency — skip if cancellation already sent
+    const { data: cancelExisting } = await supabase
+      .from("confirmations_sent")
+      .select("id, cancellation_sent")
+      .eq("booking_pk", bookingPk)
+      .single();
+
+    if (cancelExisting?.cancellation_sent) {
+      console.log(`[CONFIRM] Cancellation already sent for booking ${bookingPk} — skipping.`);
+      return;
+    }
+
     const cancelText = buildCancellationText(booking);
     try {
       await twilioClient.messages.create({ body: cancelText, from: fromNumber, to: sendTo });
       console.log(`[CONFIRM] Cancellation sent to ${sendTo} for booking ${bookingPk}`);
     } catch (err) {
       console.error(`[CONFIRM] Cancellation send failed:`, err.message);
+      return;
     }
+
+    // Mark cancellation sent (upsert in case no prior confirmation row exists)
+    await supabase.from("confirmations_sent").upsert(
+      {
+        booking_pk:        bookingPk,
+        guest_phone:       guestPhone,
+        guest_name:        booking.contact?.name ?? null,
+        company:           booking.company?.shortname ?? "unknown",
+        item_name:         booking.availability?.item?.name ?? "tour",
+        start_at:          booking.availability?.start_at ?? new Date().toISOString(),
+        source,
+        cancellation_sent: true,
+      },
+      { onConflict: "booking_pk" }
+    );
     return;
   }
 
@@ -286,12 +314,35 @@ async function pollNewBookings(twilioClient, supabase, crmSupabase) {
         if (!res.ok) continue;
 
         const { bookings } = await res.json();
-        const newBookings = (bookings ?? []).filter(
+        const allBookings = bookings ?? [];
+
+        // New confirmed bookings since last poll
+        const newBookings = allBookings.filter(
           (b) => new Date(b.created_at ?? 0) > new Date(lastPoll)
         );
-
         for (const b of newBookings) {
           await processBookingEvent(b, "poll", twilioClient, supabase, crmSupabase);
+        }
+
+        // Missed cancellations — find confirmed bookings that are now cancelled
+        // but haven't had a cancellation text sent yet
+        const cancelledPks = allBookings
+          .filter((b) => b.status === "cancelled")
+          .map((b) => String(b.pk));
+
+        if (cancelledPks.length > 0) {
+          const { data: pendingCancels } = await supabase
+            .from("confirmations_sent")
+            .select("booking_pk")
+            .in("booking_pk", cancelledPks)
+            .eq("cancellation_sent", false);
+
+          for (const row of pendingCancels ?? []) {
+            const booking = allBookings.find((b) => String(b.pk) === row.booking_pk);
+            if (booking) {
+              await processBookingEvent(booking, "poll", twilioClient, supabase, crmSupabase);
+            }
+          }
         }
       } catch (err) {
         console.error(`[CONFIRM] Poll failed for ${company.shortname}:`, err.message);
