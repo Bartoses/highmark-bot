@@ -18,7 +18,7 @@ import twilio from "twilio";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
-import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborAvailability } from "./knowledgeBase.js";
+import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborKbRow, getFareHarborAvailability } from "./knowledgeBase.js";
 import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
@@ -428,13 +428,17 @@ Message: "${message}"`,
 // Checks FH availability per item if a date string is provided.
 // ─────────────────────────────────────────────────────────────────────────────
 async function buildTourMenu(season, dateStr) {
-  const reaItems = await getFareHarborItems("rea", supabase);
+  const { items: reaItems, availabilityData: reaAvail } = await getFareHarborKbRow("rea", supabase);
 
   // Individual items listed — REA guided tours (freshest from KB cache, up to 4)
   const options = [];
 
   if (season !== "summer") {
     for (const item of reaItems.slice(0, 4)) {
+      // Skip items confirmed to have no online availability (open_days === 0)
+      // If availabilityData is missing for this item, include it (unknown ≠ unavailable)
+      const avail = reaAvail[item.name];
+      if (avail && avail.open_days === 0) continue;
       options.push({ label: item.name, company: "rea", pk: item.pk,
         url: `https://fareharbor.com/embeds/book/rabbitearsadventures/items/${item.pk}/?ref=highmark&full-items=yes` });
     }

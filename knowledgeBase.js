@@ -784,6 +784,22 @@ export async function getFareHarborItems(companyId, supabase) {
   }
 }
 
+export async function getFareHarborKbRow(companyId, supabase) {
+  try {
+    const { data } = await supabase
+      .from("knowledge_base")
+      .select("data")
+      .eq("key", `${companyId}_fareharbor`)
+      .single();
+    return {
+      items:            data?.data?.items            ?? [],
+      availabilityData: data?.data?.availabilityData ?? {},
+    };
+  } catch {
+    return { items: [], availabilityData: {} };
+  }
+}
+
 // Direct FH API call for specific item + date. Returns availability array or null.
 // date format: YYYY-MM-DD
 export async function getFareHarborAvailability(companyId, itemPk, date) {
