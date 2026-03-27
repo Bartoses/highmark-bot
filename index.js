@@ -24,6 +24,7 @@ import { resolveClient, CLIENTS, getDefaultClient } from "./clients.js";
 import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
+import { handleListLeads, handleUpdateLead, handleLeadsSummary } from "./adminLeads.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -1201,6 +1202,13 @@ app.get("/internal/clients", requireUiAccess, (_req, res) => {
     }))
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN LEADS — Internal lead management API (protected by UI_SECRET)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/admin/leads/summary", requireUiAccess, (req, res) => handleLeadsSummary(req, res, supabase));
+app.get("/admin/leads",         requireUiAccess, (req, res) => handleListLeads(req, res, supabase));
+app.patch("/admin/leads/:id",   requireUiAccess, (req, res) => handleUpdateLead(req, res, supabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCHEDULED MESSAGES WORKER — called by Railway cron every minute

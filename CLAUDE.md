@@ -37,10 +37,12 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (142 tests), spawns its own server on port 3099
+test.js                — automated test suite (161 tests), spawns its own server on port 3099
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
+adminLeads.js          — admin lead management: list, update, summary routes (Chunk 5)
 db1_lead_capture.sql   — migration: adds lead_step/lead_data to conversations + creates leads table
 db1_waitlist.sql       — migration: adds waitlist_pending/waitlist_context to conversations + lead_type to leads
+db1_lead_mgmt.sql      — migration: extended status values + updated_by audit column on leads
 db1_cancellation_sent.sql — migration: adds cancellation_sent column to confirmations_sent
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
@@ -231,8 +233,29 @@ Used by Lone Pine Performance — collects service request without pretending to
 - `openerText` — first-message text (overrides getSeasonalOpener generic logic)
 - `handoffReply(phone)` — function returning text sent on explicit handoff intent
 
+### Admin Lead Management (adminLeads.js — Chunk 5)
+Internal API for viewing and updating captured leads. Protected by `requireUiAccess` (same `UI_SECRET` as the UI console).
+
+**Routes:**
+- `GET /admin/leads` — paginated list; query params: `client_id`, `status`, `lead_type`, `limit` (default 50), `offset` (default 0); newest first
+- `PATCH /admin/leads/:id` — update `status`, `notes`, and/or `updated_by`; returns updated lead
+- `GET /admin/leads/summary` — aggregate counts; query param: `client_id`; returns `{ by_status, by_type, total }`
+
+**Valid statuses:** `new | contacted | scheduled | closed | ignored`
+
+**Migrations required:**
+- `db1_lead_mgmt.sql` — adds check constraint for status values + `updated_by` audit column
+
+**Access:**
+```bash
+curl "https://highmark-bot-production.up.railway.app/admin/leads?key=YOUR_UI_SECRET"
+curl -X PATCH "https://highmark-bot-production.up.railway.app/admin/leads/LEAD_ID?key=YOUR_UI_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"contacted","notes":"Left voicemail"}'
+```
+
 ### Session Tips
-Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — keeps context focused and saves credits.
+Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — and when switching from SMS flow work to admin/internal workflow work. Keeps context focused and saves credits.
 
 ### TEST_MODE
 When `TEST_MODE=true` (local only, never set on Railway):
@@ -339,5 +362,6 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 2. ~~**Rebooking cancellations**~~ — DONE. Idempotent cancel texts, poller catches missed cancellations, `cancellation_sent` column tracks state.
 3. ~~**Booking link in confirmation**~~ — DONE. Uses `booking.uuid` + `item.pk` from FH payload.
 4. ~~**Lead capture flow (Lone Pine)**~~ — DONE. 3-step SMS flow + `leads` table + business notification. Run `db1_lead_capture.sql` migration in Supabase before deploy.
-5. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
-6. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+5. ~~**Admin lead management**~~ — DONE. List/filter/update/summary routes at `/admin/leads`. Run `db1_lead_mgmt.sql` migration to enable extended statuses + `updated_by`. Protected by `UI_SECRET`.
+6. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
+7. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.

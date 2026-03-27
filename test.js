@@ -104,6 +104,15 @@ async function httpGet(path) {
   return fetch(`${BASE_URL}${path}`);
 }
 
+async function httpPatch(path, body) {
+  const { default: fetch } = await import("node-fetch");
+  return fetch(`${BASE_URL}${path}`, {
+    method:  "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(body),
+  });
+}
+
 async function resetConvo(phone = TEST_PHONE) {
   await httpPost("/reset", { from: phone }, "application/json");
 }
@@ -1109,6 +1118,147 @@ async function test23() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 24: Chunk 5 — Admin Lead Management API
+// ─────────────────────────────────────────────────────────────────────────────
+async function test24() {
+  console.log("\nTEST 24: Admin Lead Management API (Chunk 5)");
+
+  if (!supabase) {
+    fail("Supabase unavailable — skipping lead management tests");
+    return;
+  }
+
+  // Seed a test lead directly into Supabase
+  const TEST_CLIENT = "csr_rea";
+  const TEST_PHONE_LEAD = "+15550098765";
+  const { data: inserted, error: insertErr } = await supabase.from("leads").insert({
+    client_id:         TEST_CLIENT,
+    from_number:       TEST_PHONE_LEAD,
+    contact_phone:     TEST_PHONE_LEAD,
+    requested_service: "Test service — admin chunk 5",
+    source:            "sms",
+    status:            "new",
+    lead_type:         "booking",
+  }).select().single();
+
+  if (insertErr || !inserted) {
+    fail("Test lead insert failed", insertErr?.message ?? "no data");
+    return;
+  }
+  pass("Test lead seeded into DB");
+
+  const leadId = inserted.id;
+
+  // ── GET /admin/leads ──────────────────────────────────────────────────────
+  const listRes  = await httpGet("/admin/leads");
+  const listData = await listRes.json();
+
+  listRes.status === 200
+    ? pass("GET /admin/leads returns 200")
+    : fail("GET /admin/leads wrong status", String(listRes.status));
+
+  Array.isArray(listData.leads)
+    ? pass("GET /admin/leads returns leads array")
+    : fail("GET /admin/leads missing leads array", JSON.stringify(listData));
+
+  typeof listData.total === "number"
+    ? pass("GET /admin/leads returns total count")
+    : fail("GET /admin/leads missing total", JSON.stringify(listData));
+
+  const seededInList = listData.leads.some((l) => l.id === leadId);
+  seededInList
+    ? pass("Seeded lead appears in list")
+    : fail("Seeded lead not found in list");
+
+  // ── Filter by client_id ───────────────────────────────────────────────────
+  const filteredRes  = await httpGet(`/admin/leads?client_id=${TEST_CLIENT}`);
+  const filteredData = await filteredRes.json();
+
+  filteredData.leads.every((l) => l.client_id === TEST_CLIENT)
+    ? pass("client_id filter: all leads match client")
+    : fail("client_id filter: returned wrong clients", JSON.stringify(filteredData.leads.map((l) => l.client_id)));
+
+  // ── Filter by status ──────────────────────────────────────────────────────
+  const statusRes  = await httpGet("/admin/leads?status=new");
+  const statusData = await statusRes.json();
+
+  statusData.leads.every((l) => l.status === "new")
+    ? pass("status filter: all leads have status=new")
+    : fail("status filter: returned wrong statuses");
+
+  // ── PATCH /admin/leads/:id — status update ────────────────────────────────
+  // Note: updated_by requires db1_lead_mgmt.sql migration — tested separately
+  const patchStatusRes  = await httpPatch(`/admin/leads/${leadId}`, { status: "contacted" });
+  const patchStatusData = await patchStatusRes.json();
+
+  patchStatusRes.status === 200
+    ? pass("PATCH status → 200")
+    : fail("PATCH status wrong status", String(patchStatusRes.status));
+
+  patchStatusData.lead?.status === "contacted"
+    ? pass("PATCH status: lead.status updated to contacted")
+    : fail("PATCH status: wrong status in response", patchStatusData.lead?.status);
+
+  // ── PATCH /admin/leads/:id — notes update ─────────────────────────────────
+  const patchNotesRes  = await httpPatch(`/admin/leads/${leadId}`, {
+    notes: "Called back — voicemail left. Try again Thursday.",
+  });
+  const patchNotesData = await patchNotesRes.json();
+
+  patchNotesRes.status === 200
+    ? pass("PATCH notes → 200")
+    : fail("PATCH notes wrong status", String(patchNotesRes.status));
+
+  patchNotesData.lead?.notes?.includes("voicemail")
+    ? pass("PATCH notes: notes field updated")
+    : fail("PATCH notes: notes missing in response", patchNotesData.lead?.notes);
+
+  // ── PATCH — invalid status rejected ──────────────────────────────────────
+  const badPatchRes = await httpPatch(`/admin/leads/${leadId}`, { status: "bogus_status" });
+  badPatchRes.status === 400
+    ? pass("PATCH invalid status: returns 400")
+    : fail("PATCH invalid status: expected 400", String(badPatchRes.status));
+
+  // ── GET /admin/leads/summary ──────────────────────────────────────────────
+  const summaryRes  = await httpGet("/admin/leads/summary");
+  const summaryData = await summaryRes.json();
+
+  summaryRes.status === 200
+    ? pass("GET /admin/leads/summary returns 200")
+    : fail("GET /admin/leads/summary wrong status", String(summaryRes.status));
+
+  typeof summaryData.by_status === "object" && summaryData.by_status !== null
+    ? pass("summary has by_status object")
+    : fail("summary missing by_status", JSON.stringify(summaryData));
+
+  typeof summaryData.by_type === "object" && summaryData.by_type !== null
+    ? pass("summary has by_type object")
+    : fail("summary missing by_type", JSON.stringify(summaryData));
+
+  // All valid statuses should appear in by_status (seeded at 0)
+  const statuses = ["new", "contacted", "scheduled", "closed", "ignored"];
+  statuses.every((s) => typeof summaryData.by_status[s] === "number")
+    ? pass("summary by_status has all valid status keys")
+    : fail("summary by_status missing some status keys", JSON.stringify(summaryData.by_status));
+
+  typeof summaryData.total === "number" && summaryData.total > 0
+    ? pass(`summary total: ${summaryData.total} leads`)
+    : fail("summary total missing or zero", String(summaryData.total));
+
+  // ── client_id filter on summary ───────────────────────────────────────────
+  const clientSummaryRes = await httpGet(`/admin/leads/summary?client_id=${TEST_CLIENT}`);
+  await clientSummaryRes.json(); // consume body
+
+  clientSummaryRes.status === 200
+    ? pass("GET /admin/leads/summary?client_id returns 200")
+    : fail("summary?client_id wrong status", String(clientSummaryRes.status));
+
+  // ── Cleanup test lead ─────────────────────────────────────────────────────
+  await supabase.from("leads").delete().eq("id", leadId);
+  pass("Test lead cleaned up");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -1146,6 +1296,7 @@ async function main() {
     await test19(); // Lone Pine informational flow
     await test22(); // Lone Pine lead capture integration (gated)
     await test23(); // Waitlist feature (unit + gated integration)
+    await test24(); // Admin lead management API (Chunk 5)
   } catch (e) {
     fail("Test server", e.message);
   } finally {

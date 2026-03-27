@@ -71,6 +71,17 @@ Tell me the current state.
 
 ---
 
+## Admin / lead management session start
+```
+Read CLAUDE.md — specifically the "Admin Lead Management" section.
+I want to work on [admin task]. Before writing any code:
+1. Confirm which routes are already implemented (/admin/leads, /admin/leads/:id, /admin/leads/summary)
+2. Confirm the migration status (db1_lead_mgmt.sql must be run for updated_by + status constraint)
+3. Confirm the test plan
+```
+
+---
+
 ## Standing rules (remind Claude every session if needed)
 ```
 Reminder of our workflow rules for this project:
