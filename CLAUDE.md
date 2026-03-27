@@ -37,7 +37,9 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (131 tests), spawns its own server on port 3099
+test.js                — automated test suite (138 tests), spawns its own server on port 3099
+leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
+db1_lead_capture.sql   — migration: adds lead_step/lead_data to conversations + creates leads table
 db1_cancellation_sent.sql — migration: adds cancellation_sent column to confirmations_sent
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
@@ -63,8 +65,7 @@ Each client entry defines: `id`, `botName`, `tone`, `inboundPhones`, `supportPho
 
 **bookingMode values:**
 - `fareharbor` — FareHarbor booking menu + real-time availability (CSR/REA)
-- `informational` — Q&A only, all booking/scheduling routes to phone CTA (Lone Pine)
-- `lead_capture` — (future) Q&A + lightweight lead collection before phone routing
+- `informational` — Q&A + optional lead capture flow if `leadCaptureEnabled: true` (Lone Pine)
 
 **Current clients:**
 | Client | ID | Mode | Twilio Number |
@@ -208,10 +209,23 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
 - Same-day bookings NOT allowed — minimum 1 day advance booking required
 - Availability window always starts from tomorrow in both KB refresh and real-time checks
 - Groups 6+ always handoff
-- `informational` clients never enter the booking state machine — booking intent routes to phone CTA
+- `informational` clients never enter the FH booking state machine
+  - If `leadCaptureEnabled: true`: booking intent starts 3-step lead capture flow (service → callback → timeframe)
+  - Otherwise: booking intent routes directly to phone CTA
+
+### Lead Capture Flow (leads.js + informational mode)
+Used by Lone Pine Performance — collects service request without pretending to confirm appointments.
+- **Step 1** (leadStep=1): bot asks what service is needed; includes phone CTA as escape hatch
+- **Step 2** (leadStep=2): bot asks for callback number; "same" uses guest's inbound number
+- **Step 3** (leadStep=3): bot asks for preferred timeframe
+- **Complete** (leadStep→null): `saveLead()` writes to `leads` table; `notifyBusinessOfLead()` SMS to `client.leadNotificationPhone`; confirmation sent to guest
+- Abort: guest replies with "call/phone/never mind/cancel/skip" during step 1 → handoffReply
+- DB: `lead_step` (int) + `lead_data` (jsonb) columns on `conversations` — migration: `db1_lead_capture.sql`
 
 ### Per-Client Behavior Config (clients.js fields)
-- `bookingMode` — `fareharbor` | `informational` | `lead_capture` (future)
+- `bookingMode` — `fareharbor` | `informational`
+- `leadCaptureEnabled` — enables 3-step lead capture for informational clients
+- `leadNotificationPhone` — SMS destination for new lead notifications
 - `crmEnabled` — gates all CRM upsert/tagging; `false` means no contact records created
 - `openerText` — first-message text (overrides getSeasonalOpener generic logic)
 - `handoffReply(phone)` — function returning text sent on explicit handoff intent
@@ -323,5 +337,6 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 1. ~~**Booking follow-up `setTimeout`**~~ — DONE. Durable `scheduled_messages` + `highmark-cron` Railway service (every 5 min).
 2. ~~**Rebooking cancellations**~~ — DONE. Idempotent cancel texts, poller catches missed cancellations, `cancellation_sent` column tracks state.
 3. ~~**Booking link in confirmation**~~ — DONE. Uses `booking.uuid` + `item.pk` from FH payload.
-4. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
-5. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+4. ~~**Lead capture flow (Lone Pine)**~~ — DONE. 3-step SMS flow + `leads` table + business notification. Run `db1_lead_capture.sql` migration in Supabase before deploy.
+5. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
+6. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.

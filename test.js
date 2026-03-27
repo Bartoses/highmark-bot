@@ -24,6 +24,7 @@ import { checkOptOut, upsertContact, addTagsToContact, OPT_OUT_KEYWORDS, OPT_IN_
 import { getKnowledgeContext } from "./knowledgeBase.js";
 import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient } from "./clients.js";
+import { saveLead, notifyBusinessOfLead } from "./leads.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -960,6 +961,97 @@ async function test21() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 22: Chunk 4 — Lead Capture Flow (Lone Pine)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test22() {
+  console.log("\nTEST 22: Chunk 4 — Lead Capture (Lone Pine)");
+
+  const lp = CLIENTS.lone_pine;
+
+  // Unit: lead capture config
+  lp.leadCaptureEnabled === true
+    ? pass("lone_pine.leadCaptureEnabled is true")
+    : fail("lone_pine.leadCaptureEnabled should be true", String(lp.leadCaptureEnabled));
+
+  typeof lp.leadNotificationPhone === "string" && lp.leadNotificationPhone.length > 0
+    ? pass("lone_pine.leadNotificationPhone is set")
+    : fail("lone_pine.leadNotificationPhone missing or empty");
+
+  const csr = CLIENTS.csr_rea;
+  !csr.leadCaptureEnabled
+    ? pass("csr_rea.leadCaptureEnabled is falsy (not a lead-capture client)")
+    : fail("csr_rea.leadCaptureEnabled should be falsy", String(csr.leadCaptureEnabled));
+
+  // Unit: leads.js exports are functions
+  typeof saveLead === "function"
+    ? pass("saveLead is importable function")
+    : fail("saveLead is not a function");
+
+  typeof notifyBusinessOfLead === "function"
+    ? pass("notifyBusinessOfLead is importable function")
+    : fail("notifyBusinessOfLead is not a function");
+
+  // Unit: saveLead returns false when no supabase client
+  const result = await saveLead(null, { clientId: "lone_pine", fromNumber: "+15550001111", contactPhone: "+15550001111", service: "revalve" });
+  result === false
+    ? pass("saveLead(null, ...) returns false gracefully")
+    : fail("saveLead(null, ...) should return false", String(result));
+
+  // Integration: full 3-step lead capture flow (gated on env var)
+  if (process.env.LONE_PINE_TWILIO_NUMBER !== LP_TO_PHONE) {
+    pass("Lead capture integration skipped (set LONE_PINE_TWILIO_NUMBER=+15551111111 to enable)");
+    return;
+  }
+
+  const LEAD_PHONE = "+15550003333";
+  await httpPost("/reset", { from: LEAD_PHONE }, "application/json");
+
+  // Step 0: greeting
+  await sendSms("hey", LEAD_PHONE, LP_TO_PHONE);
+
+  // Step 1: booking intent → ask for service
+  const r1 = await sendSms("I need a suspension revalve", LEAD_PHONE, LP_TO_PHONE);
+  /service|what service|revalve|rebuild|e\.g\./i.test(r1)
+    ? pass("Lead step 1: asks for service type")
+    : fail("Lead step 1: unexpected reply", r1);
+  /761-2124|call/i.test(r1)
+    ? pass("Lead step 1: includes phone CTA as escape hatch")
+    : fail("Lead step 1: missing phone CTA", r1);
+  /fareharbor/i.test(r1)
+    ? fail("Lead step 1: should not mention FareHarbor", r1)
+    : pass("Lead step 1: FareHarbor-free");
+
+  // Step 2: service provided → ask for callback
+  const r2 = await sendSms("Front suspension revalve for my mountain bike", LEAD_PHONE, LP_TO_PHONE);
+  /number|reach you|call back|callback|same/i.test(r2)
+    ? pass("Lead step 2: asks for callback number")
+    : fail("Lead step 2: unexpected reply", r2);
+
+  // Step 3: callback provided → ask for timeframe
+  const r3 = await sendSms("same", LEAD_PHONE, LP_TO_PHONE);
+  /timeframe|when|asap|next week|rush/i.test(r3)
+    ? pass("Lead step 3: asks for timeframe")
+    : fail("Lead step 3: unexpected reply", r3);
+
+  // Step 4: timeframe provided → confirmation + reset
+  const r4 = await sendSms("Next week ideally", LEAD_PHONE, LP_TO_PHONE);
+  /passed|request|team|call|761-2124/i.test(r4)
+    ? pass("Lead step 4: confirmation sent, includes contact info")
+    : fail("Lead step 4: unexpected reply", r4);
+  /step|service|timeframe|callback/i.test(r4)
+    ? fail("Lead step 4: reply reads like mid-flow prompt (not reset)", r4)
+    : pass("Lead step 4: reply is a completion message");
+
+  // After completion: new booking intent should restart the flow (not pick up mid-flow)
+  const r5 = await sendSms("Actually I also need a rebuild quote", LEAD_PHONE, LP_TO_PHONE);
+  /service|rebuild|what service|revalve|e\.g\./i.test(r5)
+    ? pass("Lead flow restarts cleanly after completion")
+    : fail("Lead flow after completion: unexpected reply", r5);
+
+  await httpPost("/reset", { from: LEAD_PHONE }, "application/json");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -995,6 +1087,7 @@ async function main() {
     await test14();
     await test16();
     await test19(); // Lone Pine informational flow
+    await test22(); // Lone Pine lead capture integration (gated)
   } catch (e) {
     fail("Test server", e.message);
   } finally {

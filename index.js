@@ -19,6 +19,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
 import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborKbRow, getFareHarborAvailability } from "./knowledgeBase.js";
+import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { resolveClient, CLIENTS, getDefaultClient } from "./clients.js";
 import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
@@ -577,6 +578,8 @@ async function getConversation(fromNumber, toNumber) {
         handoff:               data.handoff                ?? false,
         consecutiveFrustrated: data.consecutive_frustrated ?? 0,
         sessionType:           data.session_type           ?? "live",
+        leadStep:              data.lead_step              ?? null,
+        leadData:              data.lead_data              ?? null,
       },
     };
   }
@@ -590,6 +593,8 @@ async function getConversation(fromNumber, toNumber) {
       handoff:               false,
       consecutiveFrustrated: 0,
       sessionType:           "live",
+      leadStep:              null,
+      leadData:              null,
     },
   };
 }
@@ -605,6 +610,8 @@ async function saveConversation(fromNumber, toNumber, convo) {
       handoff:                convo.handoff,
       consecutive_frustrated: convo.consecutiveFrustrated,
       session_type:           convo.sessionType,
+      lead_step:              convo.leadStep,
+      lead_data:              convo.leadData,
       updated_at:             new Date().toISOString(),
     },
     { onConflict: "from_number,to_number" }
@@ -874,8 +881,67 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       }
     }
 
-    // BOOKING INTENT — informational clients: route explicitly to phone CTA
-    // (no booking state machine, no FareHarbor, no tour menu)
+    // LEAD CAPTURE FLOW — informational clients with lead capture enabled
+    // ── Step null → 1: booking intent starts the flow ──────────────────────
+    else if (intent === "booking" && client.bookingMode === "informational" && client.leadCaptureEnabled && convo.leadStep === null) {
+      convo.leadStep = 1;
+      convo.leadData = { service: null, callback: null, timeframe: null };
+      replyText = enforceLength(
+        `Happy to pass your request to the team! What service do you need? (e.g. revalve, rebuild, coatings) Or call us directly at ${client.handoffPhone} 🔧`
+      );
+    }
+
+    // ── Step 1 → 2: capture service, ask for callback ───────────────────────
+    else if (convo.leadStep === 1 && client.bookingMode === "informational") {
+      if (/call|phone|never mind|cancel|skip/i.test(rawBody)) {
+        convo.leadStep = null; convo.leadData = null;
+        replyText = enforceLength(client.handoffReply(client.handoffPhone));
+      } else {
+        convo.leadData = { ...(convo.leadData ?? {}), service: rawBody.slice(0, 200) };
+        convo.leadStep = 2;
+        replyText = enforceLength(
+          `Got it — ${rawBody.slice(0, 60)}. Best number to reach you? (or reply 'same' to use this number)`
+        );
+      }
+    }
+
+    // ── Step 2 → 3: capture callback, ask for timeframe ─────────────────────
+    else if (convo.leadStep === 2 && client.bookingMode === "informational") {
+      const isSame = /\bsame\b|this number|this one|mine/i.test(rawBody);
+      convo.leadData = { ...(convo.leadData ?? {}), callback: isSame ? fromNumber : rawBody.slice(0, 30) };
+      convo.leadStep = 3;
+      replyText = enforceLength(`Perfect. Any idea on timeframe? (e.g. next week, ASAP, no rush)`);
+    }
+
+    // ── Step 3: capture timeframe, save lead, confirm ────────────────────────
+    else if (convo.leadStep === 3 && client.bookingMode === "informational") {
+      convo.leadData = { ...(convo.leadData ?? {}), timeframe: rawBody.slice(0, 100) };
+      const contactPhone = /^\+?\d/.test(convo.leadData.callback ?? "")
+        ? convo.leadData.callback
+        : fromNumber;
+
+      await saveLead(supabase, {
+        clientId:  client.id,
+        fromNumber,
+        contactPhone,
+        service:   convo.leadData.service,
+        timeframe: convo.leadData.timeframe,
+      });
+
+      notifyBusinessOfLead(
+        twilioClient, client, fromNumber, toNumber,
+        convo.leadData, process.env.TEST_MODE === "true"
+      ).catch((err) => console.error("[LEADS] notify error:", err.message));
+
+      convo.leadStep = null; // back to normal Q&A after completion
+      convo.leadData = null;
+
+      replyText = enforceLength(
+        `You're all set! I've passed your request along to the team — expect a call soon 🔧 Or reach out directly: ${client.handoffPhone}`
+      );
+    }
+
+    // BOOKING INTENT — informational clients without lead capture: phone CTA via Claude
     else if (intent === "booking" && client.bookingMode === "informational") {
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
       replyText = await getClaudeReply(

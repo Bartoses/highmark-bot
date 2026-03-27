@@ -115,11 +115,13 @@ export const CLIENTS = {
       weekends:  "Closed Saturday and Sunday",
     },
 
-    // Capability flags — informational only for now
+    // Capability flags — informational + lead capture
     bookingMode:   "informational",
     fareharborEnabled:        false,
     crmEnabled:               false,
     confirmationTextsEnabled: false,
+    leadCaptureEnabled:       true,
+    leadNotificationPhone:    "(970) 761-2124", // notified by SMS when a lead is captured
 
     fareharborCompanies: [],
 
