@@ -42,6 +42,7 @@ export const CLIENTS = {
     fareharborEnabled:        process.env.FAREHARBOR_ENABLED === "true",
     crmEnabled:               true,
     confirmationTextsEnabled: process.env.CONFIRMATIONS_ENABLED === "true",
+    waitlistEnabled:          true,
 
     // FareHarbor companies operated by this client
     fareharborCompanies: [
@@ -122,6 +123,7 @@ export const CLIENTS = {
     confirmationTextsEnabled: false,
     leadCaptureEnabled:       true,
     leadNotificationPhone:    "(970) 761-2124", // notified by SMS when a lead is captured
+    waitlistEnabled:          true,
 
     fareharborCompanies: [],
 

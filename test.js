@@ -1052,6 +1052,63 @@ async function test22() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 23: Waitlist Feature
+// ─────────────────────────────────────────────────────────────────────────────
+async function test23() {
+  console.log("\nTEST 23: Waitlist Feature");
+
+  // Unit: waitlistEnabled flags
+  CLIENTS.csr_rea.waitlistEnabled === true
+    ? pass("csr_rea.waitlistEnabled is true")
+    : fail("csr_rea.waitlistEnabled should be true", String(CLIENTS.csr_rea.waitlistEnabled));
+
+  CLIENTS.lone_pine.waitlistEnabled === true
+    ? pass("lone_pine.waitlistEnabled is true")
+    : fail("lone_pine.waitlistEnabled should be true", String(CLIENTS.lone_pine.waitlistEnabled));
+
+  // Unit: saveLead with leadType='waitlist' returns false gracefully when no supabase
+  const waitlistResult = await saveLead(null, {
+    clientId: "csr_rea", fromNumber: "+15550001111", contactPhone: "+15550001111",
+    service: "waitlist: tour/rental", timeframe: null, leadType: "waitlist",
+  });
+  waitlistResult === false
+    ? pass("saveLead(null, leadType:'waitlist') returns false gracefully")
+    : fail("saveLead(null, waitlist) should return false", String(waitlistResult));
+
+  // Integration: "let me know" trigger + YES confirmation (gated on LONE_PINE_TWILIO_NUMBER)
+  if (process.env.LONE_PINE_TWILIO_NUMBER !== LP_TO_PHONE) {
+    pass("Waitlist integration skipped (set LONE_PINE_TWILIO_NUMBER=+15551111111 to enable)");
+    return;
+  }
+
+  const WAITLIST_PHONE = "+15550004444";
+  await httpPost("/reset", { from: WAITLIST_PHONE }, "application/json");
+
+  // Init convo
+  await sendSms("hey", WAITLIST_PHONE, LP_TO_PHONE);
+
+  // Trigger: "notify me" / "let me know"
+  const r1 = await sendSms("let me know when you have availability", WAITLIST_PHONE, LP_TO_PHONE);
+  /yes|confirm|spots|open|save your number/i.test(r1)
+    ? pass("Waitlist trigger: asks for YES confirmation")
+    : fail("Waitlist trigger: unexpected reply", r1);
+  /761-2124|call/i.test(r1)
+    ? pass("Waitlist trigger: includes phone fallback")
+    : fail("Waitlist trigger: missing phone fallback", r1);
+
+  // Confirm: reply YES
+  const r2 = await sendSms("yes", WAITLIST_PHONE, LP_TO_PHONE);
+  /list|saved|spots|open|text you/i.test(r2)
+    ? pass("Waitlist YES: confirmation sent")
+    : fail("Waitlist YES: unexpected reply", r2);
+  /fareharbor/i.test(r2)
+    ? fail("Waitlist YES: should not mention FareHarbor", r2)
+    : pass("Waitlist YES: FareHarbor-free");
+
+  await httpPost("/reset", { from: WAITLIST_PHONE }, "application/json");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -1088,6 +1145,7 @@ async function main() {
     await test16();
     await test19(); // Lone Pine informational flow
     await test22(); // Lone Pine lead capture integration (gated)
+    await test23(); // Waitlist feature (unit + gated integration)
   } catch (e) {
     fail("Test server", e.message);
   } finally {

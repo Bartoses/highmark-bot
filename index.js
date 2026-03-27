@@ -557,6 +557,13 @@ function formatMenuInstruction(client, options, dateStr) {
   return `List these options${dateNote} and ask the guest to pick one by number. Also ask how many people. After the list, add: "Or browse everything yourself: Guided: ${guidedBrowse} | Rentals: ${rentalBrowse}" Options: ${numbered}`;
 }
 
+// Returns true when all options with known availability have available===false.
+function isAllUnavailable(options, dateStr) {
+  if (!dateStr) return false;
+  const known = options.filter((o) => o.available !== null);
+  return known.length > 0 && known.every((o) => o.available === false);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SUPABASE CONVERSATION STORE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -580,6 +587,8 @@ async function getConversation(fromNumber, toNumber) {
         sessionType:           data.session_type           ?? "live",
         leadStep:              data.lead_step              ?? null,
         leadData:              data.lead_data              ?? null,
+        waitlistPending:       data.waitlist_pending       ?? false,
+        waitlistContext:       data.waitlist_context       ?? null,
       },
     };
   }
@@ -595,6 +604,8 @@ async function getConversation(fromNumber, toNumber) {
       sessionType:           "live",
       leadStep:              null,
       leadData:              null,
+      waitlistPending:       false,
+      waitlistContext:       null,
     },
   };
 }
@@ -612,6 +623,8 @@ async function saveConversation(fromNumber, toNumber, convo) {
       session_type:           convo.sessionType,
       lead_step:              convo.leadStep,
       lead_data:              convo.leadData,
+      waitlist_pending:       convo.waitlistPending,
+      waitlist_context:       convo.waitlistContext,
       updated_at:             new Date().toISOString(),
     },
     { onConflict: "from_number,to_number" }
@@ -787,6 +800,36 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       replyText = enforceLength(client.handoffReply(client.handoffPhone));
     }
 
+    // WAITLIST — YES/NO confirmation handler
+    // Fires after handoff checks so escalation/handoff always wins.
+    // waitlistPending is set by three triggers: allUnavailable, no items, "notify me".
+    else if (convo.waitlistPending === true && client.waitlistEnabled !== false) {
+      const isYes = /^(yes|yeah|yep|sure|ok|okay|please|y)\b/i.test(rawBody.trim());
+      if (isYes) {
+        await saveLead(supabase, {
+          clientId:     client.id,
+          fromNumber,
+          contactPhone: fromNumber,
+          service:      convo.waitlistContext?.service ?? "availability updates",
+          timeframe:    convo.waitlistContext?.date    ?? null,
+          leadType:     "waitlist",
+        });
+        notifyBusinessOfLead(
+          twilioClient, client, fromNumber, toNumber,
+          { service: convo.waitlistContext?.service ?? "availability updates", callback: fromNumber, timeframe: convo.waitlistContext?.date },
+          process.env.TEST_MODE === "true",
+          "waitlist"
+        ).catch((err) => console.error("[WAITLIST] notify error:", err.message));
+        replyText = enforceLength(
+          `You're on the list! We'll text you when spots open. Questions anytime: ${client.handoffPhone} 🤙`
+        );
+      } else {
+        replyText = enforceLength(`No problem! Reach us anytime at ${client.handoffPhone} 🤙`);
+      }
+      convo.waitlistPending = false;
+      convo.waitlistContext = null;
+    }
+
     // FIRST MESSAGE
     else if (isNew) {
       // Check if confirmed guest (pre-seeded by booking confirmation)
@@ -802,6 +845,19 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     // RETURNING AFTER 24H — light re-intro
     else if (returning && convo.bookingStep === null && !convo.handoff) {
       replyText = enforceLength(`Hey, ${client.botName} again — welcome back! What can I help with?`);
+    }
+
+    // WAITLIST TRIGGER — "notify me" / "let me know" proactive opt-in (any client)
+    else if (
+      /let me know|notify me|heads.?up when|alert me when|when.+open.*book|when.+available/i.test(rawBody) &&
+      !convo.waitlistPending &&
+      client.waitlistEnabled !== false
+    ) {
+      convo.waitlistPending = true;
+      convo.waitlistContext = { service: "availability updates", date: null };
+      replyText = enforceLength(
+        `Happy to! We'll text you at this number when spots open. Just reply YES to confirm, or call us anytime: ${client.handoffPhone}`
+      );
     }
 
     // BOOKING FLOW — state machine (fareharbor clients only)
@@ -828,13 +884,25 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       if (menuOptions.length === 0) {
         // No items available for online booking — don't enter step 1
         convo.bookingStep = null;
-        replyText = await getClaudeReply(convo, client, season, knowledgeCtx,
-          `Guest wants to book but there are currently no tours or rentals available for online booking. Respond warmly and honestly — snowmobile operations are paused due to warm temps and low snow base. Mention summer RZR adventures are coming soon. Do NOT suggest any booking links or dates. Offer to have the team follow up: ${client.handoffPhone}.`
-        );
+        let noItemsInstruction = `Guest wants to book but there are currently no tours or rentals available for online booking. Respond warmly and honestly — snowmobile operations are paused due to warm temps and low snow base. Mention summer RZR adventures are coming soon. Do NOT suggest any booking links or dates. Offer to have the team follow up: ${client.handoffPhone}.`;
+        if (client.waitlistEnabled !== false) {
+          convo.waitlistPending = true;
+          convo.waitlistContext = { service: "tours/rentals", date: null };
+          noItemsInstruction += ` Also ask: "Want a heads-up when we reopen for bookings? Reply YES and we'll save your number."`;
+        }
+        replyText = await getClaudeReply(convo, client, season, knowledgeCtx, noItemsInstruction);
       } else {
         convo.bookingStep = 1;
         convo.bookingData.menuOptions = menuOptions; // save for step 1
-        const menuInstruction = formatMenuInstruction(client, menuOptions, extractedDate);
+        let menuInstruction = formatMenuInstruction(client, menuOptions, extractedDate);
+        if (isAllUnavailable(menuOptions, extractedDate) && client.waitlistEnabled !== false) {
+          convo.waitlistPending = true;
+          convo.waitlistContext = {
+            service: extractedDate ? `tour on ${extractedDate}` : "tour/rental",
+            date:    extractedDate,
+          };
+          menuInstruction += ` Also invite them to join the waitlist: "Want a heads-up when spots open? Reply YES and we'll save your number."`;
+        }
         replyText = await getClaudeReply(convo, client, season, knowledgeCtx, menuInstruction);
       }
     }

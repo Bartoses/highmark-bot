@@ -11,7 +11,7 @@
  * Save a captured lead to the leads table in DB1.
  * Returns true on success, false on failure (non-throwing).
  */
-export async function saveLead(supabase, { clientId, fromNumber, contactPhone, service, timeframe }) {
+export async function saveLead(supabase, { clientId, fromNumber, contactPhone, service, timeframe, leadType = 'booking' }) {
   if (!supabase) return false;
   try {
     await supabase.from("leads").insert({
@@ -22,6 +22,7 @@ export async function saveLead(supabase, { clientId, fromNumber, contactPhone, s
       preferred_timeframe: timeframe ?? null,
       source:              "sms",
       status:              "new",
+      lead_type:           leadType,
     });
     console.log(`[LEADS] Saved — ${clientId} / ${fromNumber}`);
     return true;
@@ -42,7 +43,7 @@ export async function saveLead(supabase, { clientId, fromNumber, contactPhone, s
  * @param {object} leadData      — { service, callback, timeframe }
  * @param {boolean} testMode     — pass true to skip send (TEST_MODE)
  */
-export async function notifyBusinessOfLead(twilioClient, client, fromNumber, botPhone, leadData, testMode = false) {
+export async function notifyBusinessOfLead(twilioClient, client, fromNumber, botPhone, leadData, testMode = false, leadType = 'booking') {
   const notifyPhone = client.leadNotificationPhone;
   if (!notifyPhone || !twilioClient) return;
 
@@ -58,7 +59,7 @@ export async function notifyBusinessOfLead(twilioClient, client, fromNumber, bot
       : fromNumber;
 
     const lines = [
-      `📋 New request — ${client.name}`,
+      `📋 ${leadType === 'waitlist' ? 'New waitlist signup' : 'New request'} — ${client.name}`,
       `Service: ${leadData.service ?? "not specified"}`,
       `Call back: ${callbackPhone}`,
     ];
