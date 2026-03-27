@@ -784,27 +784,11 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   let replyText;
 
   try {
-    // 11. Sentiment escalation → auto-handoff after 2 consecutive frustrated messages
-    if (convo.consecutiveFrustrated >= 2 && !convo.handoff) {
-      convo.handoff = true;
-      console.log(`[HANDOFF] Auto-escalation (frustrated x${convo.consecutiveFrustrated}) — ${fromNumber}`);
-      replyText = enforceLength(
-        `I want to make sure you get the best help — give us a call at ${client.handoffPhone} and we'll sort you out 🤙`
-      );
-    }
-
-    // 12. Explicit handoff intent
-    else if (intent === "handoff") {
-      convo.handoff = true;
-      console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
-      replyText = enforceLength(client.handoffReply(client.handoffPhone));
-    }
-
-    // WAITLIST — YES/NO confirmation handler
-    // Fires after handoff checks so escalation/handoff always wins.
-    // waitlistPending is set by three triggers: allUnavailable, no items, "notify me".
-    else if (convo.waitlistPending === true && client.waitlistEnabled !== false) {
+    // WAITLIST pre-flight — runs before main routing.
+    // YES/NO: handled here. Any other message: clears pending and falls through to normal routing.
+    if (convo.waitlistPending === true && client.waitlistEnabled !== false) {
       const isYes = /^(yes|yeah|yep|sure|ok|okay|please|y)\b/i.test(rawBody.trim());
+      const isNo  = /^(no|nope|nah|not now|skip|n)\b/i.test(rawBody.trim());
       if (isYes) {
         await saveLead(supabase, {
           clientId:     client.id,
@@ -823,11 +807,31 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         replyText = enforceLength(
           `You're on the list! We'll text you when spots open. Questions anytime: ${client.handoffPhone} 🤙`
         );
-      } else {
+      } else if (isNo) {
         replyText = enforceLength(`No problem! Reach us anytime at ${client.handoffPhone} 🤙`);
       }
+      // Always clear pending — guest either confirmed, declined, or moved on
       convo.waitlistPending = false;
       convo.waitlistContext = null;
+    }
+
+    // Main routing — only runs if not already handled by waitlist pre-flight above
+    if (!replyText) {
+
+    // 11. Sentiment escalation → auto-handoff after 2 consecutive frustrated messages
+    if (convo.consecutiveFrustrated >= 2 && !convo.handoff) {
+      convo.handoff = true;
+      console.log(`[HANDOFF] Auto-escalation (frustrated x${convo.consecutiveFrustrated}) — ${fromNumber}`);
+      replyText = enforceLength(
+        `I want to make sure you get the best help — give us a call at ${client.handoffPhone} and we'll sort you out 🤙`
+      );
+    }
+
+    // 12. Explicit handoff intent
+    else if (intent === "handoff") {
+      convo.handoff = true;
+      console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
+      replyText = enforceLength(client.handoffReply(client.handoffPhone));
     }
 
     // FIRST MESSAGE
@@ -1040,6 +1044,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         console.log(`[HANDOFF] Claude triggered handoff for ${fromNumber}`);
       }
     }
+
+    } // end if (!replyText) — main routing block
 
     // Log and store reply
     console.log(JSON.stringify({
