@@ -23,9 +23,12 @@ export const CLIENTS = {
     botName: "Summit",
     tone:  "warm, stoked, genuinely local — like a guide who loves their job. Never robotic. Never a FAQ page.",
 
-    // Twilio numbers that route to this client. The production number is hardcoded;
-    // CSR_REA_TWILIO_NUMBER env var lets you override or add a second number.
+    // Twilio numbers that route to this client.
+    // +18335786496 — primary client number (pending Twilio toll-free verification)
+    // +18668906657 — demo number (active, used for prospect demos)
+    // CSR_REA_TWILIO_NUMBER env var adds an optional override/additional number
     inboundPhones: [
+      "+18335786496",
       "+18668906657",
       process.env.CSR_REA_TWILIO_NUMBER,
     ].filter(Boolean),
@@ -101,8 +104,10 @@ export const CLIENTS = {
     botName: "Lone Pine",
     tone:  "knowledgeable, local, professional, and helpful",
 
-    // Set LONE_PINE_TWILIO_NUMBER in Railway env vars when the Twilio number is provisioned
+    // +18336489744 — primary client number (pending Twilio toll-free verification)
+    // LONE_PINE_TWILIO_NUMBER env var adds an optional override/additional number
     inboundPhones: [
+      "+18336489744",
       process.env.LONE_PINE_TWILIO_NUMBER,
     ].filter(Boolean),
 

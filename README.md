@@ -2,7 +2,7 @@
 
 Built by Whiteout Solutions. An AI-powered SMS concierge for outdoor activity businesses — tour operators, rental companies, lodges. Handles guest inquiries, live weather/conditions, tour booking menus, confirmation texts, and CRM — all over SMS.
 
-**Clients:** Colorado Sled Rentals + Rabbit Ears Adventures (CSR/REA) — live on +18668906657 | Lone Pine Performance — configured, pending Twilio provisioning
+**Clients:** CSR/REA — +18335786496 (pending) · demo: +18668906657 | Lone Pine Performance — +18336489744 (pending)
 **Production URL:** https://highmark-bot-production.up.railway.app
 
 ---
@@ -83,7 +83,10 @@ npm run dev:test
 Real Twilio flow — texts go through the live bot on Railway.
 
 1. Ensure `TEST_MODE` is NOT set on Railway
-2. Twilio number `+18668906657` webhook → `https://highmark-bot-production.up.railway.app/sms` (HTTP POST)
+2. Twilio number webhook → `https://highmark-bot-production.up.railway.app/sms` (HTTP POST)
+   - Demo (active): `+18668906657`
+   - CSR/REA primary (pending): `+18335786496`
+   - Lone Pine (pending): `+18336489744`
 3. Run a scenario:
 
 ```bash
@@ -97,7 +100,9 @@ chmod +x virtual-test.sh
 
 Virtual Phone numbers:
 - Inbound (acts as customer): `+18777804236`
-- Bot Twilio number: `+18668906657`
+- Demo / CSR+REA fallback: `+18668906657` (use this until new numbers are verified)
+- CSR/REA primary: `+18335786496` (pending verification)
+- Lone Pine: `+18336489744` (pending verification)
 
 Scenarios: 1=greeting, 2=snow conditions, 3=beginner booking, 4=experienced rider, 5=group of 8 handoff, 6=explicit handoff, 7=sentiment escalation, 8=reservation lookup, 9=DEMO trigger, 10=SUMMITDEMO
 

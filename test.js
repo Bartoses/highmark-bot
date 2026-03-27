@@ -734,11 +734,23 @@ async function test18() {
     ? pass("CLIENTS registry has lone_pine")
     : fail("CLIENTS registry missing lone_pine");
 
-  // csr_rea resolves from production number
-  const csrRea = resolveClient("+18668906657");
+  // csr_rea resolves from primary number
+  const csrRea = resolveClient("+18335786496");
   csrRea.id === "csr_rea"
-    ? pass("resolveClient('+18668906657') → csr_rea")
-    : fail("resolveClient production number", `expected csr_rea, got ${csrRea.id}`);
+    ? pass("resolveClient('+18335786496') → csr_rea (primary)")
+    : fail("resolveClient primary number", `expected csr_rea, got ${csrRea.id}`);
+
+  // csr_rea also resolves from demo number
+  const csrReaDemo = resolveClient("+18668906657");
+  csrReaDemo.id === "csr_rea"
+    ? pass("resolveClient('+18668906657') → csr_rea (demo)")
+    : fail("resolveClient demo number", `expected csr_rea, got ${csrReaDemo.id}`);
+
+  // lone_pine resolves from its hardcoded number
+  const lpResolved = resolveClient("+18336489744");
+  lpResolved.id === "lone_pine"
+    ? pass("resolveClient('+18336489744') → lone_pine (primary)")
+    : fail("resolveClient lone_pine number", `expected lone_pine, got ${lpResolved.id}`);
 
   // Unknown number falls back to csr_rea
   const fallback = resolveClient("+10000000000");
@@ -758,6 +770,7 @@ async function test18() {
     : fail("getDefaultClient()", "expected csr_rea");
 
   // lone_pine resolves from its configured env number (if set)
+  // LONE_PINE_TWILIO_NUMBER env var override also resolves if set
   const lpNumber = process.env.LONE_PINE_TWILIO_NUMBER;
   if (lpNumber) {
     const lp = resolveClient(lpNumber);
@@ -765,7 +778,7 @@ async function test18() {
       ? pass(`resolveClient(LONE_PINE_TWILIO_NUMBER) → lone_pine`)
       : fail("resolveClient(LONE_PINE_TWILIO_NUMBER)", `expected lone_pine, got ${lp.id}`);
   } else {
-    pass("lone_pine Twilio number not set (expected in dev — will test when provisioned)");
+    pass("LONE_PINE_TWILIO_NUMBER env var not set (ok — hardcoded number handles routing)");
   }
 
   // csr_rea has required fields

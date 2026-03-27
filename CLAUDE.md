@@ -4,8 +4,8 @@
 Summit is an AI SMS concierge built by Whiteout Solutions as a POC to demo to Steamboat Springs outdoor businesses (tour operators, lodges, activity companies) what an AI-powered guest texting service can do. Stack: Twilio + Claude API + Node.js/Express, deployed on Railway.
 
 **Clients:**
-- Colorado Sled Rentals + Rabbit Ears Adventures (CSR/REA) — live, +18668906657
-- Lone Pine Performance — configured in clients.js, pending Twilio number provisioning
+- Colorado Sled Rentals + Rabbit Ears Adventures (CSR/REA) — +18335786496 (pending verification) | demo: +18668906657 (active)
+- Lone Pine Performance — +18336489744 (pending verification)
 
 **Railway URL:** https://highmark-bot-production.up.railway.app
 
@@ -73,8 +73,8 @@ Each client entry defines: `id`, `botName`, `tone`, `inboundPhones`, `supportPho
 **Current clients:**
 | Client | ID | Mode | Twilio Number |
 |---|---|---|---|
-| Colorado Sled Rentals + Rabbit Ears Adventures | `csr_rea` | `fareharbor` | +18668906657 |
-| Lone Pine Performance | `lone_pine` | `informational` | set `LONE_PINE_TWILIO_NUMBER` |
+| Colorado Sled Rentals + Rabbit Ears Adventures | `csr_rea` | `fareharbor` | +18335786496 (pending) · demo: +18668906657 |
+| Lone Pine Performance | `lone_pine` | `informational` | +18336489744 (pending) |
 
 **Railway env vars still needed per deployment:**
 - `FAREHARBOR_ENABLED` — `true` for Tier 2 FH access
@@ -131,7 +131,9 @@ chmod +x virtual-test.sh
 ```
 
 Virtual Phone numbers:
-- Bot Twilio number (From): `+18668906657`
+- Bot demo number (From): `+18668906657` (active — use for demos until new numbers verified)
+- Bot CSR/REA primary (From): `+18335786496` (pending Twilio verification)
+- Bot Lone Pine (From): `+18336489744` (pending Twilio verification)
 - Virtual Phone (acts as customer): `+18777804236`
 
 Scenarios: 1=greeting, 2=snow conditions, 3=beginner booking, 4=experienced rider, 5=group of 8 handoff, 6=explicit handoff, 7=sentiment escalation, 8=reservation lookup, 9=DEMO trigger, 10=SUMMITDEMO
