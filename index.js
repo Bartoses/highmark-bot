@@ -125,13 +125,16 @@ export function getSeasonalOpener(client) {
   const c      = (client && typeof client === "object") ? client : getDefaultClient();
   const season = getCurrentSeason();
 
+  // Use client-configured opener if provided (e.g. Lone Pine)
+  if (c.openerText) return c.openerText;
+
   if (c.id === "csr_rea") {
     if (season === "winter")  return "Hey! I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?";
     if (season === "summer")  return "Hey! I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?";
     return "Hey! I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?";
   }
 
-  // Generic opener for informational clients
+  // Generic fallback for informational clients without openerText
   return `Hey! I'm here to help with ${c.name} — ${c.services.slice(0, 2).join(" and ")} in Steamboat. What can I help with?`;
 }
 
@@ -719,8 +722,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         to:   process.env.CONFIRMATIONS_TEST_PHONE,
       }).catch((err) => console.error("[DEMO] Owner notify failed:", err.message));
 
-      // Tag in CRM as demo lead
-      if (crmSupabase) {
+      // Tag in CRM as demo lead (only for CRM-enabled clients)
+      if (client.crmEnabled && crmSupabase) {
         await upsertContact(fromNumber, { source: "demo", tags: ["demo_lead"] }, crmSupabase)
           .catch(() => {});
       }
@@ -774,9 +777,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     else if (intent === "handoff") {
       convo.handoff = true;
       console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
-      replyText = enforceLength(
-        `Great question for our team! Give us a call at ${client.handoffPhone} and we'll get you sorted 🤙`
-      );
+      replyText = enforceLength(client.handoffReply(client.handoffPhone));
     }
 
     // FIRST MESSAGE
@@ -873,6 +874,16 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       }
     }
 
+    // BOOKING INTENT — informational clients: route explicitly to phone CTA
+    // (no booking state machine, no FareHarbor, no tour menu)
+    else if (intent === "booking" && client.bookingMode === "informational") {
+      const knowledgeCtx = await getKnowledgeContext(supabase, client);
+      replyText = await getClaudeReply(
+        convo, client, season, knowledgeCtx,
+        `Guest wants to schedule or book. ${client.name} does not use online booking — all scheduling is done by phone${client.supportEmail ? ` or email` : ""}. Direct them to call ${client.handoffPhone}${client.supportEmail ? ` or email ${client.supportEmail}` : ""}. Keep it warm and brief.`
+      );
+    }
+
     // DEFAULT: Claude handles everything else (all clients including informational)
     else {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo, client);
@@ -890,7 +901,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       );
 
       // Detect if Claude's reply triggers a handoff
-      if (/give (us|jake|them) a call at/i.test(replyText)) {
+      if (/give (us|jake|him|them) a call at/i.test(replyText)) {
         convo.handoff = true;
         console.log(`[HANDOFF] Claude triggered handoff for ${fromNumber}`);
       }
@@ -914,15 +925,15 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     // 23. Save conversation to Supabase
     await saveConversation(fromNumber, toNumber, convo);
 
-    // 24. Upsert contact to CRM + auto-tag
-    if (crmSupabase) {
+    // 24. Upsert contact to CRM + auto-tag (only for clients with CRM enabled)
+    if (client.crmEnabled && crmSupabase) {
       const tags = deriveTagsFromMessage(rawBody, intent, season);
       if (returning) tags.push("repeat");
       await upsertContact(fromNumber, { source: "sms_conversation", tags }, crmSupabase);
     }
 
-    // 25. Track campaign reply
-    if (crmSupabase) await trackCampaignReply(fromNumber, crmSupabase);
+    // 25. Track campaign reply (only for clients with CRM enabled)
+    if (client.crmEnabled && crmSupabase) await trackCampaignReply(fromNumber, crmSupabase);
 
     // 26. Send via Twilio (or return JSON in TEST_MODE / UI mode)
     if (process.env.TEST_MODE === "true" || isUiReq(req)) {

@@ -87,6 +87,9 @@ export const CLIENTS = {
       "Self-guided snowmobile rentals",
       "RZR off-road adventures",
     ],
+
+    // Text sent when an explicit handoff is triggered (intent="handoff" or 2x frustrated)
+    handoffReply: (phone) => `Great question for our team! Give us a call at ${phone} and we'll get you sorted 🤙`,
   },
 
   // ── Lone Pine Performance ─────────────────────────────────────────────────
@@ -149,6 +152,12 @@ export const CLIENTS = {
       { q: "What suspension work do you do?", a: "Suspension revalve, factory rebuild, high performance coatings, and telemetry sessions for mountain bikes, motorcycles, and snow-related suspension." },
       { q: "Do you work on snowbikes?",      a: "Yes — snow-related suspension including snowbike and snowmobile suspension is part of what we do." },
     ],
+
+    // Opener text sent on first contact (overrides generic getSeasonalOpener fallback)
+    openerText: "Hey! Lone Pine Performance here — suspension and performance work for bikes, motos, and snow. What can I help you with?",
+
+    // Text sent when an explicit handoff is triggered (intent="handoff" or 2x frustrated)
+    handoffReply: (phone) => `Great question for Jake! Give him a call at ${phone} and he'll get you sorted 🔧`,
   },
 };
 

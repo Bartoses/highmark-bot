@@ -912,6 +912,54 @@ async function test20() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 21: Chunk 3 — Per-client runtime behavior routing
+// ─────────────────────────────────────────────────────────────────────────────
+async function test21() {
+  console.log("\nTEST 21: Chunk 3 — Per-client runtime behavior routing");
+
+  const csrRea = CLIENTS.csr_rea;
+  const lp     = CLIENTS.lone_pine;
+
+  // handoffReply function exists on each client
+  typeof csrRea.handoffReply === "function"
+    ? pass("csr_rea has handoffReply function")
+    : fail("csr_rea missing handoffReply function");
+
+  typeof lp.handoffReply === "function"
+    ? pass("lone_pine has handoffReply function")
+    : fail("lone_pine missing handoffReply function");
+
+  // csr_rea handoffReply uses team/us language
+  const csrReply = csrRea.handoffReply(csrRea.handoffPhone);
+  /our team|give us/i.test(csrReply)
+    ? pass("csr_rea handoffReply uses team language")
+    : fail("csr_rea handoffReply unexpected text", csrReply);
+
+  /fareharbor/i.test(csrReply)
+    ? fail("csr_rea handoffReply should not mention FareHarbor", csrReply)
+    : pass("csr_rea handoffReply is FH-free");
+
+  // lone_pine handoffReply uses Jake and correct phone
+  const lpReply = lp.handoffReply(lp.handoffPhone);
+  /jake/i.test(lpReply)
+    ? pass("lone_pine handoffReply mentions Jake")
+    : fail("lone_pine handoffReply missing Jake", lpReply);
+
+  /761-2124/.test(lpReply)
+    ? pass("lone_pine handoffReply contains correct phone")
+    : fail("lone_pine handoffReply missing phone", lpReply);
+
+  // CRM enabled flags
+  csrRea.crmEnabled === true
+    ? pass("csr_rea.crmEnabled is true")
+    : fail("csr_rea.crmEnabled should be true", String(csrRea.crmEnabled));
+
+  lp.crmEnabled === false
+    ? pass("lone_pine.crmEnabled is false (no CRM records)")
+    : fail("lone_pine.crmEnabled should be false", String(lp.crmEnabled));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -936,6 +984,7 @@ async function main() {
   await test17();
   await test18(); // client registry + resolution
   await test20(); // per-client KB context
+  await test21(); // per-client runtime behavior routing (Chunk 3)
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
