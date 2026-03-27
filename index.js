@@ -19,6 +19,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
 import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborKbRow, getFareHarborAvailability } from "./knowledgeBase.js";
+import { resolveClient, CLIENTS, getDefaultClient } from "./clients.js";
 import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
@@ -95,30 +96,9 @@ function requireUiAccess(req, res, next) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT CONFIG
-// Search "CLIENT_CONFIG" to find every value that changes per business.
-// Set these as environment variables in Railway (or .env locally).
+// All per-client values now live in clients.js. resolveClient(toNumber) returns
+// the active client on every request. Search clients.js for CLIENT_CONFIG fields.
 // ─────────────────────────────────────────────────────────────────────────────
-const CLIENT_NAME         = process.env.CLIENT_NAME        || "our team";                     // CLIENT_CONFIG
-const CLIENT_PHONE        = process.env.CLIENT_PHONE       || "(970) 439-1707";               // CLIENT_CONFIG
-const HANDOFF_PHONE       = process.env.HANDOFF_PHONE      || CLIENT_PHONE;                   // CLIENT_CONFIG
-const FAREHARBOR_ENABLED  = process.env.FAREHARBOR_ENABLED === "true";                        // CLIENT_CONFIG
-
-// CLIENT_CONFIG — booking URLs keyed by offering type
-const BOOKING_URLS = {
-  // General browse links — guest picks their own item (use for ambiguous/general requests)
-  csr_browse_all:         "https://fareharbor.com/embeds/book/coloradosledrentals/items/?flow=1262218&full-items=yes&ref=highmark",
-  rea_browse_all:         "https://fareharbor.com/embeds/book/rabbitearsadventures/items/?flow=1491038&full-items=yes&ref=homepage",
-  // Specific flows — use when guest has stated experience level or tour preference
-  csr_steamboat_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=highmark&full-items=yes&flow=1262221",
-  csr_kremmling_unguided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=highmark&full-items=yes&flow=1262222",
-  csr_proride_guided:     "https://fareharbor.com/embeds/book/coloradosledrentals/items/?ref=highmark&flow=1470754&full-items=yes",
-  rea_2hr_tour:           "https://fareharbor.com/embeds/book/rabbitearsadventures/?ref=highmark&full-items=yes&flow=1539483",
-  rea_3hr_tour:           "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673348/?ref=highmark&full-items=yes&flow=1491038",
-  rea_private_tour:       "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673358/?ref=highmark&full-items=yes&flow=1491038",
-  all_winter:             "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=highmark&full-items=yes&flow=276228",
-  rzr_steamboat:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV?ref=highmark",
-  rzr_kremmling:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV?ref=highmark",
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SERVICE CLIENTS
@@ -140,22 +120,75 @@ export function getCurrentSeason() {
   return "summer";
 }
 
-export function getSeasonalOpener() {
+// client param is optional — defaults to csr_rea for backward compatibility
+export function getSeasonalOpener(client) {
+  const c      = (client && typeof client === "object") ? client : getDefaultClient();
   const season = getCurrentSeason();
-  if (season === "winter")   return "Hey! I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?";
-  if (season === "summer")   return "Hey! I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?";
-  return "Hey! I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?";
+
+  if (c.id === "csr_rea") {
+    if (season === "winter")  return "Hey! I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?";
+    if (season === "summer")  return "Hey! I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?";
+    return "Hey! I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?";
+  }
+
+  // Generic opener for informational clients
+  return `Hey! I'm here to help with ${c.name} — ${c.services.slice(0, 2).join(" and ")} in Steamboat. What can I help with?`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SYSTEM PROMPT
+// Dispatch-based: uses client.bookingMode to select the right prompt builder.
+// Backward-compat: if first arg is a string (old-style call), treats it as season
+// and builds the csr_rea prompt — keeps test.js and any callers working.
 // ─────────────────────────────────────────────────────────────────────────────
-export function buildSystemPrompt(season, knowledgeContext) {
+
+function buildSystemPromptInformational(client, knowledgeContext) {
+  const serviceList = client.services.join(", ");
+  const faqText     = (client.faq ?? []).map((f) => `Q: ${f.q}\nA: ${f.a}`).join("\n");
+  const hoursText   = client.hours
+    ? `${client.hours.weekdays}. ${client.hours.weekends}.`
+    : "Contact us for current hours.";
+
+  return `You are an SMS assistant for ${client.name}, located in Steamboat Springs, CO.
+Tone: ${client.tone}. Never robotic. Never a FAQ page.
+Never mention Whiteout Solutions, Highmark, or the underlying platform.
+
+━━━ SMS RULES ━━━
+- Every reply: up to 480 chars. Use as much as needed, never cut off mid-thought.
+- Plain text only. No bullets, dashes, markdown. Emojis: max 1-2 per message.
+- Never send 2 texts in a row without a guest reply.
+
+━━━ BUSINESS INFO ━━━
+Name: ${client.name}
+Phone: ${client.supportPhone}
+Email: ${client.supportEmail ?? "N/A"}
+Address: ${client.address ?? "Contact us for address"}
+Hours: ${hoursText}
+Services: ${serviceList}
+
+━━━ BOOKING / SCHEDULING ━━━
+${client.name} does NOT use online booking.
+If a guest asks to schedule, book, or get on the calendar — direct them to:
+  Call ${client.handoffPhone}
+  Email ${client.supportEmail}
+Do NOT pretend live scheduling exists. Do NOT invent appointment times or availability.
+
+━━━ HANDOFF ━━━
+For complex service quotes, custom work, or anything you cannot answer with the info above:
+HANDOFF MESSAGE: "Great question for the team! Give Jake a call at ${client.handoffPhone} and he'll get you sorted 🔧"
+
+━━━ FAQ ━━━
+${faqText}
+
+${knowledgeContext ? `━━━ LIVE DATA ━━━\n${knowledgeContext}` : ""}`;
+}
+
+function buildSystemPromptCsrRea(client, season, knowledgeContext) {
   const isWinter   = season === "winter" || season === "shoulder";
   const isSummer   = season === "summer" || season === "shoulder";
-  const bookingRef = Object.entries(BOOKING_URLS)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join("\n");
+  const urls       = client.bookingUrls ?? {};
+  const bookingRef = Object.entries(urls).map(([k, v]) => `${k}: ${v}`).join("\n");
+  const handoff    = client.handoffPhone;
 
   return `You are Summit — AI SMS concierge for Colorado Sled Rentals and Rabbit Ears Adventures, Steamboat Springs CO.
 Warm, stoked, genuinely local. Like a guide who loves their job. Never robotic. Never a FAQ page.
@@ -185,7 +218,7 @@ ${bookingRef}
 - Complaint or problem
 - Injury, accident, or insurance question
 - Custom pricing request
-HANDOFF MESSAGE: "Great question for our team! Give us a call at ${HANDOFF_PHONE} and we'll get you sorted 🤙"
+HANDOFF MESSAGE: "Great question for our team! Give us a call at ${handoff} and we'll get you sorted 🤙"
 After a handoff: keep answering questions normally. Only repeat the phone number if the guest asks for complex help (booking large groups, complaints, custom pricing). General info, conditions, product questions — answer them fully.
 
 ${isWinter ? `━━━ WINTER KNOWLEDGE ━━━
@@ -320,6 +353,20 @@ ONLY if the LIVE DATA section below has NO SNOW CONDITIONS block at all → say 
 ${knowledgeContext ? `━━━ LIVE DATA ━━━\n${knowledgeContext}` : ""}`;
 }
 
+// Public dispatcher — backward-compat: first arg may be a season string (old tests)
+// or a client object (new calls). Both work.
+export function buildSystemPrompt(clientOrSeason, season, knowledgeContext) {
+  if (typeof clientOrSeason === "string") {
+    // Old-style: buildSystemPrompt(season, knowledgeContext)
+    return buildSystemPromptCsrRea(getDefaultClient(), clientOrSeason, season ?? "");
+  }
+  const client = clientOrSeason ?? getDefaultClient();
+  if (client.bookingMode === "informational") {
+    return buildSystemPromptInformational(client, knowledgeContext ?? "");
+  }
+  return buildSystemPromptCsrRea(client, season ?? getCurrentSeason(), knowledgeContext ?? "");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // INTENT + SENTIMENT DETECTION
 // ─────────────────────────────────────────────────────────────────────────────
@@ -359,9 +406,9 @@ export function isReturningGuest(conversation) {
   return Date.now() - new Date(lastTs).getTime() > 24 * 60 * 60 * 1000;
 }
 
-// Checks FareHarbor availability if message mentions a date (Tier 2 only)
-async function checkAvailabilityIfNeeded(message, convo) {
-  if (!FAREHARBOR_ENABLED) return null;
+// Checks FareHarbor availability if message mentions a date (Tier 2 / fareharbor clients only)
+async function checkAvailabilityIfNeeded(message, convo, client) {
+  if (!client?.fareharborEnabled) return null;
 
   const datePatterns = [
     /\b(this )?(saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b/i,
@@ -427,8 +474,12 @@ Message: "${message}"`,
 // TOUR MENU BUILDER
 // Builds a numbered list of available tours for the guest to choose from.
 // Checks FH availability per item if a date string is provided.
+// Returns [] for non-fareharbor clients.
 // ─────────────────────────────────────────────────────────────────────────────
-async function buildTourMenu(season, dateStr) {
+async function buildTourMenu(client, season, dateStr) {
+  if (client.bookingMode !== "fareharbor") return [];
+
+  const urls = client.bookingUrls ?? {};
   const { items: reaItems, availabilityData: reaAvail } = await getFareHarborKbRow("rea", supabase);
 
   // Individual items listed — REA guided tours (freshest from KB cache, up to 4)
@@ -445,18 +496,18 @@ async function buildTourMenu(season, dateStr) {
     }
     // CSR: one "browse all" link covers all sled models (too many to list individually)
     options.push({ label: "CSR self-guided sled rental (browse all sleds)", company: "csr",
-      url: BOOKING_URLS.csr_browse_all });
+      url: urls.csr_browse_all });
     options.push({ label: "CSR Pro-Ride backcountry guided (expert riders)", company: "csr",
-      url: BOOKING_URLS.csr_proride_guided });
+      url: urls.csr_proride_guided });
   }
 
   if (season !== "winter") {
-    options.push({ label: "RZR off-road adventure (Steamboat)", company: "csr", url: BOOKING_URLS.rzr_steamboat });
-    options.push({ label: "RZR off-road adventure (Kremmling)", company: "csr", url: BOOKING_URLS.rzr_kremmling });
+    options.push({ label: "RZR off-road adventure (Steamboat)", company: "csr", url: urls.rzr_steamboat });
+    options.push({ label: "RZR off-road adventure (Kremmling)", company: "csr", url: urls.rzr_kremmling });
   }
 
   // Check FH availability per item if a date was given
-  if (dateStr && FAREHARBOR_ENABLED) {
+  if (dateStr && client.fareharborEnabled) {
     await Promise.all(options.map(async (opt) => {
       if (!opt.pk) { opt.available = null; return; } // browse-all links have no single PK
       try {
@@ -476,7 +527,7 @@ async function buildTourMenu(season, dateStr) {
 }
 
 // Formats the tour menu as a Claude instruction string
-function formatMenuInstruction(options, dateStr) {
+function formatMenuInstruction(client, options, dateStr) {
   const numbered = options.map((opt, i) => {
     let line = `${i + 1}) ${opt.label}`;
     if (dateStr) {
@@ -486,16 +537,17 @@ function formatMenuInstruction(options, dateStr) {
     return line;
   }).join(", ");
 
-  const dateNote = dateStr ? ` for ${dateStr}` : "";
-  const guidedBrowse = BOOKING_URLS.rea_browse_all;
-  const rentalBrowse = BOOKING_URLS.csr_browse_all;
+  const urls         = client.bookingUrls ?? {};
+  const guidedBrowse = urls.rea_browse_all;
+  const rentalBrowse = urls.csr_browse_all;
+  const dateNote     = dateStr ? ` for ${dateStr}` : "";
 
   const allUnavailable = dateStr
     && options.filter((o) => o.available !== null).length > 0
     && options.every((o) => o.available === false);
 
   if (allUnavailable) {
-    return `No availability found${dateNote}. Tell the guest clearly — no open slots on that date. Suggest a different date or call ${HANDOFF_PHONE}. Also share these browse links so they can check other dates themselves: Guided tours: ${guidedBrowse} | Rentals: ${rentalBrowse}`;
+    return `No availability found${dateNote}. Tell the guest clearly — no open slots on that date. Suggest a different date or call ${client.handoffPhone}. Also share these browse links so they can check other dates themselves: Guided tours: ${guidedBrowse} | Rentals: ${rentalBrowse}`;
   }
 
   return `List these options${dateNote} and ask the guest to pick one by number. Also ask how many people. After the list, add: "Or browse everything yourself: Guided: ${guidedBrowse} | Rentals: ${rentalBrowse}" Options: ${numbered}`;
@@ -559,11 +611,11 @@ async function saveConversation(fromNumber, toNumber, convo) {
 // ─────────────────────────────────────────────────────────────────────────────
 // CLAUDE CALL
 // ─────────────────────────────────────────────────────────────────────────────
-async function getClaudeReply(convo, season, knowledgeContext, extraInstruction, maxLength = 320) {
+async function getClaudeReply(convo, client, season, knowledgeContext, extraInstruction, maxLength = 320) {
   const messages = convo.messages.map(({ role, content }) => ({ role, content }));
   const system   = extraInstruction
-    ? `${buildSystemPrompt(season, knowledgeContext)}\n\nCURRENT CONTEXT: ${extraInstruction}`
-    : buildSystemPrompt(season, knowledgeContext);
+    ? `${buildSystemPrompt(client, season, knowledgeContext)}\n\nCURRENT CONTEXT: ${extraInstruction}`
+    : buildSystemPrompt(client, season, knowledgeContext);
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-6",
@@ -586,6 +638,9 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   const rawBody    = req.body.Body?.trim() ?? "";
   const fromNumber = req.body.From;
   const toNumber   = req.body.To;
+
+  // Resolve which client this inbound number belongs to
+  const client = resolveClient(toNumber);
 
   // 1. Parse + validate
   if (!rawBody || !fromNumber) {
@@ -612,7 +667,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
   // 4.5. HELP keyword — required by TCPA/CTIA. Works even if opted out.
   if (msgUpper === "HELP") {
-    const helpText = `${CLIENT_NAME} SMS: booking help & trail info. Msg freq varies. Msg & data rates may apply. Reply STOP to unsubscribe. Support: ${CLIENT_PHONE}`;
+    const helpText = `${client.name} SMS: info & booking assistance. Msg freq varies. Msg & data rates may apply. Reply STOP to unsubscribe. Support: ${client.supportPhone}`;
     if (process.env.TEST_MODE === "true") return res.json({ reply: helpText });
     await twilioClient.messages.create({ body: helpText, from: toNumber, to: fromNumber });
     res.set("Content-Type", "text/xml");
@@ -647,7 +702,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       }
       opener = enforceLength(opener, 320);
     } else {
-      opener = enforceLength(getSeasonalOpener());
+      opener = enforceLength(getSeasonalOpener(client));
     }
 
     console.log(`[DEMO] ${msgUpper} — reset + opener sent to ${fromNumber}`);
@@ -711,7 +766,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       convo.handoff = true;
       console.log(`[HANDOFF] Auto-escalation (frustrated x${convo.consecutiveFrustrated}) — ${fromNumber}`);
       replyText = enforceLength(
-        `I want to make sure you get the best help — give our team a call at ${HANDOFF_PHONE} and they'll sort you out 🤙`
+        `I want to make sure you get the best help — give us a call at ${client.handoffPhone} and we'll sort you out 🤙`
       );
     }
 
@@ -720,7 +775,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       convo.handoff = true;
       console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
       replyText = enforceLength(
-        `Great question for our team! Give us a call at ${HANDOFF_PHONE} and we'll get you sorted 🤙`
+        `Great question for our team! Give us a call at ${client.handoffPhone} and we'll get you sorted 🤙`
       );
     }
 
@@ -732,18 +787,18 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           `Hey! You're all set for ${convo.bookingData.activity} on ${convo.bookingData.date}. Any questions before your adventure? 🏔`
         );
       } else {
-        replyText = enforceLength(getSeasonalOpener());
+        replyText = enforceLength(getSeasonalOpener(client));
       }
     }
 
     // RETURNING AFTER 24H — light re-intro
     else if (returning && convo.bookingStep === null && !convo.handoff) {
-      replyText = enforceLength(`Hey, Summit again — welcome back to Steamboat! What can I help with?`);
+      replyText = enforceLength(`Hey, ${client.botName} again — welcome back! What can I help with?`);
     }
 
-    // BOOKING FLOW — state machine
+    // BOOKING FLOW — state machine (fareharbor clients only)
     // Step null → 1: Show tour menu, ask guest to pick
-    else if (intent === "booking" && convo.bookingStep === null) {
+    else if (intent === "booking" && convo.bookingStep === null && client.bookingMode === "fareharbor") {
       convo.bookingStep = 1;
 
       // Extract date from message if present (for availability check)
@@ -759,31 +814,31 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         if (parsed.date && parsed.date !== "null") extractedDate = parsed.date;
       } catch { /* ignore */ }
 
-      const menuOptions  = await buildTourMenu(season, extractedDate);
+      const menuOptions  = await buildTourMenu(client, season, extractedDate);
       const knowledgeCtx = await getKnowledgeContext(supabase);
 
       if (menuOptions.length === 0) {
         // No items available for online booking — don't enter step 1
         convo.bookingStep = null;
-        replyText = await getClaudeReply(convo, season, knowledgeCtx,
-          `Guest wants to book but there are currently no tours or rentals available for online booking. Respond warmly and honestly — snowmobile operations are paused due to warm temps and low snow base. Mention summer RZR adventures are coming soon. Do NOT suggest any booking links or dates. Offer to have the team follow up: ${HANDOFF_PHONE}.`
+        replyText = await getClaudeReply(convo, client, season, knowledgeCtx,
+          `Guest wants to book but there are currently no tours or rentals available for online booking. Respond warmly and honestly — snowmobile operations are paused due to warm temps and low snow base. Mention summer RZR adventures are coming soon. Do NOT suggest any booking links or dates. Offer to have the team follow up: ${client.handoffPhone}.`
         );
       } else {
         convo.bookingStep = 1;
         convo.bookingData.menuOptions = menuOptions; // save for step 1
-        const menuInstruction = formatMenuInstruction(menuOptions, extractedDate);
-        replyText = await getClaudeReply(convo, season, knowledgeCtx, menuInstruction);
+        const menuInstruction = formatMenuInstruction(client, menuOptions, extractedDate);
+        replyText = await getClaudeReply(convo, client, season, knowledgeCtx, menuInstruction);
       }
     }
 
-    // Step 1 → 2: Guest picked a tour — route to its booking link
-    else if (convo.bookingStep === 1) {
+    // Step 1 → 2: Guest picked a tour — route to its booking link (fareharbor only)
+    else if (convo.bookingStep === 1 && client.bookingMode === "fareharbor") {
       // Group size >= 6 → handoff
       const groupMatch = rawBody.match(/\b([6-9]|[1-9]\d+)\b/);
       if (groupMatch && parseInt(groupMatch[1]) >= 6) {
         convo.handoff = true;
         replyText = enforceLength(
-          `Great question for our team! Give us a call at ${HANDOFF_PHONE} and we'll get you sorted 🤙`
+          `Great question for our team! Give us a call at ${client.handoffPhone} and we'll get you sorted 🤙`
         );
       } else {
         convo.bookingData.groupSize = groupMatch ? parseInt(groupMatch[1]) : null;
@@ -812,21 +867,22 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
         const knowledgeCtx = await getKnowledgeContext(supabase);
         replyText = await getClaudeReply(
-          convo, season, knowledgeCtx,
+          convo, client, season, knowledgeCtx,
           `Guest chose: "${chosen?.label}". Send them this booking link: ${chosen?.url}. Include the full URL. Keep it warm and under 320 chars.`
         );
       }
     }
 
-    // DEFAULT: Claude handles everything else
+    // DEFAULT: Claude handles everything else (all clients including informational)
     else {
-      const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo);
+      const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo, client);
       const knowledgeCtx = await getKnowledgeContext(supabase);
 
       // 480 chars (3 texts) for all intents — never cut off mid-thought
       const replyMax = 480;
       replyText = await getClaudeReply(
         convo,
+        client,
         season,
         knowledgeCtx,
         availCtx ? `Live availability data: ${availCtx}` : null,
@@ -834,7 +890,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       );
 
       // Detect if Claude's reply triggers a handoff
-      if (/give us a call at|call.*439-1707/i.test(replyText)) {
+      if (/give (us|jake|them) a call at/i.test(replyText)) {
         convo.handoff = true;
         console.log(`[HANDOFF] Claude triggered handoff for ${fromNumber}`);
       }
@@ -887,7 +943,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
     try {
       await twilioClient.messages.create({
-        body: `Hey! Having a quick issue. Give us a call at ${HANDOFF_PHONE} and we'll help right away. Sorry!`,
+        body: `Hey! Having a quick issue. Give us a call at ${client.handoffPhone} and we'll help right away. Sorry!`,
         from: toNumber,
         to:   fromNumber,
       });
@@ -971,11 +1027,14 @@ app.post("/internal/preview", requireUiAccess, (req, res) => {
 
 // Server info — UI reads this to know the phone number and season
 app.get("/internal/info", requireUiAccess, (_req, res) => {
+  const toPhone = process.env.TWILIO_PHONE_NUMBER || "+18668906657";
+  const uiClient = resolveClient(toPhone);
   res.json({
-    toPhone:  process.env.TWILIO_PHONE_NUMBER || "+18668906657",
-    season:   getCurrentSeason(),
-    testMode: process.env.TEST_MODE === "true",
-    clientName: CLIENT_NAME,
+    toPhone,
+    season:     getCurrentSeason(),
+    testMode:   process.env.TEST_MODE === "true",
+    clientName: uiClient.name,
+    clientId:   uiClient.id,
   });
 });
 
@@ -1004,13 +1063,18 @@ app.post("/cron/scheduled-messages", async (req, res) => {
 // HEALTH CHECK — Railway uses this to confirm the app is up
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
+  const toPhone    = process.env.TWILIO_PHONE_NUMBER || "+18668906657";
+  const hcClient   = resolveClient(toPhone);
   res.json({
-    status:              "Highmark running ✅",
-    version:             "1.0.0",
-    season:              getCurrentSeason(),
-    fareharbor_enabled:  FAREHARBOR_ENABLED,
-    phone:               process.env.TWILIO_PHONE_NUMBER,
-    uptime_seconds:      Math.floor(process.uptime()),
+    status:             "Highmark running ✅",
+    version:            "1.0.0",
+    season:             getCurrentSeason(),
+    client_id:          hcClient.id,
+    client_name:        hcClient.name,
+    fareharbor_enabled: hcClient.fareharborEnabled,
+    booking_mode:       hcClient.bookingMode,
+    phone:              toPhone,
+    uptime_seconds:     Math.floor(process.uptime()),
   });
 });
 
@@ -1019,9 +1083,11 @@ app.get("/", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
   // Listen first so Railway/tests get a fast response, then init in background
-  const PORT = process.env.PORT || 3000;
+  const PORT        = process.env.PORT || 3000;
+  const toPhone     = process.env.TWILIO_PHONE_NUMBER || "+18668906657";
+  const startClient = resolveClient(toPhone);
   app.listen(PORT, () => {
-    console.log(`🏔 Highmark (${CLIENT_NAME}) running on port ${PORT} | Season: ${getCurrentSeason()} | FH: ${FAREHARBOR_ENABLED}`);
+    console.log(`🏔 Highmark (${startClient.name}) running on port ${PORT} | Season: ${getCurrentSeason()} | Mode: ${startClient.bookingMode} | FH: ${startClient.fareharborEnabled}`);
   });
 
   // Init runs after listen — FareHarbor fetches can take several seconds

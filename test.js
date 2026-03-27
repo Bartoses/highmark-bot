@@ -23,6 +23,7 @@ import { buildConfirmationText, buildFollowUpText } from "./bookingConfirmations
 import { checkOptOut, upsertContact, addTagsToContact, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { getKnowledgeContext } from "./knowledgeBase.js";
 import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
+import { resolveClient, CLIENTS, getDefaultClient } from "./clients.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -701,6 +702,164 @@ async function test17() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 18: Client Registry + Resolution
+// ─────────────────────────────────────────────────────────────────────────────
+async function test18() {
+  console.log("\nTEST 18: Client Registry + Resolution");
+
+  // CLIENTS registry contains expected clients
+  "csr_rea" in CLIENTS
+    ? pass("CLIENTS registry has csr_rea")
+    : fail("CLIENTS registry missing csr_rea");
+
+  "lone_pine" in CLIENTS
+    ? pass("CLIENTS registry has lone_pine")
+    : fail("CLIENTS registry missing lone_pine");
+
+  // csr_rea resolves from production number
+  const csrRea = resolveClient("+18668906657");
+  csrRea.id === "csr_rea"
+    ? pass("resolveClient('+18668906657') → csr_rea")
+    : fail("resolveClient production number", `expected csr_rea, got ${csrRea.id}`);
+
+  // Unknown number falls back to csr_rea
+  const fallback = resolveClient("+10000000000");
+  fallback.id === "csr_rea"
+    ? pass("resolveClient(unknown) falls back to csr_rea")
+    : fail("resolveClient fallback", `expected csr_rea, got ${fallback.id}`);
+
+  // null falls back to csr_rea
+  const nullFallback = resolveClient(null);
+  nullFallback.id === "csr_rea"
+    ? pass("resolveClient(null) falls back to csr_rea")
+    : fail("resolveClient(null)", `expected csr_rea, got ${nullFallback.id}`);
+
+  // getDefaultClient returns csr_rea
+  getDefaultClient().id === "csr_rea"
+    ? pass("getDefaultClient() returns csr_rea")
+    : fail("getDefaultClient()", "expected csr_rea");
+
+  // lone_pine resolves from its configured env number (if set)
+  const lpNumber = process.env.LONE_PINE_TWILIO_NUMBER;
+  if (lpNumber) {
+    const lp = resolveClient(lpNumber);
+    lp.id === "lone_pine"
+      ? pass(`resolveClient(LONE_PINE_TWILIO_NUMBER) → lone_pine`)
+      : fail("resolveClient(LONE_PINE_TWILIO_NUMBER)", `expected lone_pine, got ${lp.id}`);
+  } else {
+    pass("lone_pine Twilio number not set (expected in dev — will test when provisioned)");
+  }
+
+  // csr_rea has required fields
+  const csrReaClient = CLIENTS.csr_rea;
+  csrReaClient.bookingMode === "fareharbor"
+    ? pass("csr_rea.bookingMode is fareharbor")
+    : fail("csr_rea.bookingMode", csrReaClient.bookingMode);
+
+  typeof csrReaClient.handoffPhone === "string" && csrReaClient.handoffPhone.length > 0
+    ? pass("csr_rea.handoffPhone defined")
+    : fail("csr_rea.handoffPhone missing");
+
+  csrReaClient.bookingUrls?.csr_browse_all?.startsWith("https://")
+    ? pass("csr_rea.bookingUrls.csr_browse_all is a URL")
+    : fail("csr_rea.bookingUrls.csr_browse_all", csrReaClient.bookingUrls?.csr_browse_all);
+
+  // lone_pine has required fields
+  const lpClient = CLIENTS.lone_pine;
+  lpClient.bookingMode === "informational"
+    ? pass("lone_pine.bookingMode is informational")
+    : fail("lone_pine.bookingMode", lpClient.bookingMode);
+
+  lpClient.handoffPhone === "(970) 761-2124"
+    ? pass("lone_pine.handoffPhone is correct")
+    : fail("lone_pine.handoffPhone", lpClient.handoffPhone);
+
+  lpClient.fareharborEnabled === false
+    ? pass("lone_pine.fareharborEnabled is false")
+    : fail("lone_pine.fareharborEnabled", String(lpClient.fareharborEnabled));
+
+  Array.isArray(lpClient.services) && lpClient.services.length > 0
+    ? pass(`lone_pine.services has ${lpClient.services.length} items`)
+    : fail("lone_pine.services missing or empty");
+
+  // buildSystemPrompt backward compat (old-style string call still works)
+  buildSystemPrompt("winter", "").length > 100
+    ? pass("buildSystemPrompt('winter', '') backward compat works")
+    : fail("buildSystemPrompt backward compat broken");
+
+  // buildSystemPrompt with lone_pine client
+  buildSystemPrompt(lpClient, "winter", "").includes("Lone Pine Performance")
+    ? pass("buildSystemPrompt(lone_pine) contains client name")
+    : fail("buildSystemPrompt(lone_pine) missing client name");
+
+  // Lone Pine prompt must NOT contain FareHarbor
+  buildSystemPrompt(lpClient, "winter", "").includes("FareHarbor")
+    ? fail("lone_pine system prompt should not mention FareHarbor")
+    : pass("lone_pine system prompt is FareHarbor-free");
+
+  // Lone Pine prompt must contain handoff phone
+  buildSystemPrompt(lpClient, "winter", "").includes("761-2124")
+    ? pass("lone_pine system prompt contains handoff phone")
+    : fail("lone_pine system prompt missing handoff phone");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 19: Lone Pine — Informational SMS Flow (integration)
+// ─────────────────────────────────────────────────────────────────────────────
+const LP_TO_PHONE = "+15551111111";  // simulated Lone Pine Twilio number
+
+async function test19() {
+  console.log("\nTEST 19: Lone Pine Informational SMS Flow");
+
+  // To make resolveClient work for this test, LONE_PINE_TWILIO_NUMBER must match LP_TO_PHONE.
+  // If not configured, skip gracefully.
+  if (process.env.LONE_PINE_TWILIO_NUMBER !== LP_TO_PHONE) {
+    pass("Lone Pine integration test skipped (set LONE_PINE_TWILIO_NUMBER=+15551111111 to enable)");
+    return;
+  }
+
+  await httpPost("/reset", { from: TEST_PHONE2 }, "application/json");
+
+  // 1. Greeting from Lone Pine number
+  const r1 = await sendSms("hey", TEST_PHONE2, LP_TO_PHONE);
+  r1.length > 0
+    ? pass(`LP Message 1 (greeting): ${r1.length} chars`)
+    : fail("LP Message 1: no reply");
+
+  // Must NOT mention Summit or FareHarbor
+  /summit/i.test(r1)
+    ? fail("LP greeting mentions Summit (should not)", r1)
+    : pass("LP greeting does not mention Summit");
+
+  /fareharbor/i.test(r1)
+    ? fail("LP greeting mentions FareHarbor (should not)", r1)
+    : pass("LP greeting does not mention FareHarbor");
+
+  // 2. Ask to book / schedule
+  const r2 = await sendSms("I need to schedule a suspension revalve", TEST_PHONE2, LP_TO_PHONE);
+  r2.length > 0
+    ? pass(`LP Message 2 (booking intent): ${r2.length} chars`)
+    : fail("LP Message 2: no reply");
+
+  // Should direct to phone, not FH
+  /761-2124|call|phone/i.test(r2)
+    ? pass("LP booking intent routes to phone CTA")
+    : fail("LP booking intent did not suggest calling", r2);
+
+  /fareharbor/i.test(r2)
+    ? fail("LP booking reply mentions FareHarbor (should not)", r2)
+    : pass("LP booking reply is FareHarbor-free");
+
+  // 3. Ask about hours
+  const r3 = await sendSms("What are your hours?", TEST_PHONE2, LP_TO_PHONE);
+  /9am|monday|fri/i.test(r3)
+    ? pass("LP hours reply contains business hours")
+    : fail("LP hours reply missing hours info", r3);
+
+  await httpPost("/reset", { from: TEST_PHONE2 }, "application/json");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -723,6 +882,7 @@ async function main() {
   await test13();
   await test15();
   await test17();
+  await test18(); // client registry + resolution
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -732,6 +892,7 @@ async function main() {
     await test11();
     await test14();
     await test16();
+    await test19(); // Lone Pine informational flow
   } catch (e) {
     fail("Test server", e.message);
   } finally {
