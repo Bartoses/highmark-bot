@@ -371,6 +371,12 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 <!-- ── Mobile drawer (scenarios + simulate, shown on small screens) ─────── -->
 <div id="mobile-drawer">
   <div class="panel-section">
+    <div class="section-label">Client</div>
+    <select id="client-select-mobile" class="form-select" onchange="switchClient(this.value)">
+      <option value="">Loading...</option>
+    </select>
+  </div>
+  <div class="panel-section">
     <div class="section-label">Scenarios</div>
     <div id="mobile-scenario-list"></div>
   </div>
@@ -387,6 +393,14 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <!-- ── Left panel ──────────────────────────────────────────────────────── -->
   <div class="panel" id="left">
     <div class="panel-scroll">
+
+      <!-- Client selector -->
+      <div class="panel-section">
+        <div class="section-label">Client</div>
+        <select id="client-select" class="form-select" onchange="switchClient(this.value)">
+          <option value="">Loading...</option>
+        </select>
+      </div>
 
       <!-- Guest identity -->
       <div class="panel-section">
@@ -536,14 +550,16 @@ function uiHeaders(extra = {}) {
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const State = {
-  safeMode:    true,
-  fromPhone:   "+15550000099",
-  toPhone:     "+18668906657",
-  clientName:  "Colorado Sled Rentals",
-  season:      "winter",
-  running:     false,
-  transcript:  [],
-  lastMeta:    null,
+  safeMode:      true,
+  fromPhone:     "+15550000099",
+  toPhone:       "+18668906657",
+  clientName:    "Colorado Sled Rentals",
+  clientBotName: "Summit",
+  season:        "winter",
+  clients:       [],
+  running:       false,
+  transcript:    [],
+  lastMeta:      null,
   currentPayloads: { sms: {}, fh: {}, session: {} },
   booking: {
     company:     "coloradosledrentals",
@@ -578,6 +594,14 @@ async function init() {
     }
   } catch(e) {
     document.getElementById("header-info").textContent = "⚠ server unreachable";
+  }
+
+  // Load client list for selector
+  try {
+    State.clients = await apiFetch("/internal/clients");
+    populateClientSelects();
+  } catch(e) {
+    console.warn("Could not load client list:", e.message);
   }
 
   // Load scenarios (desktop list + mobile drawer list)
@@ -697,6 +721,45 @@ async function resetChat() {
   clearInspector();
   clearTranscript();
   updatePayload("sms");
+}
+
+// ─── Client selector ──────────────────────────────────────────────────────────
+function populateClientSelects() {
+  for (const selId of ["client-select", "client-select-mobile"]) {
+    const sel = document.getElementById(selId);
+    if (!sel) continue;
+    sel.innerHTML = "";
+    for (const c of State.clients) {
+      const opt = document.createElement("option");
+      opt.value    = c.toPhone ?? "";
+      opt.text     = c.toPhone ? c.name : `${c.name} (not configured)`;
+      opt.disabled = !c.toPhone;
+      if (c.toPhone === State.toPhone) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+}
+
+async function switchClient(toPhone) {
+  if (!toPhone || toPhone === State.toPhone) return;
+  State.toPhone = toPhone;
+
+  // Sync both selects
+  for (const id of ["client-select", "client-select-mobile"]) {
+    const el = document.getElementById(id);
+    if (el) el.value = toPhone;
+  }
+
+  // Update header info + bot name
+  const client = State.clients.find(c => c.toPhone === toPhone);
+  if (client) {
+    State.clientName    = client.name;
+    State.clientBotName = client.botName ?? client.name;
+    document.getElementById("header-info").textContent =
+      `${client.name}  ·  ${State.season}  ·  ${toPhone}`;
+  }
+
+  await resetChat();
 }
 
 // ─── Scenarios ────────────────────────────────────────────────────────────────
@@ -844,7 +907,7 @@ function renderTranscript() {
     const tags = e.role === "user" && e.meta
       ? `<div class="tr-tags">${tagHtml(e.meta.intent,"intent")}${tagHtml(e.meta.sentiment,"sentiment")}</div>` : "";
     div.innerHTML = `
-      <div class="tr-role ${e.role}">${e.role === "bot" ? "SUMMIT" : "GUEST"}</div>
+      <div class="tr-role ${e.role}">${e.role === "bot" ? escHtml((State.clientBotName || "Bot").toUpperCase()) : "GUEST"}</div>
       <div class="tr-text">${escHtml(e.text)}</div>
       ${tags}
       <div class="tr-time">${time}</div>
@@ -899,11 +962,13 @@ function appendUserMsg(text) {
 }
 
 function appendBotMsg(text, meta = {}) {
-  const thread = document.getElementById("chat-thread");
-  const row = document.createElement("div");
-  row.className = "msg-row bot";
-  const ts = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-  const texts = Math.ceil(text.length / 160);
+  const thread   = document.getElementById("chat-thread");
+  const row      = document.createElement("div");
+  row.className  = "msg-row bot";
+  const ts       = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const texts    = Math.ceil(text.length / 160);
+  const botName  = State.clientBotName || "Bot";
+  const initial  = botName.charAt(0).toUpperCase();
   const metaTags = [
     meta.intent    ? `<span class="tag intent">${escHtml(meta.intent)}</span>` : "",
     meta.sentiment ? `<span class="tag sentiment">${escHtml(meta.sentiment)}</span>` : "",
@@ -913,8 +978,8 @@ function appendBotMsg(text, meta = {}) {
 
   row.innerHTML = `
     <div class="msg-header">
-      <div class="msg-avatar">S</div>
-      <div class="msg-sender">Summit</div>
+      <div class="msg-avatar">${escHtml(initial)}</div>
+      <div class="msg-sender">${escHtml(botName)}</div>
     </div>
     <div class="msg-bubble">${linkify(text)}</div>
     <div class="msg-meta">${metaTags}</div>
@@ -926,13 +991,15 @@ function appendBotMsg(text, meta = {}) {
 }
 
 function appendTyping() {
-  const thread = document.getElementById("chat-thread");
-  const row = document.createElement("div");
+  const thread  = document.getElementById("chat-thread");
+  const row     = document.createElement("div");
   row.className = "msg-row bot";
+  const botName = State.clientBotName || "Bot";
+  const initial = botName.charAt(0).toUpperCase();
   row.innerHTML = `
     <div class="msg-header">
-      <div class="msg-avatar">S</div>
-      <div class="msg-sender">Summit</div>
+      <div class="msg-avatar">${escHtml(initial)}</div>
+      <div class="msg-sender">${escHtml(botName)}</div>
     </div>
     <div class="typing-indicator">
       <div class="typing-dot"></div>

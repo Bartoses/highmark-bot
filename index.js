@@ -1049,6 +1049,19 @@ app.get("/internal/info", requireUiAccess, (_req, res) => {
   });
 });
 
+// All configured clients — used by UI client selector
+app.get("/internal/clients", requireUiAccess, (_req, res) => {
+  res.json(
+    Object.values(CLIENTS).map((c) => ({
+      id:          c.id,
+      name:        c.name,
+      botName:     c.botName,
+      toPhone:     c.inboundPhones[0] ?? null,
+      bookingMode: c.bookingMode,
+    }))
+  );
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SCHEDULED MESSAGES WORKER — called by Railway cron every minute
 // POST /cron/scheduled-messages
