@@ -3,23 +3,33 @@
 ## What This Is
 Summit is an AI SMS concierge built by Whiteout Solutions as a POC to demo to Steamboat Springs outdoor businesses (tour operators, lodges, activity companies) what an AI-powered guest texting service can do. Stack: Twilio + Claude API + Node.js/Express, deployed on Railway.
 
-**Current client:** Colorado Sled Rentals + Rabbit Ears Adventures (CSR/REA)
-**Live number:** +18668906657
+**Clients:**
+- Colorado Sled Rentals + Rabbit Ears Adventures (CSR/REA) — live, +18668906657
+- Lone Pine Performance — configured in clients.js, pending Twilio number provisioning
+
 **Railway URL:** https://highmark-bot-production.up.railway.app
 
 ---
 
+## Roadmap
+Before starting any new feature or task, read the `Roadmap` file in this directory. It defines the current state, phase priorities, and the strict order of next builds. Use it to understand what to build next and to avoid work that conflicts with planned direction.
+
+---
+
 ## Rules — Follow These on Every Change
-1. **Write tests** — add or update test cases covering the change
-2. **Test locally** — run the full test suite and verify all scenarios pass
-3. **Deploy** — commit and push to GitHub; Railway auto-deploys from `main`
-4. **End-to-end verify** — run the Railway health check and confirm the deploy is live
-5. **Update docs** — update CLAUDE.md, README.md, and memory files to reflect the change
+1. **Read the Roadmap** — check `Roadmap` to confirm the task aligns with current priorities
+2. **Write tests** — add or update test cases covering the change
+3. **Test locally** — run the full test suite and verify all scenarios pass
+4. **Deploy** — commit and push to GitHub; Railway auto-deploys from `main`
+5. **End-to-end verify** — run the Railway health check and confirm the deploy is live
+6. **Update docs** — update CLAUDE.md, README.md, Roadmap, and memory files to reflect the change
 
 ---
 
 ## File Structure
 ```
+Roadmap                — project phases, priorities, next 5 builds — READ THIS BEFORE STARTING ANY TASK
+clients.js             — per-client configuration registry + resolveClient(toNumber) — ADD NEW CLIENTS HERE
 index.js               — main Express server, SMS webhook, all bot logic, booking state machine
 knowledgeBase.js       — FH items (24hr cron) + FH availability (3hr cron) + weather (1hr cron) + website (7-day cron, hash-gated)
 bookingConfirmations.js — FareHarbor webhook receiver + 30min polling + confirmation texts
@@ -27,7 +37,7 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (97 tests), spawns its own server on port 3099
+test.js                — automated test suite (116 tests), spawns its own server on port 3099
 db1_cancellation_sent.sql — migration: adds cancellation_sent column to confirmations_sent
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
@@ -39,16 +49,34 @@ PROMPTS.md             — Session starter prompts
 
 ---
 
-## Per-Client Variables
-Search `CLIENT_CONFIG` in `index.js` to find every value that changes when onboarding a new business.
-Set these as Railway environment variables:
-- `CLIENT_NAME` — business name shown in handoff messages
-- `CLIENT_PHONE` / `HANDOFF_PHONE` — phone for human handoff
-- `CLIENT_EMAIL` — contact email
-- `CLIENT_ID` — short slug (e.g. `csr_rea`) used to key CRM records
-- `FAREHARBOR_ENABLED` — `true` for Tier 2, `false` for Tier 1
+## Multi-Client Architecture
+
+Client config lives in `clients.js` — edit that file to add or update clients.
+Each client entry defines: `id`, `botName`, `tone`, `inboundPhones`, `supportPhone`, `handoffPhone`,
+`bookingMode` (`fareharbor` | `informational` | `lead_capture`), `fareharborCompanies`, `scrapeUrls`,
+`snotelStations`, `bookingUrls`, `services`, `faq`, `hours`.
+
+**To onboard a new client:**
+1. Add an entry to `CLIENTS` in `clients.js`
+2. Set `LONE_PINE_TWILIO_NUMBER` (or `<CLIENT>_TWILIO_NUMBER`) env var in Railway
+3. No other code changes required — `resolveClient(toNumber)` routes automatically
+
+**bookingMode values:**
+- `fareharbor` — FareHarbor booking menu + real-time availability (CSR/REA)
+- `informational` — Q&A only, all booking/scheduling routes to phone CTA (Lone Pine)
+- `lead_capture` — (future) Q&A + lightweight lead collection before phone routing
+
+**Current clients:**
+| Client | ID | Mode | Twilio Number |
+|---|---|---|---|
+| Colorado Sled Rentals + Rabbit Ears Adventures | `csr_rea` | `fareharbor` | +18668906657 |
+| Lone Pine Performance | `lone_pine` | `informational` | set `LONE_PINE_TWILIO_NUMBER` |
+
+**Railway env vars still needed per deployment:**
+- `FAREHARBOR_ENABLED` — `true` for Tier 2 FH access
 - `CONFIRMATIONS_ENABLED` — `true` when ready to text real guests
 - `CONFIRMATIONS_TEST_PHONE` — redirect all confirmation texts here while testing
+- `CLIENT_PHONE` / `HANDOFF_PHONE` — overrides csr_rea defaults if needed
 
 ---
 
@@ -64,7 +92,7 @@ Commands: `/reset` (fresh conversation), `/quit`
 ```bash
 npm test
 ```
-Spawns its own server on port 3099. Runs all 97 scenarios automatically.
+Spawns its own server on port 3099. Runs all 116 scenarios automatically.
 
 ### Server + curl tests (TEST_MODE)
 **Terminal 1:**
@@ -111,7 +139,7 @@ Scenarios: 1=greeting, 2=snow conditions, 3=beginner booking, 4=experienced ride
 4. **Tour pick** — reply "2" → correct individual booking link sent
 5. **No availability** — date with no slots → explicit message + browse-all links
 6. **Same-day** — "can I book for today" → policy message + next available date
-7. **Handoff** — "I want to speak to a person" returns handoff with CLIENT_NAME
+7. **Handoff** — "I want to speak to a person" returns handoff with client.handoffPhone
 8. **Booking after handoff** — asking about tours after handoff re-engages (does NOT get redirect)
 9. **HELP** — returns program info + STOP instruction + phone number
 10. **STOP** — opt-out confirmation sent, subsequent messages dropped
