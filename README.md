@@ -45,7 +45,7 @@ knowledgeBase.js        — FH items (24hr) + availability (3hr) + weather (1hr)
 bookingConfirmations.js — FareHarbor webhook receiver + 30-min polling + confirmation/follow-up texts
 crm.js                  — contacts, campaigns, TCPA opt-out/opt-in, auto-tagging
 chat.js                 — local terminal chat simulator (no Twilio cost)
-test.js                 — automated test suite, 162 tests, spawns its own server on port 3099
+test.js                 — automated test suite, 169 tests, spawns its own server on port 3099
 leads.js                — lead capture module: saveLead() + notifyBusinessOfLead()
 adminLeads.js           — admin lead management routes: list, update, summary
 db1_lead_capture.sql    — migration: lead_step/lead_data columns + leads table
@@ -69,7 +69,7 @@ npm install
 npm run chat
 # Commands: /reset (fresh conversation), /quit
 
-# Full automated test suite (162 tests)
+# Full automated test suite (169 tests)
 npm test
 
 # Server in TEST_MODE for curl testing
