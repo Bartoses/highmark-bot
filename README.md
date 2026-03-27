@@ -45,7 +45,7 @@ knowledgeBase.js        — FH items (24hr) + availability (3hr) + weather (1hr)
 bookingConfirmations.js — FareHarbor webhook receiver + 30-min polling + confirmation/follow-up texts
 crm.js                  — contacts, campaigns, TCPA opt-out/opt-in, auto-tagging
 chat.js                 — local terminal chat simulator (no Twilio cost)
-test.js                 — automated test suite, 116 tests, spawns its own server on port 3099
+test.js                 — automated test suite, 131 tests, spawns its own server on port 3099
 virtual-test.sh         — Twilio Virtual Phone test runner (10 scenarios)
 db1_schema.sql          — Supabase DB1 migration (conversations + knowledge_base + settings)
 db2_crm_schema.sql      — Supabase DB2 CRM migration (contacts, campaigns, opt_outs)
@@ -64,7 +64,7 @@ npm install
 npm run chat
 # Commands: /reset (fresh conversation), /quit
 
-# Full automated test suite (116 tests)
+# Full automated test suite (131 tests)
 npm test
 
 # Server in TEST_MODE for curl testing

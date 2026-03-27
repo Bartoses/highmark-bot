@@ -37,7 +37,7 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (116 tests), spawns its own server on port 3099
+test.js                — automated test suite (131 tests), spawns its own server on port 3099
 db1_cancellation_sent.sql — migration: adds cancellation_sent column to confirmations_sent
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
@@ -54,7 +54,7 @@ PROMPTS.md             — Session starter prompts
 Client config lives in `clients.js` — edit that file to add or update clients.
 Each client entry defines: `id`, `botName`, `tone`, `inboundPhones`, `supportPhone`, `handoffPhone`,
 `bookingMode` (`fareharbor` | `informational` | `lead_capture`), `fareharborCompanies`, `scrapeUrls`,
-`snotelStations`, `bookingUrls`, `services`, `faq`, `hours`.
+`snotelStations`, `bookingUrls`, `services`, `faq`, `hours`, `crmEnabled`, `openerText`, `handoffReply`.
 
 **To onboard a new client:**
 1. Add an entry to `CLIENTS` in `clients.js`
@@ -170,11 +170,12 @@ Expected: `{"status":"Highmark running ✅", ...}`
 3. Opted-out gate (silently drop)
 4. Load conversation from Supabase
 5. Intent + sentiment classification
-6. Booking state machine steps
-7. Handoff gate — blocks non-booking/conditions intents when `convo.handoff=true`
-   - booking and conditions intents BYPASS the handoff gate (re-engage the guest)
-8. Claude called with system prompt + KB context
-9. Save conversation to Supabase, return TwiML
+6. Booking mode routing (per client.bookingMode):
+   - `fareharbor`: booking state machine (null → 1 → 2) + FareHarbor tour menu
+   - `informational`: booking intent → phone CTA via Claude, no state machine
+7. Claude called with system prompt + KB context (prompt dispatched by bookingMode)
+8. Save conversation to Supabase, return TwiML
+9. CRM upsert/tagging — only if `client.crmEnabled` is true
 
 ### Rate Limiting
 Two layers on `/sms`:
@@ -207,7 +208,16 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
 - Same-day bookings NOT allowed — minimum 1 day advance booking required
 - Availability window always starts from tomorrow in both KB refresh and real-time checks
 - Groups 6+ always handoff
-- Booking/conditions intents bypass handoff gate so re-engaging guests get real answers
+- `informational` clients never enter the booking state machine — booking intent routes to phone CTA
+
+### Per-Client Behavior Config (clients.js fields)
+- `bookingMode` — `fareharbor` | `informational` | `lead_capture` (future)
+- `crmEnabled` — gates all CRM upsert/tagging; `false` means no contact records created
+- `openerText` — first-message text (overrides getSeasonalOpener generic logic)
+- `handoffReply(phone)` — function returning text sent on explicit handoff intent
+
+### Session Tips
+Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — keeps context focused and saves credits.
 
 ### TEST_MODE
 When `TEST_MODE=true` (local only, never set on Railway):
