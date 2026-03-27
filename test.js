@@ -491,15 +491,23 @@ async function test13() {
   console.log("\nTEST 13: Knowledge Base Context");
   if (!supabase) { fail("Supabase unavailable"); return; }
   try {
-    const start = Date.now();
-    const ctx   = await getKnowledgeContext(supabase);
+    // csr_rea (explicit client)
+    const csrRea  = getDefaultClient();
+    const start   = Date.now();
+    const ctx     = await getKnowledgeContext(supabase, csrRea);
     const elapsed = Date.now() - start;
     typeof ctx === "string"
-      ? pass(`getKnowledgeContext: string (${ctx.length} chars)`)
+      ? pass(`getKnowledgeContext(csr_rea): string (${ctx.length} chars)`)
       : fail("getKnowledgeContext non-string");
     elapsed < 5000
-      ? pass(`getKnowledgeContext: ${elapsed}ms`)
+      ? pass(`getKnowledgeContext(csr_rea): ${elapsed}ms`)
       : fail("getKnowledgeContext too slow", `${elapsed}ms`);
+
+    // backward compat: no client arg → still returns a string
+    const ctxNoArg = await getKnowledgeContext(supabase);
+    typeof ctxNoArg === "string"
+      ? pass("getKnowledgeContext(no client) backward compat works")
+      : fail("getKnowledgeContext backward compat broken");
   } catch (e) { fail("getKnowledgeContext threw", e.message); }
 }
 
@@ -860,6 +868,50 @@ async function test19() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 20: Per-Client Knowledge Base Context
+// ─────────────────────────────────────────────────────────────────────────────
+async function test20() {
+  console.log("\nTEST 20: Per-Client Knowledge Base Context");
+  if (!supabase) { fail("Supabase unavailable"); return; }
+
+  // ── csr_rea context ────────────────────────────────────────────────────────
+  try {
+    const csrCtx = await getKnowledgeContext(supabase, CLIENTS.csr_rea);
+    typeof csrCtx === "string"
+      ? pass(`csr_rea KB context: string (${csrCtx.length} chars)`)
+      : fail("csr_rea KB context not a string");
+
+    // csr_rea context should not contain Lone Pine business info
+    /lone pine|lonepineperformance/i.test(csrCtx)
+      ? fail("csr_rea context contains Lone Pine data (wrong client)")
+      : pass("csr_rea context is Lone Pine-free");
+  } catch (e) { fail("csr_rea KB context threw", e.message); }
+
+  // ── lone_pine context ──────────────────────────────────────────────────────
+  try {
+    const lpCtx = await getKnowledgeContext(supabase, CLIENTS.lone_pine);
+    typeof lpCtx === "string"
+      ? pass(`lone_pine KB context: string (${lpCtx.length} chars)`)
+      : fail("lone_pine KB context not a string");
+
+    // lone_pine context must NOT contain FareHarbor booking data
+    const hasFhAvailability = /AVAILABILITY:|TOUR DETAILS:|DYNAMIC BOOKING LINKS/i.test(lpCtx);
+    hasFhAvailability
+      ? fail("lone_pine KB context contains FareHarbor sections (should not)")
+      : pass("lone_pine KB context is FareHarbor-free");
+
+    // lone_pine context must NOT contain SNOTEL snow depth data
+    /SNOW CONDITIONS/i.test(lpCtx)
+      ? fail("lone_pine KB context contains SNOW CONDITIONS (should not)")
+      : pass("lone_pine KB context has no SNOTEL snow data");
+
+    // Weather section may appear (shared for Steamboat clients) — that's fine
+    // Just verify it doesn't error and returns a clean string
+    pass("lone_pine KB context returned without error");
+  } catch (e) { fail("lone_pine KB context threw", e.message); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -883,6 +935,7 @@ async function main() {
   await test15();
   await test17();
   await test18(); // client registry + resolution
+  await test20(); // per-client KB context
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");

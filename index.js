@@ -815,7 +815,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       } catch { /* ignore */ }
 
       const menuOptions  = await buildTourMenu(client, season, extractedDate);
-      const knowledgeCtx = await getKnowledgeContext(supabase);
+      const knowledgeCtx = await getKnowledgeContext(supabase, client);
 
       if (menuOptions.length === 0) {
         // No items available for online booking — don't enter step 1
@@ -865,7 +865,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         convo.bookingData.company  = chosen?.company ?? "csr";
         convo.bookingStep = 2;
 
-        const knowledgeCtx = await getKnowledgeContext(supabase);
+        const knowledgeCtx = await getKnowledgeContext(supabase, client);
         replyText = await getClaudeReply(
           convo, client, season, knowledgeCtx,
           `Guest chose: "${chosen?.label}". Send them this booking link: ${chosen?.url}. Include the full URL. Keep it warm and under 320 chars.`
@@ -876,7 +876,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     // DEFAULT: Claude handles everything else (all clients including informational)
     else {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo, client);
-      const knowledgeCtx = await getKnowledgeContext(supabase);
+      const knowledgeCtx = await getKnowledgeContext(supabase, client);
 
       // 480 chars (3 texts) for all intents — never cut off mid-thought
       const replyMax = 480;
