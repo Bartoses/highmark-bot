@@ -823,16 +823,32 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     if (convo.consecutiveFrustrated >= 2 && !convo.handoff) {
       convo.handoff = true;
       console.log(`[HANDOFF] Auto-escalation (frustrated x${convo.consecutiveFrustrated}) — ${fromNumber}`);
-      replyText = enforceLength(
-        `I want to make sure you get the best help — give us a call at ${client.handoffPhone} and we'll sort you out 🤙`
-      );
+      if (client.waitlistEnabled !== false) {
+        convo.waitlistPending = true;
+        convo.waitlistContext = { service: "general inquiry", date: null };
+        replyText = enforceLength(
+          `I want to make sure you get the best help. Want me to save your number so the team can call you back? Reply YES to confirm, or call now: ${client.handoffPhone} 🤙`
+        );
+      } else {
+        replyText = enforceLength(
+          `I want to make sure you get the best help — give us a call at ${client.handoffPhone} and we'll sort you out 🤙`
+        );
+      }
     }
 
-    // 12. Explicit handoff intent
+    // 12. Explicit handoff intent — try lead capture first, phone as escape hatch
     else if (intent === "handoff") {
       convo.handoff = true;
       console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
-      replyText = enforceLength(client.handoffReply(client.handoffPhone));
+      if (client.waitlistEnabled !== false) {
+        convo.waitlistPending = true;
+        convo.waitlistContext = { service: "general inquiry", date: null };
+        replyText = enforceLength(
+          `Of course! Want me to save your number so the team can reach out to you directly? Reply YES to confirm, or call us now: ${client.handoffPhone} 🤙`
+        );
+      } else {
+        replyText = enforceLength(client.handoffReply(client.handoffPhone));
+      }
     }
 
     // FIRST MESSAGE
@@ -862,6 +878,38 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       convo.waitlistContext = { service: "availability updates", date: null };
       replyText = enforceLength(
         `Happy to! We'll text you at this number when spots open. Just reply YES to confirm, or call us anytime: ${client.handoffPhone}`
+      );
+    }
+
+    // ORGANIC OUTREACH YES — guest says YES after Claude organically asked about reaching out.
+    // Catches the gap where Claude improvises "want me to reach out?" and the guest confirms,
+    // but waitlistPending was never set (no structured trigger fired).
+    // Condition: guest sent a clear YES + not mid-booking + last bot message had reach-out language.
+    else if (
+      /^(yes|yeah|yep|sure|ok|okay|please|y)\b/i.test(rawBody.trim()) &&
+      convo.bookingStep === null &&
+      client.waitlistEnabled !== false &&
+      /reach out|let you know|heads.?up|notify|first to know|snag a spot|save your number|add you to|call you back|get back to you|have someone|reach you|follow up|touch base/i.test(
+        convo.messages.filter((m) => m.role === "assistant").slice(-1)[0]?.content ?? ""
+      )
+    ) {
+      await saveLead(supabase, {
+        clientId:     client.id,
+        fromNumber,
+        contactPhone: fromNumber,
+        service:      "availability interest",
+        timeframe:    null,
+        leadType:     "waitlist",
+      });
+      notifyBusinessOfLead(
+        twilioClient, client, fromNumber, toNumber,
+        { service: "availability interest", callback: fromNumber, timeframe: null },
+        process.env.TEST_MODE === "true",
+        "waitlist"
+      ).catch((err) => console.error("[ORGANIC YES] notify error:", err.message));
+      console.log(`[ORGANIC YES] Lead saved — ${fromNumber} confirmed reach-out interest`);
+      replyText = enforceLength(
+        `You're on the list! We'll reach out when it's time. Questions anytime: ${client.handoffPhone} 🤙`
       );
     }
 
