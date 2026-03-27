@@ -1187,8 +1187,10 @@ async function test24() {
     : fail("status filter: returned wrong statuses");
 
   // ── PATCH /admin/leads/:id — status update ────────────────────────────────
-  // Note: updated_by requires db1_lead_mgmt.sql migration — tested separately
-  const patchStatusRes  = await httpPatch(`/admin/leads/${leadId}`, { status: "contacted" });
+  const patchStatusRes  = await httpPatch(`/admin/leads/${leadId}`, {
+    status:     "contacted",
+    updated_by: "test_suite",
+  });
   const patchStatusData = await patchStatusRes.json();
 
   patchStatusRes.status === 200
@@ -1199,9 +1201,14 @@ async function test24() {
     ? pass("PATCH status: lead.status updated to contacted")
     : fail("PATCH status: wrong status in response", patchStatusData.lead?.status);
 
+  patchStatusData.lead?.updated_by === "test_suite"
+    ? pass("PATCH status: updated_by recorded")
+    : fail("PATCH status: updated_by missing", patchStatusData.lead?.updated_by);
+
   // ── PATCH /admin/leads/:id — notes update ─────────────────────────────────
   const patchNotesRes  = await httpPatch(`/admin/leads/${leadId}`, {
-    notes: "Called back — voicemail left. Try again Thursday.",
+    notes:      "Called back — voicemail left. Try again Thursday.",
+    updated_by: "test_suite",
   });
   const patchNotesData = await patchNotesRes.json();
 

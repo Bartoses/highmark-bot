@@ -37,7 +37,7 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (161 tests), spawns its own server on port 3099
+test.js                — automated test suite (162 tests), spawns its own server on port 3099
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, update, summary routes (Chunk 5)
 db1_lead_capture.sql   — migration: adds lead_step/lead_data to conversations + creates leads table
