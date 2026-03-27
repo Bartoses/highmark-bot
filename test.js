@@ -1131,6 +1131,70 @@ async function test23() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 25: Organic outreach YES — saves lead when guest confirms Claude's reach-out offer
+// ─────────────────────────────────────────────────────────────────────────────
+async function test25() {
+  console.log("\nTEST 25: Organic Outreach YES — lead capture");
+
+  if (!supabase) {
+    fail("Supabase unavailable — skipping organic YES test");
+    return;
+  }
+
+  const ORGANIC_PHONE = "+15550005555";
+  await httpPost("/reset", { from: ORGANIC_PHONE }, "application/json");
+
+  // Seed a conversation with a prior bot message containing reach-out language.
+  // This simulates Claude having already asked "Want me to reach out when spots open?"
+  await supabase.from("conversations").upsert({
+    from_number: ORGANIC_PHONE,
+    to_number:   TO_PHONE,
+    messages: [
+      { role: "assistant", content: "RZR season opens in April! Want me to reach out when bookings go live so you can snag a spot early? 🤙", timestamp: new Date().toISOString() },
+    ],
+    booking_step: null,
+    booking_data: { activity: null, date: null, groupSize: null, company: null, booking_pk: null },
+    handoff: false,
+    consecutive_frustrated: 0,
+    session_type: "test",
+  }, { onConflict: "from_number,to_number" });
+
+  // Guest replies YES — should trigger organic YES handler
+  const r = await sendSms("yes", ORGANIC_PHONE, TO_PHONE);
+
+  /list|reach out|time|questions|🤙/i.test(r)
+    ? pass("Organic YES: confirmation reply sent")
+    : fail("Organic YES: unexpected reply", r);
+
+  /name|email|more info|tell me/i.test(r)
+    ? fail("Organic YES: bot should not ask for more info after save", r)
+    : pass("Organic YES: bot did not improvise further data collection");
+
+  // Verify lead was saved to DB
+  const { data: savedLead } = await supabase
+    .from("leads")
+    .select("id, lead_type, contact_phone")
+    .eq("from_number", ORGANIC_PHONE)
+    .eq("lead_type", "waitlist")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  savedLead
+    ? pass("Organic YES: waitlist lead written to DB")
+    : fail("Organic YES: no lead found in DB");
+
+  savedLead?.contact_phone === ORGANIC_PHONE
+    ? pass("Organic YES: contact_phone is guest's number")
+    : fail("Organic YES: contact_phone mismatch", savedLead?.contact_phone);
+
+  // Cleanup
+  if (savedLead) await supabase.from("leads").delete().eq("id", savedLead.id);
+  await httpPost("/reset", { from: ORGANIC_PHONE }, "application/json");
+  pass("Organic YES: test cleaned up");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TEST 24: Chunk 5 — Admin Lead Management API
 // ─────────────────────────────────────────────────────────────────────────────
 async function test24() {
@@ -1317,6 +1381,7 @@ async function main() {
     await test22(); // Lone Pine lead capture integration (gated)
     await test23(); // Waitlist feature (unit + gated integration)
     await test24(); // Admin lead management API (Chunk 5)
+    await test25(); // Organic outreach YES → waitlist lead (Chunk 5b)
   } catch (e) {
     fail("Test server", e.message);
   } finally {
