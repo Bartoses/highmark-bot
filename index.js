@@ -1174,7 +1174,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       testMode: process.env.TEST_MODE === "true", isNew, convo,
     });
     await saveConversation(fromNumber, toNumber, convo);
-    if (process.env.TEST_MODE === "true") return res.json({ reply, meta: { mode: "demo" } });
+    if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply, meta: { mode: "demo" } });
     await twilioClient.messages.create({ body: reply, from: toNumber, to: fromNumber })
       .catch((err) => console.error("[DEMO] Twilio send error:", err.message));
     res.set("Content-Type", "text/xml");
