@@ -606,6 +606,211 @@ export function shouldAttemptLeadCapture(convo, buyingSignals, client) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// NUMERIC BUYING INTENT SCORE
+// Returns { score: 0-100, strength, reasons[] }
+// Weighted numeric scoring — complements detectBuyingSignals() for decisions
+// that need finer-grained thresholds.
+// ─────────────────────────────────────────────────────────────────────────────
+export function scoreBuyingIntent(body, convo) {
+  const text     = body.toLowerCase().trim();
+  const lastBot  = convo.messages.filter((m) => m.role === "assistant").slice(-1)[0]?.content ?? "";
+  const userMsgs = convo.messages.filter((m) => m.role === "user").length;
+  let score = 0;
+  const reasons = [];
+
+  if (/what.*recommend|what.*best|which.*option|what.*should|what.*suggest|what.*would you/i.test(text)) {
+    score += 15; reasons.push("seeking_recommendation");
+  }
+  if (/can you help|do you work on|do you do|do you handle|do you fix/i.test(text)) {
+    score += 10; reasons.push("checking_capability");
+  }
+  if (/my (bike|sled|setup|suspension|ride|rig)|\b(ktm|yeti|trek|specialized|polaris|ski.?doo|rzr)\b|\bsb\d{2,3}\b|\bsc\d{2,3}\b/i.test(text)) {
+    score += 10; reasons.push("product_context");
+  }
+  if (/what.*right for|what.*work for|what.*do i need|best.*for me|what.*make sense|what.*fit/i.test(text)) {
+    score += 15; reasons.push("personalized_fit");
+  }
+  if (/how long|turnaround|next step|how.*get started|how.*process|when can i|timeline/i.test(text)) {
+    score += 20; reasons.push("logistics_interest");
+  }
+  if (/availability|open.*slot|when.*available|do you have.*open|get.*in/i.test(text)) {
+    score += 20; reasons.push("availability_check");
+  }
+  // Agreement after bot gave a recommendation
+  const botRecommended = /recommend|suggest|go with|try the|would work|best option|good choice|perfect for|ideal for|right for|i'?d go with/i.test(lastBot);
+  if (userMsgs >= 1 && botRecommended &&
+    /^(yeah|yes|yep|sure|ok|okay|sounds good|that works|perfect|great|cool|let'?s do|i'?m in|exactly|makes sense|sounds right)/i.test(text)) {
+    score += 25; reasons.push("agreement_after_recommendation");
+  }
+  if (/how do i (book|schedule|get started|proceed|move forward)|what.*(next step)|how.*sign up/i.test(text)) {
+    score += 30; reasons.push("next_step_inquiry");
+  }
+  if (/\bbook\b|let'?s do it|want to book|ready.*go|move forward|i'?m ready|sign.*up/i.test(text)) {
+    score += 40; reasons.push("booking_intent");
+  }
+  if (/\d{3}[\s.\-]?\d{3}[\s.\-]?\d{4}|[\w.+\-]+@[\w.\-]+\.[a-z]{2,}/i.test(text)) {
+    score += 35; reasons.push("contact_provided");
+  }
+  if (/have.*reach out|contact me|reach me|text me at|call me at/i.test(text)) {
+    score += 30; reasons.push("explicit_contact_request");
+  }
+  // Negative modifiers
+  if (/just looking|maybe later|not now|just curious|no thanks|browsing/i.test(text)) {
+    score -= 20; reasons.push("casual_browsing");
+  }
+  if ((convo.consecutiveFrustrated ?? 0) >= 1) {
+    score -= 40; reasons.push("frustration_penalty");
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  let strength = "none";
+  if (score >= 60)      strength = "high";
+  else if (score >= 35) strength = "medium";
+  else if (score >= 15) strength = "low";
+
+  return { score, strength, reasons };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPERTISE-FIRST GUARD
+// Returns true when the assistant must show expertise / answer before any
+// lead capture attempt. Prevents lead capture from interrupting genuine help.
+// ─────────────────────────────────────────────────────────────────────────────
+export function needsExpertiseFirst(intent, buyingSignals, convo) {
+  // Once we've given a recommendation, expertise has been demonstrated
+  if (convo.commercialState?.recommendationGiven === true) return false;
+  // Recommendation requests must always be answered before capturing
+  if (intent === "recommendation") return true;
+  // Personalized fit or "what's best for me" type signals need an answer first
+  if (
+    buyingSignals.signals.includes("personalized_fit") ||
+    buyingSignals.signals.includes("seeking_recommendation")
+  ) return true;
+  // Short intent-revealing messages that imply a question (e.g. "u want to go fast")
+  const lastUserText = convo.messages.filter((m) => m.role === "user").slice(-1)[0]?.content?.toLowerCase() ?? "";
+  if (/want.*fast|go.*fast|too soft|too stiff|what.*should|best.*for/i.test(lastUserText)) return true;
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MICRO-CLOSE LIBRARY
+// Returns a single context-appropriate soft close.
+// One per response — never stack multiple asks.
+// ─────────────────────────────────────────────────────────────────────────────
+export function getMicroClose(client, inferredGoal) {
+  if (client.bookingMode === "informational") {
+    if (inferredGoal === "ready_to_book" || inferredGoal === "moving_forward") {
+      return "Want me to have Jake take a look at your setup?";
+    }
+    return "Want help getting that dialed in?";
+  }
+  // Adventure / fareharbor clients
+  if (inferredGoal === "ready_to_book" || inferredGoal === "moving_forward") {
+    return "Want me to help get this set up for you?";
+  }
+  return "Want me to have the crew reach out here with the best option?";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESPONSE PLAN
+// Deterministic decision layer — runs before the Claude call and produces a
+// structured plan that tells Claude what to accomplish and what is forbidden.
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildResponsePlan(intent, sentiment, buyingSignals, convo, client) {
+  const cs             = convo.commercialState ?? {};
+  const expertiseFirst = needsExpertiseFirst(intent, buyingSignals, convo);
+  const forbiddenMoves = ["ask_for_phone_when_sms"]; // always forbidden in SMS
+
+  // Primary goal
+  let primaryGoal = "answer";
+  if (intent === "recommendation" || expertiseFirst) primaryGoal = "recommend";
+  else if (buyingSignals.signals.includes("booking_intent"))    primaryGoal = "book";
+
+  const mustRecommend           = primaryGoal === "recommend";
+  const mustIncludeLocalContext = mustRecommend ||
+    buyingSignals.signals.some((s) => ["personalized_fit", "product_context", "seeking_recommendation"].includes(s));
+
+  // Lead capture only after expertise shown and not on a recommendation turn
+  const captureOk = !expertiseFirst && !mustRecommend && shouldAttemptLeadCapture(convo, buyingSignals, client);
+
+  // Soft close: recommendation was given on a PRIOR turn and signals are present
+  const shouldSoftClose = cs.recommendationGiven === true && buyingSignals.strength !== "none" && !captureOk && !mustRecommend;
+
+  const microClose = (shouldSoftClose || captureOk)
+    ? getMicroClose(client, buyingSignals.inferredGoal)
+    : null;
+
+  // Forbidden moves
+  if (expertiseFirst || mustRecommend) {
+    forbiddenMoves.push("lead_capture_before_recommendation");
+    forbiddenMoves.push("hard_handoff_before_answer");
+  }
+  if (client.waitlistEnabled !== false) {
+    forbiddenMoves.push("dump_contact_info_without_micro_close");
+  }
+
+  return {
+    primaryGoal,
+    mustAnswer:              true,
+    mustRecommend,
+    mustIncludeLocalContext,
+    shouldSoftClose,
+    shouldAttemptLeadCapture: captureOk,
+    shouldHardHandoff:       false,
+    forbiddenMoves,
+    microClose,
+  };
+}
+
+// Converts a response plan to a Claude instruction string injected as CURRENT CONTEXT
+function formatResponsePlanInstruction(plan, client) {
+  const lines = [];
+
+  if (plan.mustRecommend) {
+    lines.push(
+      "CURRENT TURN — give a specific recommendation: (1) clear recommendation, " +
+      "(2) one-sentence why, (3) local/product/use-case context. " +
+      "Optional: one micro-close at the end. Do NOT attempt lead capture or include contact info."
+    );
+  }
+
+  if (plan.shouldSoftClose && plan.microClose) {
+    lines.push(`After answering, end with this micro-close: "${plan.microClose}"`);
+  }
+
+  if (plan.forbiddenMoves.includes("ask_for_phone_when_sms")) {
+    lines.push("Do NOT ask for a phone number — the customer is in an SMS thread, their number is already known.");
+  }
+
+  if (plan.forbiddenMoves.includes("dump_contact_info_without_micro_close")) {
+    const offer = plan.microClose ? `"${plan.microClose}"` : '"Want me to have the team reach out?"';
+    lines.push(`Do NOT include the business phone number or email unless explicitly asked. Use a soft offer instead: ${offer}`);
+  }
+
+  if (plan.forbiddenMoves.includes("lead_capture_before_recommendation")) {
+    lines.push("Do NOT ask for contact info or attempt lead capture in this response — answer first.");
+  }
+
+  return lines.join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST-GENERATION VALIDATORS
+// Run on the generated response text before sending to catch forbidden patterns.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Returns true if the response appears to ask the customer for their phone number
+export function containsPhoneAsk(text) {
+  // Match patterns like "what's your number?", "best number to reach you?", "phone number?"
+  // Exclude patterns that reference the business's own number ("call us at", "our number")
+  if (/our (phone|number)|call us at|reach us at|contact us at/i.test(text)) return false;
+  return (
+    /\b(best number|your number|your phone|reach you at|what.*(number|phone).*\?)\b/i.test(text) ||
+    (/\b(number|phone)\b.*\?/i.test(text) && !/\b(booking|tour|option|trail|trail number|slot|available)\b/i.test(text))
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // LEAD INFO EXTRACTION
 // Pulls phone and/or email from a user message (e.g. "text me at 555-123-4567").
 // Returns { name, phone, email, source } or null if nothing found.
@@ -825,6 +1030,7 @@ async function getConversation(fromNumber, toNumber) {
         stage:                  bd._stage                    ?? "new",
         leadCaptureAttempted:   bd._leadCaptureAttempted    ?? false,
         leadCapturePendingName: bd._leadCapturePendingName  ?? false,
+        commercialState:        bd._commercialState          ?? { recommendationGiven: false, leadCaptureAttempts: 0 },
       },
     };
   }
@@ -845,6 +1051,7 @@ async function getConversation(fromNumber, toNumber) {
       stage:                 "new",
       leadCaptureAttempted:  false,
       leadCapturePendingName: false,
+      commercialState:       { recommendationGiven: false, leadCaptureAttempts: 0 },
     },
   };
 }
@@ -856,6 +1063,7 @@ async function saveConversation(fromNumber, toNumber, convo) {
     _stage:                convo.stage                ?? "new",
     _leadCaptureAttempted: convo.leadCaptureAttempted ?? false,
     _leadCapturePendingName: convo.leadCapturePendingName ?? false,
+    _commercialState:      convo.commercialState      ?? { recommendationGiven: false, leadCaptureAttempts: 0 },
   };
   await supabase.from("conversations").upsert(
     {
@@ -1173,10 +1381,10 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
     // PROACTIVE LEAD CAPTURE — fires when buying signals are strong and timing is right.
     // Sets waitlistPending so the pre-flight above handles the YES/NO on the next turn.
-    // Does NOT fire for: booking intents (handled by booking flow), active lead capture flows,
-    // or when capture has already been attempted this conversation.
+    // Does NOT fire for: booking intents, handoff, conditions, or when expertise must come first.
     else if (
       shouldAttemptLeadCapture(convo, buyingSignals, client) &&
+      !needsExpertiseFirst(intent, buyingSignals, convo) &&
       intent !== "booking" && intent !== "handoff" && intent !== "conditions"
     ) {
       convo.waitlistPending      = true;
@@ -1352,27 +1560,36 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo, client);
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
 
-      // Build base extra instruction
-      let extraInstruction = availCtx ? `Live availability data: ${availCtx}` : null;
+      // Build deterministic response plan — tells Claude what to do and what is forbidden
+      const responsePlan    = buildResponsePlan(intent, sentiment, buyingSignals, convo, client);
+      const planInstruction = formatResponsePlanInstruction(responsePlan, client);
 
-      // FAILSAFE: if buying signals are present and lead capture hasn't been attempted yet,
-      // suppress direct contact info so Claude doesn't short-circuit the lead capture path.
-      // Lead capture fires on the NEXT turn via shouldAttemptLeadCapture() or organic YES.
-      if (buyingSignals.hasBuyingSignal && !convo.leadCaptureAttempted && client.waitlistEnabled !== false) {
-        const noContactRule = `IMPORTANT — Do NOT include a phone number, email address, or ask for the customer's contact info in this response. Do NOT run multi-step data collection. End with ONE soft question only: "Want me to have the team reach out?" or similar. Keep it brief. The system handles everything after they say yes.`;
-        extraInstruction = extraInstruction ? `${extraInstruction}\n\n${noContactRule}` : noContactRule;
+      // Combine availability context with plan instruction
+      let extraInstruction = [
+        availCtx      ? `Live availability data: ${availCtx}` : null,
+        planInstruction || null,
+      ].filter(Boolean).join("\n\n") || null;
+
+      // 480 chars (3 texts) — never cut off mid-thought
+      const replyMax = 480;
+      replyText = await getClaudeReply(convo, client, season, knowledgeCtx, extraInstruction, replyMax);
+
+      // Post-generation validator: catch phone ask and regenerate once with stricter instruction
+      if (containsPhoneAsk(replyText) && responsePlan.forbiddenMoves.includes("ask_for_phone_when_sms")) {
+        console.warn(`[VALIDATOR] Phone ask detected — regenerating for ${fromNumber}`);
+        const correction = [
+          availCtx ? `Live availability data: ${availCtx}` : null,
+          planInstruction || null,
+          "CORRECTION: Your previous draft asked for a phone number. The customer is already texting you — remove any phone-ask and replace with a soft offer like \"Want me to have the team reach out?\"",
+        ].filter(Boolean).join("\n\n");
+        replyText = await getClaudeReply(convo, client, season, knowledgeCtx, correction, replyMax);
       }
 
-      // 480 chars (3 texts) for all intents — never cut off mid-thought
-      const replyMax = 480;
-      replyText = await getClaudeReply(
-        convo,
-        client,
-        season,
-        knowledgeCtx,
-        extraInstruction,
-        replyMax
-      );
+      // Track that a recommendation was given — unlocks lead capture on the next turn
+      if (intent === "recommendation") {
+        if (!convo.commercialState) convo.commercialState = { recommendationGiven: false, leadCaptureAttempts: 0 };
+        convo.commercialState.recommendationGiven = true;
+      }
 
       // Detect if Claude's reply triggers a handoff
       if (/give (us|jake|him|them) a call at/i.test(replyText)) {
@@ -1417,11 +1634,12 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         reply: replyText,
         meta: {
           intent, sentiment,
-          bookingStep:         convo.bookingStep,
-          handoff:             convo.handoff,
-          stage:               convo.stage,
-          buyingSignalStrength: buyingSignals.strength,
-          buyingSignals:       buyingSignals.signals,
+          bookingStep:           convo.bookingStep,
+          handoff:               convo.handoff,
+          stage:                 convo.stage,
+          buyingSignalStrength:  buyingSignals.strength,
+          buyingSignals:         buyingSignals.signals,
+          recommendationGiven:   convo.commercialState?.recommendationGiven ?? false,
         },
       });
     }
