@@ -17,6 +17,10 @@ import {
   detectSentiment,
   enforceLength,
   isReturningGuest,
+  detectBuyingSignals,
+  updateConversationStage,
+  shouldAttemptLeadCapture,
+  extractLeadInfo,
 } from "./index.js";
 
 import { buildConfirmationText, buildFollowUpText } from "./bookingConfirmations.js";
@@ -1343,6 +1347,133 @@ async function test24() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 26 — Buying signals, conversation stage machine, lead capture trigger
+// ─────────────────────────────────────────────────────────────────────────────
+async function test26() {
+  console.log("\nTEST 26: Buying signals + conversation stage machine");
+
+  const client = getDefaultClient();
+
+  // ── detectBuyingSignals ───────────────────────────────────────────────────
+
+  // LOW: seeking recommendation
+  const lowConvo = { messages: [{ role: "user", content: "hi" }] };
+  const low = detectBuyingSignals("what would you recommend for a beginner?", lowConvo);
+  low.strength === "low" ? pass("LOW: seeking_recommendation → strength low") : fail("LOW: seeking_recommendation → strength low", `got ${low.strength}`);
+  low.signals.includes("seeking_recommendation") ? pass("LOW: seeking_recommendation signal present") : fail("LOW: seeking_recommendation signal present");
+
+  // LOW: product context
+  const lowProd = detectBuyingSignals("I have a Yeti SB160", lowConvo);
+  lowProd.strength === "low" ? pass("LOW: product context → strength low") : fail("LOW: product context → strength low", `got ${lowProd.strength}`);
+  lowProd.signals.includes("product_context") ? pass("LOW: product_context signal present") : fail("LOW: product_context signal present");
+
+  // MEDIUM: personalized fit
+  const med = detectBuyingSignals("what would work best for my setup?", lowConvo);
+  med.strength === "medium" ? pass("MEDIUM: personalized_fit → strength medium") : fail("MEDIUM: personalized_fit → strength medium", `got ${med.strength}`);
+  med.signals.includes("personalized_fit") ? pass("MEDIUM: personalized_fit signal present") : fail("MEDIUM: personalized_fit signal present");
+
+  // MEDIUM: logistics interest
+  const medLog = detectBuyingSignals("how long does a revalve take?", lowConvo);
+  medLog.strength === "medium" ? pass("MEDIUM: logistics_interest → strength medium") : fail("MEDIUM: logistics_interest → strength medium", `got ${medLog.strength}`);
+
+  // MEDIUM: agreement after recommendation
+  const convoWithBotRec = {
+    messages: [
+      { role: "user",      content: "want to go faster" },
+      { role: "assistant", content: "I'd go with a suspension revalve — right for your weight and riding style." },
+    ],
+  };
+  const agree = detectBuyingSignals("sounds good", convoWithBotRec);
+  agree.strength === "medium" ? pass("MEDIUM: agreement after recommendation → medium") : fail("MEDIUM: agreement after recommendation → medium", `got ${agree.strength}`);
+  agree.signals.includes("agreement_after_recommendation") ? pass("MEDIUM: agreement signal present") : fail("MEDIUM: agreement signal present");
+
+  // HIGH: booking intent
+  const high = detectBuyingSignals("I want to book for this Saturday", lowConvo);
+  high.strength === "high" ? pass("HIGH: booking_intent → strength high") : fail("HIGH: booking_intent → strength high", `got ${high.strength}`);
+  high.signals.includes("booking_intent") ? pass("HIGH: booking_intent signal present") : fail("HIGH: booking_intent signal present");
+
+  // HIGH: contact provided
+  const highContact = detectBuyingSignals("yeah text me at 970-555-1234", lowConvo);
+  highContact.strength === "high" ? pass("HIGH: contact_provided → strength high") : fail("HIGH: contact_provided → strength high", `got ${highContact.strength}`);
+  highContact.signals.includes("contact_provided") ? pass("HIGH: contact_provided signal present") : fail("HIGH: contact_provided signal present");
+
+  // NONE: casual greeting
+  const none = detectBuyingSignals("hey how's it going", lowConvo);
+  none.hasBuyingSignal === false ? pass("NONE: casual greeting → no buying signal") : fail("NONE: casual greeting → no buying signal", `got ${none.strength}`);
+
+  // ── detectIntent — recommendation ────────────────────────────────────────
+  detectIntent("what service would you recommend for my bike?") === "recommendation" ? pass("detectIntent: recommendation intent detected") : fail("detectIntent: recommendation intent detected");
+  detectIntent("which option is best for me?") === "recommendation" ? pass("detectIntent: which option is best → recommendation") : fail("detectIntent: which option is best → recommendation");
+  detectIntent("I want to book a tour") === "booking" ? pass("detectIntent: booking still detected correctly") : fail("detectIntent: booking still detected correctly");
+  detectIntent("what's the snow like?") === "conditions" ? pass("detectIntent: conditions still detected correctly") : fail("detectIntent: conditions still detected correctly");
+
+  // ── extractLeadInfo ───────────────────────────────────────────────────────
+  const withPhone = extractLeadInfo("yeah text me at 970-555-1234");
+  withPhone !== null ? pass("extractLeadInfo: phone detected") : fail("extractLeadInfo: phone detected");
+  withPhone?.phone === "9705551234" ? pass("extractLeadInfo: phone digits correct") : fail("extractLeadInfo: phone digits correct", `got ${withPhone?.phone}`);
+  withPhone?.email === null ? pass("extractLeadInfo: no email (expected)") : fail("extractLeadInfo: no email (expected)");
+
+  const withEmail = extractLeadInfo("sure, reach me at jake@example.com");
+  withEmail !== null ? pass("extractLeadInfo: email detected") : fail("extractLeadInfo: email detected");
+  withEmail?.email === "jake@example.com" ? pass("extractLeadInfo: email value correct") : fail("extractLeadInfo: email value correct", `got ${withEmail?.email}`);
+
+  const noInfo = extractLeadInfo("yeah sounds good");
+  noInfo === null ? pass("extractLeadInfo: returns null when no contact info") : fail("extractLeadInfo: returns null when no contact info");
+
+  // ── updateConversationStage ───────────────────────────────────────────────
+
+  // new + first message → discovery
+  const c1 = { messages: [{ role: "user", content: "hi" }], stage: "new", consecutiveFrustrated: 0 };
+  updateConversationStage(c1, { strength: "none", signals: [] }, "smalltalk", "neutral");
+  c1.stage === "discovery" ? pass("Stage: new → discovery on first message") : fail("Stage: new → discovery on first message", `got ${c1.stage}`);
+
+  // discovery + low signal → engaged
+  const c2 = { messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "hey!" }], stage: "discovery", consecutiveFrustrated: 0 };
+  updateConversationStage(c2, { strength: "low", signals: ["seeking_recommendation"] }, "recommendation", "neutral");
+  c2.stage === "engaged" ? pass("Stage: discovery → engaged on low signal") : fail("Stage: discovery → engaged on low signal", `got ${c2.stage}`);
+
+  // engaged + medium signal → considering
+  const c3 = { messages: Array(2).fill({ role: "user", content: "x" }), stage: "engaged", consecutiveFrustrated: 0 };
+  updateConversationStage(c3, { strength: "medium", signals: ["personalized_fit"] }, "info", "neutral");
+  c3.stage === "considering" ? pass("Stage: engaged → considering on medium signal") : fail("Stage: engaged → considering on medium signal", `got ${c3.stage}`);
+
+  // considering + high signal → high_intent
+  const c4 = { messages: Array(3).fill({ role: "user", content: "x" }), stage: "considering", consecutiveFrustrated: 0 };
+  updateConversationStage(c4, { strength: "high", signals: ["booking_intent"] }, "booking", "neutral");
+  c4.stage === "high_intent" ? pass("Stage: considering → high_intent on high signal") : fail("Stage: considering → high_intent on high signal", `got ${c4.stage}`);
+
+  // Frustrated → handoff regardless of current stage
+  const c5 = { messages: Array(2).fill({ role: "user", content: "x" }), stage: "considering", consecutiveFrustrated: 1 };
+  updateConversationStage(c5, { strength: "none", signals: [] }, "info", "frustrated");
+  c5.stage === "handoff" ? pass("Stage: frustrated → handoff") : fail("Stage: frustrated → handoff", `got ${c5.stage}`);
+
+  // Never downgrade: high_intent stays high_intent on low signal
+  const c6 = { messages: Array(4).fill({ role: "user", content: "x" }), stage: "high_intent", consecutiveFrustrated: 0 };
+  updateConversationStage(c6, { strength: "low", signals: [] }, "info", "neutral");
+  c6.stage === "high_intent" ? pass("Stage: never downgrade high_intent on low signal") : fail("Stage: never downgrade high_intent on low signal", `got ${c6.stage}`);
+
+  // ── shouldAttemptLeadCapture ──────────────────────────────────────────────
+  const baseConvo = {
+    messages:              Array(3).fill({ role: "user", content: "x" }),
+    stage:                 "considering",
+    waitlistPending:       false,
+    leadCaptureAttempted:  false,
+    leadStep:              null,
+    consecutiveFrustrated: 0,
+  };
+  const medSignal = { strength: "medium", signals: ["personalized_fit"] };
+
+  shouldAttemptLeadCapture(baseConvo, medSignal, client) === true  ? pass("shouldAttemptLeadCapture: fires at considering + medium") : fail("shouldAttemptLeadCapture: fires at considering + medium");
+  shouldAttemptLeadCapture({ ...baseConvo, stage: "high_intent" }, medSignal, client) === true ? pass("shouldAttemptLeadCapture: fires at high_intent") : fail("shouldAttemptLeadCapture: fires at high_intent");
+  shouldAttemptLeadCapture({ ...baseConvo, leadCaptureAttempted: true }, medSignal, client) === false ? pass("shouldAttemptLeadCapture: does not re-fire after attempt") : fail("shouldAttemptLeadCapture: does not re-fire after attempt");
+  shouldAttemptLeadCapture({ ...baseConvo, messages: [{ role: "user", content: "hi" }] }, medSignal, client) === false ? pass("shouldAttemptLeadCapture: does not fire on first message") : fail("shouldAttemptLeadCapture: does not fire on first message");
+  shouldAttemptLeadCapture(baseConvo, { strength: "low", signals: [] }, client) === false ? pass("shouldAttemptLeadCapture: does not fire on low signal") : fail("shouldAttemptLeadCapture: does not fire on low signal");
+  shouldAttemptLeadCapture({ ...baseConvo, stage: "discovery" }, medSignal, client) === false ? pass("shouldAttemptLeadCapture: does not fire at discovery") : fail("shouldAttemptLeadCapture: does not fire at discovery");
+  shouldAttemptLeadCapture({ ...baseConvo, stage: "lead_captured" }, medSignal, client) === false ? pass("shouldAttemptLeadCapture: does not fire when already captured") : fail("shouldAttemptLeadCapture: does not fire when already captured");
+  shouldAttemptLeadCapture({ ...baseConvo, consecutiveFrustrated: 1 }, medSignal, client) === false ? pass("shouldAttemptLeadCapture: does not fire when frustrated") : fail("shouldAttemptLeadCapture: does not fire when frustrated");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -1368,6 +1499,7 @@ async function main() {
   await test18(); // client registry + resolution
   await test20(); // per-client KB context
   await test21(); // per-client runtime behavior routing (Chunk 3)
+  await test26(); // buying signals, stage machine, lead capture trigger
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");

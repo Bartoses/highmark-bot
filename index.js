@@ -172,6 +172,24 @@ Flow: when the customer is ready to schedule or get a quote, be clear and direct
 - Plain text only. No bullets, dashes, markdown. Emojis: max 1-2 per message.
 - Never send 2 texts in a row without a guest reply.
 
+━━━ RESPONSE PRIORITY (follow this order every turn) ━━━
+1. Answer the question directly
+2. Add one useful insight tied to the specific service or product
+3. Move the conversation forward with one clear next step
+4. Offer to connect them with the team before dumping a phone number
+5. Provide call/email only when it is genuinely the best path
+
+DO NOT:
+- Default to "give Jake a call" at the first sign of complexity — answer it first
+- Ask multiple questions at once
+- Repeat information already covered in the conversation
+- Re-explain after the customer says "yeah" or "sounds good" — just move forward
+
+PACING:
+- 2–4 sentences for most replies. Longer only for option comparisons or technical explanations.
+- If customer is moving toward a decision: tighten up, give clear direction.
+- If customer says "yeah" / "sounds good" after a recommendation: move to next step immediately.
+
 ━━━ BUSINESS INFO ━━━
 Name: ${client.name}
 Phone: ${client.supportPhone}
@@ -225,6 +243,25 @@ Continuity: use prior turns to maintain tone. Never ask about group size, experi
 - Emojis: max 1-2 per message. Use sparingly.
 - Never send 2 texts in a row without a guest reply.
 - Always end conditions replies with a natural follow-up question to keep the guest engaged (e.g. "Want to get out this weekend?" or "Want to be first to know when we reopen?").
+
+━━━ RESPONSE PRIORITY (follow this order every turn) ━━━
+1. Answer the question directly
+2. Add one useful insight tied to the specific service, machine, or trail
+3. Move the conversation forward with one clear next step or question
+4. If buying intent is present: offer to connect them with the team (before giving a phone number)
+5. Provide call/email only when it is genuinely the best path — not as a default escape
+
+DO NOT:
+- Default to "give us a call" at the first sign of complexity
+- List everything available — lead with a confident recommendation
+- Ask multiple questions at once
+- Repeat information already in the conversation
+- Re-explain after the guest says "yeah", "sounds good", or "let's do it" — just move forward
+
+PACING:
+- 2–4 sentences for most replies. Longer only for recommendations, option comparisons, or safety/logistics info.
+- If guest is moving toward a decision: tighten up, give clear direction, stop asking discovery questions.
+- If guest says "yeah" / "sounds good" / "let's do it" after a recommendation: transition to next step immediately — do not restart explanation.
 
 ━━━ BOOKING RULES ━━━
 - Same-day bookings are NOT available — minimum 1 day advance booking required. If a guest asks about today, let them know and offer the next available date.
@@ -402,6 +439,7 @@ export function detectIntent(message) {
   if (/\bbook\b|availability|available|sign.?up|schedule|when can|how do (i|we) book|get a spot|for \d+ (people|person|guests|adults)|this (weekend|saturday|sunday|friday|thursday)|want to (ride|go|do|try)/i.test(t)) return "booking";
   if (/snow|powder|condition|grooming|report|depth|weather|trail.*open|base|fresh pow|road condition|avalanche|avy|snotel|snowpack|danger|forecast/i.test(t)) return "conditions";
   if (/complaint|problem|refund|injury|wrong|not working|terrible|worst|annoying|upset|angry|disappointed|too expensive/i.test(t)) return "handoff";
+  if (/what.*recommend|what.*best|which.*option|what.*should i|what.*would you|which.*is better|help me choose|what.*makes sense|what.*do you suggest|best.*for me|which.*service|what.*right for/i.test(t)) return "recommendation";
   return "info";
 }
 
@@ -429,6 +467,163 @@ export function isReturningGuest(conversation) {
   if (!conversation?.messages?.length) return false;
   const lastTs = conversation.messages[conversation.messages.length - 1].timestamp;
   return Date.now() - new Date(lastTs).getTime() > 24 * 60 * 60 * 1000;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUYING SIGNAL DETECTION
+// Returns { hasBuyingSignal, strength: 'none'|'low'|'medium'|'high', signals[], inferredGoal }
+// Pure function — no side effects.
+// ─────────────────────────────────────────────────────────────────────────────
+export function detectBuyingSignals(body, convo) {
+  const text     = body.toLowerCase().trim();
+  const userMsgs = convo.messages.filter((m) => m.role === "user").length;
+  const lastBot  = convo.messages.filter((m) => m.role === "assistant").slice(-1)[0]?.content ?? "";
+  const signals  = [];
+  let strength   = "none";
+
+  // LOW — exploring with commercial intent
+  if (/what.*recommend|what.*best|which.*option|what.*different|compare|vs\b|versus|which.*should|what.*suggest/i.test(text)) {
+    signals.push("seeking_recommendation"); strength = "low";
+  }
+  if (/can you help|you work on|do you do|do you handle|do you offer|can you fix|do you have/i.test(text)) {
+    signals.push("checking_capability"); if (strength === "none") strength = "low";
+  }
+  if (/my (bike|sled|setup|suspension|ride|rig|ktm|yeti|trek|specialized|polaris|ski.?doo|snowmobile|rzr|utv)|\b(ktm|yeti|trek|specialized|polaris|ski.?doo|rzr|utv)\b|i (have|ride|got|run|own) (a |an )?(ktm|yeti|trek|specialized|polaris|ski.?doo|snowmobile|rzr|utv)/i.test(text)) {
+    signals.push("product_context"); if (strength === "none") strength = "low";
+  }
+
+  // MEDIUM — moving toward a decision
+  if (/what.*would work|what.*make sense|what.*right for me|what.*need|what.*service|best option|best fit|what.*do i need/i.test(text)) {
+    signals.push("personalized_fit"); strength = "medium";
+  }
+  if (/how long|turnaround|timeline|when can|next step|how.*get started|how.*process|how.*work|what.*process/i.test(text)) {
+    signals.push("logistics_interest"); if (strength !== "high") strength = "medium";
+  }
+  if (/availability|open.*slot|when.*available|do you have.*open|opening|get.*in/i.test(text)) {
+    signals.push("availability_check"); if (strength !== "high") strength = "medium";
+  }
+
+  // Agreement after bot gave a recommendation — context-dependent
+  const botRecommended = /recommend|suggest|go with|try the|would work|best option|good choice|perfect for|ideal for|right for|i'?d go with|sounds like/i.test(lastBot);
+  if (
+    userMsgs >= 1 && botRecommended &&
+    /^(yeah|yes|yep|sure|ok|okay|sounds good|that works|that'?s it|perfect|great|cool|let'?s do|i'?m in|i want|let me|that makes sense|makes sense|sounds right|exactly|yes please|that'?s what)/i.test(text)
+  ) {
+    signals.push("agreement_after_recommendation"); if (strength !== "high") strength = "medium";
+  }
+
+  // HIGH — ready to act
+  if (/\bbook\b|schedule.*appoint|come in|when.*open|get.*started|sign.*up|let'?s do it|want to book|want to schedule|ready.*go|move forward|i'?m ready/i.test(text)) {
+    signals.push("booking_intent"); strength = "high";
+  }
+  if (/\d{3}[\s.\-]?\d{3}[\s.\-]?\d{4}|[\w.+\-]+@[\w.\-]+\.[a-z]{2,}/i.test(text)) {
+    signals.push("contact_provided"); strength = "high";
+  }
+  if (/have.*reach out|have.*call.*me|contact me|reach me|my (number|email|phone)|text me at|call me at/i.test(text)) {
+    signals.push("explicit_contact_request"); strength = "high";
+  }
+
+  let inferredGoal = null;
+  if (signals.includes("booking_intent") || signals.includes("contact_provided")) inferredGoal = "ready_to_book";
+  else if (signals.includes("agreement_after_recommendation"))                     inferredGoal = "moving_forward";
+  else if (signals.includes("personalized_fit") || signals.includes("logistics_interest")) inferredGoal = "needs_guidance";
+  else if (signals.includes("seeking_recommendation"))                             inferredGoal = "exploring_options";
+
+  return { hasBuyingSignal: strength !== "none", strength, signals, inferredGoal };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONVERSATION STAGE MACHINE
+// Stages (additive, never downgrade): new → discovery → engaged → considering
+//   → high_intent → lead_capture_requested → lead_captured → closed
+// Stored in convo.stage. Updated once per turn.
+// ─────────────────────────────────────────────────────────────────────────────
+export function updateConversationStage(convo, buyingSignals, intent, sentiment) {
+  // Frustrated → handoff; already-terminal stages: don't touch
+  if (sentiment === "frustrated") { convo.stage = "handoff"; return; }
+  if (["handoff", "lead_captured", "closed"].includes(convo.stage)) return;
+
+  const ORDER  = ["new", "discovery", "engaged", "considering", "high_intent", "lead_capture_requested", "lead_captured", "closed", "handoff"];
+  const current = convo.stage ?? "new";
+  const curIdx  = ORDER.indexOf(current);
+  const userMsgCount = convo.messages.filter((m) => m.role === "user").length;
+
+  let next = current;
+
+  if (current === "new" && userMsgCount >= 1) next = "discovery";
+
+  if (["new", "discovery"].includes(current)) {
+    if (buyingSignals.strength === "low" || intent === "recommendation")  next = "engaged";
+    if (buyingSignals.strength === "medium")                               next = "considering";
+    if (buyingSignals.strength === "high")                                 next = "high_intent";
+  }
+
+  if (current === "engaged") {
+    if (intent === "recommendation" || buyingSignals.signals.includes("personalized_fit") || buyingSignals.signals.includes("logistics_interest")) next = "considering";
+    if (buyingSignals.strength === "high") next = "high_intent";
+  }
+
+  if (current === "considering") {
+    if (buyingSignals.strength === "high" || buyingSignals.signals.includes("agreement_after_recommendation")) next = "high_intent";
+  }
+
+  // Never downgrade
+  const nextIdx = ORDER.indexOf(next);
+  if (nextIdx > curIdx) convo.stage = next;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEAD CAPTURE TRIGGER
+// Returns true when intent and timing are right for a proactive soft lead ask.
+// ─────────────────────────────────────────────────────────────────────────────
+export function shouldAttemptLeadCapture(convo, buyingSignals, client) {
+  if (["lead_captured", "handoff", "closed"].includes(convo.stage)) return false;
+  if (convo.waitlistPending || convo.leadCaptureAttempted)           return false;
+  if (convo.leadStep !== null)                                        return false; // mid structured-flow
+  const userMsgCount = convo.messages.filter((m) => m.role === "user").length;
+  if (userMsgCount < 2)                                               return false;
+  if ((convo.consecutiveFrustrated ?? 0) >= 1)                       return false;
+  if (!["considering", "high_intent"].includes(convo.stage))         return false;
+  if (buyingSignals.strength !== "medium" && buyingSignals.strength !== "high") return false;
+  if (client.waitlistEnabled === false)                               return false;
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEAD INFO EXTRACTION
+// Pulls phone and/or email from a user message (e.g. "text me at 555-123-4567").
+// Returns { name, phone, email, source } or null if nothing found.
+// ─────────────────────────────────────────────────────────────────────────────
+export function extractLeadInfo(body) {
+  const phoneMatch = body.match(/\b(\+?1?\s?[-.]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})\b/);
+  const emailMatch = body.match(/[\w.+\-]+@[\w.\-]+\.[a-z]{2,}/i);
+  const nameMatch  = body.match(/(?:i'?m|i am|my name is|call me|it'?s)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+  if (!phoneMatch && !emailMatch) return null;
+  return {
+    name:   nameMatch  ? nameMatch[1]              : null,
+    phone:  phoneMatch ? phoneMatch[1].replace(/\D/g, "") : null,
+    email:  emailMatch ? emailMatch[0].toLowerCase() : null,
+    source: "chat_capture",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SOFT LEAD CAPTURE PROMPT BUILDER
+// Generates a context-aware soft ask that fits the brand and conversation moment.
+// ─────────────────────────────────────────────────────────────────────────────
+function buildLeadCapturePrompt(client, inferredGoal) {
+  const phone = client.handoffPhone;
+  if (client.bookingMode === "informational") {
+    if (inferredGoal === "moving_forward" || inferredGoal === "ready_to_book") {
+      return `Want me to have the team reach out to help get that sorted? Reply YES and I'll pass your number along. Or call directly: ${phone} 🔧`;
+    }
+    return `Want me to have someone from the team reach out with the best fit for your situation? Reply YES to confirm, or call: ${phone} 🔧`;
+  }
+  // fareharbor / adventure clients
+  if (inferredGoal === "moving_forward" || inferredGoal === "ready_to_book") {
+    return `Want me to have someone from the team reach out to help get this set up? Reply YES and we'll text you. Or call now: ${phone} 🤙`;
+  }
+  return `Want me to have the team reach out with the best option for your situation? Reply YES to confirm. Or call us: ${phone} 🤙`;
 }
 
 // Checks FareHarbor availability if message mentions a date (Tier 2 / fareharbor clients only)
@@ -597,12 +792,13 @@ async function getConversation(fromNumber, toNumber) {
     .single();
 
   if (data) {
+    const bd = data.booking_data ?? {};
     return {
       isNew: false,
       convo: {
         messages:              data.messages               ?? [],
         bookingStep:           data.booking_step           ?? null,
-        bookingData:           data.booking_data           ?? { activity: null, date: null, groupSize: null, company: null, booking_pk: null },
+        bookingData:           bd,
         handoff:               data.handoff                ?? false,
         consecutiveFrustrated: data.consecutive_frustrated ?? 0,
         sessionType:           data.session_type           ?? "live",
@@ -610,6 +806,8 @@ async function getConversation(fromNumber, toNumber) {
         leadData:              data.lead_data              ?? null,
         waitlistPending:       data.waitlist_pending       ?? false,
         waitlistContext:       data.waitlist_context       ?? null,
+        stage:                 bd._stage                   ?? "new",
+        leadCaptureAttempted:  bd._leadCaptureAttempted    ?? false,
       },
     };
   }
@@ -627,18 +825,26 @@ async function getConversation(fromNumber, toNumber) {
       leadData:              null,
       waitlistPending:       false,
       waitlistContext:       null,
+      stage:                 "new",
+      leadCaptureAttempted:  false,
     },
   };
 }
 
 async function saveConversation(fromNumber, toNumber, convo) {
+  // Persist stage + leadCaptureAttempted inside booking_data to avoid schema changes
+  const bookingData = {
+    ...(convo.bookingData ?? {}),
+    _stage:                convo.stage               ?? "new",
+    _leadCaptureAttempted: convo.leadCaptureAttempted ?? false,
+  };
   await supabase.from("conversations").upsert(
     {
       from_number:            fromNumber,
       to_number:              toNumber,
       messages:               convo.messages,
       booking_step:           convo.bookingStep,
-      booking_data:           convo.bookingData,
+      booking_data:           bookingData,
       handoff:                convo.handoff,
       consecutive_frustrated: convo.consecutiveFrustrated,
       session_type:           convo.sessionType,
@@ -778,10 +984,11 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   const { isNew, convo } = await getConversation(fromNumber, toNumber);
 
   // 7-9. Classify
-  const season    = getCurrentSeason();
-  const intent    = detectIntent(rawBody);
-  const sentiment = detectSentiment(rawBody);
-  const returning = !isNew && isReturningGuest(convo);
+  const season       = getCurrentSeason();
+  const intent       = detectIntent(rawBody);
+  const sentiment    = detectSentiment(rawBody);
+  const returning    = !isNew && isReturningGuest(convo);
+  const buyingSignals = detectBuyingSignals(rawBody, convo);
 
   // 10. Update consecutive frustrated counter
   if (sentiment === "frustrated") {
@@ -802,6 +1009,9 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   // Keep last 10 messages to stay within token limits
   if (convo.messages.length > 10) convo.messages = convo.messages.slice(-10);
 
+  // Update conversation stage based on this turn's signals
+  updateConversationStage(convo, buyingSignals, intent, sentiment);
+
   let replyText;
 
   try {
@@ -811,20 +1021,26 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const isYes = /^(yes|yeah|yep|sure|ok|okay|please|y)\b/i.test(rawBody.trim());
       const isNo  = /^(no|nope|nah|not now|skip|n)\b/i.test(rawBody.trim());
       if (isYes) {
+        // Check if guest provided explicit contact info in the same message
+        const extracted  = extractLeadInfo(rawBody);
+        const contactPhone = extracted?.phone ? `+1${extracted.phone}` : fromNumber;
+        const contactEmail = extracted?.email ?? null;
         await saveLead(supabase, {
           clientId:     client.id,
           fromNumber,
-          contactPhone: fromNumber,
+          contactPhone,
+          contactEmail,
           service:      convo.waitlistContext?.service ?? "availability updates",
           timeframe:    convo.waitlistContext?.date    ?? null,
           leadType:     "waitlist",
         });
         notifyBusinessOfLead(
           twilioClient, client, fromNumber, toNumber,
-          { service: convo.waitlistContext?.service ?? "availability updates", callback: fromNumber, timeframe: convo.waitlistContext?.date },
+          { service: convo.waitlistContext?.service ?? "availability updates", callback: contactPhone, timeframe: convo.waitlistContext?.date },
           process.env.TEST_MODE === "true",
           "waitlist"
         ).catch((err) => console.error("[WAITLIST] notify error:", err.message));
+        convo.stage = "lead_captured";
         replyText = enforceLength(
           `You're on the list! We'll text you when spots open. Questions anytime: ${client.handoffPhone} 🤙`
         );
@@ -913,24 +1129,47 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         convo.messages.filter((m) => m.role === "assistant").slice(-1)[0]?.content ?? ""
       )
     ) {
+      const extracted    = extractLeadInfo(rawBody);
+      const contactPhone = extracted?.phone ? `+1${extracted.phone}` : fromNumber;
+      const contactEmail = extracted?.email ?? null;
       await saveLead(supabase, {
         clientId:     client.id,
         fromNumber,
-        contactPhone: fromNumber,
+        contactPhone,
+        contactEmail,
         service:      "availability interest",
         timeframe:    null,
         leadType:     "waitlist",
       });
       notifyBusinessOfLead(
         twilioClient, client, fromNumber, toNumber,
-        { service: "availability interest", callback: fromNumber, timeframe: null },
+        { service: "availability interest", callback: contactPhone, timeframe: null },
         process.env.TEST_MODE === "true",
         "waitlist"
       ).catch((err) => console.error("[ORGANIC YES] notify error:", err.message));
       console.log(`[ORGANIC YES] Lead saved — ${fromNumber} confirmed reach-out interest`);
+      convo.stage = "lead_captured";
       replyText = enforceLength(
         `You're on the list! We'll reach out when it's time. Questions anytime: ${client.handoffPhone} 🤙`
       );
+    }
+
+    // PROACTIVE LEAD CAPTURE — fires when buying signals are strong and timing is right.
+    // Sets waitlistPending so the pre-flight above handles the YES/NO on the next turn.
+    // Does NOT fire for: booking intents (handled by booking flow), active lead capture flows,
+    // or when capture has already been attempted this conversation.
+    else if (
+      shouldAttemptLeadCapture(convo, buyingSignals, client) &&
+      intent !== "booking" && intent !== "handoff" && intent !== "conditions"
+    ) {
+      convo.waitlistPending      = true;
+      convo.leadCaptureAttempted = true;
+      convo.waitlistContext      = {
+        service: buyingSignals.inferredGoal ?? "general inquiry",
+        date:    null,
+      };
+      replyText = enforceLength(buildLeadCapturePrompt(client, buyingSignals.inferredGoal));
+      console.log(`[LEAD] Proactive capture triggered — stage: ${convo.stage}, signal: ${buyingSignals.strength}, goal: ${buyingSignals.inferredGoal} — ${fromNumber}`);
     }
 
     // BOOKING FLOW — state machine (fareharbor clients only)
@@ -1148,7 +1387,14 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     if (process.env.TEST_MODE === "true" || isUiReq(req)) {
       return res.json({
         reply: replyText,
-        meta: { intent, sentiment, bookingStep: convo.bookingStep, handoff: convo.handoff },
+        meta: {
+          intent, sentiment,
+          bookingStep:         convo.bookingStep,
+          handoff:             convo.handoff,
+          stage:               convo.stage,
+          buyingSignalStrength: buyingSignals.strength,
+          buyingSignals:       buyingSignals.signals,
+        },
       });
     }
 
