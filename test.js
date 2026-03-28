@@ -35,7 +35,7 @@ import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
-import { isYesIntent, isNoIntent, detectPath } from "./demoFlow.js";
+import { isYesIntent, isNoIntent, detectPath, detectVertical } from "./demoFlow.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -1826,10 +1826,10 @@ async function test28() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TEST 29: Chunk 7 — Demo mode + guided flow
+// TEST 29: Chunk 7 — Demo mode + guided flow (with business-type personalization)
 // ─────────────────────────────────────────────────────────────────────────────
 async function test29() {
-  console.log("\nTEST 29: Demo Mode — Guided Conversion Flow (Chunk 7 + refactor)");
+  console.log("\nTEST 29: Demo Mode — Guided Conversion Flow (Chunk 7 + personalization)");
 
   const DEMO_PHONE = "+18668906657"; // routes to highmark_demo
 
@@ -1848,6 +1848,14 @@ async function test29() {
   detectPath("3")                === 3     ? pass("detectPath: '3' → 3")     : fail("detectPath: 3");
   detectPath("4")                === null  ? pass("detectPath: '4' → null (not a path, is YES)") : fail("detectPath: 4 should be null");
   detectPath("hello")            === null  ? pass("detectPath: 'hello' → null") : fail("detectPath: hello not null");
+
+  // ── Unit: vertical detection ───────────────────────────────────────────────
+  detectVertical("snowmobile tours and rentals")  === "outdoor"       ? pass("detectVertical: tours → outdoor")              : fail("detectVertical: tours", detectVertical("snowmobile tours"));
+  detectVertical("hair salon and spa")            === "appointments"  ? pass("detectVertical: salon → appointments")         : fail("detectVertical: salon", detectVertical("hair salon"));
+  detectVertical("HVAC contractor")               === "home_services" ? pass("detectVertical: HVAC → home_services")         : fail("detectVertical: hvac", detectVertical("HVAC contractor"));
+  detectVertical("restaurant downtown")           === "restaurant"    ? pass("detectVertical: restaurant → restaurant")      : fail("detectVertical: restaurant", detectVertical("restaurant"));
+  detectVertical("yoga studio and gym")           === "fitness"       ? pass("detectVertical: yoga → fitness")               : fail("detectVertical: yoga", detectVertical("yoga studio"));
+  detectVertical("some random business")          === "default"       ? pass("detectVertical: unknown → default")            : fail("detectVertical: unknown", detectVertical("some random business"));
 
   // ── Unit: client routing ───────────────────────────────────────────────────
   resolveClient(DEMO_PHONE).id === "highmark_demo"
@@ -1868,33 +1876,42 @@ async function test29() {
 
   // ── Integration: demo flow (requires server) ───────────────────────────────
   // Dedicated phone numbers per scenario to stay under 10 msg/min per phone.
-  const DEMO_PHONE_A = "+15550011111"; // path 2 → full lead capture (7 msgs)
-  const DEMO_PHONE_B = "+15550022222"; // path 1 + MENU + BACK (5 msgs)
-  const DEMO_PHONE_C = "+15550033333"; // path 3 + multi-path + complete loop (5 msgs)
+  const DEMO_PHONE_A = "+15550011111"; // business type → path 2 → full lead capture (9 msgs)
+  const DEMO_PHONE_B = "+15550022222"; // path 1 (direct) + MENU + BACK (4 msgs)
+  const DEMO_PHONE_C = "+15550033333"; // path 3 (direct) + multi-path navigation (4 msgs)
   const DEMO_PHONE_D = "+15550044444"; // START OVER + production check (3 msgs)
-  const DEMO_PHONE_E = "+15550055555"; // "4" shortcut + path_cta (4 msgs)
+  const DEMO_PHONE_E = "+15550055555"; // "4" shortcut from business-type step (2 msgs)
 
-  // ── A: Full lead capture path ──────────────────────────────────────────────
+  // ── A: Business type → outdoor path 2 → full lead capture ─────────────────
   await resetConvo(DEMO_PHONE_A);
 
   const greeting = await sendSms("Hey", DEMO_PHONE_A, DEMO_PHONE);
-  greeting.includes("Welcome to Highmark") && greeting.includes("1️⃣")
-    ? pass("Demo: first message → guided opener with paths")
-    : fail("Demo: opener wrong or missing", greeting.slice(0, 100));
+  greeting.includes("Welcome to Highmark") && /business|kind/i.test(greeting)
+    ? pass("Demo: first message → opener asks what kind of business")
+    : fail("Demo: opener wrong or missing business-type question", greeting.slice(0, 100));
+
+  // Business type detected → personalized menu shown
+  const menuReply = await sendSms("outdoor tours and snowmobile rentals", DEMO_PHONE_A, DEMO_PHONE);
+  menuReply.includes("1️⃣") && /tour|outdoor|rental/i.test(menuReply)
+    ? pass("Demo: business type → menu shown with vertical context")
+    : fail("Demo: personalized menu not shown after business type", menuReply.slice(0, 100));
 
   const path2 = await sendSms("2", DEMO_PHONE_A, DEMO_PHONE);
-  path2.length > 20 && !path2.includes("Welcome to Highmark")
-    ? pass("Demo: path 2 → lead capture intro shown")
+  path2.length > 20 && /lead|capture|Customer|Highmark/i.test(path2)
+    ? pass("Demo: path 2 → lead capture intro with simulated exchange")
     : fail("Demo: path 2 intro wrong", path2.slice(0, 100));
 
-  // Any reply → followup with CTA and unexplored paths
+  // Any reply → followup with revenue simulation + CTA
   const followup = await sendSms("Cool", DEMO_PHONE_A, DEMO_PHONE);
-  followup.includes("YES") || followup.includes("set this up")
+  followup.includes("YES") || followup.includes("get started")
     ? pass("Demo: followup reply → CTA with YES option")
     : fail("Demo: CTA not shown in followup", followup.slice(0, 100));
   /1️⃣|3️⃣/.test(followup)
     ? pass("Demo: followup offers unexplored paths")
     : fail("Demo: followup should offer unexplored paths", followup.slice(0, 100));
+  /📊|inquir|week/i.test(followup)
+    ? pass("Demo: revenue simulation shown in followup (first path explored)")
+    : fail("Demo: revenue simulation missing from followup", followup.slice(0, 100));
 
   // YES → lead capture
   const nameAsk = await sendSms("yes", DEMO_PHONE_A, DEMO_PHONE);
@@ -1942,13 +1959,14 @@ async function test29() {
     ? pass("Demo: complete state → MENU returns menu (not a dead end)")
     : fail("Demo: MENU in complete state broken", afterComplete.slice(0, 100));
 
-  // ── B: Path 1 + MENU + BACK ───────────────────────────────────────────────
+  // ── B: Path number during business-type step + MENU + BACK ────────────────
+  // When user types "1" during awaiting_business_type → default vertical, path 1 shown directly
   await resetConvo(DEMO_PHONE_B);
-  await sendSms("Hi", DEMO_PHONE_B, DEMO_PHONE);
+  await sendSms("Hi", DEMO_PHONE_B, DEMO_PHONE);  // → opener asks business type
 
   const p1intro = await sendSms("1", DEMO_PHONE_B, DEMO_PHONE);
-  p1intro.length > 20 && /Q&A|hour|FAQ|answer/i.test(p1intro)
-    ? pass("Demo: path 1 (Q&A) intro shown")
+  p1intro.length > 20 && /Q&A|hour|FAQ|answer|Customer|Highmark/i.test(p1intro)
+    ? pass("Demo: '1' during business-type step → path 1 (Q&A) intro shown directly")
     : fail("Demo: path 1 intro missing", p1intro.slice(0, 100));
 
   // MENU from path_intro → menu with ✅ for path 1
@@ -1963,30 +1981,33 @@ async function test29() {
     ? pass("Demo: BACK command → navigates back gracefully")
     : fail("Demo: BACK command broken", backReply.slice(0, 100));
 
-  // ── C: Path 3 + multi-path exploration + complete loop ────────────────────
+  // ── C: Path 3 (direct) + multi-path + revenue sim ─────────────────────────
   await resetConvo(DEMO_PHONE_C);
-  await sendSms("Hi", DEMO_PHONE_C, DEMO_PHONE);
+  await sendSms("Hi", DEMO_PHONE_C, DEMO_PHONE);  // → opener asks business type
 
   const p3intro = await sendSms("3", DEMO_PHONE_C, DEMO_PHONE);
-  p3intro.length > 20 && /book|availability|conversion/i.test(p3intro)
-    ? pass("Demo: path 3 (Booking) intro shown")
+  p3intro.length > 20 && /book|availab|schedule|Customer/i.test(p3intro)
+    ? pass("Demo: '3' during business-type step → path 3 (Booking) intro shown directly")
     : fail("Demo: path 3 intro missing", p3intro.slice(0, 100));
 
-  // Reply → followup with unexplored paths (1 and 2)
+  // Reply → followup with revenue sim + unexplored paths (1 and 2)
   const p3followup = await sendSms("Nice", DEMO_PHONE_C, DEMO_PHONE);
   /1️⃣|2️⃣/.test(p3followup)
     ? pass("Demo: path 3 followup offers unexplored paths (1, 2)")
     : fail("Demo: path 3 followup missing unexplored options", p3followup.slice(0, 100));
+  /📊|inquir|week/i.test(p3followup)
+    ? pass("Demo: revenue simulation included in path 3 followup")
+    : fail("Demo: revenue simulation missing from path 3 followup", p3followup.slice(0, 100));
 
   // Jump to path 1 from followup → cross-path navigation works
   const crossPath = await sendSms("1", DEMO_PHONE_C, DEMO_PHONE);
-  /Q&A|hour|FAQ|answer/i.test(crossPath)
+  /Q&A|hour|walk.?in|Customer|Highmark/i.test(crossPath)
     ? pass("Demo: cross-path navigation (3 → 1) works from followup")
     : fail("Demo: cross-path navigation broken", crossPath.slice(0, 100));
 
   // ── D: START OVER + production client unaffected ──────────────────────────
   await resetConvo(DEMO_PHONE_D);
-  await sendSms("2", DEMO_PHONE_D, DEMO_PHONE);
+  await sendSms("Hey", DEMO_PHONE_D, DEMO_PHONE);  // → opener (asks business type)
   const reset = await sendSms("START OVER", DEMO_PHONE_D, DEMO_PHONE);
   reset.includes("Welcome to Highmark")
     ? pass("Demo: START OVER → resets to opener")
@@ -1997,14 +2018,14 @@ async function test29() {
     ? pass("Demo: production csr_rea flow unaffected")
     : fail("Demo: csr_rea flow broken by demo change");
 
-  // ── E: "4" shortcut + path_cta exploration ────────────────────────────────
+  // ── E: "4" shortcut during business-type step → immediate lead capture ─────
   await resetConvo(DEMO_PHONE_E);
-  await sendSms("Hi", DEMO_PHONE_E, DEMO_PHONE);
+  await sendSms("Hi", DEMO_PHONE_E, DEMO_PHONE);  // → opener asks business type
 
-  // "4" from menu → straight to lead capture (treated as YES intent)
+  // "4" is YES intent → skips vertical detection + menu, goes straight to name
   const shortcut = await sendSms("4", DEMO_PHONE_E, DEMO_PHONE);
   /name/i.test(shortcut)
-    ? pass("Demo: '4' shortcut from menu → asks for name immediately")
+    ? pass("Demo: '4' during business-type step → skips to lead capture")
     : fail("Demo: '4' shortcut should trigger lead capture", shortcut.slice(0, 100));
 
   // ── UI /internal/clients ───────────────────────────────────────────────────
