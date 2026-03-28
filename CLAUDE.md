@@ -37,12 +37,13 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (169 tests), spawns its own server on port 3099
+test.js                — automated test suite (208 tests), spawns its own server on port 3099
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, update, summary routes (Chunk 5)
 db1_lead_capture.sql   — migration: adds lead_step/lead_data to conversations + creates leads table
 db1_waitlist.sql       — migration: adds waitlist_pending/waitlist_context to conversations + lead_type to leads
 db1_lead_mgmt.sql      — migration: extended status values + updated_by audit column on leads
+db1_lead_name.sql      — migration: adds contact_email to leads table (run after db1_lead_mgmt.sql)
 db1_cancellation_sent.sql — migration: adds cancellation_sent column to confirmations_sent
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
@@ -194,7 +195,10 @@ Tracked in `convo.stage` (stored inside `booking_data._stage` — no schema migr
 - `detectIntent` expanded: adds `recommendation` for "what's best for me / which option" messages
 - TEST_MODE meta: now includes `stage`, `buyingSignalStrength`, `buyingSignals`
 - Response priority + pacing rules added to both system prompts (RESPONSE PRIORITY + PACING blocks)
-- 207/207 tests pass
+- SMS channel awareness: bot never asks for phone number (already have it from `From`); on YES asks for name only; saves lead after name received
+- Name capture pre-flight: `leadCapturePendingName` flag stored in `booking_data._leadCapturePendingName`; resolves before waitlist pre-flight
+- `saveLead()` uses `contact_name` column; `contact_email` included only post-migration (`db1_lead_name.sql`)
+- 208/208 tests pass
 
 ### Context-Aware Personality
 Both system prompts (`buildSystemPromptCsrRea` and `buildSystemPromptInformational`) include a `PERSONALITY & TONE` block that instructs Claude to:
