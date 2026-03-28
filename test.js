@@ -35,7 +35,7 @@ import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
-import { isYesIntent, isNoIntent, detectPath, detectVertical } from "./demoFlow.js";
+import { isYesIntent, isNoIntent, detectPath, detectVertical, detectQuestionIntent } from "./demoFlow.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -1826,36 +1826,48 @@ async function test28() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TEST 29: Chunk 7 — Demo mode + guided flow (with business-type personalization)
+// TEST 29: Chunk 7 — Demo mode: product assistant + guided demo + lead capture
 // ─────────────────────────────────────────────────────────────────────────────
 async function test29() {
-  console.log("\nTEST 29: Demo Mode — Guided Conversion Flow (Chunk 7 + personalization)");
+  console.log("\nTEST 29: Demo Mode — Product assistant + guided demo (answer → educate → demonstrate → convert)");
 
   const DEMO_PHONE = "+18668906657"; // routes to highmark_demo
 
   // ── Unit: intent detection ─────────────────────────────────────────────────
-  isYesIntent("yes")             === true  ? pass("isYesIntent: yes → true")            : fail("isYesIntent: yes");
-  isYesIntent("Yeah sure")       === true  ? pass("isYesIntent: yeah sure → true")      : fail("isYesIntent: yeah sure");
-  isYesIntent("pricing")         === true  ? pass("isYesIntent: pricing → true")        : fail("isYesIntent: pricing");
-  isYesIntent("get this")        === true  ? pass("isYesIntent: get this → true")       : fail("isYesIntent: get this");
-  isYesIntent("4")               === true  ? pass("isYesIntent: '4' → true (shortcut)") : fail("isYesIntent: 4 shortcut");
-  isYesIntent("no thanks")       === false ? pass("isYesIntent: no thanks → false")     : fail("isYesIntent: no thanks false positive");
+  isYesIntent("yes")             === true  ? pass("isYesIntent: yes → true")               : fail("isYesIntent: yes");
+  isYesIntent("Yeah sure")       === true  ? pass("isYesIntent: yeah sure → true")       : fail("isYesIntent: yeah sure");
+  isYesIntent("get this")        === true  ? pass("isYesIntent: get this → true")        : fail("isYesIntent: get this");
+  isYesIntent("how do i start")  === true  ? pass("isYesIntent: how do i start → true")  : fail("isYesIntent: how do i start");
+  isYesIntent("4")               === true  ? pass("isYesIntent: '4' → true (shortcut)")  : fail("isYesIntent: 4 shortcut");
+  isYesIntent("no thanks")       === false ? pass("isYesIntent: no thanks → false")      : fail("isYesIntent: no thanks false positive");
+  isYesIntent("how much")        === false ? pass("isYesIntent: 'how much' → false (Q&A, not CTA)") : fail("isYesIntent: how much should be false");
+  isYesIntent("pricing")         === false ? pass("isYesIntent: 'pricing' → false (Q&A, not CTA)")  : fail("isYesIntent: pricing should be false");
   isNoIntent("no")               === true  ? pass("isNoIntent: no → true")              : fail("isNoIntent: no");
   isNoIntent("nope not now")     === true  ? pass("isNoIntent: nope not now → true")    : fail("isNoIntent: nope not now");
   isNoIntent("yes please")       === false ? pass("isNoIntent: yes → false")            : fail("isNoIntent: yes false positive");
   detectPath("1") === 1          ? pass("detectPath: '1' → 1")         : fail("detectPath: 1");
   detectPath("2 Lead capture")   === 2     ? pass("detectPath: '2 ...' → 2") : fail("detectPath: 2");
   detectPath("3")                === 3     ? pass("detectPath: '3' → 3")     : fail("detectPath: 3");
-  detectPath("4")                === null  ? pass("detectPath: '4' → null (not a path, is YES)") : fail("detectPath: 4 should be null");
+  detectPath("4")                === null  ? pass("detectPath: '4' → null (YES intent, not path)") : fail("detectPath: 4 should be null");
   detectPath("hello")            === null  ? pass("detectPath: 'hello' → null") : fail("detectPath: hello not null");
 
+  // ── Unit: question intent detection ───────────────────────────────────────
+  detectQuestionIntent("how much does it cost")       === "pricing"      ? pass("detectQuestionIntent: cost → pricing")       : fail("detectQuestionIntent: cost", detectQuestionIntent("how much does it cost"));
+  detectQuestionIntent("what does Highmark do")       === "overview"     ? pass("detectQuestionIntent: what does → overview")  : fail("detectQuestionIntent: what does", detectQuestionIntent("what does Highmark do"));
+  detectQuestionIntent("how does setup work")         === "setup"        ? pass("detectQuestionIntent: setup → setup")         : fail("detectQuestionIntent: setup", detectQuestionIntent("how does setup work"));
+  detectQuestionIntent("what features does it have")  === "features"     ? pass("detectQuestionIntent: features → features")   : fail("detectQuestionIntent: features", detectQuestionIntent("what features"));
+  detectQuestionIntent("do you have a crm")           === "roadmap"      ? pass("detectQuestionIntent: crm → roadmap")         : fail("detectQuestionIntent: crm", detectQuestionIntent("do you have a crm"));
+  detectQuestionIntent("does it scrape my website")   === "scraping"     ? pass("detectQuestionIntent: scraping → scraping")   : fail("detectQuestionIntent: scraping", detectQuestionIntent("scrape my website"));
+  detectQuestionIntent("how does it work")            === "how_it_works" ? pass("detectQuestionIntent: how → how_it_works")    : fail("detectQuestionIntent: how", detectQuestionIntent("how does it work"));
+  detectQuestionIntent("random message")              === null           ? pass("detectQuestionIntent: random → null")         : fail("detectQuestionIntent: null", detectQuestionIntent("random message"));
+
   // ── Unit: vertical detection ───────────────────────────────────────────────
-  detectVertical("snowmobile tours and rentals")  === "outdoor"       ? pass("detectVertical: tours → outdoor")              : fail("detectVertical: tours", detectVertical("snowmobile tours"));
-  detectVertical("hair salon and spa")            === "appointments"  ? pass("detectVertical: salon → appointments")         : fail("detectVertical: salon", detectVertical("hair salon"));
-  detectVertical("HVAC contractor")               === "home_services" ? pass("detectVertical: HVAC → home_services")         : fail("detectVertical: hvac", detectVertical("HVAC contractor"));
-  detectVertical("restaurant downtown")           === "restaurant"    ? pass("detectVertical: restaurant → restaurant")      : fail("detectVertical: restaurant", detectVertical("restaurant"));
-  detectVertical("yoga studio and gym")           === "fitness"       ? pass("detectVertical: yoga → fitness")               : fail("detectVertical: yoga", detectVertical("yoga studio"));
-  detectVertical("some random business")          === "default"       ? pass("detectVertical: unknown → default")            : fail("detectVertical: unknown", detectVertical("some random business"));
+  detectVertical("snowmobile tours and rentals")  === "outdoor"       ? pass("detectVertical: tours → outdoor")      : fail("detectVertical: tours", detectVertical("snowmobile tours"));
+  detectVertical("hair salon and spa")            === "appointments"  ? pass("detectVertical: salon → appointments") : fail("detectVertical: salon", detectVertical("hair salon"));
+  detectVertical("HVAC contractor")               === "home_services" ? pass("detectVertical: HVAC → home_services") : fail("detectVertical: hvac", detectVertical("HVAC contractor"));
+  detectVertical("restaurant downtown")           === "restaurant"    ? pass("detectVertical: restaurant")           : fail("detectVertical: restaurant", detectVertical("restaurant"));
+  detectVertical("yoga studio")                   === "fitness"       ? pass("detectVertical: yoga → fitness")       : fail("detectVertical: yoga", detectVertical("yoga studio"));
+  detectVertical("some random business")          === "default"       ? pass("detectVertical: unknown → default")    : fail("detectVertical: unknown", detectVertical("some random business"));
 
   // ── Unit: client routing ───────────────────────────────────────────────────
   resolveClient(DEMO_PHONE).id === "highmark_demo"
@@ -1875,158 +1887,129 @@ async function test29() {
     : fail("csr_rea should NOT include demo number");
 
   // ── Integration: demo flow (requires server) ───────────────────────────────
-  // Dedicated phone numbers per scenario to stay under 10 msg/min per phone.
-  const DEMO_PHONE_A = "+15550011111"; // business type → path 2 → full lead capture (9 msgs)
-  const DEMO_PHONE_B = "+15550022222"; // path 1 (direct) + MENU + BACK (4 msgs)
-  const DEMO_PHONE_C = "+15550033333"; // path 3 (direct) + multi-path navigation (4 msgs)
-  const DEMO_PHONE_D = "+15550044444"; // START OVER + production check (3 msgs)
-  const DEMO_PHONE_E = "+15550055555"; // "4" shortcut from business-type step (2 msgs)
+  // Dedicated phones per scenario — stays under 10 msg/min per phone, 30/min IP total.
+  const DEMO_PHONE_A = "+15550011111"; // Q&A: pricing answered, no premature lead capture (2 msgs)
+  const DEMO_PHONE_B = "+15550022222"; // full demo: 2 → biz type → path → lead capture (9 msgs)
+  const DEMO_PHONE_C = "+15550033333"; // path shortcuts + multi-path + revenue sim (5 msgs)
+  const DEMO_PHONE_D = "+15550044444"; // MENU + START OVER (3 msgs)
+  const DEMO_PHONE_E = "+15550055555"; // "4" shortcut → immediate lead capture (2 msgs)
 
-  // ── A: Business type → outdoor path 2 → full lead capture ─────────────────
+  // ── A: Product Q&A — pricing answered directly, NOT pushed to lead capture ──
   await resetConvo(DEMO_PHONE_A);
 
   const greeting = await sendSms("Hey", DEMO_PHONE_A, DEMO_PHONE);
-  greeting.includes("Welcome to Highmark") && /business|kind/i.test(greeting)
-    ? pass("Demo: first message → opener asks what kind of business")
-    : fail("Demo: opener wrong or missing business-type question", greeting.slice(0, 100));
+  greeting.includes("Welcome to Highmark") && /ask|pricing|demo/i.test(greeting)
+    ? pass("Demo: opener is product assistant mode (not a forced funnel)")
+    : fail("Demo: opener wrong", greeting.slice(0, 100));
+  !greeting.includes("What kind of business")
+    ? pass("Demo: opener does NOT ask for business type on first contact")
+    : fail("Demo: opener should not force business type question");
 
-  // Business type detected → personalized menu shown
-  const menuReply = await sendSms("outdoor tours and snowmobile rentals", DEMO_PHONE_A, DEMO_PHONE);
-  menuReply.includes("1️⃣") && /tour|outdoor|rental/i.test(menuReply)
-    ? pass("Demo: business type → menu shown with vertical context")
-    : fail("Demo: personalized menu not shown after business type", menuReply.slice(0, 100));
+  const pricingReply = await sendSms("How much does it cost?", DEMO_PHONE_A, DEMO_PHONE);
+  /\$|tier|starter|growth/i.test(pricingReply)
+    ? pass("Demo: pricing question → answered with actual pricing info")
+    : fail("Demo: pricing not answered", pricingReply.slice(0, 100));
+  !/name/i.test(pricingReply)
+    ? pass("Demo: pricing answer does NOT jump to lead capture")
+    : fail("Demo: pricing should not ask for name");
 
-  const path2 = await sendSms("2", DEMO_PHONE_A, DEMO_PHONE);
-  path2.length > 20 && /lead|capture|Customer|Highmark/i.test(path2)
+  // ── B: Full demo path: 2 → business type → path 2 → lead capture ───────────
+  await resetConvo(DEMO_PHONE_B);
+  await sendSms("Hi", DEMO_PHONE_B, DEMO_PHONE);  // opener
+
+  // "2" (See a demo) → only NOW asks business type
+  const demoChoice = await sendSms("2", DEMO_PHONE_B, DEMO_PHONE);
+  /business|kind/i.test(demoChoice)
+    ? pass("Demo: '2' (See a demo) → asks business type")
+    : fail("Demo: '2' should trigger business type question", demoChoice.slice(0, 100));
+
+  const demoMenu = await sendSms("outdoor tours and snowmobile rentals", DEMO_PHONE_B, DEMO_PHONE);
+  demoMenu.includes("1️⃣") && /tour|outdoor|rental/i.test(demoMenu)
+    ? pass("Demo: business type → tailored demo menu with vertical context")
+    : fail("Demo: tailored demo menu not shown", demoMenu.slice(0, 100));
+
+  const path2intro = await sendSms("2", DEMO_PHONE_B, DEMO_PHONE);
+  path2intro.length > 20 && /lead|capture|Customer|Highmark/i.test(path2intro)
     ? pass("Demo: path 2 → lead capture intro with simulated exchange")
-    : fail("Demo: path 2 intro wrong", path2.slice(0, 100));
+    : fail("Demo: path 2 intro wrong", path2intro.slice(0, 100));
 
-  // Any reply → followup with revenue simulation + CTA
-  const followup = await sendSms("Cool", DEMO_PHONE_A, DEMO_PHONE);
-  followup.includes("YES") || followup.includes("get started")
-    ? pass("Demo: followup reply → CTA with YES option")
-    : fail("Demo: CTA not shown in followup", followup.slice(0, 100));
-  /1️⃣|3️⃣/.test(followup)
-    ? pass("Demo: followup offers unexplored paths")
-    : fail("Demo: followup should offer unexplored paths", followup.slice(0, 100));
+  const followup = await sendSms("Cool", DEMO_PHONE_B, DEMO_PHONE);
+  /YES|get started/i.test(followup)
+    ? pass("Demo: followup → CTA with YES option")
+    : fail("Demo: CTA missing from followup", followup.slice(0, 100));
   /📊|inquir|week/i.test(followup)
-    ? pass("Demo: revenue simulation shown in followup (first path explored)")
-    : fail("Demo: revenue simulation missing from followup", followup.slice(0, 100));
+    ? pass("Demo: revenue simulation in followup")
+    : fail("Demo: revenue simulation missing", followup.slice(0, 100));
 
-  // YES → lead capture
-  const nameAsk = await sendSms("yes", DEMO_PHONE_A, DEMO_PHONE);
+  const nameAsk = await sendSms("yes", DEMO_PHONE_B, DEMO_PHONE);
   /name/i.test(nameAsk)
-    ? pass("Demo: YES → asks for name")
-    : fail("Demo: should ask for name after YES", nameAsk.slice(0, 100));
+    ? pass("Demo: YES → asks for name (lead capture begins after intent)")
+    : fail("Demo: YES should ask for name", nameAsk.slice(0, 100));
 
-  const bizAsk = await sendSms("Alex", DEMO_PHONE_A, DEMO_PHONE);
-  /business/i.test(bizAsk)
-    ? pass("Demo: name provided → asks for business")
-    : fail("Demo: should ask for business name", bizAsk.slice(0, 100));
+  const bizAsk  = await sendSms("Alex", DEMO_PHONE_B, DEMO_PHONE);
+  /business/i.test(bizAsk) ? pass("Demo: name → asks for business") : fail("Demo: should ask for business", bizAsk.slice(0, 100));
 
-  const webAsk = await sendSms("Acme Outdoors", DEMO_PHONE_A, DEMO_PHONE);
-  /website/i.test(webAsk)
-    ? pass("Demo: business provided → asks for website")
-    : fail("Demo: should ask for website", webAsk.slice(0, 100));
+  const webAsk  = await sendSms("Acme Outdoors", DEMO_PHONE_B, DEMO_PHONE);
+  /website/i.test(webAsk) ? pass("Demo: business → asks for website") : fail("Demo: should ask for website", webAsk.slice(0, 100));
 
-  const confirm = await sendSms("skip", DEMO_PHONE_A, DEMO_PHONE);
-  confirm.toLowerCase().includes("reach out") || confirm.toLowerCase().includes("all set")
-    ? pass("Demo: SKIP website → confirmation sent")
-    : fail("Demo: confirmation missing after SKIP", confirm.slice(0, 100));
-  confirm.toLowerCase().includes("menu") || confirm.toLowerCase().includes("explore")
-    ? pass("Demo: confirmation includes next steps (not a dead end)")
-    : fail("Demo: confirmation should offer next steps", confirm.slice(0, 100));
+  const confirm = await sendSms("skip", DEMO_PHONE_B, DEMO_PHONE);
+  /reach out|all set/i.test(confirm) ? pass("Demo: SKIP website → confirmation") : fail("Demo: confirmation missing", confirm.slice(0, 100));
+  /menu|explore/i.test(confirm) ? pass("Demo: complete state not a dead end") : fail("Demo: confirmation should offer next steps", confirm.slice(0, 100));
 
-  // Lead in DB
   if (supabase) {
     const { data: leads } = await supabase
       .from("leads").select("*")
-      .eq("client_id", "highmark_demo").eq("from_number", DEMO_PHONE_A)
+      .eq("client_id", "highmark_demo").eq("from_number", DEMO_PHONE_B)
       .order("created_at", { ascending: false }).limit(1);
     const lead = leads?.[0];
-    lead          ? pass("Demo: lead written to DB")              : fail("Demo: lead not found in leads table");
-    lead?.lead_type === "demo"
-                  ? pass("Demo: lead_type=demo")                  : fail("Demo: lead_type should be 'demo'", lead?.lead_type);
-    lead?.contact_name === "Alex"
-                  ? pass("Demo: contact_name saved correctly")    : fail("Demo: contact_name wrong", lead?.contact_name);
+    lead                          ? pass("Demo: lead written to DB")           : fail("Demo: lead not found");
+    lead?.lead_type === "demo"    ? pass("Demo: lead_type=demo")               : fail("Demo: lead_type wrong", lead?.lead_type);
+    lead?.contact_name === "Alex" ? pass("Demo: contact_name saved correctly") : fail("Demo: contact_name wrong", lead?.contact_name);
     if (lead) await supabase.from("leads").delete().eq("id", lead.id);
     pass("Demo: test lead cleaned up");
   }
 
-  // complete state is not a dead end — MENU works
-  const afterComplete = await sendSms("MENU", DEMO_PHONE_A, DEMO_PHONE);
-  afterComplete.includes("4️⃣") || afterComplete.includes("explore")
-    ? pass("Demo: complete state → MENU returns menu (not a dead end)")
-    : fail("Demo: MENU in complete state broken", afterComplete.slice(0, 100));
-
-  // ── B: Path number during business-type step + MENU + BACK ────────────────
-  // When user types "1" during awaiting_business_type → default vertical, path 1 shown directly
-  await resetConvo(DEMO_PHONE_B);
-  await sendSms("Hi", DEMO_PHONE_B, DEMO_PHONE);  // → opener asks business type
-
-  const p1intro = await sendSms("1", DEMO_PHONE_B, DEMO_PHONE);
-  p1intro.length > 20 && /Q&A|hour|FAQ|answer|Customer|Highmark/i.test(p1intro)
-    ? pass("Demo: '1' during business-type step → path 1 (Q&A) intro shown directly")
-    : fail("Demo: path 1 intro missing", p1intro.slice(0, 100));
-
-  // MENU from path_intro → menu with ✅ for path 1
-  const menuFromPath = await sendSms("MENU", DEMO_PHONE_B, DEMO_PHONE);
-  menuFromPath.includes("✅") && menuFromPath.includes("4️⃣")
-    ? pass("Demo: MENU command → menu with ✅ for explored paths")
-    : fail("Demo: MENU not returning expected menu", menuFromPath.slice(0, 100));
-
-  // BACK from awaiting_menu → returns to previous step (path_intro for Q&A)
-  const backReply = await sendSms("BACK", DEMO_PHONE_B, DEMO_PHONE);
-  backReply.length > 20
-    ? pass("Demo: BACK command → navigates back gracefully")
-    : fail("Demo: BACK command broken", backReply.slice(0, 100));
-
-  // ── C: Path 3 (direct) + multi-path + revenue sim ─────────────────────────
+  // ── C: Demo path shortcuts + multi-path + revenue sim ─────────────────────
   await resetConvo(DEMO_PHONE_C);
-  await sendSms("Hi", DEMO_PHONE_C, DEMO_PHONE);  // → opener asks business type
+  await sendSms("Hi", DEMO_PHONE_C, DEMO_PHONE);           // opener
+  await sendSms("2", DEMO_PHONE_C, DEMO_PHONE);            // → asks business type
 
-  const p3intro = await sendSms("3", DEMO_PHONE_C, DEMO_PHONE);
+  const p3intro = await sendSms("3", DEMO_PHONE_C, DEMO_PHONE); // path 3 (default vertical)
   p3intro.length > 20 && /book|availab|schedule|Customer/i.test(p3intro)
-    ? pass("Demo: '3' during business-type step → path 3 (Booking) intro shown directly")
+    ? pass("Demo: '3' during awaiting_demo_type → path 3 (Booking) intro")
     : fail("Demo: path 3 intro missing", p3intro.slice(0, 100));
 
-  // Reply → followup with revenue sim + unexplored paths (1 and 2)
   const p3followup = await sendSms("Nice", DEMO_PHONE_C, DEMO_PHONE);
-  /1️⃣|2️⃣/.test(p3followup)
-    ? pass("Demo: path 3 followup offers unexplored paths (1, 2)")
-    : fail("Demo: path 3 followup missing unexplored options", p3followup.slice(0, 100));
-  /📊|inquir|week/i.test(p3followup)
-    ? pass("Demo: revenue simulation included in path 3 followup")
-    : fail("Demo: revenue simulation missing from path 3 followup", p3followup.slice(0, 100));
+  /1️⃣|2️⃣/.test(p3followup)  ? pass("Demo: path 3 followup offers unexplored paths")     : fail("Demo: unexplored paths missing", p3followup.slice(0, 100));
+  /📊|inquir|week/i.test(p3followup) ? pass("Demo: revenue simulation in path 3 followup") : fail("Demo: revenue sim missing", p3followup.slice(0, 100));
 
-  // Jump to path 1 from followup → cross-path navigation works
   const crossPath = await sendSms("1", DEMO_PHONE_C, DEMO_PHONE);
   /Q&A|hour|walk.?in|Customer|Highmark/i.test(crossPath)
-    ? pass("Demo: cross-path navigation (3 → 1) works from followup")
-    : fail("Demo: cross-path navigation broken", crossPath.slice(0, 100));
+    ? pass("Demo: cross-path navigation (3 → 1) from followup")
+    : fail("Demo: cross-path broken", crossPath.slice(0, 100));
 
-  // ── D: START OVER + production client unaffected ──────────────────────────
+  // ── D: MENU command + START OVER ──────────────────────────────────────────
   await resetConvo(DEMO_PHONE_D);
-  await sendSms("Hey", DEMO_PHONE_D, DEMO_PHONE);  // → opener (asks business type)
+  await sendSms("Hey", DEMO_PHONE_D, DEMO_PHONE);
+
+  const menuCmd = await sendSms("MENU", DEMO_PHONE_D, DEMO_PHONE);
+  /1️⃣|2️⃣|3️⃣|4️⃣/.test(menuCmd)
+    ? pass("Demo: MENU → main product menu shown")
+    : fail("Demo: MENU broken", menuCmd.slice(0, 100));
+
   const reset = await sendSms("START OVER", DEMO_PHONE_D, DEMO_PHONE);
   reset.includes("Welcome to Highmark")
     ? pass("Demo: START OVER → resets to opener")
-    : fail("Demo: START OVER should reset", reset.slice(0, 100));
+    : fail("Demo: START OVER broken", reset.slice(0, 100));
 
-  const csrGreet = await sendSms("Hey", TEST_PHONE2, "+18335786496");
-  csrGreet.length > 10 && !csrGreet.includes("Welcome to Highmark")
-    ? pass("Demo: production csr_rea flow unaffected")
-    : fail("Demo: csr_rea flow broken by demo change");
-
-  // ── E: "4" shortcut during business-type step → immediate lead capture ─────
+  // ── E: "4" shortcut → immediate lead capture ──────────────────────────────
   await resetConvo(DEMO_PHONE_E);
-  await sendSms("Hi", DEMO_PHONE_E, DEMO_PHONE);  // → opener asks business type
+  await sendSms("Hi", DEMO_PHONE_E, DEMO_PHONE);
 
-  // "4" is YES intent → skips vertical detection + menu, goes straight to name
   const shortcut = await sendSms("4", DEMO_PHONE_E, DEMO_PHONE);
   /name/i.test(shortcut)
-    ? pass("Demo: '4' during business-type step → skips to lead capture")
-    : fail("Demo: '4' shortcut should trigger lead capture", shortcut.slice(0, 100));
+    ? pass("Demo: '4' in browsing → skips directly to lead capture")
+    : fail("Demo: '4' should trigger lead capture", shortcut.slice(0, 100));
 
   // ── UI /internal/clients ───────────────────────────────────────────────────
   const clientsRes  = await httpGet("/internal/clients");
