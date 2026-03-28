@@ -338,38 +338,50 @@ curl -X POST "https://highmark-bot-production.up.railway.app/admin/clients?key=Y
   -d '{"id":"new_client","name":"New Business","booking_mode":"informational","support_phone":"(970) 555-0001","website_url":"https://example.com"}'
 ```
 
-### Demo Mode (demoFlow.js — Chunk 7)
-Guided sales demo for prospects. No AI, no real APIs. Deterministic state machine.
+### Demo Mode (demoFlow.js)
+Guided, conversion-focused sales demo for prospects. No AI calls, no real APIs. Fully deterministic.
+
+**Design principle:** This is a sales tool, not just a demo. Every response has a clear next step. No dead ends.
 
 **Client:** `highmark_demo` in `clients.js` — owns +18668906657. `bookingMode: "demo"`, `isDemo: true`.
 
-**Demo number:** +1 866 890 6657 (active). Routes to `handleDemoFlow()` in index.js before any production logic.
+**Demo number:** +1 866 890 6657. Routes to `handleDemoFlow()` in index.js before any production logic.
 
-**Flow:**
-1. Any first text → guided opener (paths 1/2/3)
-2. Reply 1/2/3 → path intro (Q&A / Lead Capture / Booking)
-3. Any reply → followup + CTA ("Want me to set this up? Reply YES")
-4. YES → name → business name → website (skippable) → lead saved + admin notified
+**Flow overview:**
+1. First text → opener with 4 options (Q&A / Lead Capture / Booking / Get started)
+2. Pick 1/2/3 → feature path intro (simulated customer interaction)
+3. Any reply → value followup + unexplored paths OR stronger CTA if all paths seen
+4. YES / "4" / "get this" → lead capture (name → business → website) → save + notify admin
+5. `complete` is NOT a dead end — MENU, path picks, and YES all work
 
-**State machine steps:** `awaiting_path → path_intro → cta → lead_name → lead_business → lead_website → complete`
+**State machine steps:** `awaiting_menu → path_intro → path_followup → [path_cta] → lead_name → lead_business → lead_website → complete`
 
-**State persisted in:** `conversations.booking_data._demo` (JSONB, no migration needed)
+**State persisted in:** `conversations.booking_data._demo` (JSONB, no schema migration needed)
 
-**Reset:** Text `START OVER` or `DEMO` at any time
+**Global navigation commands (work from any state):**
+- `MENU` / `OPTIONS` — show main menu with ✅ markers for explored paths
+- `BACK` — return to previous step
+- `START OVER` / `DEMO` / `RESTART` / `RESET` — full reset to opener
+- `4` or any YES intent — jump directly to lead capture
 
-**Lead storage:** `leads` table with `lead_type="demo"`, `client_id="highmark_demo"`, `source="sms"`
+**Lead storage:** `leads` table, `lead_type="demo"`, `client_id="highmark_demo"`, `source="sms"`
 
 **Admin notification:** SMS to `DEMO_NOTIFY_PHONE` env var (falls back to `CONFIRMATIONS_TEST_PHONE`)
 
-**Pricing tier config:** `tier` field added to all clients — `"free" | "growth" | "pro" | "demo"`. Config only, no billing.
+**Pricing tier config:** `tier` field on all clients — `"free" | "growth" | "pro" | "demo"`. Config only, no billing.
 
-**Testing the demo:**
+**Extending the demo for new features (campaigns, CRM, analytics, etc.):**
+Add an entry to `PATHS` in `demoFlow.js` with `label`, `menuLine`, `intro`, and `followup`. The state machine handles routing, menu rendering, ✅ markers, and CTA logic automatically. No other changes needed.
+
+**Testing:**
 ```bash
-npm run chat  # then switch phone to +18668906657, or
+npm run chat  # switch phone to +18668906657 in chat.js, or
 ./virtual-test.sh 9  # triggers DEMO keyword
+# UI: https://highmark-bot-production.up.railway.app/ui?key=highmark2026
+#   → select "Highmark Demo" client → test all menu paths, MENU/BACK/START OVER
 ```
 
-**Testing UI:** All clients (including `highmark_demo` and any DB-backed clients) appear in the UI client selector at `/ui?key=UI_SECRET`. `/internal/clients` now uses `getAllClients()`.
+**Testing UI:** All clients appear in the UI selector at `/ui?key=UI_SECRET`. Demo client is marked `isDemo: true`.
 
 **Session tip:** Start a new Claude session when moving from demo/sales work to website/landing page work.
 
