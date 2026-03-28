@@ -183,6 +183,15 @@ Expected: `{"status":"Highmark running ✅", ...}`
 8. Save conversation to Supabase, return TwiML
 9. CRM upsert/tagging — only if `client.crmEnabled` is true
 
+### Context-Aware Personality
+Both system prompts (`buildSystemPromptCsrRea` and `buildSystemPromptInformational`) include a `PERSONALITY & TONE` block that instructs Claude to:
+- Match energy to the guest (playful → playful, concise → concise, frustrated → no humor)
+- Classify sarcasm before responding: playful bravado vs. irritated vs. literal
+- Tie any humor to the specific offering, machine, or trail being discussed — never generic
+- Tighten tone as the conversation moves toward booking or support resolution
+- Never re-ask questions already answered in prior turns
+The base voice is set by `client.tone` in `clients.js`. The PERSONALITY & TONE block governs how that voice adapts in real time. Automatically inherited by all future clients via `bookingMode`.
+
 ### Rate Limiting
 Two layers on `/sms`:
 - **IP limiter** — 30 req/min per IP (express-rate-limit)

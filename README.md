@@ -227,6 +227,14 @@ Both return empty TwiML `<Response></Response>` on 429 so Twilio doesn't retry.
 - `DEMO` — resets + sends Highmark-branded opener + notifies owner at +17202892483
 - `SUMMITDEMO` — resets conversation + sends seasonal opener (internal demos)
 
+### Context-Aware Personality
+Both system prompts include a `PERSONALITY & TONE` block. Claude classifies each message (playful sarcasm, bravado, irritated, literal) and adapts:
+- Energy matching: playful → playful; concise → concise; frustrated → no humor
+- Humor tied to the specific offering, machine, or trail — never generic
+- Tone tightens as conversation moves toward booking or support
+- Never re-asks questions already answered in prior turns
+Base voice set by `client.tone` in `clients.js`. Automatically inherited by all future clients.
+
 ### Message Length
 Default 320 chars (2 texts). `enforceLength(text, max=320)` — never truncates URLs.
 
