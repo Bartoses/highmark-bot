@@ -190,6 +190,12 @@ PACING:
 - If customer is moving toward a decision: tighten up, give clear direction.
 - If customer says "yeah" / "sounds good" after a recommendation: move to next step immediately.
 
+━━━ CONTACT INFO FAILSAFE ━━━
+Before including a phone number or email address: ask yourself "Have I already offered to connect them with the team?"
+If NO: do not include contact details. End with a soft offer instead: "Want me to have the team reach out?" or "Want to get that sorted?"
+If YES and they declined, or they explicitly asked for it: then include it.
+Never dump contact info as the first response to a recommendation or service question.
+
 ━━━ BUSINESS INFO ━━━
 Name: ${client.name}
 Phone: ${client.supportPhone}
@@ -262,6 +268,12 @@ PACING:
 - 2–4 sentences for most replies. Longer only for recommendations, option comparisons, or safety/logistics info.
 - If guest is moving toward a decision: tighten up, give clear direction, stop asking discovery questions.
 - If guest says "yeah" / "sounds good" / "let's do it" after a recommendation: transition to next step immediately — do not restart explanation.
+
+━━━ CONTACT INFO FAILSAFE ━━━
+Before including a phone number or email address in your reply, ask yourself: "Have I already offered to connect them with the team in this conversation?"
+If NO: do not include direct contact details. Instead end with a soft offer: "Want me to have the team reach out?" or "Want to get that set up?"
+If YES and they said no, or they explicitly asked for the number: then include it.
+This rule exists because a soft lead capture is always more valuable than a phone number dump that the guest ignores.
 
 ━━━ BOOKING RULES ━━━
 - Same-day bookings are NOT available — minimum 1 day advance booking required. If a guest asks about today, let them know and offer the next available date.
@@ -488,7 +500,7 @@ export function detectBuyingSignals(body, convo) {
   if (/can you help|you work on|do you do|do you handle|do you offer|can you fix|do you have/i.test(text)) {
     signals.push("checking_capability"); if (strength === "none") strength = "low";
   }
-  if (/my (bike|sled|setup|suspension|ride|rig|ktm|yeti|trek|specialized|polaris|ski.?doo|snowmobile|rzr|utv)|\b(ktm|yeti|trek|specialized|polaris|ski.?doo|rzr|utv)\b|i (have|ride|got|run|own) (a |an )?(ktm|yeti|trek|specialized|polaris|ski.?doo|snowmobile|rzr|utv)/i.test(text)) {
+  if (/my (bike|sled|setup|suspension|ride|rig|ktm|yeti|trek|specialized|polaris|ski.?doo|snowmobile|rzr|utv)|\b(ktm|yeti|trek|specialized|polaris|ski.?doo|rzr|utv)\b|i (have|ride|got|run|own) (a |an )?(ktm|yeti|trek|specialized|polaris|ski.?doo|snowmobile|rzr|utv)|\bsb\d{2,3}\b|\bsc\d{2,3}\b|stumpjumper|enduro|meta\b|hightower|ripley|bronson|megatower|evo\b/i.test(text)) {
     signals.push("product_context"); if (strength === "none") strength = "low";
   }
 
@@ -1335,6 +1347,17 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo, client);
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
 
+      // Build base extra instruction
+      let extraInstruction = availCtx ? `Live availability data: ${availCtx}` : null;
+
+      // FAILSAFE: if buying signals are present and lead capture hasn't been attempted yet,
+      // suppress direct contact info so Claude doesn't short-circuit the lead capture path.
+      // Lead capture fires on the NEXT turn via shouldAttemptLeadCapture() or organic YES.
+      if (buyingSignals.hasBuyingSignal && !convo.leadCaptureAttempted && client.waitlistEnabled !== false) {
+        const noContactRule = `IMPORTANT — Do NOT include a phone number or email address in this response. If you are making a recommendation or describing a next step, end with a soft offer like "Want me to have the team reach out?" or "Want to get that dialed in?" — keep it brief. Direct contact details (phone/email) should only appear if the guest explicitly asks for them or has already declined the soft offer.`;
+        extraInstruction = extraInstruction ? `${extraInstruction}\n\n${noContactRule}` : noContactRule;
+      }
+
       // 480 chars (3 texts) for all intents — never cut off mid-thought
       const replyMax = 480;
       replyText = await getClaudeReply(
@@ -1342,7 +1365,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         client,
         season,
         knowledgeCtx,
-        availCtx ? `Live availability data: ${availCtx}` : null,
+        extraInstruction,
         replyMax
       );
 
