@@ -25,6 +25,8 @@ import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, bui
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
 import { handleListLeads, handleUpdateLead, handleLeadsSummary } from "./adminLeads.js";
+import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
+import { loadDbClients } from "./clients.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -1771,6 +1773,14 @@ app.get("/admin/leads",         requireUiAccess, (req, res) => handleListLeads(r
 app.patch("/admin/leads/:id",   requireUiAccess, (req, res) => handleUpdateLead(req, res, supabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ADMIN CLIENTS — Client provisioning API (protected by UI_SECRET)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/admin/clients",       requireUiAccess, (req, res) => handleListClients(req, res));
+app.get("/admin/clients/:id",   requireUiAccess, (req, res) => handleGetClient(req, res));
+app.post("/admin/clients",      requireUiAccess, (req, res) => handleCreateClient(req, res, supabase));
+app.patch("/admin/clients/:id", requireUiAccess, (req, res) => handleUpdateClient(req, res, supabase));
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SCHEDULED MESSAGES WORKER — called by Railway cron every minute
 // POST /cron/scheduled-messages
 // Set CRON_SECRET env var and pass as x-cron-secret header to protect the route.
@@ -1811,6 +1821,22 @@ app.get("/", (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// INIT CLIENTS — loads DB-backed clients into runtime registry at startup
+// ─────────────────────────────────────────────────────────────────────────────
+async function initClients(supabaseClient) {
+  if (!supabaseClient) return;
+  const { data, error } = await supabaseClient.from("clients").select("*").eq("active", true);
+  if (error) {
+    console.error("[CLIENTS] DB load failed:", error.message);
+    return;
+  }
+  loadDbClients(data ?? []);
+  if ((data ?? []).length > 0) {
+    console.log(`[CLIENTS] Loaded ${data.length} DB client(s): ${data.map((r) => r.id).join(", ")}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // STARTUP — only runs when executed directly (not when imported by test.js)
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -1826,6 +1852,7 @@ async function main() {
   initBookingConfirmations(app, twilioClient, supabase, crmSupabase).catch(console.error);
   initCRM(app, crmSupabase).catch(console.error);
   initKnowledgeBase(supabase, anthropic).catch(console.error);
+  initClients(supabase).catch(console.error);
 }
 
 const __filename = fileURLToPath(import.meta.url);

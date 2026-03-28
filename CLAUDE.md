@@ -37,9 +37,11 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (208 tests), spawns its own server on port 3099
+test.js                — automated test suite (269 tests), spawns its own server on port 3099
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, update, summary routes (Chunk 5)
+adminClients.js        — client provisioning: create/update/list/readiness routes (Chunk 6)
+db1_clients.sql        — migration: creates clients table for DB-backed client provisioning (Chunk 6)
 db1_lead_capture.sql   — migration: adds lead_step/lead_data to conversations + creates leads table
 db1_waitlist.sql       — migration: adds waitlist_pending/waitlist_context to conversations + lead_type to leads
 db1_lead_mgmt.sql      — migration: extended status values + updated_by audit column on leads
@@ -296,8 +298,47 @@ curl -X PATCH "https://highmark-bot-production.up.railway.app/admin/leads/LEAD_I
   -d '{"status":"contacted","notes":"Left voicemail"}'
 ```
 
+### Admin Client Provisioning (adminClients.js — Chunk 6)
+Internal API for adding and managing clients without code edits. Protected by `requireUiAccess`.
+
+**Routes:**
+- `GET /admin/clients` — list all clients (static + DB-backed) with readiness; optional `?active=true/false`
+- `GET /admin/clients/:id` — single client with readiness summary
+- `POST /admin/clients` — create new DB-backed client; applies defaults automatically
+- `PATCH /admin/clients/:id` — update DB-backed client (static clients → 400, edit `clients.js`)
+
+**Validation on create/update:**
+- `id`: required, lowercase alphanumeric + underscores, unique
+- `booking_mode`: one of `fareharbor | informational | lead_capture`
+- `inbound_phones`: E.164 format, globally unique across all clients
+- Static clients (in `clients.js`) are read-only via API
+
+**Defaults applied on create:**
+- `bot_name`: "Summit" | `tone`: "warm, helpful, and knowledgeable" | `timezone`: "America/Denver"
+- `active`: true | `waitlist_enabled`: true | all feature flags: false
+- `website_url`: auto-set from first `scrape_urls` entry if not provided
+
+**Readiness checks** (`computeReadiness(client)`):
+- `inbound_phone` — at least 1 Twilio number assigned
+- `website_or_scrape` — website_url or scrape_urls present
+- `support_contact` — support_phone or handoff_phone set
+- `booking_mode` — valid mode set
+- `bot_identity` — bot_name set
+
+**Runtime loading:** `initClients(supabase)` runs at server startup, loads active DB rows into `_runtimeClients` via `loadDbClients()`. `resolveClient()` checks DB clients first, then static clients. After create/update, registry reloads automatically (no restart needed).
+
+**Migration required:** `db1_clients.sql` — run in Supabase DB1 SQL editor before first use.
+
+**Access:**
+```bash
+curl "https://highmark-bot-production.up.railway.app/admin/clients?key=YOUR_UI_SECRET"
+curl -X POST "https://highmark-bot-production.up.railway.app/admin/clients?key=YOUR_UI_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"new_client","name":"New Business","booking_mode":"informational","support_phone":"(970) 555-0001","website_url":"https://example.com"}'
+```
+
 ### Session Tips
-Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — and when switching from SMS flow work to admin/internal workflow work. Keeps context focused and saves credits.
+Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — when switching from SMS flow work to admin/internal workflow work — and when moving from admin provisioning work to public website/sales funnel work. Keeps context focused and saves credits.
 
 ### TEST_MODE
 When `TEST_MODE=true` (local only, never set on Railway):
@@ -405,5 +446,6 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 3. ~~**Booking link in confirmation**~~ — DONE. Uses `booking.uuid` + `item.pk` from FH payload.
 4. ~~**Lead capture flow (Lone Pine)**~~ — DONE. 3-step SMS flow + `leads` table + business notification. Run `db1_lead_capture.sql` migration in Supabase before deploy.
 5. ~~**Admin lead management**~~ — DONE. List/filter/update/summary routes at `/admin/leads`. Run `db1_lead_mgmt.sql` migration to enable extended statuses + `updated_by`. Protected by `UI_SECRET`.
-6. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
-7. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+6. ~~**Client onboarding + provisioning**~~ — DONE. DB-backed client registry. POST/PATCH/GET `/admin/clients`. Validation, defaults, readiness checks. Run `db1_clients.sql` migration in Supabase DB1 before deploy.
+7. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
+8. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.

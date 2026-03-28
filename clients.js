@@ -171,16 +171,79 @@ export const CLIENTS = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// RUNTIME REGISTRY — DB-backed clients loaded at startup via loadDbClients()
+// Clients added here take precedence over static CLIENTS for phone routing.
+// ─────────────────────────────────────────────────────────────────────────────
+const _runtimeClients = {};
+
+// Convert a Supabase clients table row → client config object (same shape as CLIENTS)
+function dbRowToClient(row) {
+  const template = row.handoff_reply_template;
+  return {
+    id:            row.id,
+    slug:          row.slug,
+    name:          row.name,
+    botName:       row.bot_name,
+    tone:          row.tone,
+    inboundPhones: row.inbound_phones       ?? [],
+    supportPhone:  row.support_phone        ?? null,
+    handoffPhone:  row.handoff_phone        ?? row.support_phone ?? null,
+    supportEmail:  row.support_email        ?? null,
+    address:       row.address              ?? null,
+    timezone:      row.timezone,
+    hours:         row.hours                ?? null,
+    bookingMode:   row.booking_mode,
+    fareharborEnabled:        row.fareharbor_enabled          ?? false,
+    crmEnabled:               row.crm_enabled                 ?? false,
+    confirmationTextsEnabled: row.confirmation_texts_enabled  ?? false,
+    waitlistEnabled:          row.waitlist_enabled            ?? true,
+    leadCaptureEnabled:       row.lead_capture_enabled        ?? false,
+    leadNotificationPhone:    row.lead_notification_phone     ?? null,
+    fareharborCompanies:      row.fareharbor_companies        ?? [],
+    scrapeUrls:    row.scrape_urls    ?? [],
+    snotelStations: row.snotel_stations ?? [],
+    bookingUrls:   row.booking_urls   ?? {},
+    services:      row.services       ?? [],
+    faq:           row.faq            ?? [],
+    openerText:    row.opener_text    ?? null,
+    handoffReply:  template
+      ? (phone) => template.replace(/\{phone\}/g, phone)
+      : (phone) => `For questions, give us a call at ${phone} 🤙`,
+    active:       row.active          ?? true,
+    websiteUrl:   row.website_url     ?? null,
+    staticFacts:  row.static_facts    ?? null,
+    _fromDb:      true,
+  };
+}
+
+// Called from index.js after DB init — populates _runtimeClients from Supabase rows
+export function loadDbClients(rows) {
+  // Clear and repopulate (supports reload on create/update)
+  for (const key of Object.keys(_runtimeClients)) delete _runtimeClients[key];
+  for (const row of rows) {
+    _runtimeClients[row.id] = dbRowToClient(row);
+  }
+}
+
+// Returns merged registry: static CLIENTS + DB-loaded clients (DB takes precedence)
+export function getAllClients() {
+  return { ...CLIENTS, ..._runtimeClients };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CLIENT RESOLVER
 // Matches inbound Twilio "To" number to a client config.
+// Checks DB-loaded clients first, then static CLIENTS.
 // Falls back to csr_rea for safety (backward compatibility with existing deploy).
 // ─────────────────────────────────────────────────────────────────────────────
 export function resolveClient(toNumber) {
   if (toNumber) {
+    for (const client of Object.values(_runtimeClients)) {
+      if (client.inboundPhones.includes(toNumber)) return client;
+    }
     for (const client of Object.values(CLIENTS)) {
       if (client.inboundPhones.includes(toNumber)) return client;
     }
-    // Only warn if it doesn't look like a test number
     if (!toNumber.startsWith("+1555")) {
       console.warn(`[CLIENT] No config match for To: ${toNumber} — falling back to csr_rea`);
     }

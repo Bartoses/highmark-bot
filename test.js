@@ -32,7 +32,8 @@ import { buildConfirmationText, buildFollowUpText } from "./bookingConfirmations
 import { checkOptOut, upsertContact, addTagsToContact, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { getKnowledgeContext } from "./knowledgeBase.js";
 import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
-import { resolveClient, CLIENTS, getDefaultClient } from "./clients.js";
+import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
+import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1636,6 +1637,194 @@ async function test27() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 28: Chunk 6 — Client provisioning (unit + integration)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test28() {
+  console.log("\nTEST 28: Client Provisioning (Chunk 6)");
+
+  // ── Unit: computeReadiness ─────────────────────────────────────────────────
+  const fullyReady = {
+    id: "x", slug: "x", botName: "Bot", bookingMode: "informational",
+    inboundPhones: ["+18005550000"], supportPhone: "(800) 555-0000",
+    scrapeUrls: ["https://example.com"], websiteUrl: null,
+  };
+  const readinessFull = computeReadiness(fullyReady);
+  readinessFull.ready === true
+    ? pass("computeReadiness: fully configured client → ready=true")
+    : fail("computeReadiness: fully configured should be ready", JSON.stringify(readinessFull));
+
+  const noPhone = { ...fullyReady, inboundPhones: [] };
+  computeReadiness(noPhone).checks.inbound_phone === false
+    ? pass("computeReadiness: missing inbound_phone → check fails")
+    : fail("computeReadiness: inbound_phone check should fail");
+
+  const noContact = { ...fullyReady, supportPhone: null, handoffPhone: null, support_phone: null, handoff_phone: null };
+  computeReadiness(noContact).checks.support_contact === false
+    ? pass("computeReadiness: missing contact → check fails")
+    : fail("computeReadiness: support_contact check should fail");
+
+  const noSite = { ...fullyReady, scrapeUrls: [], websiteUrl: null };
+  computeReadiness(noSite).checks.website_or_scrape === false
+    ? pass("computeReadiness: no website/scrape → check fails")
+    : fail("computeReadiness: website_or_scrape check should fail");
+
+  // ── Unit: VALID_BOOKING_MODES ──────────────────────────────────────────────
+  ["fareharbor", "informational", "lead_capture"].every((m) => VALID_BOOKING_MODES.includes(m))
+    ? pass("VALID_BOOKING_MODES includes all three modes")
+    : fail("VALID_BOOKING_MODES missing expected mode");
+
+  // ── Unit: static clients still resolve via resolveClient ──────────────────
+  resolveClient("+18668906657").id === "csr_rea"
+    ? pass("resolveClient: demo number routes to csr_rea")
+    : fail("resolveClient: csr_rea resolution broken");
+
+  resolveClient("+18336489744").id === "lone_pine"
+    ? pass("resolveClient: Lone Pine number routes to lone_pine")
+    : fail("resolveClient: lone_pine resolution broken");
+
+  // ── Unit: getAllClients returns static clients ─────────────────────────────
+  const allClients = getAllClients();
+  allClients.csr_rea && allClients.lone_pine
+    ? pass("getAllClients: static clients present")
+    : fail("getAllClients: static clients missing");
+
+  // ── Integration: API tests (require server + Supabase) ────────────────────
+  if (!supabase) {
+    fail("Supabase unavailable — skipping client API integration tests");
+    return;
+  }
+
+  const TEST_CLIENT_ID = "test_chunk6_client";
+
+  // Cleanup from any previous failed run
+  await supabase.from("clients").delete().eq("id", TEST_CLIENT_ID);
+
+  // ── GET /admin/clients — lists static clients ──────────────────────────────
+  const listRes  = await httpGet("/admin/clients");
+  const listData = await listRes.json();
+
+  listRes.status === 200
+    ? pass("GET /admin/clients → 200")
+    : fail("GET /admin/clients wrong status", String(listRes.status));
+
+  Array.isArray(listData.clients)
+    ? pass("GET /admin/clients returns clients array")
+    : fail("GET /admin/clients missing clients array");
+
+  listData.clients.some((c) => c.id === "csr_rea") && listData.clients.some((c) => c.id === "lone_pine")
+    ? pass("GET /admin/clients includes both static clients")
+    : fail("GET /admin/clients static clients missing");
+
+  listData.clients.every((c) => c.readiness && typeof c.readiness.ready === "boolean")
+    ? pass("GET /admin/clients: every client has readiness block")
+    : fail("GET /admin/clients: readiness missing from some clients");
+
+  // ── GET /admin/clients/:id — single client ────────────────────────────────
+  const getRes  = await httpGet("/admin/clients/csr_rea");
+  const getData = await getRes.json();
+
+  getRes.status === 200
+    ? pass("GET /admin/clients/csr_rea → 200")
+    : fail("GET /admin/clients/:id wrong status", String(getRes.status));
+
+  getData.client?.is_static === true
+    ? pass("GET /admin/clients/:id: static client has is_static=true")
+    : fail("GET /admin/clients/:id: is_static wrong");
+
+  const notFoundRes = await httpGet("/admin/clients/does_not_exist");
+  notFoundRes.status === 404
+    ? pass("GET /admin/clients/:id: unknown id → 404")
+    : fail("GET /admin/clients/:id: should 404 for unknown id");
+
+  // ── POST /admin/clients — create new client ───────────────────────────────
+  const createRes = await httpPost(
+    "/admin/clients",
+    {
+      id:           TEST_CLIENT_ID,
+      name:         "Test Chunk6 Business",
+      booking_mode: "informational",
+      bot_name:     "TestBot",
+      support_phone: "(555) 000-0001",
+      website_url:  "https://example.com",
+    },
+    "application/json"
+  );
+  const createData = await createRes.json();
+
+  createRes.status === 201
+    ? pass("POST /admin/clients → 201")
+    : fail("POST /admin/clients wrong status", `${createRes.status}: ${JSON.stringify(createData)}`);
+
+  createData.client?.id === TEST_CLIENT_ID
+    ? pass("POST /admin/clients: response contains created client")
+    : fail("POST /admin/clients: id mismatch", JSON.stringify(createData));
+
+  // Defaults applied
+  createData.client?.bot_name === "TestBot"
+    ? pass("POST /admin/clients: bot_name applied")
+    : fail("POST /admin/clients: bot_name default wrong");
+
+  createData.client?.readiness?.checks?.support_contact === true
+    ? pass("POST /admin/clients: readiness.support_contact passes")
+    : fail("POST /admin/clients: readiness.support_contact should be true", JSON.stringify(createData.client?.readiness));
+
+  // ── POST /admin/clients — duplicate id rejected ───────────────────────────
+  const dupeRes = await httpPost(
+    "/admin/clients",
+    { id: TEST_CLIENT_ID, name: "Dupe", booking_mode: "informational" },
+    "application/json"
+  );
+  dupeRes.status === 409
+    ? pass("POST /admin/clients: duplicate id → 409")
+    : fail("POST /admin/clients: duplicate id should 409", String(dupeRes.status));
+
+  // ── POST /admin/clients — duplicate inbound phone rejected ────────────────
+  const dupePhoneRes = await httpPost(
+    "/admin/clients",
+    { id: "test_chunk6_dup_phone", name: "Dup Phone", booking_mode: "informational", inbound_phones: ["+18668906657"] },
+    "application/json"
+  );
+  dupePhoneRes.status === 409
+    ? pass("POST /admin/clients: duplicate inbound_phone → 409")
+    : fail("POST /admin/clients: duplicate phone should 409", String(dupePhoneRes.status));
+
+  // ── POST /admin/clients — invalid booking_mode rejected ───────────────────
+  const badModeRes = await httpPost(
+    "/admin/clients",
+    { id: "test_bad_mode", name: "Bad Mode", booking_mode: "invalid_mode" },
+    "application/json"
+  );
+  badModeRes.status === 400
+    ? pass("POST /admin/clients: invalid booking_mode → 400")
+    : fail("POST /admin/clients: bad booking_mode should 400", String(badModeRes.status));
+
+  // ── PATCH /admin/clients/:id — update DB client ───────────────────────────
+  const patchRes = await httpPatch(`/admin/clients/${TEST_CLIENT_ID}`, {
+    name:       "Test Chunk6 Updated",
+    services:   ["Service A", "Service B"],
+  });
+  const patchData = await patchRes.json();
+
+  patchRes.status === 200
+    ? pass("PATCH /admin/clients/:id → 200")
+    : fail("PATCH /admin/clients/:id wrong status", String(patchRes.status));
+
+  patchData.client?.name === "Test Chunk6 Updated"
+    ? pass("PATCH /admin/clients/:id: name updated")
+    : fail("PATCH /admin/clients/:id: name not updated", JSON.stringify(patchData));
+
+  // ── PATCH static client → 400 ─────────────────────────────────────────────
+  const patchStaticRes = await httpPatch("/admin/clients/csr_rea", { name: "New Name" });
+  patchStaticRes.status === 400
+    ? pass("PATCH static client → 400 (edit clients.js)")
+    : fail("PATCH static client should return 400", String(patchStaticRes.status));
+
+  // Cleanup
+  await supabase.from("clients").delete().eq("id", TEST_CLIENT_ID);
+  pass("Test client cleaned up from DB");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -1677,6 +1866,7 @@ async function main() {
     await test23(); // Waitlist feature (unit + gated integration)
     await test24(); // Admin lead management API (Chunk 5)
     await test25(); // Organic outreach YES → waitlist lead (Chunk 5b)
+    await test28(); // Client provisioning API (Chunk 6)
   } catch (e) {
     fail("Test server", e.message);
   } finally {
