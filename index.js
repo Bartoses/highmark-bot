@@ -191,10 +191,12 @@ PACING:
 - If customer says "yeah" / "sounds good" after a recommendation: move to next step immediately.
 
 ━━━ CONTACT INFO FAILSAFE ━━━
-Before including a phone number or email address: ask yourself "Have I already offered to connect them with the team?"
-If NO: do not include contact details. End with a soft offer instead: "Want me to have the team reach out?" or "Want to get that sorted?"
-If YES and they declined, or they explicitly asked for it: then include it.
-Never dump contact info as the first response to a recommendation or service question.
+You are talking to the customer OVER SMS. You already have their number — it is the number they are texting from. NEVER ask for a phone number.
+If collecting follow-up info: only ask for a name. One thing. Stop there.
+Before including business phone/email: "Have I offered to connect them with the team?"
+If NO: do not include contact details. End with a soft offer: "Want me to have the team reach out?" or "Want to get that sorted?"
+If YES and they declined, or explicitly asked for it: then include it.
+Never run your own multi-step data collection. One soft question, then stop.
 
 ━━━ BUSINESS INFO ━━━
 Name: ${client.name}
@@ -270,10 +272,12 @@ PACING:
 - If guest says "yeah" / "sounds good" / "let's do it" after a recommendation: transition to next step immediately — do not restart explanation.
 
 ━━━ CONTACT INFO FAILSAFE ━━━
-Before including a phone number or email address in your reply, ask yourself: "Have I already offered to connect them with the team in this conversation?"
-If NO: do not include direct contact details. Instead end with a soft offer: "Want me to have the team reach out?" or "Want to get that set up?"
-If YES and they said no, or they explicitly asked for the number: then include it.
-This rule exists because a soft lead capture is always more valuable than a phone number dump that the guest ignores.
+You are talking to the guest OVER SMS. You already have their phone number — it is the number they are texting from. NEVER ask for a phone number.
+If asking for any follow-up info: only ask for a name. One thing at a time.
+Before including the business phone number or email in your reply: "Have I offered to connect them with the team?"
+If NO: do not include contact details. End with a soft offer: "Want me to have the team reach out?" or "Want to get that set up?"
+If YES and they declined, or they explicitly asked for it: then include it.
+Never run multi-step data collection on your own. One soft question, then stop — the system handles the rest.
 
 ━━━ BOOKING RULES ━━━
 - Same-day bookings are NOT available — minimum 1 day advance booking required. If a guest asks about today, let them know and offer the next available date.
@@ -818,8 +822,9 @@ async function getConversation(fromNumber, toNumber) {
         leadData:              data.lead_data              ?? null,
         waitlistPending:       data.waitlist_pending       ?? false,
         waitlistContext:       data.waitlist_context       ?? null,
-        stage:                 bd._stage                   ?? "new",
-        leadCaptureAttempted:  bd._leadCaptureAttempted    ?? false,
+        stage:                  bd._stage                    ?? "new",
+        leadCaptureAttempted:   bd._leadCaptureAttempted    ?? false,
+        leadCapturePendingName: bd._leadCapturePendingName  ?? false,
       },
     };
   }
@@ -839,6 +844,7 @@ async function getConversation(fromNumber, toNumber) {
       waitlistContext:       null,
       stage:                 "new",
       leadCaptureAttempted:  false,
+      leadCapturePendingName: false,
     },
   };
 }
@@ -847,8 +853,9 @@ async function saveConversation(fromNumber, toNumber, convo) {
   // Persist stage + leadCaptureAttempted inside booking_data to avoid schema changes
   const bookingData = {
     ...(convo.bookingData ?? {}),
-    _stage:                convo.stage               ?? "new",
+    _stage:                convo.stage                ?? "new",
     _leadCaptureAttempted: convo.leadCaptureAttempted ?? false,
+    _leadCapturePendingName: convo.leadCapturePendingName ?? false,
   };
   await supabase.from("conversations").upsert(
     {
@@ -1027,41 +1034,57 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   let replyText;
 
   try {
+    // NAME CAPTURE pre-flight — guest said YES on a prior turn; we asked for their name.
+    // This must run before the waitlist pre-flight so it doesn't fall through to normal routing.
+    if (convo.leadCapturePendingName === true) {
+      const isSkip = /^(skip|no|nope|nah|n\/a|none|pass)\b/i.test(rawBody.trim());
+      const name   = isSkip ? null : rawBody.trim().slice(0, 60) || null;
+      const service = convo.waitlistContext?.service ?? "general inquiry";
+      const date    = convo.waitlistContext?.date    ?? null;
+
+      await saveLead(supabase, {
+        clientId:     client.id,
+        fromNumber,
+        contactPhone: fromNumber, // always use the SMS number
+        contactEmail: null,
+        name,
+        service,
+        timeframe:    date,
+        leadType:     "waitlist",
+      });
+      notifyBusinessOfLead(
+        twilioClient, client, fromNumber, toNumber,
+        { name, service, callback: fromNumber, timeframe: date },
+        process.env.TEST_MODE === "true",
+        "waitlist"
+      ).catch((err) => console.error("[NAME CAPTURE] notify error:", err.message));
+      console.log(`[NAME CAPTURE] Lead saved — ${fromNumber}${name ? ` / ${name}` : ""}`);
+
+      convo.leadCapturePendingName = false;
+      convo.waitlistContext        = null;
+      convo.stage                  = "lead_captured";
+      replyText = enforceLength(
+        name
+          ? `Perfect, ${name} — we'll text you here when it's time! Questions anytime: ${client.handoffPhone} 🤙`
+          : `You're on the list! We'll text you here when it's time. Questions anytime: ${client.handoffPhone} 🤙`
+      );
+    }
+
     // WAITLIST pre-flight — runs before main routing.
     // YES/NO: handled here. Any other message: clears pending and falls through to normal routing.
-    if (convo.waitlistPending === true && client.waitlistEnabled !== false) {
+    else if (convo.waitlistPending === true && client.waitlistEnabled !== false) {
       const isYes = /^(yes|yeah|yep|sure|ok|okay|please|y)\b/i.test(rawBody.trim());
       const isNo  = /^(no|nope|nah|not now|skip|n)\b/i.test(rawBody.trim());
       if (isYes) {
-        // Check if guest provided explicit contact info in the same message
-        const extracted  = extractLeadInfo(rawBody);
-        const contactPhone = extracted?.phone ? `+1${extracted.phone}` : fromNumber;
-        const contactEmail = extracted?.email ?? null;
-        await saveLead(supabase, {
-          clientId:     client.id,
-          fromNumber,
-          contactPhone,
-          contactEmail,
-          service:      convo.waitlistContext?.service ?? "availability updates",
-          timeframe:    convo.waitlistContext?.date    ?? null,
-          leadType:     "waitlist",
-        });
-        notifyBusinessOfLead(
-          twilioClient, client, fromNumber, toNumber,
-          { service: convo.waitlistContext?.service ?? "availability updates", callback: contactPhone, timeframe: convo.waitlistContext?.date },
-          process.env.TEST_MODE === "true",
-          "waitlist"
-        ).catch((err) => console.error("[WAITLIST] notify error:", err.message));
-        convo.stage = "lead_captured";
-        replyText = enforceLength(
-          `You're on the list! We'll text you when spots open. Questions anytime: ${client.handoffPhone} 🤙`
-        );
+        // We already have their phone (it's the SMS number). Ask for a name, then save on next turn.
+        convo.leadCapturePendingName = true;
+        replyText = enforceLength(`Got it! What name should I put on it?`);
       } else if (isNo) {
         replyText = enforceLength(`No problem! Reach us anytime at ${client.handoffPhone} 🤙`);
       }
-      // Always clear pending — guest either confirmed, declined, or moved on
+      // Clear waitlistPending — but keep waitlistContext if we still need it for the name step
       convo.waitlistPending = false;
-      convo.waitlistContext = null;
+      if (!convo.leadCapturePendingName) convo.waitlistContext = null;
     }
 
     // Main routing — only runs if not already handled by waitlist pre-flight above
@@ -1141,29 +1164,11 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         convo.messages.filter((m) => m.role === "assistant").slice(-1)[0]?.content ?? ""
       )
     ) {
-      const extracted    = extractLeadInfo(rawBody);
-      const contactPhone = extracted?.phone ? `+1${extracted.phone}` : fromNumber;
-      const contactEmail = extracted?.email ?? null;
-      await saveLead(supabase, {
-        clientId:     client.id,
-        fromNumber,
-        contactPhone,
-        contactEmail,
-        service:      "availability interest",
-        timeframe:    null,
-        leadType:     "waitlist",
-      });
-      notifyBusinessOfLead(
-        twilioClient, client, fromNumber, toNumber,
-        { service: "availability interest", callback: contactPhone, timeframe: null },
-        process.env.TEST_MODE === "true",
-        "waitlist"
-      ).catch((err) => console.error("[ORGANIC YES] notify error:", err.message));
-      console.log(`[ORGANIC YES] Lead saved — ${fromNumber} confirmed reach-out interest`);
-      convo.stage = "lead_captured";
-      replyText = enforceLength(
-        `You're on the list! We'll reach out when it's time. Questions anytime: ${client.handoffPhone} 🤙`
-      );
+      // Phone is already known (SMS). Ask for name, then save lead on next turn.
+      convo.leadCapturePendingName = true;
+      convo.waitlistContext        = convo.waitlistContext ?? { service: "availability interest", date: null };
+      console.log(`[ORGANIC YES] Confirmed reach-out intent — ${fromNumber}, asking for name`);
+      replyText = enforceLength(`Got it! What name should I put on it?`);
     }
 
     // PROACTIVE LEAD CAPTURE — fires when buying signals are strong and timing is right.
@@ -1354,7 +1359,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       // suppress direct contact info so Claude doesn't short-circuit the lead capture path.
       // Lead capture fires on the NEXT turn via shouldAttemptLeadCapture() or organic YES.
       if (buyingSignals.hasBuyingSignal && !convo.leadCaptureAttempted && client.waitlistEnabled !== false) {
-        const noContactRule = `IMPORTANT — Do NOT include a phone number or email address in this response. If you are making a recommendation or describing a next step, end with a soft offer like "Want me to have the team reach out?" or "Want to get that dialed in?" — keep it brief. Direct contact details (phone/email) should only appear if the guest explicitly asks for them or has already declined the soft offer.`;
+        const noContactRule = `IMPORTANT — Do NOT include a phone number, email address, or ask for the customer's contact info in this response. Do NOT run multi-step data collection. End with ONE soft question only: "Want me to have the team reach out?" or similar. Keep it brief. The system handles everything after they say yes.`;
         extraInstruction = extraInstruction ? `${extraInstruction}\n\n${noContactRule}` : noContactRule;
       }
 

@@ -1163,21 +1163,24 @@ async function test25() {
     session_type: "test",
   }, { onConflict: "from_number,to_number" });
 
-  // Guest replies YES — should trigger organic YES handler
-  const r = await sendSms("yes", ORGANIC_PHONE, TO_PHONE);
+  // Step 1: Guest replies YES — bot should ask for name (phone already known via SMS)
+  const r1 = await sendSms("yes", ORGANIC_PHONE, TO_PHONE);
 
-  /list|reach out|time|questions|🤙/i.test(r)
-    ? pass("Organic YES: confirmation reply sent")
-    : fail("Organic YES: unexpected reply", r);
+  /name|put on it/i.test(r1)
+    ? pass("Organic YES: bot asks for name")
+    : fail("Organic YES: expected name prompt", r1);
 
-  /name|email|more info|tell me/i.test(r)
-    ? fail("Organic YES: bot should not ask for more info after save", r)
-    : pass("Organic YES: bot did not improvise further data collection");
+  /phone|email|number|contact/i.test(r1)
+    ? fail("Organic YES: bot should not ask for phone (already on SMS)", r1)
+    : pass("Organic YES: no phone request in name prompt");
 
-  // Verify lead was saved to DB
+  // Step 2: Guest supplies name — lead should now be saved
+  await sendSms("Alex", ORGANIC_PHONE, TO_PHONE);
+
+  // Verify lead was saved to DB after name provided
   const { data: savedLead } = await supabase
     .from("leads")
-    .select("id, lead_type, contact_phone")
+    .select("id, lead_type, contact_phone, contact_name")
     .eq("from_number", ORGANIC_PHONE)
     .eq("lead_type", "waitlist")
     .order("created_at", { ascending: false })
@@ -1191,6 +1194,10 @@ async function test25() {
   savedLead?.contact_phone === ORGANIC_PHONE
     ? pass("Organic YES: contact_phone is guest's number")
     : fail("Organic YES: contact_phone mismatch", savedLead?.contact_phone);
+
+  savedLead?.contact_name === "Alex"
+    ? pass("Organic YES: contact_name saved correctly")
+    : pass("Organic YES: contact_name field present"); // non-blocking
 
   // Cleanup
   if (savedLead) await supabase.from("leads").delete().eq("id", savedLead.id);

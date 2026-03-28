@@ -11,19 +11,23 @@
  * Save a captured lead to the leads table in DB1.
  * Returns true on success, false on failure (non-throwing).
  */
-export async function saveLead(supabase, { clientId, fromNumber, contactPhone, service, timeframe, leadType = 'booking' }) {
+export async function saveLead(supabase, { clientId, fromNumber, contactPhone, contactEmail, name, service, timeframe, leadType = 'booking' }) {
   if (!supabase) return false;
   try {
-    await supabase.from("leads").insert({
+    const row = {
       client_id:           clientId,
       from_number:         fromNumber,
       contact_phone:       contactPhone,
-      requested_service:   service   ?? null,
-      preferred_timeframe: timeframe ?? null,
+      contact_name:        name         ?? null,
+      requested_service:   service      ?? null,
+      preferred_timeframe: timeframe    ?? null,
       source:              "sms",
       status:              "new",
       lead_type:           leadType,
-    });
+    };
+    // contact_email requires db1_lead_name.sql migration — only include when provided
+    if (contactEmail != null) row.contact_email = contactEmail;
+    await supabase.from("leads").insert(row);
     console.log(`[LEADS] Saved — ${clientId} / ${fromNumber}`);
     return true;
   } catch (err) {
@@ -60,9 +64,11 @@ export async function notifyBusinessOfLead(twilioClient, client, fromNumber, bot
 
     const lines = [
       `📋 ${leadType === 'waitlist' ? 'New waitlist signup' : 'New request'} — ${client.name}`,
-      `Service: ${leadData.service ?? "not specified"}`,
-      `Call back: ${callbackPhone}`,
     ];
+    if (leadData.name) lines.push(`Name: ${leadData.name}`);
+    lines.push(`Service: ${leadData.service ?? "not specified"}`);
+    lines.push(`Call back: ${callbackPhone}`);
+    if (leadData.email)    lines.push(`Email: ${leadData.email}`);
     if (leadData.timeframe) lines.push(`Timeframe: ${leadData.timeframe}`);
 
     await twilioClient.messages.create({
