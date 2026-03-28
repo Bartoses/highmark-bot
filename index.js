@@ -909,7 +909,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       /^(yes|yeah|yep|sure|ok|okay|please|y)\b/i.test(rawBody.trim()) &&
       convo.bookingStep === null &&
       client.waitlistEnabled !== false &&
-      /reach out|let you know|heads.?up|notify|first to know|snag a spot|save your number|add you to|call you back|get back to you|have someone|reach you|follow up|touch base/i.test(
+      /reach out|let you know|heads.?up|notify|first to know|snag a spot|save your number|add you to|call you back|get back to you|have someone|reach you|follow up|touch base|get in touch|connect with|talk through|in contact|pass your|pass along/i.test(
         convo.messages.filter((m) => m.role === "assistant").slice(-1)[0]?.content ?? ""
       )
     ) {
