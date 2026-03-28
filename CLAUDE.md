@@ -198,7 +198,21 @@ Tracked in `convo.stage` (stored inside `booking_data._stage` — no schema migr
 - SMS channel awareness: bot never asks for phone number (already have it from `From`); on YES asks for name only; saves lead after name received
 - Name capture pre-flight: `leadCapturePendingName` flag stored in `booking_data._leadCapturePendingName`; resolves before waitlist pre-flight
 - `saveLead()` uses `contact_name` column; `contact_email` included only post-migration (`db1_lead_name.sql`)
-- 208/208 tests pass
+- 243/243 tests pass
+
+### Commercial Decision Layer (index.js)
+Deterministic logic layer that runs before every Claude call to enforce answer-first, expertise-first behavior:
+
+- `scoreBuyingIntent(body, convo)` → `{ score: 0-100, strength, reasons[] }` — numeric weighted scoring; 15+ = low, 35+ = medium, 60+ = high
+- `needsExpertiseFirst(intent, buyingSignals, convo)` → boolean — returns true when bot must answer/recommend BEFORE any lead capture attempt; clears once `commercialState.recommendationGiven = true`
+- `getMicroClose(client, inferredGoal)` → string — per-client soft close library; one ask only, never stacked
+- `buildResponsePlan(intent, sentiment, buyingSignals, convo, client)` → plan object — deterministic pre-call decision: `{ primaryGoal, mustRecommend, mustIncludeLocalContext, shouldSoftClose, shouldAttemptLeadCapture, forbiddenMoves[], microClose }`
+- `formatResponsePlanInstruction(plan, client)` → string — converts plan to Claude instruction injected as CURRENT CONTEXT
+- `containsPhoneAsk(text)` → boolean — post-gen validator; if true, response is regenerated once with a correction instruction
+- `commercialState` persisted in `booking_data._commercialState` (no schema migration): `{ recommendationGiven, leadCaptureAttempts }`
+- `recommendationGiven` set to true in DEFAULT block after any `recommendation` intent response — unlocks proactive lead capture on next turn
+- Proactive lead capture block now requires `!needsExpertiseFirst()` — recommendation turns always answer first
+- TEST_MODE meta includes `recommendationGiven`
 
 ### Context-Aware Personality
 Both system prompts (`buildSystemPromptCsrRea` and `buildSystemPromptInformational`) include a `PERSONALITY & TONE` block that instructs Claude to:
