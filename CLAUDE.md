@@ -183,6 +183,19 @@ Expected: `{"status":"Highmark running ✅", ...}`
 8. Save conversation to Supabase, return TwiML
 9. CRM upsert/tagging — only if `client.crmEnabled` is true
 
+### Conversation Stage Machine
+Tracked in `convo.stage` (stored inside `booking_data._stage` — no schema migration needed):
+`new → discovery → engaged → considering → high_intent → lead_captured → closed | handoff`
+- `updateConversationStage(convo, buyingSignals, intent, sentiment)` — runs once per turn, never downgrades, frustrated→handoff
+- `detectBuyingSignals(body, convo)` → `{ strength: none|low|medium|high, signals[], inferredGoal }`
+- `shouldAttemptLeadCapture(convo, signals, client)` — fires proactive soft ask at considering+ with medium/high signal; respects all guard conditions (min 2 turns, not frustrated, not already attempted)
+- `extractLeadInfo(body)` — pulls phone/email from message text; used in waitlist + organic YES handlers
+- `buildLeadCapturePrompt(client, inferredGoal)` — context-aware soft ask matched to brand and conversation goal
+- `detectIntent` expanded: adds `recommendation` for "what's best for me / which option" messages
+- TEST_MODE meta: now includes `stage`, `buyingSignalStrength`, `buyingSignals`
+- Response priority + pacing rules added to both system prompts (RESPONSE PRIORITY + PACING blocks)
+- 207/207 tests pass
+
 ### Context-Aware Personality
 Both system prompts (`buildSystemPromptCsrRea` and `buildSystemPromptInformational`) include a `PERSONALITY & TONE` block that instructs Claude to:
 - Match energy to the guest (playful → playful, concise → concise, frustrated → no humor)

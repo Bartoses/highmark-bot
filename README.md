@@ -227,6 +227,16 @@ Both return empty TwiML `<Response></Response>` on 429 so Twilio doesn't retry.
 - `DEMO` — resets + sends Highmark-branded opener + notifies owner at +17202892483
 - `SUMMITDEMO` — resets conversation + sends seasonal opener (internal demos)
 
+### Conversation Stage Machine
+`convo.stage` tracks engagement level per turn (stored in `booking_data._stage`, no migration):
+`new → discovery → engaged → considering → high_intent → lead_captured → closed | handoff`
+- `detectBuyingSignals()` classifies each message (none/low/medium/high strength + named signals)
+- `updateConversationStage()` advances stage, never downgrades, frustrated→handoff
+- `shouldAttemptLeadCapture()` proactively triggers a soft lead ask at considering+ with medium/high signal
+- `extractLeadInfo()` pulls explicit phone/email from message text
+- `detectIntent` expanded to include `recommendation` intent
+- Both system prompts include RESPONSE PRIORITY + PACING blocks
+
 ### Context-Aware Personality
 Both system prompts include a `PERSONALITY & TONE` block. Claude classifies each message (playful sarcasm, bravado, irritated, literal) and adapts:
 - Energy matching: playful → playful; concise → concise; frustrated → no humor
