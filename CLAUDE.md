@@ -37,7 +37,8 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (269 tests), spawns its own server on port 3099
+test.js                — automated test suite (301 tests), spawns its own server on port 3099
+demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, update, summary routes (Chunk 5)
 adminClients.js        — client provisioning: create/update/list/readiness routes (Chunk 6)
@@ -337,6 +338,41 @@ curl -X POST "https://highmark-bot-production.up.railway.app/admin/clients?key=Y
   -d '{"id":"new_client","name":"New Business","booking_mode":"informational","support_phone":"(970) 555-0001","website_url":"https://example.com"}'
 ```
 
+### Demo Mode (demoFlow.js — Chunk 7)
+Guided sales demo for prospects. No AI, no real APIs. Deterministic state machine.
+
+**Client:** `highmark_demo` in `clients.js` — owns +18668906657. `bookingMode: "demo"`, `isDemo: true`.
+
+**Demo number:** +1 866 890 6657 (active). Routes to `handleDemoFlow()` in index.js before any production logic.
+
+**Flow:**
+1. Any first text → guided opener (paths 1/2/3)
+2. Reply 1/2/3 → path intro (Q&A / Lead Capture / Booking)
+3. Any reply → followup + CTA ("Want me to set this up? Reply YES")
+4. YES → name → business name → website (skippable) → lead saved + admin notified
+
+**State machine steps:** `awaiting_path → path_intro → cta → lead_name → lead_business → lead_website → complete`
+
+**State persisted in:** `conversations.booking_data._demo` (JSONB, no migration needed)
+
+**Reset:** Text `START OVER` or `DEMO` at any time
+
+**Lead storage:** `leads` table with `lead_type="demo"`, `client_id="highmark_demo"`, `source="sms"`
+
+**Admin notification:** SMS to `DEMO_NOTIFY_PHONE` env var (falls back to `CONFIRMATIONS_TEST_PHONE`)
+
+**Pricing tier config:** `tier` field added to all clients — `"free" | "growth" | "pro" | "demo"`. Config only, no billing.
+
+**Testing the demo:**
+```bash
+npm run chat  # then switch phone to +18668906657, or
+./virtual-test.sh 9  # triggers DEMO keyword
+```
+
+**Testing UI:** All clients (including `highmark_demo` and any DB-backed clients) appear in the UI client selector at `/ui?key=UI_SECRET`. `/internal/clients` now uses `getAllClients()`.
+
+**Session tip:** Start a new Claude session when moving from demo/sales work to website/landing page work.
+
 ### Session Tips
 Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — when switching from SMS flow work to admin/internal workflow work — and when moving from admin provisioning work to public website/sales funnel work. Keeps context focused and saves credits.
 
@@ -447,5 +483,7 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 4. ~~**Lead capture flow (Lone Pine)**~~ — DONE. 3-step SMS flow + `leads` table + business notification. Run `db1_lead_capture.sql` migration in Supabase before deploy.
 5. ~~**Admin lead management**~~ — DONE. List/filter/update/summary routes at `/admin/leads`. Run `db1_lead_mgmt.sql` migration to enable extended statuses + `updated_by`. Protected by `UI_SECRET`.
 6. ~~**Client onboarding + provisioning**~~ — DONE. DB-backed client registry. POST/PATCH/GET `/admin/clients`. Validation, defaults, readiness checks. Run `db1_clients.sql` migration in Supabase DB1 before deploy.
-7. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
-8. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+7. ~~**Sales + Demo engine**~~ — DONE. `highmark_demo` client owns +18668906657. Guided 3-path SMS demo (Q&A / Lead Capture / Booking), lead capture, admin notification. `bookingMode: "demo"` in clients.js; demoFlow.js handles deterministic state machine.
+8. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
+9. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+10. **Website** — usehighmark.com landing page not yet built. Next step: serve static HTML from Railway at `/home` or dedicated service.

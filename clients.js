@@ -7,6 +7,7 @@
 //   "fareharbor"   — real-time availability + booking menu (Tier 2)
 //   "informational" — Q&A + handoff to phone, no booking API
 //   "lead_capture"  — Q&A + collects name/email/need before routing to phone
+//   "demo"          — guided sales demo flow (deterministic, no AI/API calls)
 //
 // To add a new client:
 //   1. Add an entry to CLIENTS keyed by client id
@@ -25,11 +26,10 @@ export const CLIENTS = {
 
     // Twilio numbers that route to this client.
     // +18335786496 — primary client number (pending Twilio toll-free verification)
-    // +18668906657 — demo number (active, used for prospect demos)
+    // Note: +18668906657 (demo number) has moved to the highmark_demo client
     // CSR_REA_TWILIO_NUMBER env var adds an optional override/additional number
     inboundPhones: [
       "+18335786496",
-      "+18668906657",
       process.env.CSR_REA_TWILIO_NUMBER,
     ].filter(Boolean),
 
@@ -39,6 +39,9 @@ export const CLIENTS = {
     address:      null,
     timezone:     "America/Denver",
     hours:        null, // hours are in the scraped KB for CSR/REA
+
+    // Pricing tier (config only — billing not implemented)
+    tier: "growth",
 
     // Capability flags
     bookingMode:   "fareharbor",
@@ -121,6 +124,9 @@ export const CLIENTS = {
       weekends:  "Closed Saturday and Sunday",
     },
 
+    // Pricing tier (config only — billing not implemented)
+    tier: "growth",
+
     // Capability flags — informational + lead capture
     bookingMode:   "informational",
     fareharborEnabled:        false,
@@ -167,6 +173,50 @@ export const CLIENTS = {
 
     // Text sent when an explicit handoff is triggered (intent="handoff" or 2x frustrated)
     handoffReply: (phone) => `Great question for Jake! Give him a call at ${phone} and he'll get you sorted 🔧`,
+  },
+
+  // ── Highmark Demo ─────────────────────────────────────────────────────────
+  // Guided sales demo — deterministic flow, no AI/API calls.
+  // Routes to demoFlow.js in index.js when bookingMode === "demo".
+  highmark_demo: {
+    id:      "highmark_demo",
+    slug:    "highmark_demo",
+    name:    "Highmark Demo",
+    botName: "Highmark",
+    tone:    "warm, energetic, confident — sales-oriented but not pushy",
+    tier:    "demo",
+
+    // +18668906657 is the active demo number used for prospect demos + virtual-test.sh
+    // DEMO_TWILIO_NUMBER env var adds an optional additional number
+    inboundPhones: [
+      "+18668906657",
+      process.env.DEMO_TWILIO_NUMBER,
+    ].filter(Boolean),
+
+    supportPhone:  "hello@whiteoutsolutions.co",
+    handoffPhone:  "hello@whiteoutsolutions.co",
+    supportEmail:  "hello@whiteoutsolutions.co",
+    address:       null,
+    timezone:      "America/Denver",
+    hours:         null,
+
+    bookingMode:              "demo",
+    isDemo:                   true,
+    fareharborEnabled:        false,
+    crmEnabled:               false,
+    confirmationTextsEnabled: false,
+    waitlistEnabled:          false,
+    leadCaptureEnabled:       false,
+
+    fareharborCompanies: [],
+    scrapeUrls:          [],
+    snotelStations:      [],
+    bookingUrls:         {},
+    services:            [],
+    faq:                 [],
+
+    openerText:   null, // demoFlow.js sends its own opener
+    handoffReply: (_phone) => "Questions? Email us at hello@whiteoutsolutions.co 🏔",
   },
 };
 

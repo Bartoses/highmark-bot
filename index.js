@@ -20,13 +20,14 @@ import { createClient } from "@supabase/supabase-js";
 
 import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborKbRow, getFareHarborAvailability } from "./knowledgeBase.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
-import { resolveClient, CLIENTS, getDefaultClient } from "./clients.js";
+import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
 import { handleListLeads, handleUpdateLead, handleLeadsSummary } from "./adminLeads.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { loadDbClients } from "./clients.js";
+import { handleDemoFlow } from "./demoFlow.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -1163,7 +1164,22 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
   }
 
-  // 6. DEMO triggers — reset conversation and send appropriate opener
+  // 6. Demo mode — deterministic guided sales demo, no AI/API calls
+  //    Triggered when the inbound Twilio number routes to a bookingMode==="demo" client.
+  if (client.bookingMode === "demo") {
+    const { isNew, convo } = await getConversation(fromNumber, toNumber);
+    const { reply } = await handleDemoFlow({
+      supabase, twilioClient, fromNumber, toNumber, rawBody,
+      testMode: process.env.TEST_MODE === "true", isNew, convo,
+    });
+    await saveConversation(fromNumber, toNumber, convo);
+    if (process.env.TEST_MODE === "true") return res.json({ reply, meta: { mode: "demo" } });
+    await twilioClient.messages.create({ body: reply, from: toNumber, to: fromNumber });
+    res.set("Content-Type", "text/xml");
+    return res.send("<Response></Response>");
+  }
+
+  // 7. DEMO triggers — reset conversation and send appropriate opener
   //    DEMO: public keyword (on website), introduces Highmark by name for prospects
   //    SUMMITDEMO: internal keyword for owner use, sends straight into Summit persona
   if (msgUpper === "DEMO" || msgUpper === "SUMMITDEMO") {
@@ -1752,15 +1768,17 @@ app.get("/internal/info", requireUiAccess, (_req, res) => {
   });
 });
 
-// All configured clients — used by UI client selector
+// All configured clients (static + DB-backed) — used by UI client selector
 app.get("/internal/clients", requireUiAccess, (_req, res) => {
   res.json(
-    Object.values(CLIENTS).map((c) => ({
+    Object.values(getAllClients()).map((c) => ({
       id:          c.id,
       name:        c.name,
       botName:     c.botName,
       toPhone:     c.inboundPhones[0] ?? null,
       bookingMode: c.bookingMode,
+      tier:        c.tier ?? null,
+      isDemo:      c.isDemo ?? false,
     }))
   );
 });

@@ -35,6 +35,7 @@ import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
+import { isYesIntent, isNoIntent, detectPath } from "./demoFlow.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -750,11 +751,11 @@ async function test18() {
     ? pass("resolveClient('+18335786496') → csr_rea (primary)")
     : fail("resolveClient primary number", `expected csr_rea, got ${csrRea.id}`);
 
-  // csr_rea also resolves from demo number
-  const csrReaDemo = resolveClient("+18668906657");
-  csrReaDemo.id === "csr_rea"
-    ? pass("resolveClient('+18668906657') → csr_rea (demo)")
-    : fail("resolveClient demo number", `expected csr_rea, got ${csrReaDemo.id}`);
+  // demo number now routes to highmark_demo (moved from csr_rea in Chunk 7)
+  const demoClient = resolveClient("+18668906657");
+  demoClient.id === "highmark_demo"
+    ? pass("resolveClient('+18668906657') → highmark_demo (demo client)")
+    : fail("resolveClient demo number", `expected highmark_demo, got ${demoClient.id}`);
 
   // lone_pine resolves from its hardcoded number
   const lpResolved = resolveClient("+18336489744");
@@ -1492,7 +1493,7 @@ async function test26() {
 async function test27() {
   console.log("\nTEST 27: Commercial decision layer — scoreBuyingIntent, needsExpertiseFirst, buildResponsePlan");
 
-  const client = resolveClient("+18668906657"); // csr_rea
+  const client   = getDefaultClient();             // csr_rea
   const lonePine = resolveClient("+18336489744"); // informational
 
   // Minimal convo helper
@@ -1674,9 +1675,9 @@ async function test28() {
     : fail("VALID_BOOKING_MODES missing expected mode");
 
   // ── Unit: static clients still resolve via resolveClient ──────────────────
-  resolveClient("+18668906657").id === "csr_rea"
-    ? pass("resolveClient: demo number routes to csr_rea")
-    : fail("resolveClient: csr_rea resolution broken");
+  resolveClient("+18668906657").id === "highmark_demo"
+    ? pass("resolveClient: demo number routes to highmark_demo")
+    : fail("resolveClient: demo number should route to highmark_demo");
 
   resolveClient("+18336489744").id === "lone_pine"
     ? pass("resolveClient: Lone Pine number routes to lone_pine")
@@ -1825,6 +1826,160 @@ async function test28() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TEST 29: Chunk 7 — Demo mode + guided flow
+// ─────────────────────────────────────────────────────────────────────────────
+async function test29() {
+  console.log("\nTEST 29: Demo Mode + Guided Flow (Chunk 7)");
+
+  const DEMO_PHONE = "+18668906657"; // routes to highmark_demo
+
+  // ── Unit: intent detection ─────────────────────────────────────────────────
+  isYesIntent("yes")             === true  ? pass("isYesIntent: yes → true")        : fail("isYesIntent: yes");
+  isYesIntent("Yeah sure")       === true  ? pass("isYesIntent: yeah sure → true")  : fail("isYesIntent: yeah sure");
+  isYesIntent("pricing")         === true  ? pass("isYesIntent: pricing → true")    : fail("isYesIntent: pricing");
+  isYesIntent("no thanks")       === false ? pass("isYesIntent: no thanks → false") : fail("isYesIntent: no thanks false positive");
+  isNoIntent("no")               === true  ? pass("isNoIntent: no → true")          : fail("isNoIntent: no");
+  isNoIntent("nope not now")     === true  ? pass("isNoIntent: nope not now → true"): fail("isNoIntent: nope not now");
+  isNoIntent("yes please")       === false ? pass("isNoIntent: yes → false")        : fail("isNoIntent: yes false positive");
+  detectPath("1") === 1          ? pass("detectPath: '1' → 1") : fail("detectPath: 1");
+  detectPath("2 Lead capture")   === 2  ? pass("detectPath: '2 ...' → 2")  : fail("detectPath: 2");
+  detectPath("3")                === 3  ? pass("detectPath: '3' → 3")      : fail("detectPath: 3");
+  detectPath("hello")            === null ? pass("detectPath: 'hello' → null") : fail("detectPath: hello not null");
+
+  // ── Unit: client routing ───────────────────────────────────────────────────
+  resolveClient(DEMO_PHONE).id === "highmark_demo"
+    ? pass("resolveClient: demo number → highmark_demo")
+    : fail("resolveClient: demo number should route to highmark_demo");
+
+  resolveClient("+18335786496").id === "csr_rea"
+    ? pass("resolveClient: CSR/REA number unchanged")
+    : fail("resolveClient: CSR/REA number broken");
+
+  getAllClients().highmark_demo?.bookingMode === "demo"
+    ? pass("getAllClients: highmark_demo has bookingMode=demo")
+    : fail("getAllClients: highmark_demo missing or wrong bookingMode");
+
+  CLIENTS.csr_rea.inboundPhones.includes(DEMO_PHONE) === false
+    ? pass("csr_rea no longer owns demo number")
+    : fail("csr_rea should NOT include demo number");
+
+  // ── Integration: demo flow (requires server) ───────────────────────────────
+  // Use dedicated phone numbers per path to avoid rate limiter (10 msg/min/phone)
+  const DEMO_PHONE_A = "+15550011111"; // path 2 (full lead capture flow = 8 msgs)
+  const DEMO_PHONE_B = "+15550022222"; // path 1 check (2 msgs)
+  const DEMO_PHONE_C = "+15550033333"; // path 3 check (2 msgs)
+  const DEMO_PHONE_D = "+15550044444"; // START OVER + production check
+
+  await resetConvo(DEMO_PHONE_A);
+
+  // First message → opener
+  const greeting = await sendSms("Hey", DEMO_PHONE_A, DEMO_PHONE);
+  greeting.includes("Welcome to Highmark") && greeting.includes("1️⃣")
+    ? pass("Demo: first message → guided opener with paths")
+    : fail("Demo: opener wrong or missing", greeting.slice(0, 100));
+
+  // Pick path 2 (Lead Capture)
+  const path2 = await sendSms("2", DEMO_PHONE_A, DEMO_PHONE);
+  path2.length > 20 && !path2.includes("Welcome to Highmark")
+    ? pass("Demo: path 2 → lead capture intro shown")
+    : fail("Demo: path 2 intro wrong", path2.slice(0, 100));
+
+  // Any reply → followup + CTA
+  const cta = await sendSms("Cool", DEMO_PHONE_A, DEMO_PHONE);
+  cta.includes("YES") || cta.includes("set this up")
+    ? pass("Demo: followup reply → CTA shown")
+    : fail("Demo: CTA not shown", cta.slice(0, 100));
+
+  // YES → ask name
+  const nameAsk = await sendSms("yes", DEMO_PHONE_A, DEMO_PHONE);
+  /name/i.test(nameAsk)
+    ? pass("Demo: YES → asks for name")
+    : fail("Demo: should ask for name after YES", nameAsk.slice(0, 100));
+
+  // Name → ask business
+  const bizAsk = await sendSms("Alex", DEMO_PHONE_A, DEMO_PHONE);
+  /business/i.test(bizAsk)
+    ? pass("Demo: name provided → asks for business")
+    : fail("Demo: should ask for business name", bizAsk.slice(0, 100));
+
+  // Business → ask website
+  const webAsk = await sendSms("Acme Outdoors", DEMO_PHONE_A, DEMO_PHONE);
+  /website/i.test(webAsk)
+    ? pass("Demo: business provided → asks for website")
+    : fail("Demo: should ask for website", webAsk.slice(0, 100));
+
+  // Skip website → confirmation + lead saved
+  const confirm = await sendSms("skip", DEMO_PHONE_A, DEMO_PHONE);
+  confirm.toLowerCase().includes("reach out") || confirm.toLowerCase().includes("awesome")
+    ? pass("Demo: SKIP website → confirmation sent")
+    : fail("Demo: confirmation missing after SKIP", confirm.slice(0, 100));
+
+  // Lead should be in DB
+  if (supabase) {
+    const { data: leads } = await supabase
+      .from("leads")
+      .select("*")
+      .eq("client_id", "highmark_demo")
+      .eq("from_number", DEMO_PHONE_A)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const lead = leads?.[0];
+    lead
+      ? pass("Demo: lead written to DB")
+      : fail("Demo: lead not found in leads table");
+    lead?.lead_type === "demo"
+      ? pass("Demo: lead_type=demo")
+      : fail("Demo: lead_type should be 'demo'", lead?.lead_type);
+    lead?.contact_name === "Alex"
+      ? pass("Demo: contact_name saved correctly")
+      : fail("Demo: contact_name wrong", lead?.contact_name);
+    // Cleanup
+    if (lead) await supabase.from("leads").delete().eq("id", lead.id);
+    pass("Demo: test lead cleaned up");
+  }
+
+  // START OVER → resets to opener
+  await resetConvo(DEMO_PHONE_D);
+  await sendSms("2", DEMO_PHONE_D, DEMO_PHONE); // get past start
+  const reset = await sendSms("START OVER", DEMO_PHONE_D, DEMO_PHONE);
+  reset.includes("Welcome to Highmark")
+    ? pass("Demo: START OVER → resets to opener")
+    : fail("Demo: START OVER should reset", reset.slice(0, 100));
+
+  // Path 1 flow
+  await resetConvo(DEMO_PHONE_B);
+  await sendSms("Hi", DEMO_PHONE_B, DEMO_PHONE);
+  const p1intro = await sendSms("1", DEMO_PHONE_B, DEMO_PHONE);
+  p1intro.length > 20 && /Q&A|hour|FAQ|answer/i.test(p1intro)
+    ? pass("Demo: path 1 (Q&A) intro shown")
+    : fail("Demo: path 1 intro missing", p1intro.slice(0, 100));
+
+  // Path 3 flow
+  await resetConvo(DEMO_PHONE_C);
+  await sendSms("Hi", DEMO_PHONE_C, DEMO_PHONE);
+  const p3intro = await sendSms("3", DEMO_PHONE_C, DEMO_PHONE);
+  p3intro.length > 20 && /book|availability|conversion/i.test(p3intro)
+    ? pass("Demo: path 3 (Booking) intro shown")
+    : fail("Demo: path 3 intro missing", p3intro.slice(0, 100));
+
+  // Production client unaffected — use TEST_PHONE2 (fresh for this test)
+  const csrGreet = await sendSms("Hey", TEST_PHONE2, "+18335786496");
+  csrGreet.length > 10 && !csrGreet.includes("Welcome to Highmark")
+    ? pass("Demo: production csr_rea flow unaffected")
+    : fail("Demo: csr_rea flow broken by demo change");
+
+  // UI /internal/clients includes demo client
+  const clientsRes  = await httpGet("/internal/clients");
+  const clientsData = await clientsRes.json();
+  Array.isArray(clientsData) && clientsData.some((c) => c.id === "highmark_demo")
+    ? pass("Demo: /internal/clients includes highmark_demo")
+    : fail("Demo: highmark_demo missing from /internal/clients");
+  clientsData.some((c) => c.isDemo === true)
+    ? pass("Demo: /internal/clients marks demo client with isDemo=true")
+    : fail("Demo: isDemo flag missing from client list");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -1867,6 +2022,7 @@ async function main() {
     await test24(); // Admin lead management API (Chunk 5)
     await test25(); // Organic outreach YES → waitlist lead (Chunk 5b)
     await test28(); // Client provisioning API (Chunk 6)
+    await test29(); // Demo mode + guided flow (Chunk 7)
   } catch (e) {
     fail("Test server", e.message);
   } finally {
