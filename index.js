@@ -30,6 +30,7 @@ import { loadDbClients } from "./clients.js";
 import { handleDemoFlow } from "./demoFlow.js";
 
 const app = express();
+app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -1174,7 +1175,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     });
     await saveConversation(fromNumber, toNumber, convo);
     if (process.env.TEST_MODE === "true") return res.json({ reply, meta: { mode: "demo" } });
-    await twilioClient.messages.create({ body: reply, from: toNumber, to: fromNumber });
+    await twilioClient.messages.create({ body: reply, from: toNumber, to: fromNumber })
+      .catch((err) => console.error("[DEMO] Twilio send error:", err.message));
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
