@@ -26,6 +26,8 @@ import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertCo
 import { processScheduledMessages } from "./scheduler.js";
 import { handleListLeads, handleUpdateLead, handleLeadsSummary } from "./adminLeads.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
+import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
+import { loadSiteContent } from "./siteContent.js";
 import { loadDbClients } from "./clients.js";
 import { handleDemoFlow } from "./demoFlow.js";
 
@@ -1799,6 +1801,21 @@ app.get("/admin/clients",       requireUiAccess, (req, res) => handleListClients
 app.get("/admin/clients/:id",   requireUiAccess, (req, res) => handleGetClient(req, res));
 app.post("/admin/clients",      requireUiAccess, (req, res) => handleCreateClient(req, res, supabase));
 app.patch("/admin/clients/:id", requireUiAccess, (req, res) => handleUpdateClient(req, res, supabase));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SITE CONTENT MANAGEMENT
+// Public:  GET /api/site-content        — fetched by home.html overlay script
+// Admin:   GET/PATCH /admin/site-content/:section  — requires UI_SECRET
+//          GET /admin/site-editor                   — internal content editor UI
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/api/site-content", async (_req, res) => {
+  const content = await loadSiteContent(supabase);
+  res.json(content);
+});
+app.get("/admin/site-content",            requireUiAccess, (req, res) => handleListSiteContent(req, res, supabase));
+app.get("/admin/site-content/:section",   requireUiAccess, (req, res) => handleGetSiteSection(req, res, supabase));
+app.patch("/admin/site-content/:section", requireUiAccess, (req, res) => handleUpdateSiteSection(req, res, supabase));
+app.get("/admin/site-editor",             requireUiAccess, (_req, res) => res.sendFile(path.join(__uiDir, "site-editor.html")));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCHEDULED MESSAGES WORKER — called by Railway cron every minute

@@ -350,16 +350,16 @@
 <!-- ── HERO ── -->
 <section class="hero">
   <div class="container">
-    <div class="hero-badge">🏔 Live demo available now — no signup required</div>
-    <h1>Your customers text.<br><em>Highmark handles it.</em></h1>
-    <p>AI SMS concierge that answers questions, captures leads, and drives bookings — automatically, 24/7. For tour operators, rental companies, and service businesses.</p>
+    <div class="hero-badge" data-cms="hero.badge">🏔 Live demo available now — no signup required</div>
+    <h1 data-cms="hero.headline">Your customers text.<br><em>Highmark handles it.</em></h1>
+    <p data-cms="hero.subheadline">AI SMS concierge that answers questions, captures leads, and drives bookings — automatically, 24/7. For tour operators, rental companies, and service businesses.</p>
     <div class="cta-group">
-      <a href="sms:+18668906657?body=DEMO" class="btn-primary">
+      <a href="sms:+18668906657?body=DEMO" class="btn-primary" data-cms="hero.primary_cta">
         📱 Text DEMO to (866) 890-6657
       </a>
-      <a href="#pricing" class="btn-ghost">See pricing ↓</a>
+      <a href="#pricing" class="btn-ghost" data-cms="hero.secondary_cta">See pricing ↓</a>
     </div>
-    <div class="hero-proof">
+    <div class="hero-proof" data-cms-container="hero.proof_items">
       <div class="proof-item"><div class="proof-dot"></div> Live demo active now</div>
       <div class="proof-item"><div class="proof-dot"></div> No signup required</div>
       <div class="proof-item"><div class="proof-dot"></div> Most clients live in 1–3 days</div>
@@ -392,9 +392,9 @@
 <section>
   <div class="container">
     <div class="section-label">How it works</div>
-    <h2>Up and running in days, not weeks</h2>
-    <p class="section-sub">Highmark connects to your existing business in three steps. No code required.</p>
-    <div class="how-grid">
+    <h2 data-cms="how_it_works.headline">Up and running in days, not weeks</h2>
+    <p class="section-sub" data-cms="how_it_works.subheadline">Highmark connects to your existing business in three steps. No code required.</p>
+    <div class="how-grid" data-cms-container="how_it_works.steps">
       <div class="how-card">
         <div class="how-num">1</div>
         <h3>Connect your business</h3>
@@ -452,13 +452,13 @@
 <div class="demo-band">
   <div class="container">
     <div class="section-label" style="color: #93c5fd;">Live demo</div>
-    <h2>See it work right now</h2>
-    <p class="sub">Text the demo number below. Ask anything — pricing, availability, how it works. Highmark will respond in seconds.</p>
-    <div class="phone-number">
-      <a href="sms:+18668906657?body=DEMO">(866) 890-6657</a>
+    <h2 data-cms="demo_band.headline">See it work right now</h2>
+    <p class="sub" data-cms="demo_band.subheadline">Text the demo number below. Ask anything — pricing, availability, how it works. Highmark will respond in seconds.</p>
+    <div class="phone-number" data-cms="demo_band.phone_display">
+      <a href="sms:+18668906657?body=DEMO" data-cms-sms="hero.demo_phone">(866) 890-6657</a>
     </div>
-    <div class="phone-hint">Text anything to start · Works on any phone</div>
-    <a href="sms:+18668906657?body=DEMO" class="btn-primary" style="display:inline-flex;">
+    <div class="phone-hint" data-cms="demo_band.hint">Text anything to start · Works on any phone</div>
+    <a href="sms:+18668906657?body=DEMO" class="btn-primary" style="display:inline-flex;" data-cms="demo_band.cta_text" data-cms-sms="hero.demo_phone">
       📱 Open in Messages
     </a>
     <div class="or-divider">or copy the number and text it directly</div>
@@ -469,9 +469,9 @@
 <section id="pricing">
   <div class="container">
     <div class="section-label">Pricing</div>
-    <h2>Start free. Scale when you're ready.</h2>
-    <p class="section-sub">No long-term contracts. No per-message fees. Most clients go live in 1–3 days.</p>
-    <div class="pricing-grid">
+    <h2 data-cms="pricing.headline">Start free. Scale when you're ready.</h2>
+    <p class="section-sub" data-cms="pricing.subheadline">No long-term contracts. No per-message fees. Most clients go live in 1–3 days.</p>
+    <div class="pricing-grid" data-cms-container="pricing.tiers">
 
       <!-- FREE -->
       <div class="price-card">
@@ -534,7 +534,7 @@
 
     </div>
     <p style="text-align:center; margin-top:28px; font-size:.85rem; color:var(--muted);">
-      Pricing shown is per client. Volume discounts available for agencies. <a href="sms:+18668906657?body=DEMO" style="color:var(--accent)">Contact us</a> for custom plans.
+      <span data-cms="pricing.footnote">Pricing shown is per client. Volume discounts available for agencies.</span> <a href="sms:+18668906657?body=DEMO" style="color:var(--accent)">Contact us</a> for custom plans.
     </p>
   </div>
 </section>
@@ -543,8 +543,8 @@
 <section style="background:var(--surface)">
   <div class="container">
     <div class="section-label">FAQ</div>
-    <h2>Common questions</h2>
-    <div class="faq-list">
+    <h2 data-cms="faq.headline">Common questions</h2>
+    <div class="faq-list" data-cms-container="faq.items">
       <details>
         <summary>How long does setup take?</summary>
         <div class="faq-answer">Most businesses are live in 1–3 business days. We handle everything: Twilio number setup, website scraping, bot configuration, and a test pass before going live. You don't touch any code.</div>
@@ -585,13 +585,13 @@
 <section class="final-cta">
   <div class="container">
     <div class="section-label">Get started</div>
-    <h2>Your customers are texting right now</h2>
-    <p>See Highmark work on your phone in the next 30 seconds — no signup required.</p>
+    <h2 data-cms="final_cta.headline">Your customers are texting right now</h2>
+    <p data-cms="final_cta.subheadline">See Highmark work on your phone in the next 30 seconds — no signup required.</p>
     <div class="cta-group">
-      <a href="sms:+18668906657?body=DEMO" class="btn-primary">
+      <a href="sms:+18668906657?body=DEMO" class="btn-primary" data-cms="final_cta.primary_cta" data-cms-sms="hero.demo_phone">
         📱 Text DEMO to (866) 890-6657
       </a>
-      <a href="mailto:hello@whiteoutsolutions.co" class="btn-ghost">
+      <a href="mailto:hello@whiteoutsolutions.co" class="btn-ghost" data-cms="final_cta.secondary_cta" data-cms-href="final_cta.secondary_cta_href">
         Talk to us →
       </a>
     </div>
@@ -611,6 +611,185 @@
     </p>
   </div>
 </footer>
+
+<!-- ── SITE CONTENT OVERLAY ── -->
+<!-- Fetches /api/site-content and applies any DB overrides to the page.
+     The static HTML always renders first (defaults are correct), so there
+     is no flash of wrong content. If the API call fails, nothing breaks. -->
+<script>
+(function() {
+  // HTML-escape for safe innerHTML injection
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function smsUrl(phone, body) {
+    phone = phone || "+18668906657";
+    body  = body  || "DEMO";
+    return "sms:" + phone + "?body=" + encodeURIComponent(body);
+  }
+
+  // Simple deep-get from object by dot path: get(c, "hero.headline")
+  function get(obj, path) {
+    return path.split(".").reduce(function(o, k) { return o && o[k]; }, obj);
+  }
+
+  function applyText(c) {
+    // [data-cms="section.field"] → set textContent
+    document.querySelectorAll("[data-cms]").forEach(function(el) {
+      var val = get(c, el.getAttribute("data-cms"));
+      if (val == null || typeof val !== "string") return;
+      // Allow safe HTML in a known-safe field (headline may contain <em>)
+      if (el.getAttribute("data-cms").endsWith(".headline") ||
+          el.getAttribute("data-cms").endsWith(".badge")) {
+        el.innerHTML = val;
+      } else {
+        el.textContent = val;
+      }
+    });
+  }
+
+  function applySmsLinks(c) {
+    // [data-cms-sms="section.demo_phone"] → update href + any child <a>
+    var phone = get(c, "hero.demo_phone") || "+18668906657";
+    var body  = get(c, "hero.demo_body")  || "DEMO";
+    var url   = smsUrl(phone, body);
+    document.querySelectorAll("[data-cms-sms]").forEach(function(el) {
+      if (el.tagName === "A") el.href = url;
+      el.querySelectorAll("a").forEach(function(a) { a.href = url; });
+    });
+    // Update static nav CTA as well
+    document.querySelectorAll('.nav-cta[href^="sms:"]').forEach(function(a) {
+      a.href = url;
+    });
+  }
+
+  function applyHref(c) {
+    document.querySelectorAll("[data-cms-href]").forEach(function(el) {
+      var val = get(c, el.getAttribute("data-cms-href"));
+      if (val && el.tagName === "A") el.href = val;
+    });
+  }
+
+  function applyProofItems(c) {
+    var items = get(c, "hero.proof_items");
+    if (!Array.isArray(items) || !items.length) return;
+    var el = document.querySelector("[data-cms-container='hero.proof_items']");
+    if (!el) return;
+    el.innerHTML = items.map(function(t) {
+      return '<div class="proof-item"><div class="proof-dot"></div> ' + esc(t) + "</div>";
+    }).join("");
+  }
+
+  function applyHowItWorks(c) {
+    var steps = get(c, "how_it_works.steps");
+    if (!Array.isArray(steps) || !steps.length) return;
+    var el = document.querySelector("[data-cms-container='how_it_works.steps']");
+    if (!el) return;
+    el.innerHTML = steps.map(function(s) {
+      return '<div class="how-card">' +
+        '<div class="how-num">' + esc(s.num || "") + "</div>" +
+        "<h3>" + esc(s.title || "") + "</h3>" +
+        "<p>" + esc(s.body || "") + "</p>" +
+        "</div>";
+    }).join("");
+  }
+
+  function applyPricing(c) {
+    var tiers = get(c, "pricing.tiers");
+    if (!Array.isArray(tiers) || !tiers.length) return;
+    var grid = document.querySelector("[data-cms-container='pricing.tiers']");
+    if (!grid) return;
+    var phone = get(c, "hero.demo_phone") || "+18668906657";
+    var body  = get(c, "hero.demo_body")  || "DEMO";
+    var url   = smsUrl(phone, body);
+
+    grid.innerHTML = tiers.map(function(t) {
+      var isFeatured = !!t.featured;
+      var priceHtml  = t.price === 0
+        ? "<span>$0</span>"
+        : "<sup>$</sup>" + esc(String(t.price)) +
+          '<span style="font-size:1.2rem;font-weight:400;color:var(--muted)">/mo</span>';
+
+      var features = (t.features || []).map(function(f) {
+        return '<li class="' + (f.included ? "active" : "") + '">' +
+          '<span class="' + (f.included ? "check" : "cross") + '">' +
+          (f.included ? "✓" : "✗") + "</span> " +
+          esc(f.text) + "</li>";
+      }).join("");
+
+      return '<div class="price-card' + (isFeatured ? " featured" : "") + '">' +
+        (t.badge ? '<div class="price-badge">' + esc(t.badge) + "</div>" : "") +
+        '<div class="price-tier">' + esc(t.name) + "</div>" +
+        '<div class="price-amount">' + priceHtml + "</div>" +
+        '<div class="price-period">' + esc(t.period || "") + "</div>" +
+        '<div class="price-desc">' + esc(t.description || "") + "</div>" +
+        '<ul class="price-features">' + features + "</ul>" +
+        '<a href="' + url + '" class="price-cta ' + esc(t.cta_style || "ghost") + '">' +
+        esc(t.cta_text || "Get started →") + "</a>" +
+        "</div>";
+    }).join("");
+  }
+
+  function applyFaq(c) {
+    var items = get(c, "faq.items");
+    if (!Array.isArray(items) || !items.length) return;
+    var el = document.querySelector("[data-cms-container='faq.items']");
+    if (!el) return;
+    el.innerHTML = items.map(function(item) {
+      return "<details>" +
+        "<summary>" + esc(item.q || "") + "</summary>" +
+        '<div class="faq-answer">' + esc(item.a || "") + "</div>" +
+        "</details>";
+    }).join("");
+  }
+
+  function applyAnnouncement(c) {
+    var ann = get(c, "announcement");
+    var existing = document.getElementById("cms-announcement");
+    if (!ann || !ann.text) {
+      if (existing) existing.remove();
+      return;
+    }
+    var nav = document.querySelector("nav");
+    var el  = existing;
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "cms-announcement";
+      el.style.cssText =
+        "background:#1e3a5f;color:#93c5fd;text-align:center;padding:10px 20px;" +
+        "font-size:.88rem;border-bottom:1px solid rgba(59,130,246,.3);";
+      document.body.insertBefore(el, nav);
+    }
+    if (ann.link_text && ann.link_href) {
+      el.innerHTML = esc(ann.text) +
+        ' <a href="' + esc(ann.link_href) + '" style="color:#60a5fa;font-weight:600">' +
+        esc(ann.link_text) + "</a>";
+    } else {
+      el.textContent = ann.text;
+    }
+  }
+
+  fetch("/api/site-content", { cache: "no-store" })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(c) {
+      if (!c) return;
+      try { applyAnnouncement(c); }  catch (e) {}
+      try { applyText(c); }          catch (e) {}
+      try { applySmsLinks(c); }      catch (e) {}
+      try { applyHref(c); }          catch (e) {}
+      try { applyProofItems(c); }    catch (e) {}
+      try { applyHowItWorks(c); }    catch (e) {}
+      try { applyPricing(c); }       catch (e) {}
+      try { applyFaq(c); }           catch (e) {}
+    })
+    .catch(function() {});
+}());
+</script>
 
 </body>
 </html>

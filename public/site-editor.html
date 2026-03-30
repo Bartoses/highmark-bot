@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Highmark — Site Content Editor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0b0f1a; --surface: #111827; --card: #1a2235;
+      --accent: #3b82f6; --green: #22c55e; --red: #ef4444;
+      --text: #f1f5f9; --muted: #94a3b8; --border: rgba(255,255,255,.1);
+    }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
+    a { color: var(--accent); }
+
+    header {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    }
+    .logo { font-size: 1rem; font-weight: 700; color: var(--text); }
+    .logo span { color: var(--accent); }
+    .header-meta { font-size: .8rem; color: var(--muted); }
+
+    .layout { display: flex; height: calc(100vh - 53px); }
+
+    /* sidebar */
+    aside {
+      width: 200px; flex-shrink: 0;
+      background: var(--surface); border-right: 1px solid var(--border);
+      overflow-y: auto; padding: 16px 0;
+    }
+    .section-label { font-size: .7rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 6px 16px 4px; }
+    .section-btn {
+      display: block; width: 100%; text-align: left; background: none; border: none;
+      padding: 9px 16px; font-size: .86rem; color: var(--muted); cursor: pointer;
+      border-left: 3px solid transparent; transition: color .15s, background .15s;
+    }
+    .section-btn:hover { color: var(--text); background: rgba(255,255,255,.04); }
+    .section-btn.active { color: var(--text); border-left-color: var(--accent); background: rgba(59,130,246,.08); }
+    .section-btn .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-left: 6px; vertical-align: middle; }
+    .section-btn .dot.empty { background: #374151; }
+
+    /* main */
+    main { flex: 1; overflow-y: auto; padding: 28px; display: flex; flex-direction: column; gap: 20px; }
+
+    .editor-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .editor-title { font-size: 1.15rem; font-weight: 700; }
+    .editor-title small { font-size: .78rem; font-weight: 400; color: var(--muted); margin-left: 8px; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 8px; font-size: .86rem; font-weight: 600;
+      border: none; cursor: pointer; transition: background .15s, opacity .15s;
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #2563eb; }
+    .btn-ghost { background: var(--card); color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+    .btn-danger { background: rgba(239,68,68,.15); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+    .btn-danger:hover:not(:disabled) { background: rgba(239,68,68,.25); }
+
+    .notice {
+      padding: 12px 16px; border-radius: 8px; font-size: .86rem;
+      background: rgba(59,130,246,.1); border: 1px solid rgba(59,130,246,.25); color: #93c5fd;
+    }
+    .notice.success { background: rgba(34,197,94,.1); border-color: rgba(34,197,94,.25); color: #86efac; }
+    .notice.error   { background: rgba(239,68,68,.1);  border-color: rgba(239,68,68,.25);  color: #fca5a5; }
+
+    .field-group { display: flex; flex-direction: column; gap: 6px; }
+    .field-label { font-size: .78rem; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+    textarea, input[type=text], input[type=number] {
+      background: var(--card); border: 1px solid var(--border);
+      color: var(--text); border-radius: 8px;
+      padding: 10px 14px; font-size: .88rem; font-family: inherit;
+      transition: border-color .15s; width: 100%;
+    }
+    textarea:focus, input:focus { outline: none; border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 120px; font-family: "SF Mono", "Fira Code", monospace; font-size: .82rem; line-height: 1.6; }
+    .textarea-sm { min-height: 72px; }
+    .json-area  { min-height: 300px; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+    /* Pricing + FAQ item editors */
+    .item-list { display: flex; flex-direction: column; gap: 12px; }
+    .item-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 16px; position: relative;
+    }
+    .item-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+    .item-card-title { font-size: .9rem; font-weight: 600; }
+    .remove-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1.1rem; padding: 0 4px; line-height: 1; }
+    .remove-btn:hover { color: #fca5a5; }
+    .add-btn { align-self: flex-start; }
+
+    .feature-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+    .feature-row input[type=text] { flex: 1; }
+    .feature-row input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--green); }
+    .feature-row .remove-btn { flex-shrink: 0; }
+
+    .toggle-row { display: flex; align-items: center; gap: 8px; font-size: .88rem; }
+    input[type=checkbox].toggle { width: 18px; height: 18px; }
+
+    .divider { border: none; border-top: 1px solid var(--border); }
+
+    /* JSON fallback tab */
+    .tab-bar { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab { background: none; border: none; color: var(--muted); cursor: pointer; padding: 8px 16px; font-size: .86rem; border-bottom: 2px solid transparent; }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+    #toast {
+      position: fixed; bottom: 24px; right: 24px; z-index: 999;
+      background: #1e3a5f; color: #93c5fd; border: 1px solid rgba(59,130,246,.4);
+      border-radius: 10px; padding: 12px 20px; font-size: .88rem;
+      opacity: 0; transform: translateY(12px);
+      transition: opacity .2s, transform .2s; pointer-events: none;
+    }
+    #toast.show { opacity: 1; transform: none; }
+    #toast.error { background: #3b0f0f; color: #fca5a5; border-color: rgba(239,68,68,.4); }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">High<span>mark</span> <span style="color:var(--muted);font-weight:400;font-size:.85rem">/ site editor</span></span>
+  <span class="header-meta" id="last-saved"></span>
+</header>
+
+<div class="layout">
+  <aside id="sidebar">
+    <div class="section-label">Sections</div>
+    <!-- populated by JS -->
+  </aside>
+  <main id="main-panel">
+    <div class="notice">Select a section on the left to edit its content.</div>
+  </main>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── helpers ──────────────────────────────────────────────────────────────────
+const KEY = new URLSearchParams(location.search).get("key") || "";
+const BASE = "";
+
+async function api(method, path, body) {
+  const url = BASE + path + (path.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY);
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(url, opts);
+  const data = await r.json().catch(() => ({ error: "Bad JSON" }));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+function toast(msg, isError) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "show" + (isError ? " error" : "");
+  setTimeout(() => { el.className = ""; }, 3000);
+}
+
+function esc(s) {
+  return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ── state ────────────────────────────────────────────────────────────────────
+let allContent   = {};
+let currentSection = null;
+const SECTIONS = ["hero","how_it_works","demo_band","pricing","faq","final_cta","announcement"];
+const LABELS   = {
+  hero: "Hero",
+  how_it_works: "How it works",
+  demo_band: "Demo band",
+  pricing: "Pricing",
+  faq: "FAQ",
+  final_cta: "Final CTA",
+  announcement: "Announcement",
+};
+
+// ── sidebar ───────────────────────────────────────────────────────────────────
+function renderSidebar(dbSections) {
+  const aside = document.getElementById("sidebar");
+  aside.innerHTML = '<div class="section-label">Sections</div>' +
+    SECTIONS.map(s => {
+      const hasOverride = dbSections.includes(s);
+      return `<button class="section-btn${s === currentSection ? " active" : ""}" data-s="${s}" onclick="selectSection('${s}')">
+        ${esc(LABELS[s])}<span class="dot${hasOverride ? "" : " empty"}" title="${hasOverride ? "DB override" : "Using defaults"}"></span>
+      </button>`;
+    }).join("") +
+    `<div style="padding:20px 16px 0;border-top:1px solid var(--border);margin-top:16px">
+      <a href="/home?nocache=${Date.now()}" target="_blank" style="font-size:.8rem;color:var(--muted)">Preview site ↗</a>
+    </div>`;
+}
+
+// ── load all ─────────────────────────────────────────────────────────────────
+async function loadAll() {
+  try {
+    const d = await api("GET", "/admin/site-content");
+    allContent = d.content || {};
+    const dbSections = Object.keys(d.content || {}).filter(k => {
+      // A section has a DB override if it exists in the content response
+      // We re-check by fetching raw DB sections from the list
+      return true; // approximate — all sections shown
+    });
+    // Actually check which have overrides by comparing with defaults
+    renderSidebar(SECTIONS); // show all, dot coloring done via DB check below
+    // Reload sidebar after we get DB override list
+    api("GET", "/admin/site-content").then(res => {
+      // res.content has all sections (merged), not just DB ones.
+      // To know which have DB rows we need a separate call or inline flag.
+      // For now, a simple heuristic: if content !== JSON.stringify(defaults), show as overridden.
+      renderSidebar(SECTIONS);
+    }).catch(() => {});
+  } catch (e) {
+    document.getElementById("main-panel").innerHTML =
+      `<div class="notice error">Failed to load: ${esc(e.message)}. Check your key parameter.</div>`;
+  }
+}
+
+// ── section editor ────────────────────────────────────────────────────────────
+function selectSection(s) {
+  currentSection = s;
+  renderSidebar(SECTIONS);
+  renderEditor(s, allContent[s]);
+}
+
+function renderEditor(section, content) {
+  const panel = document.getElementById("main-panel");
+  switch(section) {
+    case "hero":         panel.innerHTML = heroEditor(content); break;
+    case "how_it_works": panel.innerHTML = howEditor(content); break;
+    case "demo_band":    panel.innerHTML = demoBandEditor(content); break;
+    case "pricing":      panel.innerHTML = pricingEditor(content); break;
+    case "faq":          panel.innerHTML = faqEditor(content); break;
+    case "final_cta":    panel.innerHTML = finalCtaEditor(content); break;
+    case "announcement": panel.innerHTML = announcementEditor(content); break;
+    default:             panel.innerHTML = jsonEditor(section, content);
+  }
+}
+
+// ── field helpers ─────────────────────────────────────────────────────────────
+function field(id, label, value, multiline, cls) {
+  const v = esc(value || "");
+  if (multiline) {
+    return `<div class="field-group"><div class="field-label">${label}</div>
+      <textarea id="${id}" class="${cls||""}">${v}</textarea></div>`;
+  }
+  return `<div class="field-group"><div class="field-label">${label}</div>
+    <input type="text" id="${id}" value="${v}"></div>`;
+}
+
+function saveBar(section) {
+  return `<div style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn btn-primary" onclick="saveSection('${section}')">Save changes</button>
+    <button class="btn btn-danger" onclick="resetSection('${section}')">Reset to defaults</button>
+    <a href="/home?nocache=${Date.now()}" target="_blank" class="btn btn-ghost">Preview →</a>
+  </div>`;
+}
+
+// ── hero ──────────────────────────────────────────────────────────────────────
+function heroEditor(c) {
+  return `<div class="editor-header"><div class="editor-title">Hero <small>home.html above the fold</small></div></div>
+    ${field("hero_badge","Badge text",c.badge)}
+    ${field("hero_headline","Headline (HTML allowed: &lt;em&gt;)",c.headline)}
+    ${field("hero_subheadline","Subheadline",c.subheadline,true,"textarea-sm")}
+    <div class="two-col">
+      ${field("hero_primary_cta","Primary CTA text",c.primary_cta_text)}
+      ${field("hero_secondary_cta","Secondary CTA text",c.secondary_cta_text)}
+    </div>
+    <div class="two-col">
+      ${field("hero_demo_phone","Demo phone (E.164)",c.demo_phone)}
+      ${field("hero_demo_body","SMS body text",c.demo_body)}
+    </div>
+    <div class="field-group">
+      <div class="field-label">Proof items (one per line)</div>
+      <textarea id="hero_proof" class="textarea-sm">${esc((c.proof_items||[]).join("\n"))}</textarea>
+    </div>
+    <hr class="divider">
+    ${saveBar("hero")}`;
+}
+
+function heroCollect() {
+  const proof = document.getElementById("hero_proof").value
+    .split("\n").map(s => s.trim()).filter(Boolean);
+  return {
+    badge:            document.getElementById("hero_badge").value,
+    headline:         document.getElementById("hero_headline").value,
+    subheadline:      document.getElementById("hero_subheadline").value,
+    primary_cta_text: document.getElementById("hero_primary_cta").value,
+    secondary_cta_text: document.getElementById("hero_secondary_cta").value,
+    demo_phone:       document.getElementById("hero_demo_phone").value,
+    demo_body:        document.getElementById("hero_demo_body").value,
+    proof_items:      proof,
+  };
+}
+
+// ── how it works ───────────────────────────────────────────────────────────────
+function howEditor(c) {
+  const steps = c.steps || [{num:"1",title:"",body:""},{num:"2",title:"",body:""},{num:"3",title:"",body:""}];
+  const stepsHtml = steps.map((s,i) =>
+    `<div class="item-card">
+      <div class="item-card-header"><div class="item-card-title">Step ${esc(s.num||String(i+1))}</div></div>
+      <div class="field-group">
+        <div class="field-label">Title</div>
+        <input type="text" class="how-step-title" data-i="${i}" value="${esc(s.title||"")}">
+      </div>
+      <div class="field-group" style="margin-top:8px">
+        <div class="field-label">Body</div>
+        <textarea class="how-step-body textarea-sm" data-i="${i}">${esc(s.body||"")}</textarea>
+      </div>
+    </div>`
+  ).join("");
+  return `<div class="editor-header"><div class="editor-title">How it works</div></div>
+    ${field("how_headline","Section headline",c.headline)}
+    ${field("how_sub","Section subheadline",c.subheadline,true,"textarea-sm")}
+    <div class="field-group"><div class="field-label">Steps</div></div>
+    <div class="item-list">${stepsHtml}</div>
+    <hr class="divider">
+    ${saveBar("how_it_works")}`;
+}
+
+function howCollect() {
+  const titles = [...document.querySelectorAll(".how-step-title")];
+  const bodies = [...document.querySelectorAll(".how-step-body")];
+  const steps  = titles.map((t,i) => ({ num: String(i+1), title: t.value, body: bodies[i].value }));
+  return {
+    headline:   document.getElementById("how_headline").value,
+    subheadline: document.getElementById("how_sub").value,
+    steps,
+  };
+}
+
+// ── demo band ──────────────────────────────────────────────────────────────────
+function demoBandEditor(c) {
+  return `<div class="editor-header"><div class="editor-title">Demo band <small>mid-page CTA strip</small></div></div>
+    ${field("db_headline","Headline",c.headline)}
+    ${field("db_subheadline","Subheadline",c.subheadline,true,"textarea-sm")}
+    ${field("db_hint","Hint text below phone number",c.hint)}
+    ${field("db_cta","CTA button text",c.cta_text)}
+    <div class="notice" style="font-size:.82rem">Demo phone number is controlled in the <strong>Hero</strong> section and applies everywhere on the page.</div>
+    <hr class="divider">
+    ${saveBar("demo_band")}`;
+}
+
+function demoBandCollect() {
+  return {
+    headline:   document.getElementById("db_headline").value,
+    subheadline: document.getElementById("db_subheadline").value,
+    hint:       document.getElementById("db_hint").value,
+    cta_text:   document.getElementById("db_cta").value,
+  };
+}
+
+// ── pricing ────────────────────────────────────────────────────────────────────
+function pricingEditor(c) {
+  const tiers = c.tiers || [];
+  const tiersHtml = tiers.map((t,i) => tierCard(t,i)).join("");
+  return `<div class="editor-header"><div class="editor-title">Pricing <small>3 tiers</small></div></div>
+    ${field("pr_headline","Section headline",c.headline)}
+    ${field("pr_sub","Section subheadline",c.subheadline,true,"textarea-sm")}
+    ${field("pr_footnote","Footnote",c.footnote)}
+    <div class="field-group"><div class="field-label">Pricing tiers</div></div>
+    <div id="pricing-tiers" class="item-list">${tiersHtml}</div>
+    <button class="btn btn-ghost add-btn" onclick="addTier()">+ Add tier</button>
+    <hr class="divider">
+    ${saveBar("pricing")}`;
+}
+
+function tierCard(t, i) {
+  const feats = (t.features||[]).map((f,fi) =>
+    `<div class="feature-row">
+      <input type="checkbox" ${f.included ? "checked" : ""} data-ti="${i}" data-fi="${fi}" class="feat-inc">
+      <input type="text" value="${esc(f.text||"")}" data-ti="${i}" data-fi="${fi}" class="feat-text" placeholder="Feature text">
+      <button class="remove-btn" onclick="removeFeat(${i},${fi})" title="Remove">×</button>
+    </div>`
+  ).join("");
+  return `<div class="item-card" data-tier-i="${i}">
+    <div class="item-card-header">
+      <div class="item-card-title">Tier ${i+1}</div>
+      <button class="remove-btn" onclick="removeTier(${i})" title="Remove tier">×</button>
+    </div>
+    <div class="three-col">
+      <div class="field-group"><div class="field-label">ID</div><input type="text" class="tier-id" value="${esc(t.id||"")}"></div>
+      <div class="field-group"><div class="field-label">Name</div><input type="text" class="tier-name" value="${esc(t.name||"")}"></div>
+      <div class="field-group"><div class="field-label">Price ($)</div><input type="number" class="tier-price" value="${t.price||0}" min="0"></div>
+    </div>
+    <div class="two-col" style="margin-top:8px">
+      <div class="field-group"><div class="field-label">Period</div><input type="text" class="tier-period" value="${esc(t.period||"")}"></div>
+      <div class="field-group"><div class="field-label">Badge (empty = none)</div><input type="text" class="tier-badge" value="${esc(t.badge||"")}"></div>
+    </div>
+    <div class="field-group" style="margin-top:8px">
+      <div class="field-label">Description</div>
+      <textarea class="tier-desc textarea-sm">${esc(t.description||"")}</textarea>
+    </div>
+    <div class="two-col" style="margin-top:8px">
+      <div class="field-group"><div class="field-label">CTA text</div><input type="text" class="tier-cta-text" value="${esc(t.cta_text||"")}"></div>
+      <div class="field-group"><div class="field-label">CTA style</div>
+        <input type="text" class="tier-cta-style" value="${esc(t.cta_style||"ghost")}" placeholder="ghost or primary">
+      </div>
+    </div>
+    <div class="toggle-row" style="margin-top:10px">
+      <input type="checkbox" class="toggle tier-featured" ${t.featured ? "checked" : ""}>
+      <label>Featured / recommended tier</label>
+    </div>
+    <div class="field-group" style="margin-top:12px"><div class="field-label">Features</div></div>
+    <div class="feat-list" data-ti="${i}">${feats}</div>
+    <button class="btn btn-ghost add-btn" style="margin-top:8px;font-size:.8rem;padding:6px 12px" onclick="addFeat(${i})">+ Add feature</button>
+  </div>`;
+}
+
+function collectTiers() {
+  return [...document.querySelectorAll("[data-tier-i]")].map(card => {
+    const i = parseInt(card.dataset.tierI);
+    const features = [...card.querySelectorAll(".feat-text")].map((f,fi) => ({
+      text:     f.value,
+      included: card.querySelectorAll(".feat-inc")[fi]?.checked || false,
+    }));
+    return {
+      id:          card.querySelector(".tier-id").value,
+      name:        card.querySelector(".tier-name").value,
+      price:       parseFloat(card.querySelector(".tier-price").value) || 0,
+      period:      card.querySelector(".tier-period").value,
+      badge:       card.querySelector(".tier-badge").value || null,
+      description: card.querySelector(".tier-desc").value,
+      cta_text:    card.querySelector(".tier-cta-text").value,
+      cta_style:   card.querySelector(".tier-cta-style").value,
+      featured:    card.querySelector(".tier-featured").checked,
+      features,
+    };
+  });
+}
+
+function addTier() {
+  const tiers = collectTiers();
+  tiers.push({ id: "tier_" + Date.now(), name: "New Tier", price: 0, period: "billed monthly", description: "", featured: false, badge: null, cta_text: "Get started →", cta_style: "ghost", features: [] });
+  document.getElementById("pricing-tiers").innerHTML = tiers.map((t,i) => tierCard(t,i)).join("");
+}
+
+function removeTier(i) {
+  const tiers = collectTiers();
+  tiers.splice(i, 1);
+  document.getElementById("pricing-tiers").innerHTML = tiers.map((t,j) => tierCard(t,j)).join("");
+}
+
+function addFeat(ti) {
+  const tiers = collectTiers();
+  tiers[ti].features.push({ text: "", included: true });
+  document.getElementById("pricing-tiers").innerHTML = tiers.map((t,i) => tierCard(t,i)).join("");
+}
+
+function removeFeat(ti, fi) {
+  const tiers = collectTiers();
+  tiers[ti].features.splice(fi, 1);
+  document.getElementById("pricing-tiers").innerHTML = tiers.map((t,i) => tierCard(t,i)).join("");
+}
+
+function pricingCollect() {
+  return {
+    headline:   document.getElementById("pr_headline").value,
+    subheadline: document.getElementById("pr_sub").value,
+    footnote:   document.getElementById("pr_footnote").value,
+    tiers:      collectTiers(),
+  };
+}
+
+// ── faq ────────────────────────────────────────────────────────────────────────
+function faqEditor(c) {
+  const items = c.items || [];
+  const html  = items.map((item,i) =>
+    `<div class="item-card" data-faq-i="${i}">
+      <div class="item-card-header">
+        <div class="item-card-title">Item ${i+1}</div>
+        <button class="remove-btn" onclick="removeFaq(${i})" title="Remove">×</button>
+      </div>
+      <div class="field-group">
+        <div class="field-label">Question</div>
+        <input type="text" class="faq-q" value="${esc(item.q||"")}">
+      </div>
+      <div class="field-group" style="margin-top:8px">
+        <div class="field-label">Answer</div>
+        <textarea class="faq-a textarea-sm">${esc(item.a||"")}</textarea>
+      </div>
+    </div>`
+  ).join("");
+  return `<div class="editor-header"><div class="editor-title">FAQ <small>${items.length} items</small></div></div>
+    ${field("faq_headline","Section headline",c.headline)}
+    <div class="field-group"><div class="field-label">Items</div></div>
+    <div id="faq-items" class="item-list">${html}</div>
+    <button class="btn btn-ghost add-btn" onclick="addFaqItem()">+ Add FAQ item</button>
+    <hr class="divider">
+    ${saveBar("faq")}`;
+}
+
+function collectFaqItems() {
+  return [...document.querySelectorAll("[data-faq-i]")].map(card => ({
+    q: card.querySelector(".faq-q").value,
+    a: card.querySelector(".faq-a").value,
+  }));
+}
+
+function addFaqItem() {
+  const items = collectFaqItems();
+  items.push({ q: "", a: "" });
+  const container = document.getElementById("faq-items");
+  container.innerHTML = items.map((item,i) =>
+    `<div class="item-card" data-faq-i="${i}">
+      <div class="item-card-header">
+        <div class="item-card-title">Item ${i+1}</div>
+        <button class="remove-btn" onclick="removeFaq(${i})">×</button>
+      </div>
+      <div class="field-group"><div class="field-label">Question</div><input type="text" class="faq-q" value="${esc(item.q||"")}"></div>
+      <div class="field-group" style="margin-top:8px"><div class="field-label">Answer</div><textarea class="faq-a textarea-sm">${esc(item.a||"")}</textarea></div>
+    </div>`
+  ).join("");
+}
+
+function removeFaq(i) {
+  const items = collectFaqItems();
+  items.splice(i, 1);
+  const container = document.getElementById("faq-items");
+  container.innerHTML = items.map((item,j) =>
+    `<div class="item-card" data-faq-i="${j}">
+      <div class="item-card-header">
+        <div class="item-card-title">Item ${j+1}</div>
+        <button class="remove-btn" onclick="removeFaq(${j})">×</button>
+      </div>
+      <div class="field-group"><div class="field-label">Question</div><input type="text" class="faq-q" value="${esc(item.q||"")}"></div>
+      <div class="field-group" style="margin-top:8px"><div class="field-label">Answer</div><textarea class="faq-a textarea-sm">${esc(item.a||"")}</textarea></div>
+    </div>`
+  ).join("");
+}
+
+function faqCollect() {
+  return { headline: document.getElementById("faq_headline").value, items: collectFaqItems() };
+}
+
+// ── final cta ──────────────────────────────────────────────────────────────────
+function finalCtaEditor(c) {
+  return `<div class="editor-header"><div class="editor-title">Final CTA <small>bottom of page</small></div></div>
+    ${field("fc_headline","Headline",c.headline)}
+    ${field("fc_sub","Subheadline",c.subheadline,true,"textarea-sm")}
+    <div class="two-col">
+      ${field("fc_primary","Primary CTA text",c.primary_cta_text)}
+      ${field("fc_secondary","Secondary CTA text",c.secondary_cta_text)}
+    </div>
+    ${field("fc_href","Secondary CTA link",c.secondary_cta_href)}
+    <hr class="divider">
+    ${saveBar("final_cta")}`;
+}
+
+function finalCtaCollect() {
+  return {
+    headline:          document.getElementById("fc_headline").value,
+    subheadline:       document.getElementById("fc_sub").value,
+    primary_cta_text:  document.getElementById("fc_primary").value,
+    secondary_cta_text: document.getElementById("fc_secondary").value,
+    secondary_cta_href: document.getElementById("fc_href").value,
+  };
+}
+
+// ── announcement ───────────────────────────────────────────────────────────────
+function announcementEditor(c) {
+  const ann = c || {};
+  return `<div class="editor-header"><div class="editor-title">Announcement <small>top-of-page banner (optional)</small></div></div>
+    <div class="notice" style="font-size:.82rem">Leave text blank to hide the banner entirely.</div>
+    ${field("ann_text","Banner text",ann.text)}
+    <div class="two-col">
+      ${field("ann_link_text","Link text (optional)",ann.link_text)}
+      ${field("ann_link_href","Link URL (optional)",ann.link_href)}
+    </div>
+    <hr class="divider">
+    ${saveBar("announcement")}`;
+}
+
+function announcementCollect() {
+  const text = document.getElementById("ann_text").value.trim();
+  if (!text) return null;
+  return {
+    text,
+    link_text: document.getElementById("ann_link_text").value || null,
+    link_href: document.getElementById("ann_link_href").value || null,
+  };
+}
+
+// ── json fallback ──────────────────────────────────────────────────────────────
+function jsonEditor(section, content) {
+  return `<div class="editor-header"><div class="editor-title">${esc(LABELS[section]||section)} <small>JSON editor</small></div></div>
+    <textarea id="json-val" class="json-area">${esc(JSON.stringify(content, null, 2))}</textarea>
+    <hr class="divider">
+    ${saveBar(section)}`;
+}
+
+function jsonCollect() {
+  try { return JSON.parse(document.getElementById("json-val").value); }
+  catch(e) { throw new Error("Invalid JSON: " + e.message); }
+}
+
+// ── collect current form values by section ─────────────────────────────────────
+function collectSection(section) {
+  switch(section) {
+    case "hero":         return heroCollect();
+    case "how_it_works": return howCollect();
+    case "demo_band":    return demoBandCollect();
+    case "pricing":      return pricingCollect();
+    case "faq":          return faqCollect();
+    case "final_cta":    return finalCtaCollect();
+    case "announcement": return announcementCollect();
+    default:             return jsonCollect();
+  }
+}
+
+// ── save / reset ──────────────────────────────────────────────────────────────
+async function saveSection(section) {
+  const btn = document.querySelector(".btn-primary");
+  try {
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    const body = collectSection(section);
+    const result = await api("PATCH", `/admin/site-content/${section}`, body);
+    allContent[section] = result.content;
+    toast("Saved ✓");
+    document.getElementById("last-saved").textContent =
+      "Last saved: " + new Date().toLocaleTimeString();
+  } catch(e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Save changes";
+  }
+}
+
+async function resetSection(section) {
+  if (!confirm(`Reset "${LABELS[section]||section}" to defaults? This cannot be undone.`)) return;
+  try {
+    await api("PATCH", `/admin/site-content/${section}`, {});
+    toast("Reset to defaults");
+    await loadAll();
+    selectSection(section);
+  } catch(e) {
+    toast(e.message, true);
+  }
+}
+
+// ── init ──────────────────────────────────────────────────────────────────────
+loadAll();
+</script>
+</body>
+</html>
