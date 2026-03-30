@@ -249,13 +249,14 @@ const PATHS = {
   1: {
     label:    "Q&A",
     menuLine: "See Q&A in action",
-    getIntro(vertical) {
+    getIntro(vertical, exploredPaths = []) {
       const v = VERTICALS[vertical] || VERTICALS.default;
       return (
-        `Here's Q&A in action:\n\n` +
+        `Here's how Highmark handles Q&A for a ${v.label}:\n\n` +
         `Customer: ${v.qa.customerQ}\n\n` +
         `Highmark: ${v.qa.botA}\n\n` +
-        `⚡ ~4 seconds. No staff needed.\n\nReply anything to see the impact.`
+        `⚡ ~4 seconds. No staff needed.\n\n` +
+        getNextPathOptions(1, exploredPaths)
       );
     },
     getFollowup(vertical) {
@@ -269,13 +270,14 @@ const PATHS = {
   2: {
     label:    "Lead Capture",
     menuLine: "See lead capture in action",
-    getIntro(vertical) {
+    getIntro(vertical, exploredPaths = []) {
       const v = VERTICALS[vertical] || VERTICALS.default;
       return (
         `Here's lead capture in action:\n\n` +
         `Customer: ${v.lead.scenario}\n\n` +
         `Highmark: ${v.lead.outcome}\n\n` +
-        `✅ Lead saved. You're notified instantly.\n\nReply anything to see more.`
+        `✅ Lead saved. You're notified instantly.\n\n` +
+        getNextPathOptions(2, exploredPaths)
       );
     },
     getFollowup(vertical) {
@@ -289,12 +291,13 @@ const PATHS = {
   3: {
     label:    "Booking",
     menuLine: "See the booking flow",
-    getIntro(vertical) {
+    getIntro(vertical, exploredPaths = []) {
       const v = VERTICALS[vertical] || VERTICALS.default;
       return (
         `Here's the booking flow:\n\n` +
         `Customer: ${v.booking.scenario}\n\n` +
-        `${v.booking.outcome}\n\nReply anything to see more.`
+        `${v.booking.outcome}\n\n` +
+        getNextPathOptions(3, exploredPaths)
       );
     },
     getFollowup(vertical) {
@@ -306,6 +309,15 @@ const PATHS = {
     },
   },
 };
+
+// Returns the explicit next-step options for the end of a path intro.
+// Only shows paths not yet explored and not the current one.
+function getNextPathOptions(currentPath, exploredPaths = []) {
+  const remaining = [1, 2, 3].filter(n => n !== currentPath && !exploredPaths.includes(n));
+  if (remaining.length === 0) return "Reply YES to get this for your business.";
+  const opts = remaining.map(n => `${n}️⃣ ${PATHS[n].menuLine}`).join("  ");
+  return `${opts}\n\nOr reply YES to get started.`;
+}
 
 // ── Openers and menus ─────────────────────────────────────────────────────────
 
@@ -478,7 +490,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       setState(convo, { step: prev, prevStep: null });
       if (prev === "browsing")  return { reply: MAIN_MENU };
       if (prev === "demo_menu") return { reply: buildDemoMenu(state.exploredPaths ?? [], state.vertical ?? "default") };
-      if (prev === "demo_path" && state.path) return { reply: PATHS[state.path].getIntro(state.vertical ?? "default") };
+      if (prev === "demo_path" && state.path) return { reply: PATHS[state.path].getIntro(state.vertical ?? "default", state.exploredPaths ?? []) };
     }
     transition(convo, "browsing");
     return { reply: MAIN_MENU };
@@ -547,15 +559,17 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     // Path number typed directly → use default vertical
     const directPath = detectPath(body);
     if (directPath) {
-      transition(convo, "demo_path", { path: directPath, exploredPaths: addExplored([], directPath), vertical: "default" });
-      return { reply: PATHS[directPath].getIntro("default") };
+      const ep = addExplored([], directPath);
+      transition(convo, "demo_path", { path: directPath, exploredPaths: ep, vertical: "default" });
+      return { reply: PATHS[directPath].getIntro("default", ep) };
     }
-    // Free-form business description → detect vertical → show demo menu
+    // Free-form business description → detect vertical → immediately show tailored Q&A example
     const vertical = detectVertical(body);
     const v        = VERTICALS[vertical];
-    transition(convo, "demo_menu", { vertical, exploredPaths: [] });
+    const exploredPaths = [1]; // Q&A shown immediately as the first example
+    transition(convo, "demo_path", { vertical, path: 1, exploredPaths });
     console.log(`[DEMO] Vertical: ${vertical} (${v.label}) — ${fromNumber}`);
-    return { reply: buildDemoMenu([], vertical) };
+    return { reply: PATHS[1].getIntro(vertical, exploredPaths) };
   }
 
   // ── demo_menu ─────────────────────────────────────────────────────────────
@@ -567,8 +581,9 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     }
     const path = detectPath(body);
     if (path) {
-      transition(convo, "demo_path", { path, exploredPaths: addExplored(state.exploredPaths, path) });
-      return { reply: PATHS[path].getIntro(vertical) };
+      const ep = addExplored(state.exploredPaths, path);
+      transition(convo, "demo_path", { path, exploredPaths: ep });
+      return { reply: PATHS[path].getIntro(vertical, ep) };
     }
     return { reply: buildDemoMenu(state.exploredPaths ?? [], vertical) };
   }
@@ -594,8 +609,9 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     }
     const path = detectPath(body);
     if (path && path !== state.path) {
-      transition(convo, "demo_path", { path, exploredPaths: addExplored(state.exploredPaths, path) });
-      return { reply: PATHS[path].getIntro(vertical) };
+      const ep = addExplored(state.exploredPaths, path);
+      transition(convo, "demo_path", { path, exploredPaths: ep });
+      return { reply: PATHS[path].getIntro(vertical, ep) };
     }
     if (isNoIntent(body)) {
       transition(convo, "browsing");

@@ -1890,7 +1890,7 @@ async function test29() {
   // ── Integration: demo flow (requires server) ───────────────────────────────
   // Dedicated phones per scenario — stays under 10 msg/min per phone, 30/min IP total.
   const DEMO_PHONE_A = "+15550011111"; // Q&A: pricing answered, no premature lead capture (2 msgs)
-  const DEMO_PHONE_B = "+15550022222"; // full demo: 2 → biz type → path → lead capture (9 msgs)
+  const DEMO_PHONE_B = "+15550022222"; // full demo: 2 → biz type → immediate Q&A → followup → path 2 → lead capture (9 msgs)
   const DEMO_PHONE_C = "+15550033333"; // path shortcuts + multi-path + revenue sim (5 msgs)
   const DEMO_PHONE_D = "+15550044444"; // MENU + START OVER (3 msgs)
   const DEMO_PHONE_E = "+15550055555"; // "4" shortcut → immediate lead capture (2 msgs)
@@ -1924,23 +1924,38 @@ async function test29() {
     ? pass("Demo: '2' (See a demo) → asks business type")
     : fail("Demo: '2' should trigger business type question", demoChoice.slice(0, 100));
 
-  const demoMenu = await sendSms("outdoor tours and snowmobile rentals", DEMO_PHONE_B, DEMO_PHONE);
-  demoMenu.includes("1️⃣") && /tour|outdoor|rental/i.test(demoMenu)
-    ? pass("Demo: business type → tailored demo menu with vertical context")
-    : fail("Demo: tailored demo menu not shown", demoMenu.slice(0, 100));
+  // Step 3: business type → immediate tailored Q&A (no generic menu first)
+  const demoFirstReply = await sendSms("outdoor tours and snowmobile rentals", DEMO_PHONE_B, DEMO_PHONE);
+  /Customer:|Highmark:/i.test(demoFirstReply) && /tour|outdoor|rental/i.test(demoFirstReply)
+    ? pass("Demo: business type → immediate tailored Q&A example (not a generic menu)")
+    : fail("Demo: should show immediate Q&A example after business type", demoFirstReply.slice(0, 100));
+  /2️⃣|3️⃣/.test(demoFirstReply)
+    ? pass("Demo: immediate Q&A has explicit numbered next-step options")
+    : fail("Demo: explicit next steps missing from Q&A example", demoFirstReply.slice(0, 100));
+  !/Reply anything/i.test(demoFirstReply)
+    ? pass("Demo: 'Reply anything' removed — explicit choices shown instead")
+    : fail("Demo: 'Reply anything' still present in path intro");
 
+  // Step 4: any reply from demo_path → path 1 followup with revenue sim
+  const p1followup = await sendSms("Cool", DEMO_PHONE_B, DEMO_PHONE);
+  /📊|inquir|week/i.test(p1followup)
+    ? pass("Demo: path 1 followup shows revenue simulation after first path explored")
+    : fail("Demo: revenue simulation missing from path 1 followup", p1followup.slice(0, 100));
+  /YES|get started|2️⃣|3️⃣/.test(p1followup)
+    ? pass("Demo: path 1 followup has CTA or unexplored path options")
+    : fail("Demo: CTA/options missing from path 1 followup", p1followup.slice(0, 100));
+
+  // Step 5: "2" from demo_followup → path 2 intro (cross-path navigation)
   const path2intro = await sendSms("2", DEMO_PHONE_B, DEMO_PHONE);
   path2intro.length > 20 && /lead|capture|Customer|Highmark/i.test(path2intro)
-    ? pass("Demo: path 2 → lead capture intro with simulated exchange")
+    ? pass("Demo: '2' from followup → path 2 lead capture intro with simulated exchange")
     : fail("Demo: path 2 intro wrong", path2intro.slice(0, 100));
 
+  // Step 6: any reply from path 2 demo_path → followup
   const followup = await sendSms("Cool", DEMO_PHONE_B, DEMO_PHONE);
   /YES|get started/i.test(followup)
-    ? pass("Demo: followup → CTA with YES option")
-    : fail("Demo: CTA missing from followup", followup.slice(0, 100));
-  /📊|inquir|week/i.test(followup)
-    ? pass("Demo: revenue simulation in followup")
-    : fail("Demo: revenue simulation missing", followup.slice(0, 100));
+    ? pass("Demo: path 2 followup → CTA with YES option")
+    : fail("Demo: CTA missing from path 2 followup", followup.slice(0, 100));
 
   const nameAsk = await sendSms("yes", DEMO_PHONE_B, DEMO_PHONE);
   /name/i.test(nameAsk)
@@ -2256,6 +2271,117 @@ async function test30() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// test31 — Demo overhaul: immediate tailored examples + explicit next steps
+// ─────────────────────────────────────────────────────────────────────────────
+async function test31() {
+  console.log("\nTEST 31: Demo overhaul — immediate tailored examples, explicit next steps, per-client routing");
+
+  // ── Unit: PATHS.getIntro — no "Reply anything" in any path ────────────────
+  const { PATHS: _P } = await import("./demoFlow.js").then(m => ({ PATHS: null, ...m }));
+  // Test via getIntro outputs directly using exported detectVertical
+  const testIntro1 = (await import("./demoFlow.js")).detectVertical; // warm-up import
+
+  // Import handleDemoFlow to test state machine directly
+  const { handleDemoFlow } = await import("./demoFlow.js");
+
+  // Helper: run a demo interaction with a fresh conversation
+  function makeDemoConvo() {
+    return { messages: [], bookingStep: null, bookingData: {}, handoff: false, consecutiveFrustrated: 0 };
+  }
+
+  // ── Path intros must use explicit numbered choices, not "Reply anything" ──
+  const { detectVertical: dv } = await import("./demoFlow.js");
+
+  // Test path 1 intro for outdoor vertical — no "Reply anything"
+  const convo1 = makeDemoConvo();
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo1 });
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo1 });
+  const verticalReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "snowmobile tours", testMode: true, isNew: false, convo: convo1 })).reply;
+
+  !/Reply anything/i.test(verticalReply)
+    ? pass("test31: path 1 intro has no 'Reply anything' language")
+    : fail("test31: 'Reply anything' still present in path 1 intro", verticalReply.slice(0, 120));
+
+  /2️⃣|3️⃣/.test(verticalReply)
+    ? pass("test31: path 1 intro has explicit numbered next steps (2️⃣ or 3️⃣)")
+    : fail("test31: explicit numbered options missing from path 1 intro", verticalReply.slice(0, 120));
+
+  /Customer:|Highmark:/i.test(verticalReply)
+    ? pass("test31: path 1 intro contains simulated exchange (Customer/Highmark)")
+    : fail("test31: simulated exchange missing from path 1 intro", verticalReply.slice(0, 120));
+
+  /snow|tour|rental|outdoor/i.test(verticalReply)
+    ? pass("test31: path 1 intro is tailored to the outdoor vertical")
+    : fail("test31: vertical context missing from Q&A intro", verticalReply.slice(0, 120));
+
+  // ── Path 2 intro — no "Reply anything" ────────────────────────────────────
+  const convo2 = makeDemoConvo();
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo2 });
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo2 });
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "hair salon", testMode: true, isNew: false, convo: convo2 });
+  // Now in demo_path (path=1), send any reply to get to demo_followup, then pick path 2
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "cool", testMode: true, isNew: false, convo: convo2 });
+  const path2Reply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo2 })).reply;
+
+  !/Reply anything/i.test(path2Reply)
+    ? pass("test31: path 2 intro has no 'Reply anything' language")
+    : fail("test31: 'Reply anything' in path 2 intro", path2Reply.slice(0, 120));
+
+  /3️⃣/.test(path2Reply) || /YES/i.test(path2Reply)
+    ? pass("test31: path 2 intro has explicit next step (3️⃣ or YES)")
+    : fail("test31: no explicit next step in path 2 intro", path2Reply.slice(0, 120));
+
+  // Appointments vertical in the example
+  /appointment|open|Saturday|book/i.test(path2Reply) && /Customer:|Highmark:/i.test(path2Reply)
+    ? pass("test31: path 2 intro tailored to appointments vertical (salon)")
+    : fail("test31: path 2 intro not tailored to salon/appointments vertical", path2Reply.slice(0, 120));
+
+  // ── Path 3 intro — no "Reply anything" ────────────────────────────────────
+  const convo3 = makeDemoConvo();
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099903", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo3 });
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099903", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo3 });
+  // Type "3" directly during awaiting_demo_type → path 3 with default vertical
+  const path3Reply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099903", toNumber: "+18668906657", rawBody: "3", testMode: true, isNew: false, convo: convo3 })).reply;
+
+  !/Reply anything/i.test(path3Reply)
+    ? pass("test31: path 3 intro has no 'Reply anything' language")
+    : fail("test31: 'Reply anything' in path 3 intro", path3Reply.slice(0, 120));
+
+  /1️⃣|2️⃣/.test(path3Reply) || /YES/i.test(path3Reply)
+    ? pass("test31: path 3 intro has explicit next step (1️⃣ or 2️⃣ or YES)")
+    : fail("test31: no explicit next step in path 3 intro", path3Reply.slice(0, 120));
+
+  // ── Per-client routing: each client has an id usable as URL slug ──────────
+  const { getAllClients: gac } = await import("./clients.js");
+  const allClients = Object.values(gac());
+  for (const c of allClients) {
+    typeof c.id === "string" && c.id.length > 0
+      ? pass(`test31: client ${c.id} has a non-empty id (usable as ?client= param)`)
+      : fail(`test31: client missing id`, JSON.stringify(c.id));
+  }
+
+  // ── Backwards compat: MENU, START OVER, "4" shortcut still work ─────────
+  const convo4 = makeDemoConvo();
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099904", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo4 });
+  const menuReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099904", toNumber: "+18668906657", rawBody: "MENU", testMode: true, isNew: false, convo: convo4 })).reply;
+  /1️⃣|2️⃣|3️⃣|4️⃣/.test(menuReply)
+    ? pass("test31: MENU command still returns main menu")
+    : fail("test31: MENU broken", menuReply.slice(0, 80));
+
+  const resetReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099904", toNumber: "+18668906657", rawBody: "START OVER", testMode: true, isNew: false, convo: convo4 })).reply;
+  resetReply.includes("Welcome to Highmark")
+    ? pass("test31: START OVER resets to opener")
+    : fail("test31: START OVER broken", resetReply.slice(0, 80));
+
+  const convo5 = makeDemoConvo();
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099905", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo5 });
+  const shortcutReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099905", toNumber: "+18668906657", rawBody: "4", testMode: true, isNew: false, convo: convo5 })).reply;
+  /name/i.test(shortcutReply)
+    ? pass("test31: '4' shortcut still jumps to lead capture")
+    : fail("test31: '4' shortcut broken", shortcutReply.slice(0, 80));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -2283,6 +2409,7 @@ async function main() {
   await test21(); // per-client runtime behavior routing (Chunk 3)
   await test26(); // buying signals, stage machine, lead capture trigger
   await test27(); // commercial decision layer: scoring, expertise-first, response plan
+  await test31(); // demo overhaul: immediate tailored examples, explicit next steps
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");

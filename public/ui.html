@@ -600,6 +600,12 @@ async function init() {
   try {
     State.clients = await apiFetch("/internal/clients");
     populateClientSelects();
+    // Auto-select client from ?client= URL param (e.g. ?client=highmark_demo)
+    const urlClientId = new URLSearchParams(location.search).get("client");
+    if (urlClientId) {
+      const matchedClient = State.clients.find(c => c.id === urlClientId);
+      if (matchedClient?.toPhone) await switchClient(matchedClient.toPhone, false);
+    }
   } catch(e) {
     console.warn("Could not load client list:", e.message);
   }
@@ -740,7 +746,7 @@ function populateClientSelects() {
   }
 }
 
-async function switchClient(toPhone) {
+async function switchClient(toPhone, doReset = true) {
   if (!toPhone || toPhone === State.toPhone) return;
   State.toPhone = toPhone;
 
@@ -757,9 +763,13 @@ async function switchClient(toPhone) {
     State.clientBotName = client.botName ?? client.name;
     document.getElementById("header-info").textContent =
       `${client.name}  ·  ${State.season}  ·  ${toPhone}`;
+    // Reflect active client in URL for shareable demo links (?client=id)
+    const params = new URLSearchParams(location.search);
+    params.set("client", client.id);
+    history.replaceState(null, "", "?" + params.toString());
   }
 
-  await resetChat();
+  if (doReset) await resetChat();
 }
 
 // ─── Scenarios ────────────────────────────────────────────────────────────────
