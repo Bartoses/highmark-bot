@@ -1822,9 +1822,14 @@ app.post("/cron/scheduled-messages", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PUBLIC LANDING PAGE — no auth required
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/home", (_req, res) => res.sendFile(path.join(__uiDir, "home.html")));
+
 // HEALTH CHECK — Railway uses this to confirm the app is up
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
+  if (req.headers.accept?.includes("text/html")) return res.redirect("/home");
   const toPhone    = process.env.TWILIO_PHONE_NUMBER || "+18668906657";
   const hcClient   = resolveClient(toPhone);
   res.json({
