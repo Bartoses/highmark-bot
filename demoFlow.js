@@ -42,6 +42,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { saveLead } from "./leads.js";
+import { scheduleFollowUps } from "./followUpEngine.js";
 import { loadSiteContent } from "./siteContent.js";
 import { trackDemoEvent } from "./demoAnalytics.js";
 
@@ -909,16 +910,28 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     const s = getState(convo);
 
     if (supabase) {
-      await saveLead(supabase, {
-        clientId:     "highmark_demo",
-        fromNumber,
-        contactPhone: fromNumber,
-        contactEmail: null,
-        name:         s.leadName,
-        service:      s.path ? (PATHS[s.path]?.label ?? "demo") : "demo",
-        timeframe:    website ? `website: ${website}` : null,
-        leadType:     "demo",
-      }).catch((err) => console.error("[DEMO] saveLead error:", err.message));
+      let savedLead = null;
+      try {
+        savedLead = await saveLead(supabase, {
+          clientId:     "highmark_demo",
+          fromNumber,
+          contactPhone: fromNumber,
+          contactEmail: null,
+          name:         s.leadName,
+          service:      s.path ? (PATHS[s.path]?.label ?? "demo") : "demo",
+          timeframe:    website ? `website: ${website}` : null,
+          leadType:     "demo",
+          // businessName and website dedicated columns require db1_lead_followup.sql migration
+          // Activate by passing: businessName: s.leadBusiness, website
+        });
+      } catch (err) {
+        console.error("[DEMO] saveLead error:", err.message);
+      }
+
+      if (savedLead) {
+        scheduleFollowUps(supabase, savedLead, toNumber); // fire-and-forget
+      }
+
       trackDemoEvent(supabase, {
         eventName:  "demo_lead_captured",
         fromNumber,

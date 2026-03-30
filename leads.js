@@ -9,10 +9,16 @@
 
 /**
  * Save a captured lead to the leads table in DB1.
- * Returns true on success, false on failure (non-throwing).
+ * Returns the created lead row (including id) on success, null on failure (non-throwing).
+ * Callers can use the returned row to schedule follow-ups:
+ *   const lead = await saveLead(...); if (lead) scheduleFollowUps(supabase, lead, fromPhone);
  */
-export async function saveLead(supabase, { clientId, fromNumber, contactPhone, contactEmail, name, service, timeframe, leadType = 'booking' }) {
-  if (!supabase) return false;
+export async function saveLead(supabase, {
+  clientId, fromNumber, contactPhone, contactEmail,
+  name, service, timeframe, leadType = "booking",
+  businessName = null, website = null,
+}) {
+  if (!supabase) return null;
   try {
     const row = {
       client_id:           clientId,
@@ -25,14 +31,18 @@ export async function saveLead(supabase, { clientId, fromNumber, contactPhone, c
       status:              "new",
       lead_type:           leadType,
     };
-    // contact_email requires db1_lead_name.sql migration — only include when provided
+    // Optional columns — only include when provided (requires matching migrations)
     if (contactEmail != null) row.contact_email = contactEmail;
-    await supabase.from("leads").insert(row);
-    console.log(`[LEADS] Saved — ${clientId} / ${fromNumber}`);
-    return true;
+    if (businessName != null) row.business_name = businessName;
+    if (website      != null) row.website        = website;
+
+    const { data, error } = await supabase.from("leads").insert(row).select().single();
+    if (error) { console.error("[LEADS] saveLead failed:", error.message); return null; }
+    console.log(`[LEADS] Saved — ${clientId} / ${fromNumber} (id=${data.id})`);
+    return data; // full lead row including id — pass to scheduleFollowUps()
   } catch (err) {
-    console.error("[LEADS] saveLead failed:", err.message);
-    return false;
+    console.error("[LEADS] saveLead error:", err.message);
+    return null;
   }
 }
 

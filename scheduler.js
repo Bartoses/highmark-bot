@@ -37,23 +37,19 @@ export async function scheduleMessage(supabase, {
   body,
   message_type,
   send_at,
+  lead_id         = null,
   client_id       = process.env.CLIENT_ID || "csr_rea",
   conversation_id = null,
   max_attempts    = 3,
   metadata        = {},
 }) {
+  const row = { phone, body, message_type, send_at, client_id, conversation_id, max_attempts, metadata };
+  // lead_id requires db1_lead_followup.sql migration — only include when provided
+  if (lead_id != null) row.lead_id = lead_id;
+
   const { data, error } = await supabase
     .from("scheduled_messages")
-    .insert({
-      phone,
-      body,
-      message_type,
-      send_at,
-      client_id,
-      conversation_id,
-      max_attempts,
-      metadata,
-    })
+    .insert(row)
     .select()
     .single();
 
@@ -130,6 +126,35 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
   const now      = new Date().toISOString();
   const attempts = msg.attempts + 1;
 
+  // Use per-message from_phone override (set by followUpEngine for demo/multi-client sends)
+  const sendFrom = msg.metadata?.from_phone || fromNumber;
+
+  // Stop condition: if this message is linked to a lead, check the lead's status.
+  // ENGAGED / CONVERTED leads have replied — no further automation needed.
+  if (msg.lead_id) {
+    try {
+      const { data: lead } = await supabase
+        .from("leads")
+        .select("status")
+        .eq("id", msg.lead_id)
+        .maybeSingle();
+
+      if (lead && (lead.status === "engaged" || lead.status === "converted")) {
+        console.log(`[SCHEDULER] ${msg.id} — cancelled: lead ${msg.lead_id} is ${lead.status}`);
+        await supabase.from("scheduled_messages").update({
+          status:     "cancelled",
+          error:      `Lead is ${lead.status} — no further follow-ups needed`,
+          updated_at: now,
+        }).eq("id", msg.id);
+        counts.cancelled++;
+        return;
+      }
+    } catch (err) {
+      // Non-fatal: log and proceed — don't block sends over a lead lookup failure
+      console.warn(`[SCHEDULER] Lead status check failed for ${msg.id} — proceeding:`, err.message);
+    }
+  }
+
   // Check opt-out before sending
   if (crmSupabase) {
     try {
@@ -159,7 +184,7 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
   try {
     const result = await twilioClient.messages.create({
       body: msg.body,
-      from: fromNumber,
+      from: sendFrom,
       to:   msg.phone,
     });
 
@@ -174,6 +199,21 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
     }).eq("id", msg.id);
 
     counts.sent++;
+
+    // Update lead: promote NEW → CONTACTED on first outbound, always update last_contacted_at
+    if (msg.lead_id) {
+      const leadNow = new Date().toISOString();
+      // Promote only if still NEW
+      supabase.from("leads")
+        .update({ status: "contacted", last_contacted_at: leadNow, updated_at: leadNow })
+        .eq("id", msg.lead_id).eq("status", "new")
+        .then().catch(() => {});
+      // Update last_contacted_at for already-contacted leads (non-terminal)
+      supabase.from("leads")
+        .update({ last_contacted_at: leadNow, updated_at: leadNow })
+        .eq("id", msg.lead_id).in("status", ["contacted", "scheduled"])
+        .then().catch(() => {});
+    }
   } catch (err) {
     console.error(`[SCHEDULER] Send failed for ${msg.id} attempt ${attempts}/${msg.max_attempts}: ${err.message}`);
 

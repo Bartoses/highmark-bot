@@ -37,12 +37,15 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (464 tests), spawns its own server on port 3099
+test.js                — automated test suite (485 tests), spawns its own server on port 3099
 demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
 demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
 db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
+followUpEngine.js      — lead follow-up sequencing: scheduleFollowUps() + checkAndMarkLeadEngaged() (Chunk 8)
+db1_lead_followup.sql  — migration: adds lifecycle columns to leads + lead_id to scheduled_messages (Chunk 8)
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
-adminLeads.js          — admin lead management: list, update, summary routes (Chunk 5)
+adminLeads.js          — admin lead management: list, get, update, summary routes (Chunk 5 + 8)
+adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages (Chunk 8)
 adminClients.js        — client provisioning: create/update/list/readiness routes (Chunk 6)
 db1_clients.sql        — migration: creates clients table for DB-backed client provisioning (Chunk 6)
 db1_lead_capture.sql   — migration: adds lead_step/lead_data to conversations + creates leads table
@@ -415,6 +418,65 @@ curl "https://highmark-bot-production.up.railway.app/admin/demo-analytics/summar
 curl "https://highmark-bot-production.up.railway.app/admin/demo-analytics/events?key=YOUR_UI_SECRET&event_name=demo_lead_captured"
 ```
 
+### Lead Follow-up Engine (followUpEngine.js — Chunk 8)
+Automated SMS follow-up sequences for captured leads. Runs entirely via `scheduled_messages` + the existing cron worker.
+
+**Lead lifecycle (status field on `leads` table):**
+| Status | Meaning | Set by |
+|---|---|---|
+| `new` | Just captured, follow-ups queued | `saveLead()` |
+| `contacted` | First outbound follow-up sent | Worker after successful send |
+| `engaged` | Lead replied to a message | `checkAndMarkLeadEngaged()` on inbound SMS |
+| `converted` | Became a customer | Manual PATCH `/admin/leads/:id` |
+| `scheduled` | Appointment booked | Manual PATCH |
+| `closed` | No longer active | Manual PATCH |
+| `ignored` | Not qualified | Manual PATCH |
+
+**How follow-ups work:**
+1. `saveLead()` returns the full lead row (including `id`)
+2. Caller passes the row to `scheduleFollowUps(supabase, lead, fromPhone)` — fire-and-forget
+3. `scheduleFollowUps` inserts one row per step into `scheduled_messages`, linked by `lead_id`
+4. The cron worker (`cron-worker.js` every 5 min) checks `lead.status` before each send — cancels if ENGAGED/CONVERTED
+5. After a successful send: worker promotes `new → contacted` and updates `last_contacted_at`
+6. On any inbound SMS: `checkAndMarkLeadEngaged()` marks lead ENGAGED and cancels remaining pending messages
+
+**Follow-up sequences (edit in SEQUENCES in followUpEngine.js):**
+| lead_type | Steps | Delays |
+|---|---|---|
+| `demo` | 3 messages | ~1 min, +1 day, +3 days |
+| `booking` | 1 message | ~2 min |
+| `waitlist` | 1 message | ~5 min |
+
+To add a new sequence: add a key to `SEQUENCES` in `followUpEngine.js`. No other changes needed.
+
+**from_phone override:** `scheduleFollowUps` stores `fromPhone` in `msg.metadata.from_phone`. The worker checks this before `TWILIO_PHONE_NUMBER`, so demo leads send from `+18668906657` and production leads from their configured number.
+
+**Stop conditions — leads never receive follow-ups after they've replied:**
+- `checkAndMarkLeadEngaged(supabase, fromPhone)` runs fire-and-forget on every inbound SMS (after TCPA checks, before demo/AI routing)
+- Worker double-checks `lead.status` before every send — cancels if engaged/converted
+
+**DB migration required:** Run `db1_lead_followup.sql` in Supabase DB1 before first use. Adds: `last_contacted_at`, `next_follow_up_at`, `business_name`, `website` to `leads`; `lead_id` to `scheduled_messages`.
+
+**Admin endpoints:**
+```bash
+GET /admin/leads                          # list all leads
+GET /admin/leads/:id                      # single lead
+PATCH /admin/leads/:id                    # update status/notes
+GET /admin/scheduled-messages             # view follow-up queue (filter: status, lead_id, client_id)
+GET /admin/scheduled-messages?status=pending   # pending queue
+GET /admin/scheduled-messages?lead_id=LEAD_ID  # messages for one lead
+```
+
+**Debugging failed sends:**
+1. `GET /admin/scheduled-messages?status=failed` — see error column
+2. `GET /admin/leads/:id` — check `last_contacted_at`, `next_follow_up_at`, `status`
+3. Check Railway cron logs: `[SCHEDULER]` prefix lines
+4. Failed messages retry up to 3× (5 min, 15 min backoff) then status=failed
+
+**businessName/website columns:** Added to migration and `saveLead()` signature. To activate for demo leads, uncomment the `businessName`/`website` params in `demoFlow.js` lead_website handler after running `db1_lead_followup.sql`.
+
+**Session tip:** Start a new Claude session when moving from this follow-up engine work to campaigns or billing systems.
+
 ### Session Tips
 Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — when switching from SMS flow work to admin/internal workflow work — and when moving from admin provisioning work to public website/sales funnel work. Keeps context focused and saves credits.
 
@@ -526,6 +588,7 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 5. ~~**Admin lead management**~~ — DONE. List/filter/update/summary routes at `/admin/leads`. Run `db1_lead_mgmt.sql` migration to enable extended statuses + `updated_by`. Protected by `UI_SECRET`.
 6. ~~**Client onboarding + provisioning**~~ — DONE. DB-backed client registry. POST/PATCH/GET `/admin/clients`. Validation, defaults, readiness checks. Run `db1_clients.sql` migration in Supabase DB1 before deploy.
 7. ~~**Sales + Demo engine**~~ — DONE. `highmark_demo` client owns +18668906657. Guided 3-path SMS demo (Q&A / Lead Capture / Booking), lead capture, admin notification. `bookingMode: "demo"` in clients.js; demoFlow.js handles deterministic state machine.
-8. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
+8. ~~**Lead lifecycle + automated follow-up engine**~~ — DONE. `followUpEngine.js`: scheduleFollowUps() + checkAndMarkLeadEngaged(). DB worker sends follow-ups, stops on reply, promotes new→contacted→engaged. Run `db1_lead_followup.sql` migration. Admin: GET /admin/leads/:id, GET /admin/scheduled-messages.
+9. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
 9. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
 10. **Website** — usehighmark.com landing page not yet built. Next step: serve static HTML from Railway at `/home` or dedicated service.

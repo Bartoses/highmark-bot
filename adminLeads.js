@@ -10,7 +10,18 @@
 //   GET  /admin/leads/summary    — aggregate counts by status + lead_type
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VALID_STATUSES = ["new", "contacted", "scheduled", "closed", "ignored"];
+const VALID_STATUSES = ["new", "contacted", "engaged", "scheduled", "converted", "closed", "ignored"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /admin/leads/:id — single lead
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleGetLead(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const { id } = req.params;
+  const { data, error } = await supabase.from("leads").select("*").eq("id", id).single();
+  if (error) return res.status(404).json({ error: "Lead not found" });
+  return res.json({ lead: data });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /admin/leads
@@ -111,6 +122,7 @@ export async function handleLeadsSummary(req, res, supabase) {
 
   // Seed all known statuses at 0 so the response is always a complete set
   for (const s of VALID_STATUSES) by_status[s] = 0;
+
 
   for (const row of leads) {
     by_status[row.status]               = (by_status[row.status]   ?? 0) + 1;

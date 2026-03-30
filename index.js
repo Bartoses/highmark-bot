@@ -24,8 +24,10 @@ import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clien
 import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
-import { handleListLeads, handleUpdateLead, handleLeadsSummary } from "./adminLeads.js";
+import { handleListLeads, handleGetLead, handleUpdateLead, handleLeadsSummary } from "./adminLeads.js";
 import { handleDemoAnalyticsSummary, handleDemoAnalyticsEvents } from "./demoAnalytics.js";
+import { scheduleFollowUps, checkAndMarkLeadEngaged } from "./followUpEngine.js";
+import { handleListScheduledMessages } from "./adminScheduledMessages.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
@@ -1168,6 +1170,10 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
   }
 
+  // 5.5. Mark lead ENGAGED if this is a reply from a lead we've been following up with.
+  //      Fire-and-forget — never delays the SMS response.
+  checkAndMarkLeadEngaged(supabase, fromNumber);
+
   // 6. Demo mode — deterministic guided sales demo, no AI/API calls
   //    Triggered when the inbound Twilio number routes to a bookingMode==="demo" client.
   if (client.bookingMode === "demo") {
@@ -1274,7 +1280,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const service = convo.waitlistContext?.service ?? "general inquiry";
       const date    = convo.waitlistContext?.date    ?? null;
 
-      await saveLead(supabase, {
+      const waitlistLead = await saveLead(supabase, {
         clientId:     client.id,
         fromNumber,
         contactPhone: fromNumber, // always use the SMS number
@@ -1284,6 +1290,9 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         timeframe:    date,
         leadType:     "waitlist",
       });
+      if (waitlistLead) {
+        scheduleFollowUps(supabase, waitlistLead, toNumber); // fire-and-forget
+      }
       notifyBusinessOfLead(
         twilioClient, client, fromNumber, toNumber,
         { name, service, callback: fromNumber, timeframe: date },
@@ -1549,13 +1558,17 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         ? convo.leadData.callback
         : fromNumber;
 
-      await saveLead(supabase, {
+      const savedLead = await saveLead(supabase, {
         clientId:  client.id,
         fromNumber,
         contactPhone,
         service:   convo.leadData.service,
         timeframe: convo.leadData.timeframe,
       });
+
+      if (savedLead) {
+        scheduleFollowUps(supabase, savedLead, toNumber); // fire-and-forget
+      }
 
       notifyBusinessOfLead(
         twilioClient, client, fromNumber, toNumber,
@@ -1794,7 +1807,13 @@ app.get("/internal/clients", requireUiAccess, (_req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/admin/leads/summary", requireUiAccess, (req, res) => handleLeadsSummary(req, res, supabase));
 app.get("/admin/leads",         requireUiAccess, (req, res) => handleListLeads(req, res, supabase));
+app.get("/admin/leads/:id",     requireUiAccess, (req, res) => handleGetLead(req, res, supabase));
 app.patch("/admin/leads/:id",   requireUiAccess, (req, res) => handleUpdateLead(req, res, supabase));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN SCHEDULED MESSAGES — Follow-up queue visibility (protected by UI_SECRET)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/admin/scheduled-messages", requireUiAccess, (req, res) => handleListScheduledMessages(req, res, supabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN DEMO ANALYTICS — Funnel event tracking (protected by UI_SECRET)

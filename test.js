@@ -1027,9 +1027,9 @@ async function test22() {
 
   // Unit: saveLead returns false when no supabase client
   const result = await saveLead(null, { clientId: "lone_pine", fromNumber: "+15550001111", contactPhone: "+15550001111", service: "revalve" });
-  result === false
-    ? pass("saveLead(null, ...) returns false gracefully")
-    : fail("saveLead(null, ...) should return false", String(result));
+  !result
+    ? pass("saveLead(null, ...) returns falsy gracefully")
+    : fail("saveLead(null, ...) should return falsy", String(result));
 
   // Integration: full 3-step lead capture flow (gated on env var)
   if (process.env.LONE_PINE_TWILIO_NUMBER !== LP_TO_PHONE) {
@@ -1105,9 +1105,9 @@ async function test23() {
     clientId: "csr_rea", fromNumber: "+15550001111", contactPhone: "+15550001111",
     service: "waitlist: tour/rental", timeframe: null, leadType: "waitlist",
   });
-  waitlistResult === false
-    ? pass("saveLead(null, leadType:'waitlist') returns false gracefully")
-    : fail("saveLead(null, waitlist) should return false", String(waitlistResult));
+  !waitlistResult
+    ? pass("saveLead(null, leadType:'waitlist') returns falsy gracefully")
+    : fail("saveLead(null, waitlist) should return falsy", String(waitlistResult));
 
   // Integration: "let me know" trigger + YES confirmation (gated on LONE_PINE_TWILIO_NUMBER)
   if (process.env.LONE_PINE_TWILIO_NUMBER !== LP_TO_PHONE) {
@@ -2615,6 +2615,234 @@ async function test32() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// test33 — Lead follow-up engine: scheduling, stop conditions, engagement
+// ─────────────────────────────────────────────────────────────────────────────
+async function test33() {
+  console.log("\nTEST 33: Lead follow-up engine — scheduleFollowUps, checkAndMarkLeadEngaged, stop conditions");
+
+  const { scheduleFollowUps, checkAndMarkLeadEngaged } = await import("./followUpEngine.js");
+  const { saveLead } = await import("./leads.js");
+  const { handleGetLead } = await import("./adminLeads.js");
+  const { handleListScheduledMessages } = await import("./adminScheduledMessages.js");
+
+  // ── scheduleFollowUps: no-op with null supabase ────────────────────────────
+  let threw = false;
+  try { await scheduleFollowUps(null, { id: "x", contact_phone: "+15550001", lead_type: "demo" }, "+1"); }
+  catch { threw = true; }
+  !threw
+    ? pass("test33: scheduleFollowUps(null supabase) is a no-op")
+    : fail("test33: scheduleFollowUps threw with null supabase");
+
+  // ── scheduleFollowUps: no-op if lead missing id ───────────────────────────
+  let threw2 = false;
+  try { await scheduleFollowUps({ from: () => ({}) }, { contact_phone: "+15550001", lead_type: "demo" }, "+1"); }
+  catch { threw2 = true; }
+  !threw2
+    ? pass("test33: scheduleFollowUps no-op when lead has no id")
+    : fail("test33: scheduleFollowUps threw when lead missing id");
+
+  // ── scheduleFollowUps: inserts correct count for demo sequence ────────────
+  const scheduled = [];
+  const mockSupa33 = {
+    from: (table) => {
+      if (table === "scheduled_messages") return {
+        insert: (row) => ({ select: () => ({ single: () => {
+          scheduled.push(row);
+          return Promise.resolve({ data: { ...row, id: `mock-${scheduled.length}` }, error: null });
+        }})}),
+      };
+      if (table === "leads") return {
+        update: () => ({ eq: () => ({ then: (f) => { f?.(); return Promise.resolve(); }, catch: () => {} }) }),
+      };
+      if (table === "demo_events") return { insert: () => Promise.resolve({}) };
+      return { insert: () => Promise.resolve({}) };
+    },
+  };
+
+  const demoLead = { id: "lead-001", contact_phone: "+15550002", contact_name: "Alex", lead_type: "demo", client_id: "highmark_demo" };
+  await scheduleFollowUps(mockSupa33, demoLead, "+18668906657");
+
+  scheduled.length === 3
+    ? pass("test33: demo sequence schedules 3 messages")
+    : fail("test33: demo sequence scheduled wrong count", scheduled.length);
+
+  scheduled.every(m => m.lead_id === "lead-001")
+    ? pass("test33: all scheduled messages carry the lead_id")
+    : fail("test33: scheduled messages missing lead_id");
+
+  scheduled.every(m => m.metadata?.from_phone === "+18668906657")
+    ? pass("test33: from_phone stored in metadata for worker")
+    : fail("test33: from_phone missing from scheduled message metadata");
+
+  scheduled.every(m => m.metadata?.sequence === "auto_followup")
+    ? pass("test33: sequence=auto_followup tagged in metadata")
+    : fail("test33: auto_followup tag missing from metadata");
+
+  // Verify send_at spacing: followup_2 > followup_1, followup_3 > followup_2
+  const times = scheduled.map(m => new Date(m.send_at).getTime()).sort((a, b) => a - b);
+  times[1] > times[0] && times[2] > times[1]
+    ? pass("test33: follow-up send_at timestamps are correctly spaced")
+    : fail("test33: follow-up timestamps not in correct order", times);
+
+  // Verify first message is personalized with contact_name
+  /Alex/.test(scheduled[0].body)
+    ? pass("test33: followup_1 body includes contact_name")
+    : fail("test33: followup_1 missing contact_name", scheduled[0].body.slice(0, 80));
+
+  // ── scheduleFollowUps: booking sequence = 1 message ──────────────────────
+  const scheduledB = [];
+  const mockSupaB = {
+    from: (table) => {
+      if (table === "scheduled_messages") return {
+        insert: (row) => ({ select: () => ({ single: () => {
+          scheduledB.push(row);
+          return Promise.resolve({ data: { ...row, id: `b-${scheduledB.length}` }, error: null });
+        }})}),
+      };
+      if (table === "leads") return { update: () => ({ eq: () => ({ then: () => Promise.resolve(), catch: () => {} }) }) };
+      if (table === "demo_events") return { insert: () => Promise.resolve({}) };
+      return { insert: () => Promise.resolve({}) };
+    },
+  };
+  const bookingLead = { id: "lead-002", contact_phone: "+15550003", lead_type: "booking", client_id: "lone_pine" };
+  await scheduleFollowUps(mockSupaB, bookingLead, "+18336489744");
+  scheduledB.length === 1
+    ? pass("test33: booking sequence schedules 1 message")
+    : fail("test33: booking sequence wrong count", scheduledB.length);
+
+  // ── checkAndMarkLeadEngaged: marks lead ENGAGED, cancels pending messages ──
+  let leadUpdated   = false;
+  let messagesCancelled = 0;
+  const mockSupaEngage = {
+    from: (table) => {
+      if (table === "leads") return {
+        select: () => ({ eq: () => ({ in: () => ({ order: () => ({ limit: () => ({ maybeSingle: () =>
+          Promise.resolve({ data: { id: "lead-003", status: "contacted", client_id: "highmark_demo" } })
+        }) }) }) }) }),
+        update: (patch) => ({
+          eq: (col, val) => {
+            if (col === "id" && val === "lead-003") leadUpdated = patch.status === "engaged";
+            return { then: (f) => { f?.(); return Promise.resolve(); } };
+          },
+        }),
+      };
+      if (table === "scheduled_messages") return {
+        update: () => ({ eq: () => ({ eq: () => ({
+          select: () => { messagesCancelled++; return Promise.resolve({ count: 2 }); },
+        }) }) }),
+      };
+      if (table === "demo_events") return { insert: () => Promise.resolve({}) };
+      return {};
+    },
+  };
+
+  await checkAndMarkLeadEngaged(mockSupaEngage, "+15550004");
+  leadUpdated
+    ? pass("test33: checkAndMarkLeadEngaged sets status=engaged")
+    : fail("test33: lead status not updated to engaged");
+  messagesCancelled > 0
+    ? pass("test33: checkAndMarkLeadEngaged triggers pending message cancellation")
+    : fail("test33: pending messages not cancelled on lead engagement");
+
+  // ── checkAndMarkLeadEngaged: no-op when no active lead found ──────────────
+  let noLeadUpdated = false;
+  const mockSupaNoLead = {
+    from: (table) => {
+      if (table === "leads") return {
+        select: () => ({ eq: () => ({ in: () => ({ order: () => ({ limit: () => ({ maybeSingle: () =>
+          Promise.resolve({ data: null })
+        }) }) }) }) }),
+        update: () => { noLeadUpdated = true; return { eq: () => ({ then: () => Promise.resolve() }) }; },
+      };
+      return {};
+    },
+  };
+  await checkAndMarkLeadEngaged(mockSupaNoLead, "+15550005");
+  !noLeadUpdated
+    ? pass("test33: checkAndMarkLeadEngaged no-op when no active lead")
+    : fail("test33: checkAndMarkLeadEngaged updated a non-existent lead");
+
+  // ── checkAndMarkLeadEngaged: no-op with null supabase ────────────────────
+  let threw3 = false;
+  try { await checkAndMarkLeadEngaged(null, "+15550006"); }
+  catch { threw3 = true; }
+  !threw3
+    ? pass("test33: checkAndMarkLeadEngaged(null) is a no-op")
+    : fail("test33: checkAndMarkLeadEngaged threw with null supabase");
+
+  // ── saveLead: returns full lead row with id (not just true/false) ─────────
+  const mockSupaSave = {
+    from: () => ({
+      insert: () => ({ select: () => ({ single: () =>
+        Promise.resolve({ data: { id: "abc-123", client_id: "highmark_demo", status: "new", lead_type: "demo" }, error: null })
+      }) }),
+    }),
+  };
+  const result = await saveLead(mockSupaSave, {
+    clientId: "highmark_demo", fromNumber: "+15550007", contactPhone: "+15550007",
+    name: "Test", service: "demo", leadType: "demo",
+  });
+  result !== null && typeof result === "object"
+    ? pass("test33: saveLead returns lead object (not boolean)")
+    : fail("test33: saveLead did not return lead object", result);
+  result?.id === "abc-123"
+    ? pass("test33: saveLead result includes id field")
+    : fail("test33: saveLead result missing id", result?.id);
+
+  // ── saveLead: returns null on DB error (non-throwing) ─────────────────────
+  const mockSupaErr = {
+    from: () => ({
+      insert: () => ({ select: () => ({ single: () =>
+        Promise.resolve({ data: null, error: { message: "DB error" } })
+      }) }),
+    }),
+  };
+  let errThrew = false;
+  let errResult;
+  try { errResult = await saveLead(mockSupaErr, { clientId: "x", fromNumber: "+1", contactPhone: "+1", leadType: "demo" }); }
+  catch { errThrew = true; }
+  !errThrew && errResult === null
+    ? pass("test33: saveLead returns null on DB error — does not throw")
+    : fail("test33: saveLead error handling wrong", { errThrew, errResult });
+
+  // ── saveLead: accepts businessName and website columns ────────────────────
+  let savedRow = null;
+  const mockSupaBiz = {
+    from: () => ({
+      insert: (row) => { savedRow = row; return { select: () => ({ single: () =>
+        Promise.resolve({ data: { ...row, id: "biz-1" }, error: null })
+      }) }; },
+    }),
+  };
+  await saveLead(mockSupaBiz, {
+    clientId: "highmark_demo", fromNumber: "+15550008", contactPhone: "+15550008",
+    leadType: "demo", businessName: "Acme Bike Co", website: "https://acme.com",
+  });
+  savedRow?.business_name === "Acme Bike Co"
+    ? pass("test33: saveLead stores businessName → business_name column")
+    : fail("test33: businessName not saved", savedRow?.business_name);
+  savedRow?.website === "https://acme.com"
+    ? pass("test33: saveLead stores website column")
+    : fail("test33: website not saved", savedRow?.website);
+
+  // ── Admin endpoint exports ─────────────────────────────────────────────────
+  typeof handleGetLead === "function"
+    ? pass("test33: handleGetLead exported from adminLeads.js")
+    : fail("test33: handleGetLead not exported");
+  typeof handleListScheduledMessages === "function"
+    ? pass("test33: handleListScheduledMessages exported from adminScheduledMessages.js")
+    : fail("test33: handleListScheduledMessages not exported");
+
+  // ── handleListScheduledMessages: 503 when supabase null ──────────────────
+  let schedStatus = null;
+  const mockResS = { status: (c) => ({ json: () => { schedStatus = c; } }) };
+  await handleListScheduledMessages({ query: {} }, mockResS, null);
+  schedStatus === 503
+    ? pass("test33: handleListScheduledMessages returns 503 with null supabase")
+    : fail("test33: wrong status with null supabase", schedStatus);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -2644,6 +2872,7 @@ async function main() {
   await test27(); // commercial decision layer: scoring, expertise-first, response plan
   await test31(); // demo overhaul: immediate tailored examples, explicit next steps
   await test32(); // demo analytics: event tracking + admin endpoint exports
+  await test33(); // lead follow-up engine: scheduling, stop conditions, engagement
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
