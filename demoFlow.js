@@ -43,6 +43,7 @@
 
 import { saveLead } from "./leads.js";
 import { loadSiteContent } from "./siteContent.js";
+import { trackDemoEvent } from "./demoAnalytics.js";
 
 // ── Highmark product knowledge ───────────────────────────────────────────────
 // Static defaults used when site_content DB is unavailable.
@@ -678,7 +679,7 @@ function getDemoNotifyPhone() {
 // Called from index.js when client.bookingMode === "demo"
 // Returns { reply: string }
 // ─────────────────────────────────────────────────────────────────────────────
-export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNumber, rawBody, testMode, isNew, convo }) {
+export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNumber, rawBody, testMode, isNew, convo, source = "sms" }) {
   const body      = rawBody.trim();
   const bodyUpper = body.toUpperCase();
 
@@ -695,6 +696,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       leadName: null, leadBusiness: null,
     });
     console.log(`[DEMO] Reset — ${fromNumber}`);
+    trackDemoEvent(supabase, { eventName: "demo_reset", fromNumber, source }); // fire-and-forget
     return { reply: OPENER };
   }
 
@@ -727,6 +729,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       leadName: null, leadBusiness: null,
     });
     console.log(`[DEMO] New visitor — ${fromNumber}`);
+    trackDemoEvent(supabase, { eventName: "demo_started", fromNumber, source }); // fire-and-forget
     return { reply: OPENER };
   }
 
@@ -737,6 +740,8 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
 
     // YES intent or "4" → lead capture
     if (isYesIntent(body)) {
+      trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, source });
+      trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, source });
       transition(convo, "lead_name");
       return { reply: "Let's get started! What's your name?" };
     }
@@ -775,6 +780,8 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
   if (state.step === "awaiting_demo_type") {
     // YES or "4" → skip demo, go to lead capture
     if (isYesIntent(body)) {
+      trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, source });
+      trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, source });
       transition(convo, "lead_name");
       return { reply: "Let's get started! What's your name?" };
     }
@@ -783,6 +790,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     if (directPath) {
       const ep = addExplored([], directPath);
       transition(convo, "demo_path", { path: directPath, exploredPaths: ep, vertical: "default" });
+      trackDemoEvent(supabase, { eventName: "demo_path_selected", fromNumber, demoPath: directPath, vertical: "default", source });
       return { reply: PATHS[directPath].getIntro("default", ep) };
     }
     // Free-form business description → detect vertical + subtype → show tailored Q&A
@@ -792,6 +800,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     const exploredPaths = [1]; // Q&A shown immediately as the first example
     transition(convo, "demo_path", { vertical, subtypeKey, path: 1, exploredPaths });
     console.log(`[DEMO] Vertical: ${vertical}${subtypeKey ? ` / ${subtypeKey}` : ""} (${vc.label}) — ${fromNumber}`);
+    trackDemoEvent(supabase, { eventName: "demo_path_selected", fromNumber, demoPath: 1, vertical, subtypeKey, source });
     return { reply: PATHS[1].getIntro(vertical, exploredPaths, subtypeKey) };
   }
 
@@ -800,6 +809,8 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     const vertical   = state.vertical   ?? "default";
     const subtypeKey = state.subtypeKey ?? null;
     if (isYesIntent(body)) {
+      trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, vertical, subtypeKey, source });
+      trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, vertical, subtypeKey, source });
       transition(convo, "lead_name");
       return { reply: "Let's get started! What's your name?" };
     }
@@ -807,6 +818,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     if (path) {
       const ep = addExplored(state.exploredPaths, path);
       transition(convo, "demo_path", { path, exploredPaths: ep });
+      trackDemoEvent(supabase, { eventName: "demo_path_selected", fromNumber, demoPath: path, vertical, subtypeKey, source });
       return { reply: PATHS[path].getIntro(vertical, ep, subtypeKey) };
     }
     return { reply: buildDemoMenu(state.exploredPaths ?? [], vertical) };
@@ -818,6 +830,8 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     const subtypeKey = state.subtypeKey ?? null;
     if (!state.path) { transition(convo, "demo_menu"); return { reply: buildDemoMenu(state.exploredPaths ?? [], vertical) }; }
     if (isYesIntent(body)) {
+      trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, demoPath: state.path, vertical, subtypeKey, source });
+      trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
       transition(convo, "lead_name");
       return { reply: "Love it! What's your name?" };
     }
@@ -830,6 +844,8 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     const vertical   = state.vertical   ?? "default";
     const subtypeKey = state.subtypeKey ?? null;
     if (isYesIntent(body)) {
+      trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, demoPath: state.path, vertical, subtypeKey, source });
+      trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
       transition(convo, "lead_name");
       return { reply: "Awesome! What's your name?" };
     }
@@ -843,6 +859,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       transition(convo, "browsing");
       return { reply: MAIN_MENU };
     }
+    trackDemoEvent(supabase, { eventName: "demo_cta_shown", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
     transition(convo, "demo_cta");
     return { reply: `This is exactly how Highmark works for your business.\n\nWant me to set this up?\n\nReply YES to get started. Or reply MENU to explore more.` };
   }
@@ -852,6 +869,8 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     const vertical   = state.vertical   ?? "default";
     const subtypeKey = state.subtypeKey ?? null;
     if (isYesIntent(body)) {
+      trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, demoPath: state.path, vertical, subtypeKey, source });
+      trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
       transition(convo, "lead_name");
       return { reply: "Perfect! What's your name?" };
     }
@@ -900,6 +919,15 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
         timeframe:    website ? `website: ${website}` : null,
         leadType:     "demo",
       }).catch((err) => console.error("[DEMO] saveLead error:", err.message));
+      trackDemoEvent(supabase, {
+        eventName:  "demo_lead_captured",
+        fromNumber,
+        demoPath:   s.path ?? null,
+        vertical:   s.vertical ?? "default",
+        subtypeKey: s.subtypeKey ?? null,
+        source,
+        metadata:   { name: s.leadName, business: s.leadBusiness, website },
+      });
     }
 
     const notifyPhone = getDemoNotifyPhone();

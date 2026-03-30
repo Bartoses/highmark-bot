@@ -2444,6 +2444,177 @@ async function test31() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// test32 — Demo analytics: trackDemoEvent fires at correct points, endpoints exist
+// ─────────────────────────────────────────────────────────────────────────────
+async function test32() {
+  console.log("\nTEST 32: Demo analytics — event tracking + admin endpoint exports");
+
+  const { trackDemoEvent, handleDemoAnalyticsSummary, handleDemoAnalyticsEvents } = await import("./demoAnalytics.js");
+  const { handleDemoFlow } = await import("./demoFlow.js");
+
+  // ── trackDemoEvent: no-op when supabase is null (never throws) ─────────────
+  let threw = false;
+  try { await trackDemoEvent(null, { eventName: "demo_started", fromNumber: "+15550000001" }); }
+  catch { threw = true; }
+  !threw
+    ? pass("test32: trackDemoEvent(null) is a no-op — never throws")
+    : fail("test32: trackDemoEvent(null) threw unexpectedly");
+
+  // ── trackDemoEvent: captures events into a mock supabase ──────────────────
+  const captured = [];
+  const mockSupabase = {
+    from: () => ({
+      insert: (row) => { captured.push(row); return Promise.resolve({}); },
+    }),
+  };
+
+  await trackDemoEvent(mockSupabase, {
+    eventName: "demo_started", fromNumber: "+15550000001",
+    source: "sms", vertical: "outdoor", subtypeKey: "bike",
+  });
+  captured.length === 1 && captured[0].event_name === "demo_started"
+    ? pass("test32: trackDemoEvent inserts correct event_name")
+    : fail("test32: trackDemoEvent insert failed", JSON.stringify(captured));
+
+  captured[0].vertical === "outdoor"
+    ? pass("test32: trackDemoEvent stores vertical")
+    : fail("test32: trackDemoEvent missing vertical", JSON.stringify(captured[0]));
+
+  captured[0].subtype_key === "bike"
+    ? pass("test32: trackDemoEvent stores subtype_key")
+    : fail("test32: trackDemoEvent missing subtype_key", JSON.stringify(captured[0]));
+
+  captured[0].source === "sms"
+    ? pass("test32: trackDemoEvent stores source")
+    : fail("test32: trackDemoEvent missing source", JSON.stringify(captured[0]));
+
+  // ── trackDemoEvent: DB error never throws (fire-and-forget safety) ─────────
+  const errorSupabase = {
+    from: () => ({
+      insert: () => { throw new Error("simulated DB error"); },
+    }),
+  };
+  let errorThrew = false;
+  try { await trackDemoEvent(errorSupabase, { eventName: "demo_started" }); }
+  catch { errorThrew = true; }
+  !errorThrew
+    ? pass("test32: trackDemoEvent catches DB errors — never throws to caller")
+    : fail("test32: trackDemoEvent propagated a DB error to caller");
+
+  // ── Demo flow fires demo_started on first contact ──────────────────────────
+  const events32a = [];
+  const mockSupa32a = {
+    from: () => ({
+      insert: (row) => { events32a.push(row); return Promise.resolve({}); },
+    }),
+  };
+  function makeDemoConvo32() {
+    return { messages: [], bookingStep: null, bookingData: {}, handoff: false, consecutiveFrustrated: 0, sessionType: "test", clientId: "highmark_demo" };
+  }
+  const convoA = makeDemoConvo32();
+  await handleDemoFlow({ supabase: mockSupa32a, twilioClient: null, fromNumber: "+15550000010", toNumber: "+18668906657", rawBody: "Hey", testMode: true, isNew: true, convo: convoA, source: "sms" });
+  events32a.some(e => e.event_name === "demo_started")
+    ? pass("test32: demo_started fired on first contact")
+    : fail("test32: demo_started not fired on first contact", JSON.stringify(events32a));
+
+  // ── Demo flow fires demo_reset on START OVER ────────────────────────────────
+  const events32b = [];
+  const mockSupa32b = {
+    from: () => ({
+      insert: (row) => { events32b.push(row); return Promise.resolve({}); },
+    }),
+  };
+  const convoB = makeDemoConvo32();
+  convoB.bookingData._demo = { step: "demo_path", path: 1, exploredPaths: [1], vertical: "outdoor", subtypeKey: null, qaCount: 0 };
+  await handleDemoFlow({ supabase: mockSupa32b, twilioClient: null, fromNumber: "+15550000011", toNumber: "+18668906657", rawBody: "START OVER", testMode: true, isNew: false, convo: convoB, source: "sms" });
+  events32b.some(e => e.event_name === "demo_reset")
+    ? pass("test32: demo_reset fired on START OVER")
+    : fail("test32: demo_reset not fired on START OVER", JSON.stringify(events32b));
+
+  // ── Demo flow fires demo_path_selected when business type given ────────────
+  const events32c = [];
+  const mockSupa32c = {
+    from: () => ({
+      insert: (row) => { events32c.push(row); return Promise.resolve({}); },
+    }),
+  };
+  const convoC = makeDemoConvo32();
+  convoC.bookingData._demo = { step: "awaiting_demo_type", qaCount: 0, vertical: "default", subtypeKey: null, exploredPaths: [] };
+  await handleDemoFlow({ supabase: mockSupa32c, twilioClient: null, fromNumber: "+15550000012", toNumber: "+18668906657", rawBody: "bike tour company", testMode: true, isNew: false, convo: convoC, source: "sms" });
+  const pathSelected = events32c.find(e => e.event_name === "demo_path_selected");
+  pathSelected
+    ? pass("test32: demo_path_selected fired on business type input")
+    : fail("test32: demo_path_selected not fired on business type", JSON.stringify(events32c));
+  pathSelected?.subtype_key === "bike"
+    ? pass("test32: demo_path_selected carries subtype_key=bike")
+    : fail("test32: demo_path_selected missing subtype_key", JSON.stringify(pathSelected));
+  pathSelected?.vertical === "outdoor"
+    ? pass("test32: demo_path_selected carries vertical=outdoor")
+    : fail("test32: demo_path_selected missing vertical", JSON.stringify(pathSelected));
+
+  // ── Demo flow fires demo_cta_shown when transitioning to demo_cta ──────────
+  const events32d = [];
+  const mockSupa32d = {
+    from: () => ({
+      insert: (row) => { events32d.push(row); return Promise.resolve({}); },
+    }),
+  };
+  const convoD = makeDemoConvo32();
+  convoD.bookingData._demo = { step: "demo_followup", path: 1, exploredPaths: [1], vertical: "outdoor", subtypeKey: null, qaCount: 0 };
+  await handleDemoFlow({ supabase: mockSupa32d, twilioClient: null, fromNumber: "+15550000013", toNumber: "+18668906657", rawBody: "interesting", testMode: true, isNew: false, convo: convoD, source: "sms" });
+  events32d.some(e => e.event_name === "demo_cta_shown")
+    ? pass("test32: demo_cta_shown fired on followup → cta transition")
+    : fail("test32: demo_cta_shown not fired", JSON.stringify(events32d));
+
+  // ── Demo flow fires demo_interest_expressed + demo_lead_capture_started on YES ──
+  const events32e = [];
+  const mockSupa32e = {
+    from: () => ({
+      insert: (row) => { events32e.push(row); return Promise.resolve({}); },
+    }),
+  };
+  const convoE = makeDemoConvo32();
+  convoE.bookingData._demo = { step: "demo_cta", path: 2, exploredPaths: [1, 2], vertical: "appointments", subtypeKey: "med_spa", qaCount: 1 };
+  await handleDemoFlow({ supabase: mockSupa32e, twilioClient: null, fromNumber: "+15550000014", toNumber: "+18668906657", rawBody: "YES", testMode: true, isNew: false, convo: convoE, source: "ui" });
+  events32e.some(e => e.event_name === "demo_interest_expressed")
+    ? pass("test32: demo_interest_expressed fired on YES at demo_cta")
+    : fail("test32: demo_interest_expressed not fired on YES", JSON.stringify(events32e));
+  events32e.some(e => e.event_name === "demo_lead_capture_started")
+    ? pass("test32: demo_lead_capture_started fired on YES at demo_cta")
+    : fail("test32: demo_lead_capture_started not fired on YES", JSON.stringify(events32e));
+  events32e.find(e => e.event_name === "demo_interest_expressed")?.source === "ui"
+    ? pass("test32: source='ui' correctly passed through to analytics event")
+    : fail("test32: source not 'ui' in analytics event", JSON.stringify(events32e));
+
+  // ── Admin endpoint functions are exported and callable ─────────────────────
+  typeof handleDemoAnalyticsSummary === "function"
+    ? pass("test32: handleDemoAnalyticsSummary exported from demoAnalytics.js")
+    : fail("test32: handleDemoAnalyticsSummary not exported");
+  typeof handleDemoAnalyticsEvents === "function"
+    ? pass("test32: handleDemoAnalyticsEvents exported from demoAnalytics.js")
+    : fail("test32: handleDemoAnalyticsEvents not exported");
+
+  // ── handleDemoAnalyticsSummary: 503 when supabase is null ─────────────────
+  let summaryStatus = null;
+  const mockRes = {
+    status: (code) => ({ json: (body) => { summaryStatus = code; return body; } }),
+    json: (body) => { summaryStatus = 200; return body; },
+  };
+  await handleDemoAnalyticsSummary({ query: {} }, mockRes, null);
+  summaryStatus === 503
+    ? pass("test32: handleDemoAnalyticsSummary returns 503 when supabase is null")
+    : fail("test32: summary status wrong with null supabase", summaryStatus);
+
+  // ── handleDemoAnalyticsEvents: returns empty when supabase is null ─────────
+  let eventsResult = null;
+  const mockRes2 = { json: (body) => { eventsResult = body; } };
+  await handleDemoAnalyticsEvents({ query: {} }, mockRes2, null);
+  eventsResult?.events?.length === 0
+    ? pass("test32: handleDemoAnalyticsEvents returns empty array when supabase is null")
+    : fail("test32: events response wrong with null supabase", JSON.stringify(eventsResult));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
@@ -2472,6 +2643,7 @@ async function main() {
   await test26(); // buying signals, stage machine, lead capture trigger
   await test27(); // commercial decision layer: scoring, expertise-first, response plan
   await test31(); // demo overhaul: immediate tailored examples, explicit next steps
+  await test32(); // demo analytics: event tracking + admin endpoint exports
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");

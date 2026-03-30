@@ -37,8 +37,10 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (301 tests), spawns its own server on port 3099
+test.js                — automated test suite (464 tests), spawns its own server on port 3099
 demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
+demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
+db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, update, summary routes (Chunk 5)
 adminClients.js        — client provisioning: create/update/list/readiness routes (Chunk 6)
@@ -384,6 +386,34 @@ npm run chat  # switch phone to +18668906657 in chat.js, or
 **Testing UI:** All clients appear in the UI selector at `/ui?key=UI_SECRET`. Demo client is marked `isDemo: true`.
 
 **Session tip:** Start a new Claude session when moving from demo/sales work to website/landing page work.
+
+### Demo Analytics (demoAnalytics.js — Chunk 7C)
+Lightweight fire-and-forget funnel tracking for the demo. Never awaited by callers — DB latency never impacts response time.
+
+**Tracked events:**
+| Event | Fired when |
+|---|---|
+| `demo_started` | First contact with demo bot |
+| `demo_path_selected` | User picks Q&A / Lead Capture / Booking (any state) |
+| `demo_cta_shown` | `demo_followup` → `demo_cta` transition |
+| `demo_interest_expressed` | YES intent detected in any demo state |
+| `demo_lead_capture_started` | YES intent → entering `lead_name` step |
+| `demo_lead_captured` | Lead saved successfully to `leads` table |
+| `demo_reset` | START OVER / DEMO / RESTART / RESET keyword |
+
+**Admin read routes (protected by `UI_SECRET`):**
+- `GET /admin/demo-analytics/summary` — funnel totals + conversion rates; optional `?since=YYYY-MM-DD`
+- `GET /admin/demo-analytics/events` — recent raw events (latest-first); filters: `event_name`, `demo_path`, `source`, `since`, `limit` (max 200)
+
+**Source field:** `"sms"` for Twilio, `"ui"` for UI console (detected via `isUiReq(req)` in index.js).
+
+**DB migration required:** Run `db1_demo_analytics.sql` in Supabase DB1 SQL editor before first use.
+
+**Access:**
+```bash
+curl "https://highmark-bot-production.up.railway.app/admin/demo-analytics/summary?key=YOUR_UI_SECRET"
+curl "https://highmark-bot-production.up.railway.app/admin/demo-analytics/events?key=YOUR_UI_SECRET&event_name=demo_lead_captured"
+```
 
 ### Session Tips
 Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — when switching from SMS flow work to admin/internal workflow work — and when moving from admin provisioning work to public website/sales funnel work. Keeps context focused and saves credits.

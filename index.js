@@ -25,6 +25,7 @@ import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, bui
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
 import { handleListLeads, handleUpdateLead, handleLeadsSummary } from "./adminLeads.js";
+import { handleDemoAnalyticsSummary, handleDemoAnalyticsEvents } from "./demoAnalytics.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
@@ -1174,6 +1175,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     const { reply } = await handleDemoFlow({
       supabase, twilioClient, fromNumber, toNumber, rawBody,
       testMode: process.env.TEST_MODE === "true", isNew, convo,
+      source: isUiReq(req) ? "ui" : "sms",
     });
     await saveConversation(fromNumber, toNumber, convo);
     if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply, meta: { mode: "demo" } });
@@ -1793,6 +1795,12 @@ app.get("/internal/clients", requireUiAccess, (_req, res) => {
 app.get("/admin/leads/summary", requireUiAccess, (req, res) => handleLeadsSummary(req, res, supabase));
 app.get("/admin/leads",         requireUiAccess, (req, res) => handleListLeads(req, res, supabase));
 app.patch("/admin/leads/:id",   requireUiAccess, (req, res) => handleUpdateLead(req, res, supabase));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN DEMO ANALYTICS — Funnel event tracking (protected by UI_SECRET)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/admin/demo-analytics/summary", requireUiAccess, (req, res) => handleDemoAnalyticsSummary(req, res, supabase));
+app.get("/admin/demo-analytics/events",  requireUiAccess, (req, res) => handleDemoAnalyticsEvents(req, res, supabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN CLIENTS — Client provisioning API (protected by UI_SECRET)
