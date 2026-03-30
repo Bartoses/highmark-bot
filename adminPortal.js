@@ -40,6 +40,27 @@ const EDITABLE_SETTINGS = {
   website_url:             "website_url",
 };
 
+// ── GET /portal/api/clients ───────────────────────────────────────────────────
+// internal_admin: returns all active clients (id + name)
+// client_user: returns only their own client
+export async function handlePortalClients(req, res) {
+  const { portalUser } = req;
+  const clients = getAllClients();
+
+  if (portalUser.role === "internal_admin") {
+    const list = Object.values(clients)
+      .filter(c => c.active !== false)
+      .map(c => ({ id: c.id, name: c.name, bookingMode: c.bookingMode }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return res.json({ clients: list });
+  }
+
+  // client_user — only their own
+  const c = clients[portalUser.clientId];
+  if (!c) return res.status(404).json({ error: "Client not found" });
+  return res.json({ clients: [{ id: c.id, name: c.name, bookingMode: c.bookingMode }] });
+}
+
 // ── GET /portal/api/me ────────────────────────────────────────────────────────
 export async function handlePortalMe(req, res) {
   const { portalUser } = req;
