@@ -209,8 +209,9 @@ export const CLIENTS = {
     leadCaptureEnabled:       false,
 
     fareharborCompanies: [],
-    scrapeUrls:          [],
-    snotelStations:      [],
+    // Scraped weekly (Monday 3am) via Haiku — keeps product knowledge current
+    scrapeUrls:     ["https://www.usehighmark.com/home"],
+    snotelStations: [],
     bookingUrls:         {},
     services:            [],
     faq:                 [],

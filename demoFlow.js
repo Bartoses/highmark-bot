@@ -41,23 +41,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { saveLead } from "./leads.js";
+import { loadSiteContent } from "./siteContent.js";
 
 // ── Highmark product knowledge ───────────────────────────────────────────────
-// Static KB for product Q&A. Swap for scraped usehighmark.com content once live.
-// Keep each entry under ~240 chars so it fits in 2 SMS with follow-on text.
+// Static defaults used when site_content DB is unavailable.
+// buildHmFromSiteContent() overrides pricing + features from the CMS at runtime,
+// so a site editor update automatically updates demo bot answers too.
 
-const HM = {
+const HM_DEFAULTS = {
   overview:
 `Highmark is an AI SMS concierge. It connects to your business — website, booking system, whatever you use — and handles customer texts automatically. Q&A, lead capture, booking links, confirmations. 24/7. No staff needed.`,
 
   pricing:
-`Two tiers:\n\n• Starter ($200–300/mo) — 24/7 Q&A + lead capture\n• Growth ($400–500/mo) — Q&A + lead capture + live booking integration\n\nSetup included. No per-message fees. Most clients live in 1–3 days.`,
+`Three tiers:\n\n• Free ($0) — 24/7 Q&A, up to 100 msgs/mo\n• Growth ($249/mo) — unlimited msgs, lead capture, CRM, dedicated number\n• Pro ($449/mo) — everything + live booking integration (FareHarbor)\n\nSetup included. No per-message fees. Most clients live in 1–3 days.`,
 
   setup:
 `Setup takes 1–3 days:\n1. Twilio number assigned\n2. Your website scraped for Q&A knowledge\n3. Bot persona + tone configured to match your brand\n4. Test pass → go live\n\nNo code. We handle everything.`,
 
   features:
-`What's live today:\n• 24/7 Q&A from your website\n• Lead capture + instant team notification\n• Live booking availability (FareHarbor, Growth tier)\n• CRM: contacts, tags, opt-in/out\n• Booking confirmations + follow-up texts`,
+`What's live today:\n• 24/7 Q&A from your website\n• Lead capture + instant team notification\n• Live booking availability (FareHarbor, Pro tier)\n• CRM: contacts, tags, opt-in/out\n• Booking confirmations + follow-up texts`,
 
   roadmap:
 `Coming next:\n• Campaign messaging (scheduled SMS to customer segments)\n• Analytics dashboard\n• Additional booking integrations (Checkfront, Peek, Rezdy)\n• Multi-channel (web chat, Instagram DM)`,
@@ -71,6 +73,47 @@ const HM = {
   integrations:
 `Live integrations: FareHarbor (booking), Twilio (SMS), any public website (knowledge scraping).\n\nRoadmap: Checkfront, Peek, Rezdy, Square, and calendar integrations.`,
 };
+
+// Build the live HM object from site_content (DB) merged with static defaults.
+// Called once per demo interaction — cache in siteContent.js handles DB load.
+async function buildHm(supabase) {
+  try {
+    const sc = await loadSiteContent(supabase);
+
+    // Pricing: format from structured tiers in site_content
+    let pricing = HM_DEFAULTS.pricing;
+    if (Array.isArray(sc.pricing?.tiers) && sc.pricing.tiers.length) {
+      const lines = sc.pricing.tiers.map(t => {
+        const price = t.price === 0 ? "Free" : `$${t.price}/mo`;
+        // First included feature as the tier tagline
+        const tagline = (t.features || []).find(f => f.included && f.text !== `Everything in ${t.name}`)?.text || t.description || "";
+        return `• ${t.name} (${price})${tagline ? ` — ${tagline}` : ""}`;
+      }).join("\n");
+      pricing = `${lines}\n\nSetup included. No per-message fees. Most clients live in 1–3 days.`;
+    }
+
+    // Features: pull from Growth tier feature list (most representative)
+    let features = HM_DEFAULTS.features;
+    const growthTier = sc.pricing?.tiers?.find(t => t.id === "growth");
+    if (growthTier?.features?.length) {
+      const included = growthTier.features.filter(f => f.included).map(f => `• ${f.text}`);
+      if (included.length) features = `What's included in Growth:\n${included.join("\n")}`;
+    }
+
+    // How it works: pull from site_content if steps are set
+    let how_it_works = HM_DEFAULTS.how_it_works;
+    if (Array.isArray(sc.how_it_works?.steps) && sc.how_it_works.steps.length) {
+      how_it_works = sc.how_it_works.steps.map(s => `${s.num}. ${s.title} — ${s.body}`).join("\n");
+    }
+
+    return { ...HM_DEFAULTS, pricing, features, how_it_works };
+  } catch {
+    return HM_DEFAULTS;
+  }
+}
+
+// Module-level fallback — used synchronously before the async build completes
+const HM = { ...HM_DEFAULTS };
 
 // ── Q&A follow-on lines ───────────────────────────────────────────────────────
 // Appended after each Q&A answer. Nudges toward demo or getting started.
@@ -405,6 +448,10 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
   const body      = rawBody.trim();
   const bodyUpper = body.toUpperCase();
 
+  // Load live product knowledge from site_content (same source as the website).
+  // Falls back to HM_DEFAULTS if DB unavailable. Cached for 5 min per siteContent.js.
+  const hm = await buildHm(supabase);
+
   console.log(`[DEMO] ${fromNumber} → "${body.slice(0, 40)}"`);
 
   // ── Global: reset ──────────────────────────────────────────────────────────
@@ -470,20 +517,20 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     // "1" → What Highmark does
     if (path === 1) {
       setState(convo, { qaCount: qaCount + 1 });
-      return { reply: `${HM.overview}\n\n${qaFollowon("overview", qaCount + 1)}` };
+      return { reply: `${hm.overview}\n\n${qaFollowon("overview", qaCount + 1)}` };
     }
 
     // "3" → Pricing
     if (path === 3) {
       setState(convo, { qaCount: qaCount + 1 });
-      return { reply: `${HM.pricing}\n\n${qaFollowon("pricing", qaCount + 1)}` };
+      return { reply: `${hm.pricing}\n\n${qaFollowon("pricing", qaCount + 1)}` };
     }
 
     // Direct question about Highmark
     const qIntent = detectQuestionIntent(body);
     if (qIntent) {
       setState(convo, { qaCount: qaCount + 1 });
-      return { reply: `${HM[qIntent]}\n\n${qaFollowon(qIntent, qaCount + 1)}` };
+      return { reply: `${hm[qIntent] ?? HM_DEFAULTS[qIntent] ?? hm.overview}\n\n${qaFollowon(qIntent, qaCount + 1)}` };
     }
 
     // Fallback — rephrase the main menu
