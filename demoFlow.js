@@ -918,11 +918,11 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
           contactPhone: fromNumber,
           contactEmail: null,
           name:         s.leadName,
+          businessName: s.leadBusiness ?? null,
+          website:      website ?? null,
           service:      s.path ? (PATHS[s.path]?.label ?? "demo") : "demo",
-          timeframe:    website ? `website: ${website}` : null,
+          timeframe:    null,
           leadType:     "demo",
-          // businessName and website dedicated columns require db1_lead_followup.sql migration
-          // Activate by passing: businessName: s.leadBusiness, website
         });
       } catch (err) {
         console.error("[DEMO] saveLead error:", err.message);
