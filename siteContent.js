@@ -29,7 +29,7 @@ export const DEFAULTS = {
     badge: "🏔 Live demo available now — no signup required",
     headline: "Your customers text. <em>Highmark handles it.</em>",
     subheadline:
-      "AI SMS concierge that answers questions, captures leads, and drives bookings — automatically, 24/7. For tour operators, rental companies, and service businesses.",
+      "AI SMS concierge that answers questions, captures leads, drives bookings, and sends targeted campaigns — automatically, 24/7. For tour operators, rental companies, and service businesses.",
     primary_cta_text: "📱 Text DEMO to (866) 890-6657",
     secondary_cta_text: "See pricing ↓",
     demo_phone: "+18668906657",
@@ -64,7 +64,7 @@ export const DEFAULTS = {
         num: "3",
         title: "You grow",
         body:
-          "Lead notifications hit your phone. Bookings confirm automatically. Your team only steps in when it truly matters.",
+          "Lead notifications hit your phone. Bookings confirm automatically. Send SMS campaigns to re-engage your list. Your team only steps in when it truly matters.",
       },
     ],
   },
@@ -104,6 +104,7 @@ export const DEFAULTS = {
           { text: "CRM & contact records", included: false },
           { text: "Booking integration", included: false },
           { text: "Campaign messaging", included: false },
+          { text: "Follow-up automation", included: false },
         ],
       },
       {
@@ -125,6 +126,7 @@ export const DEFAULTS = {
           { text: "CRM — contacts, tags, opt-in/out", included: true },
           { text: "Custom bot persona & tone", included: true },
           { text: "Weekly website knowledge refresh", included: true },
+          { text: "Follow-up automation", included: true },
           { text: "Live booking integration", included: false },
           { text: "Campaign messaging", included: false },
         ],
@@ -145,9 +147,9 @@ export const DEFAULTS = {
           { text: "Live booking availability", included: true },
           { text: "FareHarbor integration", included: true },
           { text: "Booking confirmation texts", included: true },
-          { text: "30-min follow-up automation", included: true },
+          { text: "Campaign messaging — unlimited sends", included: true },
+          { text: "Audience targeting (new, engaged, all leads)", included: true },
           { text: "Priority support", included: true },
-          { text: "Campaign messaging (coming soon)", included: true },
           { text: "Analytics dashboard (coming soon)", included: true },
         ],
       },
@@ -186,6 +188,10 @@ export const DEFAULTS = {
         a: "Absolutely. Text our demo number — (866) 890-6657 — right now and experience the full product Q&A flow. No signup, no credit card. The Free tier also lets you test with your own business before upgrading.",
       },
       {
+        q: "Can I send outbound texts to my leads?",
+        a: "Yes — Pro plan includes campaign messaging. Write a message, pick an audience (all leads, new contacts, or engaged prospects), and send. Messages go out at a safe pace with opt-out handling built in. Perfect for promos, seasonal offers, or re-engagement.",
+      },
+      {
         q: "Who is Highmark built for?",
         a: "Any customer-facing business that handles a high volume of repetitive inbound questions — tour operators, rental companies, service businesses, salons, gyms, restaurants, contractors. If customers text you, Highmark can handle it.",
       },
@@ -193,9 +199,9 @@ export const DEFAULTS = {
   },
 
   final_cta: {
-    headline: "Your customers are texting right now",
+    headline: "Your customers are texting. Your leads are going cold.",
     subheadline:
-      "See Highmark work on your phone in the next 30 seconds — no signup required.",
+      "Highmark answers every text, captures every lead, and sends campaigns that bring them back — automatically. See it work in the next 30 seconds.",
     primary_cta_text: "📱 Text DEMO to (866) 890-6657",
     secondary_cta_text: "Talk to us →",
     secondary_cta_href: "mailto:hello@whiteoutsolutions.co",

@@ -37,12 +37,15 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (485 tests), spawns its own server on port 3099
+test.js                — automated test suite (514 tests), spawns its own server on port 3099
 demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
 demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
 db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
 followUpEngine.js      — lead follow-up sequencing: scheduleFollowUps() + checkAndMarkLeadEngaged() (Chunk 8)
 db1_lead_followup.sql  — migration: adds lifecycle columns to leads + lead_id to scheduled_messages (Chunk 8)
+campaigns.js           — campaign engine: createCampaign, selectAudience, enqueueCampaign, getCampaignStats, interpolateMessage (Chunk 9)
+adminCampaigns.js      — campaign admin routes: POST/GET/PATCH campaigns + POST :id/send (Chunk 9)
+db1_campaigns.sql      — migration: creates campaigns + campaign_recipients tables (Chunk 9)
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, get, update, summary routes (Chunk 5 + 8)
 adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages (Chunk 8)
@@ -564,6 +567,38 @@ DYNAMIC BOOKING LINKS: <per-item FH URLs, auto-updated from cached PKs>
 - `rea_browse_all` — guest browses all REA tour options
 - Individual item URLs built dynamically from FH item PKs cached in knowledge_base table
 
+### Campaign Engine (campaigns.js + adminCampaigns.js — Chunk 9)
+Outbound SMS campaign system. Sends templated messages to a filtered audience, tracks delivery per recipient.
+
+**Admin routes (protected by `UI_SECRET`):**
+- `POST /admin/campaigns` — create a campaign (`client_id`, `name`, `message_body`, optional `audience_type`, `scheduled_at`)
+- `GET  /admin/campaigns?client_id=X` — list campaigns for a client; filter by `status`
+- `GET  /admin/campaigns/:id` — single campaign + `stats` (total/pending/sent/failed/cancelled)
+- `PATCH /admin/campaigns/:id` — update a draft campaign (name, message_body, audience_type, scheduled_at)
+- `POST /admin/campaigns/:id/send` — enqueue campaign; body `{ from_phone }` (optional)
+
+**Audience types:** `all_leads` (new/contacted/engaged/scheduled), `engaged_leads`, `new_leads`
+
+**Sending flow:**
+1. `enqueueCampaign()` selects audience from `leads` table
+2. Inserts one `campaign_recipients` row per lead
+3. Inserts one `scheduled_messages` row per lead (staggered 200ms) with `metadata.campaign_recipient_id`
+4. Cron worker processes `scheduled_messages` → updates `campaign_recipients.status` on send/fail
+
+**Template interpolation:** `{{name}}` → `contact_name` (fallback: "there"), `{{first_name}}` → first word of name. Case-insensitive.
+
+**Status lifecycle:** `draft` → `sending`|`scheduled` (on send trigger) → (campaign_recipients track per-message state)
+
+**DB migration required:** Run `db1_campaigns.sql` in Supabase DB1 before first use.
+
+```bash
+curl -X POST "https://highmark-bot-production.up.railway.app/admin/campaigns?key=YOUR_UI_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"client_id":"csr_rea","name":"Summer Promo","message_body":"Hey {{name}}, summer rides are open! Book at the link.","audience_type":"engaged_leads"}'
+
+curl -X POST "https://highmark-bot-production.up.railway.app/admin/campaigns/CAMPAIGN_ID/send?key=YOUR_UI_SECRET"
+```
+
 ### DB2 CRM Security
 - RLS enabled on all 4 tables: contacts, campaigns, campaign_sends, opt_outs
 - Service role key bypasses RLS automatically — bot is unaffected
@@ -589,6 +624,6 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 6. ~~**Client onboarding + provisioning**~~ — DONE. DB-backed client registry. POST/PATCH/GET `/admin/clients`. Validation, defaults, readiness checks. Run `db1_clients.sql` migration in Supabase DB1 before deploy.
 7. ~~**Sales + Demo engine**~~ — DONE. `highmark_demo` client owns +18668906657. Guided 3-path SMS demo (Q&A / Lead Capture / Booking), lead capture, admin notification. `bookingMode: "demo"` in clients.js; demoFlow.js handles deterministic state machine.
 8. ~~**Lead lifecycle + automated follow-up engine**~~ — DONE. `followUpEngine.js`: scheduleFollowUps() + checkAndMarkLeadEngaged(). DB worker sends follow-ups, stops on reply, promotes new→contacted→engaged. Run `db1_lead_followup.sql` migration. Admin: GET /admin/leads/:id, GET /admin/scheduled-messages.
-9. **CRM campaign sending** — `/crm/campaigns/:id/send` logs sends but doesn't actually call Twilio yet
-9. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+9. ~~**Campaign engine**~~ — DONE. `campaigns.js` + `adminCampaigns.js`. POST/GET/PATCH campaigns + POST :id/send. Audience targeting (all_leads/engaged_leads/new_leads), 200ms pacing, `{{name}}`/`{{first_name}}` interpolation. `campaign_recipients` updated on send/fail by scheduler. Run `db1_campaigns.sql` migration in Supabase DB1 before use.
+10. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
 10. **Website** — usehighmark.com landing page not yet built. Next step: serve static HTML from Railway at `/home` or dedicated service.

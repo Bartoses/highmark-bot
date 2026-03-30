@@ -2873,6 +2873,7 @@ async function main() {
   await test31(); // demo overhaul: immediate tailored examples, explicit next steps
   await test32(); // demo analytics: event tracking + admin endpoint exports
   await test33(); // lead follow-up engine: scheduling, stop conditions, engagement
+  await test34(); // campaign engine: createCampaign, selectAudience, enqueueCampaign, stats, interpolation
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -2914,6 +2915,280 @@ async function main() {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   process.exit(failures.length > 0 ? 1 : 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test34 — Campaign engine: createCampaign, selectAudience, enqueueCampaign,
+//           getCampaignStats, interpolateMessage, admin route exports
+// ─────────────────────────────────────────────────────────────────────────────
+async function test34() {
+  console.log("\nTEST 34: Campaign engine — createCampaign, selectAudience, enqueueCampaign, stats, interpolation\n");
+
+  const {
+    createCampaign,
+    selectAudience,
+    enqueueCampaign,
+    getCampaignStats,
+    interpolateMessage,
+  } = await import("./campaigns.js");
+
+  const {
+    handleCreateCampaign,
+    handleListCampaigns,
+    handleGetCampaign,
+    handleUpdateCampaign,
+    handleSendCampaign,
+  } = await import("./adminCampaigns.js");
+
+  // ── interpolateMessage ─────────────────────────────────────────────────────
+  interpolateMessage("Hi {{name}}!", { contact_name: "Jordan" }) === "Hi Jordan!"
+    ? pass("test34: interpolateMessage replaces {{name}}")
+    : fail("test34: {{name}} not replaced", interpolateMessage("Hi {{name}}!", { contact_name: "Jordan" }));
+
+  interpolateMessage("Hey {{first_name}}, thanks!", { contact_name: "Jordan Smith" }) === "Hey Jordan, thanks!"
+    ? pass("test34: interpolateMessage replaces {{first_name}} with first word only")
+    : fail("test34: {{first_name}} not replaced correctly");
+
+  interpolateMessage("Hi {{name}}!") === "Hi there!"
+    ? pass("test34: interpolateMessage falls back to 'there' when no contact_name")
+    : fail("test34: fallback to 'there' failed", interpolateMessage("Hi {{name}}!"));
+
+  interpolateMessage("Hey {{FIRST_NAME}}", { contact_name: "Alex" }) === "Hey Alex"
+    ? pass("test34: interpolateMessage is case-insensitive")
+    : fail("test34: case-insensitive replacement failed");
+
+  // ── createCampaign: invalid audience_type throws ──────────────────────────
+  let createThrew = false;
+  try {
+    await createCampaign({ from: "campaigns" }, {
+      clientId: "csr_rea", name: "Test", messageBody: "Hello",
+      audienceType: "invalid_type",
+    });
+  } catch { createThrew = true; }
+  createThrew
+    ? pass("test34: createCampaign throws on invalid audience_type")
+    : fail("test34: createCampaign did not throw on invalid audience_type");
+
+  // ── createCampaign: inserts correct row ───────────────────────────────────
+  const createdCampaigns = [];
+  const mockSupaCreate = {
+    from: (table) => ({
+      insert: (row) => {
+        createdCampaigns.push({ table, row });
+        return {
+          select: () => ({
+            single: () => Promise.resolve({
+              data: { id: "camp-001", ...row, created_at: new Date().toISOString() },
+              error: null,
+            }),
+          }),
+        };
+      },
+      select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }),
+    }),
+  };
+
+  const campaign = await createCampaign(mockSupaCreate, {
+    clientId: "csr_rea",
+    name: "Summer Promo",
+    messageBody: "Hi {{name}}, summer deals are here!",
+    audienceType: "engaged_leads",
+  });
+
+  campaign?.id === "camp-001"
+    ? pass("test34: createCampaign returns campaign row with id")
+    : fail("test34: createCampaign id wrong", campaign?.id);
+
+  createdCampaigns[0]?.row?.audience_type === "engaged_leads"
+    ? pass("test34: createCampaign stores correct audience_type")
+    : fail("test34: audience_type wrong", createdCampaigns[0]?.row?.audience_type);
+
+  createdCampaigns[0]?.row?.status === "draft"
+    ? pass("test34: createCampaign defaults to draft status")
+    : fail("test34: status not draft", createdCampaigns[0]?.row?.status);
+
+  // ── createCampaign: status=scheduled when scheduledAt is set ──────────────
+  const campaignSched = await createCampaign(mockSupaCreate, {
+    clientId: "csr_rea",
+    name: "Scheduled Promo",
+    messageBody: "Coming soon!",
+    audienceType: "all_leads",
+    scheduledAt: new Date(Date.now() + 3600000).toISOString(),
+  });
+  campaignSched?.status === "scheduled" || createdCampaigns.at(-1)?.row?.status === "scheduled"
+    ? pass("test34: createCampaign sets status=scheduled when scheduledAt is in the future")
+    : fail("test34: scheduled status not set", campaignSched?.status);
+
+  // ── selectAudience: queries with correct filters ───────────────────────────
+  const audienceQueries = [];
+  function makeAudienceMock(leads) {
+    return {
+      from: () => ({
+        select: () => ({
+          eq: (col, val) => {
+            audienceQueries.push({ col, val });
+            return {
+              not: () => ({
+                in:  () => Promise.resolve({ data: leads, error: null }),
+                eq:  () => Promise.resolve({ data: leads, error: null }),
+              }),
+              eq: () => ({ not: () => Promise.resolve({ data: leads, error: null }) }),
+            };
+          },
+        }),
+      }),
+    };
+  }
+
+  const leadsResult = await selectAudience(makeAudienceMock([
+    { id: "l1", contact_phone: "+15550001", status: "new" },
+    { id: "l2", contact_phone: "+15550002", status: "engaged" },
+  ]), { clientId: "csr_rea", audienceType: "all_leads" });
+
+  Array.isArray(leadsResult)
+    ? pass("test34: selectAudience returns an array")
+    : fail("test34: selectAudience did not return array", typeof leadsResult);
+
+  // ── selectAudience: returns [] on DB error ────────────────────────────────
+  const mockSupaErr = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          not: () => ({ in: () => Promise.resolve({ data: null, error: { message: "DB down" } }) }),
+        }),
+      }),
+    }),
+  };
+  let errThrew = false;
+  try { await selectAudience(mockSupaErr, { clientId: "csr_rea", audienceType: "all_leads" }); }
+  catch { errThrew = true; }
+  errThrew
+    ? pass("test34: selectAudience throws on DB error (propagated to enqueueCampaign)")
+    : fail("test34: selectAudience did not throw on DB error");
+
+  // ── enqueueCampaign: returns 0 recipients when no leads ───────────────────
+  const noLeadsCampaign = {
+    id: "camp-002", client_id: "csr_rea", audience_type: "new_leads",
+    message_body: "Hi {{name}}!", metadata: {}, scheduled_at: null, name: "Test",
+  };
+  const updatesEnqueue = [];
+  const mockSupaNoLeads = {
+    from: (table) => ({
+      select: (col, opts) => ({
+        eq: () => ({
+          not: () => ({ eq: () => Promise.resolve({ data: [], error: null }) }),
+        }),
+      }),
+      update: (vals) => {
+        updatesEnqueue.push({ table, vals });
+        return { eq: () => Promise.resolve({ data: null, error: null }) };
+      },
+    }),
+  };
+  const noLeadsResult = await enqueueCampaign(mockSupaNoLeads, noLeadsCampaign, "+18335786496");
+  noLeadsResult.recipientCount === 0 && noLeadsResult.enqueued === 0
+    ? pass("test34: enqueueCampaign returns 0/0 when no leads match audience")
+    : fail("test34: wrong result for empty audience", JSON.stringify(noLeadsResult));
+
+  updatesEnqueue.some(u => u.vals?.status === "sent")
+    ? pass("test34: enqueueCampaign marks campaign sent when no recipients")
+    : fail("test34: campaign not marked sent for empty audience", JSON.stringify(updatesEnqueue));
+
+  // ── getCampaignStats: aggregates by status ────────────────────────────────
+  const mockSupaStats = {
+    from: () => ({
+      select: () => ({
+        eq: () => Promise.resolve({
+          data: [
+            { status: "sent" }, { status: "sent" }, { status: "sent" },
+            { status: "pending" }, { status: "failed" },
+          ],
+          error: null,
+        }),
+      }),
+    }),
+  };
+  const stats = await getCampaignStats(mockSupaStats, "camp-001");
+  stats.total === 5
+    ? pass("test34: getCampaignStats returns correct total")
+    : fail("test34: getCampaignStats total wrong", stats.total);
+  stats.sent === 3
+    ? pass("test34: getCampaignStats counts sent correctly")
+    : fail("test34: getCampaignStats sent wrong", stats.sent);
+  stats.pending === 1 && stats.failed === 1
+    ? pass("test34: getCampaignStats counts pending and failed correctly")
+    : fail("test34: getCampaignStats pending/failed wrong", JSON.stringify(stats));
+
+  // getCampaignStats: returns zeros on DB error
+  const mockSupaStatsErr = {
+    from: () => ({ select: () => ({ eq: () => Promise.resolve({ data: null, error: { message: "err" } }) }) }),
+  };
+  const statsErr = await getCampaignStats(mockSupaStatsErr, "bad-id");
+  statsErr.total === 0
+    ? pass("test34: getCampaignStats returns zero totals on DB error")
+    : fail("test34: getCampaignStats error handling wrong", JSON.stringify(statsErr));
+
+  // ── Admin route exports ────────────────────────────────────────────────────
+  typeof handleCreateCampaign === "function"
+    ? pass("test34: handleCreateCampaign exported from adminCampaigns.js")
+    : fail("test34: handleCreateCampaign not exported");
+  typeof handleListCampaigns === "function"
+    ? pass("test34: handleListCampaigns exported from adminCampaigns.js")
+    : fail("test34: handleListCampaigns not exported");
+  typeof handleGetCampaign === "function"
+    ? pass("test34: handleGetCampaign exported from adminCampaigns.js")
+    : fail("test34: handleGetCampaign not exported");
+  typeof handleUpdateCampaign === "function"
+    ? pass("test34: handleUpdateCampaign exported from adminCampaigns.js")
+    : fail("test34: handleUpdateCampaign not exported");
+  typeof handleSendCampaign === "function"
+    ? pass("test34: handleSendCampaign exported from adminCampaigns.js")
+    : fail("test34: handleSendCampaign not exported");
+
+  // ── Admin route: 503 when supabase is null ────────────────────────────────
+  let createStatus = null;
+  const mockRes34a = { status: (c) => ({ json: () => { createStatus = c; } }) };
+  await handleCreateCampaign({ body: {} }, mockRes34a, null);
+  createStatus === 503
+    ? pass("test34: handleCreateCampaign returns 503 with null supabase")
+    : fail("test34: handleCreateCampaign wrong status with null supabase", createStatus);
+
+  let listStatus = null;
+  const mockRes34b = { status: (c) => ({ json: () => { listStatus = c; } }) };
+  await handleListCampaigns({ query: {} }, mockRes34b, null);
+  listStatus === 503
+    ? pass("test34: handleListCampaigns returns 503 with null supabase")
+    : fail("test34: handleListCampaigns wrong status with null supabase", listStatus);
+
+  // ── Admin route: 400 on missing required fields ────────────────────────────
+  let missingStatus = null;
+  const mockRes34c = { status: (c) => ({ json: (b) => { missingStatus = c; return b; } }) };
+  await handleCreateCampaign({ body: { client_id: "csr_rea" } }, mockRes34c, { from: () => {} });
+  missingStatus === 400
+    ? pass("test34: handleCreateCampaign returns 400 when name missing")
+    : fail("test34: handleCreateCampaign missing-field validation wrong", missingStatus);
+
+  // ── siteContent: campaigns mentioned in Growth and Pro tiers ──────────────
+  const growthTier = DEFAULTS.pricing.tiers.find(t => t.id === "growth");
+  const proTier    = DEFAULTS.pricing.tiers.find(t => t.id === "pro");
+
+  growthTier?.features.some(f => /campaign/i.test(f.text))
+    ? pass("test34: siteContent Growth tier mentions campaign messaging")
+    : fail("test34: Growth tier missing campaign feature");
+
+  proTier?.features.some(f => /campaign/i.test(f.text) && f.included)
+    ? pass("test34: siteContent Pro tier includes campaign messaging (included: true)")
+    : fail("test34: Pro tier campaign feature wrong", JSON.stringify(proTier?.features));
+
+  // ── siteContent: FAQ includes campaign question ───────────────────────────
+  DEFAULTS.faq.items.some(f => /campaign|outbound/i.test(f.q))
+    ? pass("test34: siteContent FAQ includes campaign/outbound question")
+    : fail("test34: FAQ missing campaign question");
+
+  // ── siteContent: final_cta updated ────────────────────────────────────────
+  /lead|campaign/i.test(DEFAULTS.final_cta.subheadline)
+    ? pass("test34: siteContent final_cta subheadline updated with leads/campaigns angle")
+    : fail("test34: final_cta subheadline not updated", DEFAULTS.final_cta.subheadline);
 }
 
 main().catch((e) => {

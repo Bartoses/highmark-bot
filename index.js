@@ -29,6 +29,7 @@ import { handleDemoAnalyticsSummary, handleDemoAnalyticsEvents } from "./demoAna
 import { scheduleFollowUps, checkAndMarkLeadEngaged } from "./followUpEngine.js";
 import { handleListScheduledMessages } from "./adminScheduledMessages.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
+import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { loadDbClients } from "./clients.js";
@@ -1828,6 +1829,16 @@ app.get("/admin/clients",       requireUiAccess, (req, res) => handleListClients
 app.get("/admin/clients/:id",   requireUiAccess, (req, res) => handleGetClient(req, res));
 app.post("/admin/clients",      requireUiAccess, (req, res) => handleCreateClient(req, res, supabase));
 app.patch("/admin/clients/:id", requireUiAccess, (req, res) => handleUpdateClient(req, res, supabase));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN CAMPAIGNS — Campaign engine (protected by UI_SECRET)
+// Requires db1_campaigns.sql migration to have been run in Supabase DB1.
+// ─────────────────────────────────────────────────────────────────────────────
+app.post("/admin/campaigns",              requireUiAccess, (req, res) => handleCreateCampaign(req, res, supabase));
+app.get("/admin/campaigns",               requireUiAccess, (req, res) => handleListCampaigns(req, res, supabase));
+app.get("/admin/campaigns/:id",           requireUiAccess, (req, res) => handleGetCampaign(req, res, supabase));
+app.patch("/admin/campaigns/:id",         requireUiAccess, (req, res) => handleUpdateCampaign(req, res, supabase));
+app.post("/admin/campaigns/:id/send",     requireUiAccess, (req, res) => handleSendCampaign(req, res, supabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SITE CONTENT MANAGEMENT

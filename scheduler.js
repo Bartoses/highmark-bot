@@ -200,6 +200,14 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
 
     counts.sent++;
 
+    // Update campaign_recipients status → sent
+    if (msg.metadata?.campaign_recipient_id) {
+      supabase.from("campaign_recipients")
+        .update({ status: "sent", sent_at: now })
+        .eq("id", msg.metadata.campaign_recipient_id)
+        .then().catch(() => {});
+    }
+
     // Update lead: promote NEW → CONTACTED on first outbound, always update last_contacted_at
     if (msg.lead_id) {
       const leadNow = new Date().toISOString();
@@ -227,6 +235,13 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
       }).eq("id", msg.id);
       counts.failed++;
       console.log(`[SCHEDULER] ${msg.id} — marked failed after ${attempts} attempt(s)`);
+      // Update campaign_recipients status → failed
+      if (msg.metadata?.campaign_recipient_id) {
+        supabase.from("campaign_recipients")
+          .update({ status: "failed", error: err.message })
+          .eq("id", msg.metadata.campaign_recipient_id)
+          .then().catch(() => {});
+      }
     } else {
       // Back off and retry
       const delayMs     = RETRY_DELAYS_MS[attempts - 1] ?? RETRY_DELAYS_MS.at(-1);
