@@ -31,7 +31,7 @@ import { handleListScheduledMessages } from "./adminScheduledMessages.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
 import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
-import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers } from "./adminPortal.js";
+import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients } from "./adminPortal.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { loadDbClients } from "./clients.js";
@@ -1872,6 +1872,7 @@ app.get("/portal/settings",  (_req, res) => res.sendFile(path.join(__uiDir, "por
 
 // Portal API — all require valid Supabase JWT
 app.get(  "/portal/api/me",                  requirePortalAuth, (req, res) => handlePortalMe(req, res));
+app.get(  "/portal/api/clients",             requirePortalAuth, (req, res) => handlePortalClients(req, res));
 app.get(  "/portal/api/dashboard",           requirePortalAuth, (req, res) => handlePortalDashboard(req, res, supabase));
 app.get(  "/portal/api/leads",               requirePortalAuth, (req, res) => handlePortalLeads(req, res, supabase));
 app.patch("/portal/api/leads/:id",           requirePortalAuth, (req, res) => handlePortalUpdateLead(req, res, supabase));

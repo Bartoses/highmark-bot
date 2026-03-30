@@ -72,6 +72,12 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   border-radius: 100px; padding: 3px 10px; font-size: 11px; color: var(--text2);
 }
 .admin-badge { background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.3); color: var(--warn); }
+.client-select {
+  background: var(--panel2); border: 1px solid var(--border2);
+  border-radius: 6px; padding: 4px 8px; font-size: 12px; color: var(--text);
+  outline: none; cursor: pointer; max-width: 200px;
+}
+.client-select:focus { border-color: var(--accent); }
 
 /* ── Sections ────────────────────────────────────────────────────────────── */
 .section { display: none; }
@@ -216,6 +222,7 @@ tr:hover td { background: var(--panel2); }
     <div id="topbar">
       <div class="topbar-title" id="topbarTitle">Dashboard</div>
       <div class="topbar-right">
+        <select class="client-select" id="clientSelect" style="display:none"></select>
         <span class="client-badge" id="clientBadge">—</span>
       </div>
     </div>
@@ -398,8 +405,33 @@ async function init() {
   // Populate header
   document.getElementById('sidebarEmail').textContent = me.email ?? '';
   const badgeEl = document.getElementById('clientBadge');
-  badgeEl.textContent = me.clientName ?? me.clientId ?? 'Highmark Admin';
   if (me.isAdmin) badgeEl.classList.add('admin-badge');
+
+  // If admin: fetch client list and show selector
+  if (me.isAdmin) {
+    const clientsData = await apiFetch('/clients');
+    const clients = clientsData?.clients ?? [];
+    const sel = document.getElementById('clientSelect');
+    if (clients.length > 0) {
+      sel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      sel.style.display = '';
+      // Pre-select first client
+      me.clientId = clients[0].id;
+      me.clientName = clients[0].name;
+      sel.addEventListener('change', () => {
+        const chosen = clients.find(c => c.id === sel.value);
+        me.clientId   = chosen?.id ?? null;
+        me.clientName = chosen?.name ?? null;
+        badgeEl.textContent = me.clientName ?? me.clientId ?? 'Highmark Admin';
+        document.title = `${me.clientName ?? 'Portal'} — Highmark`;
+        // Reload active section with new client
+        const active = document.querySelector('.section.active')?.id?.replace('sec-','') ?? 'dashboard';
+        switchSection(active);
+      });
+    }
+  }
+
+  badgeEl.textContent = me.clientName ?? me.clientId ?? 'Highmark Admin';
   document.title = `${me.clientName ?? 'Portal'} — Highmark`;
 
   // Nav
