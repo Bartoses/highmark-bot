@@ -35,7 +35,7 @@ import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
-import { isYesIntent, isNoIntent, detectPath, detectVertical, detectQuestionIntent } from "./demoFlow.js";
+import { isYesIntent, isNoIntent, detectPath, detectVertical, detectQuestionIntent, detectSubtype } from "./demoFlow.js";
 import { DEFAULTS, SECTION_KEYS, loadSiteContent, updateSiteSection, getSiteSection, invalidateSiteContentCache } from "./siteContent.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1870,6 +1870,19 @@ async function test29() {
   detectVertical("yoga studio")                   === "fitness"       ? pass("detectVertical: yoga → fitness")       : fail("detectVertical: yoga", detectVertical("yoga studio"));
   detectVertical("some random business")          === "default"       ? pass("detectVertical: unknown → default")    : fail("detectVertical: unknown", detectVertical("some random business"));
 
+  // ── Unit: subtype detection ────────────────────────────────────────────────
+  detectSubtype("bike tours in the mountains")      === "bike"       ? pass("detectSubtype: bike tours → bike")          : fail("detectSubtype: bike", detectSubtype("bike tours"));
+  detectSubtype("mountain bike rentals")            === "bike"       ? pass("detectSubtype: mountain bike → bike")        : fail("detectSubtype: mountain bike", detectSubtype("mountain bike rentals"));
+  detectSubtype("snowmobile rentals and tours")     === "snowmobile" ? pass("detectSubtype: snowmobile → snowmobile")     : fail("detectSubtype: snowmobile", detectSubtype("snowmobile tours"));
+  detectSubtype("whitewater rafting company")       === "raft"       ? pass("detectSubtype: rafting → raft")              : fail("detectSubtype: rafting", detectSubtype("rafting"));
+  detectSubtype("fly fishing guide service")        === "fishing"    ? pass("detectSubtype: fishing → fishing")           : fail("detectSubtype: fishing", detectSubtype("fishing guide"));
+  detectSubtype("ski rentals and lessons")          === "ski"        ? pass("detectSubtype: ski → ski")                   : fail("detectSubtype: ski", detectSubtype("ski rentals"));
+  detectSubtype("ATV and RZR rentals")              === "atv"        ? pass("detectSubtype: ATV/RZR → atv")               : fail("detectSubtype: atv", detectSubtype("ATV rentals"));
+  detectSubtype("zipline and canopy tours")         === "zipline"    ? pass("detectSubtype: zipline → zipline")           : fail("detectSubtype: zipline", detectSubtype("zipline tours"));
+  detectSubtype("hair salon and spa")               === null         ? pass("detectSubtype: salon → null (uses category)") : fail("detectSubtype: salon should be null", detectSubtype("hair salon"));
+  detectSubtype("med spa and aesthetics clinic")    === "med_spa"    ? pass("detectSubtype: med spa → med_spa")           : fail("detectSubtype: med spa", detectSubtype("med spa"));
+  detectSubtype("random generic business")          === null         ? pass("detectSubtype: unknown → null")              : fail("detectSubtype: unknown should be null", detectSubtype("random business"));
+
   // ── Unit: client routing ───────────────────────────────────────────────────
   resolveClient(DEMO_PHONE).id === "highmark_demo"
     ? pass("resolveClient: demo number → highmark_demo")
@@ -2289,14 +2302,74 @@ async function test31() {
     return { messages: [], bookingStep: null, bookingData: {}, handoff: false, consecutiveFrustrated: 0 };
   }
 
-  // ── Path intros must use explicit numbered choices, not "Reply anything" ──
-  const { detectVertical: dv } = await import("./demoFlow.js");
+  // Import detectSubtype for assertions
+  const { detectSubtype: ds } = await import("./demoFlow.js");
 
-  // Test path 1 intro for outdoor vertical — no "Reply anything"
+  // ── Subtype: bike tours must NOT produce snow/snowmobile examples ─────────
   const convo1 = makeDemoConvo();
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo1 });
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo1 });
-  const verticalReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "snowmobile tours", testMode: true, isNew: false, convo: convo1 })).reply;
+  const bikeReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "bike tours", testMode: true, isNew: false, convo: convo1 })).reply;
+
+  !/snow|sled|rabbit ears|snowmobile/i.test(bikeReply)
+    ? pass("test31: bike tours → NO snow/snowmobile in example")
+    : fail("test31: bike tours showing snowmobile content!", bikeReply.slice(0, 160));
+
+  /bike|trail|mountain|helmet/i.test(bikeReply)
+    ? pass("test31: bike tours → bike-specific example shown")
+    : fail("test31: bike example missing bike context", bikeReply.slice(0, 160));
+
+  /Customer:|Highmark:/i.test(bikeReply)
+    ? pass("test31: bike tours → simulated exchange present")
+    : fail("test31: bike example missing Customer/Highmark exchange", bikeReply.slice(0, 160));
+
+  ds("bike tours") === "bike"
+    ? pass("test31: detectSubtype('bike tours') === 'bike'")
+    : fail("test31: detectSubtype bike tours", ds("bike tours"));
+
+  // ── Subtype: rafting must produce river/water examples ────────────────────
+  const convo1b = makeDemoConvo();
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo1b });
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo1b });
+  const raftReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "whitewater rafting", testMode: true, isNew: false, convo: convo1b })).reply;
+
+  !/snow|sled|snowmobile|bike/i.test(raftReply)
+    ? pass("test31: rafting → NO snow or bike content")
+    : fail("test31: rafting showing wrong vertical content", raftReply.slice(0, 160));
+
+  /raft|river|class|water|launch/i.test(raftReply)
+    ? pass("test31: rafting → river-specific example shown")
+    : fail("test31: rafting example missing river context", raftReply.slice(0, 160));
+
+  // ── Subtype: fishing produces fishing-specific examples ───────────────────
+  ds("fly fishing guide service") === "fishing"
+    ? pass("test31: detectSubtype('fly fishing guide') === 'fishing'")
+    : fail("test31: detectSubtype fishing", ds("fly fishing guide service"));
+
+  // ── Subtype: snowmobile is fine when explicitly stated ────────────────────
+  const convo1c = makeDemoConvo();
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo1c });
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo1c });
+  const sledReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "snowmobile tours", testMode: true, isNew: false, convo: convo1c })).reply;
+
+  /snow|sled|trail/i.test(sledReply)
+    ? pass("test31: snowmobile tours → snow context correctly shown")
+    : fail("test31: snowmobile not producing snow examples", sledReply.slice(0, 160));
+
+  // ── Generic outdoor fallback (no subtype match) stays generic ─────────────
+  const convo1d = makeDemoConvo();
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo1d });
+  await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo1d });
+  const genericOutdoorReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "outdoor adventure company", testMode: true, isNew: false, convo: convo1d })).reply;
+
+  !/rabbit ears|specific snow|snowmobile/i.test(genericOutdoorReply)
+    ? pass("test31: generic outdoor → no snowmobile/Rabbit Ears bias")
+    : fail("test31: generic outdoor showing CSR-specific content", genericOutdoorReply.slice(0, 160));
+
+  // ── Path intros must use explicit numbered choices, not "Reply anything" ──
+
+  // Snowmobile tours → path 1 intro
+  const verticalReply = sledReply; // already computed above
 
   !/Reply anything/i.test(verticalReply)
     ? pass("test31: path 1 intro has no 'Reply anything' language")
@@ -2306,20 +2379,11 @@ async function test31() {
     ? pass("test31: path 1 intro has explicit numbered next steps (2️⃣ or 3️⃣)")
     : fail("test31: explicit numbered options missing from path 1 intro", verticalReply.slice(0, 120));
 
-  /Customer:|Highmark:/i.test(verticalReply)
-    ? pass("test31: path 1 intro contains simulated exchange (Customer/Highmark)")
-    : fail("test31: simulated exchange missing from path 1 intro", verticalReply.slice(0, 120));
-
-  /snow|tour|rental|outdoor/i.test(verticalReply)
-    ? pass("test31: path 1 intro is tailored to the outdoor vertical")
-    : fail("test31: vertical context missing from Q&A intro", verticalReply.slice(0, 120));
-
-  // ── Path 2 intro — no "Reply anything" ────────────────────────────────────
+  // ── Path 2 intro — no "Reply anything", salon tailored ────────────────────
   const convo2 = makeDemoConvo();
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo2 });
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo2 });
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "hair salon", testMode: true, isNew: false, convo: convo2 });
-  // Now in demo_path (path=1), send any reply to get to demo_followup, then pick path 2
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "cool", testMode: true, isNew: false, convo: convo2 });
   const path2Reply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099902", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo2 })).reply;
 
@@ -2331,7 +2395,6 @@ async function test31() {
     ? pass("test31: path 2 intro has explicit next step (3️⃣ or YES)")
     : fail("test31: no explicit next step in path 2 intro", path2Reply.slice(0, 120));
 
-  // Appointments vertical in the example
   /appointment|open|Saturday|book/i.test(path2Reply) && /Customer:|Highmark:/i.test(path2Reply)
     ? pass("test31: path 2 intro tailored to appointments vertical (salon)")
     : fail("test31: path 2 intro not tailored to salon/appointments vertical", path2Reply.slice(0, 120));
@@ -2340,7 +2403,6 @@ async function test31() {
   const convo3 = makeDemoConvo();
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099903", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo3 });
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099903", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo3 });
-  // Type "3" directly during awaiting_demo_type → path 3 with default vertical
   const path3Reply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099903", toNumber: "+18668906657", rawBody: "3", testMode: true, isNew: false, convo: convo3 })).reply;
 
   !/Reply anything/i.test(path3Reply)
