@@ -37,7 +37,7 @@ crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagg
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (514 tests), spawns its own server on port 3099
+test.js                — automated test suite (538 tests), spawns its own server on port 3099
 demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
 demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
 db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
@@ -46,6 +46,11 @@ db1_lead_followup.sql  — migration: adds lifecycle columns to leads + lead_id 
 campaigns.js           — campaign engine: createCampaign, selectAudience, enqueueCampaign, getCampaignStats, interpolateMessage (Chunk 9)
 adminCampaigns.js      — campaign admin routes: POST/GET/PATCH campaigns + POST :id/send (Chunk 9)
 db1_campaigns.sql      — migration: creates campaigns + campaign_recipients tables (Chunk 9)
+portalAuth.js          — portal JWT middleware factory: makePortalAuth(supabase) + resolvePortalClientId(req) (Chunk 10)
+adminPortal.js         — portal API handlers: dashboard, leads, campaigns, analytics, settings + admin user mgmt (Chunk 10)
+db1_portal.sql         — migration: creates portal_users table for client portal auth (Chunk 10)
+public/portal-login.html — client portal login page (Supabase Auth email+password)
+public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Analytics, Settings
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, get, update, summary routes (Chunk 5 + 8)
 adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages (Chunk 8)
@@ -567,6 +572,59 @@ DYNAMIC BOOKING LINKS: <per-item FH URLs, auto-updated from cached PKs>
 - `rea_browse_all` — guest browses all REA tour options
 - Individual item URLs built dynamically from FH item PKs cached in knowledge_base table
 
+### Client Portal (Chunk 10)
+Authenticated client-facing portal for managing leads, campaigns, analytics, and settings. Separate from the internal testing UI at `/ui?key=...`.
+
+**URL:** `/portal` → redirects to `/portal/login`
+**Portal sections:** Dashboard · Leads · Campaigns · Analytics · Settings
+
+**Auth model:**
+- Supabase Auth (email + password)
+- `portal_users` table: maps `auth_user_id` → `role` + `client_id`
+- Roles: `internal_admin` (can access any client via `?client_id=`), `client_user` (locked to own `client_id`)
+- JWT validated server-side on every `/portal/api/*` request via `makePortalAuth(supabase)` middleware
+
+**Client scoping:** Enforced server-side at three layers:
+1. Middleware: validates JWT, attaches `req.portalUser`
+2. `resolvePortalClientId(req)`: derives effective `client_id` (client_user ignored query param; admin uses it)
+3. DB query: every query explicitly filters `.eq("client_id", resolvedClientId)`
+
+**Required env var:** `SUPABASE_ANON_KEY` — the Supabase project's anon key (safe to expose to browsers). Returned by `GET /portal/config`. NEVER use `SUPABASE_KEY` (service role) client-side.
+
+**Provisioning a new portal user:**
+```bash
+curl -X POST "https://highmark-bot-production.up.railway.app/admin/portal-users?key=YOUR_UI_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"client@example.com","password":"secure-pw","role":"client_user","client_id":"csr_rea"}'
+```
+This creates a Supabase Auth user and inserts the `portal_users` row in one call.
+
+**Portal API endpoints (all require Bearer JWT):**
+- `GET /portal/api/me` — current user info
+- `GET /portal/api/dashboard` — lead counts, recent leads/campaigns, demo analytics
+- `GET /portal/api/leads` — paginated leads (filterable by status, lead_type)
+- `PATCH /portal/api/leads/:id` — update lead status/notes
+- `GET /portal/api/campaigns` — campaign list
+- `POST /portal/api/campaigns` — create draft campaign
+- `GET /portal/api/campaigns/:id` — campaign details + stats
+- `PATCH /portal/api/campaigns/:id` — edit draft campaign
+- `POST /portal/api/campaigns/:id/send` — send/enqueue campaign
+- `GET /portal/api/analytics` — event funnel, lead funnel, campaign summary
+- `GET /portal/api/settings` — client settings (safe fields only)
+- `PATCH /portal/api/settings` — update DB-backed client settings (static clients: read-only)
+
+**Admin routes (UI_SECRET protected — internal only):**
+- `POST /admin/portal-users` — create portal user
+- `GET /admin/portal-users` — list portal users
+
+**Settings editing:** Only DB-backed clients (created via `POST /admin/clients`) can be edited. Static clients (`csr_rea`, `lone_pine`) return `editable: false` with a read-only view.
+
+**What stays unchanged:** The internal testing UI at `/ui?key=...`, all `/admin/*` routes (UI_SECRET), and all `/sms` bot logic are completely untouched. The portal is an additive layer.
+
+**Migration required:** Run `db1_portal.sql` in Supabase DB1 SQL editor before first use.
+
+**To add a new portal module:** Add handler(s) to `adminPortal.js`, register routes in `index.js` under `requirePortalAuth`, add a section to `public/portal.html`.
+
 ### Campaign Engine (campaigns.js + adminCampaigns.js — Chunk 9)
 Outbound SMS campaign system. Sends templated messages to a filtered audience, tracks delivery per recipient.
 
@@ -625,5 +683,8 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 7. ~~**Sales + Demo engine**~~ — DONE. `highmark_demo` client owns +18668906657. Guided 3-path SMS demo (Q&A / Lead Capture / Booking), lead capture, admin notification. `bookingMode: "demo"` in clients.js; demoFlow.js handles deterministic state machine.
 8. ~~**Lead lifecycle + automated follow-up engine**~~ — DONE. `followUpEngine.js`: scheduleFollowUps() + checkAndMarkLeadEngaged(). DB worker sends follow-ups, stops on reply, promotes new→contacted→engaged. Run `db1_lead_followup.sql` migration. Admin: GET /admin/leads/:id, GET /admin/scheduled-messages.
 9. ~~**Campaign engine**~~ — DONE. `campaigns.js` + `adminCampaigns.js`. POST/GET/PATCH campaigns + POST :id/send. Audience targeting (all_leads/engaged_leads/new_leads), 200ms pacing, `{{name}}`/`{{first_name}}` interpolation. `campaign_recipients` updated on send/fail by scheduler. Run `db1_campaigns.sql` migration in Supabase DB1 before use.
-10. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
-10. **Website** — usehighmark.com landing page not yet built. Next step: serve static HTML from Railway at `/home` or dedicated service.
+10. ~~**Client portal**~~ — DONE. Authenticated portal at `/portal`. Supabase Auth + `portal_users` table. Dashboard, Leads, Campaigns, Analytics, Settings. JWT-protected API with 3-layer client scoping. Run `db1_portal.sql` + set `SUPABASE_ANON_KEY` env var. Provision users via `POST /admin/portal-users?key=UI_SECRET`.
+11. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+12. **Website** — usehighmark.com landing page served at `/home`. Next step: Start new Claude session for billing, plan enforcement, or advanced analytics.
+
+**Session tip:** Start a new Claude session when moving to billing, plan management, or advanced reporting — this session has been focused on portal/campaign/backend work.

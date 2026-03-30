@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Highmark — Sign In</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:       #0d0d0d;
+  --panel:    #131313;
+  --border:   #252525;
+  --text:     #e0e0e0;
+  --text2:    #888;
+  --accent:   #10b981;
+  --accent2:  #059669;
+  --danger:   #ef4444;
+  --radius:   8px;
+  --font:     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+.login-wrap {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.brand {
+  font-size: 22px; font-weight: 700; letter-spacing: .03em;
+  color: var(--text); margin-bottom: 32px;
+}
+.brand span { color: var(--accent); }
+
+.card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 32px; width: 100%; max-width: 380px;
+}
+.card h1 { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+.card .sub { color: var(--text2); font-size: 13px; margin-bottom: 24px; }
+
+label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+input[type="email"], input[type="password"] {
+  width: 100%; background: #0d0d0d; border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 14px;
+  padding: 10px 12px; outline: none; transition: border-color .15s;
+}
+input:focus { border-color: var(--accent); }
+.field { margin-bottom: 16px; }
+
+.btn {
+  width: 100%; background: var(--accent); color: #000; font-weight: 700;
+  font-size: 14px; border: none; border-radius: 6px; padding: 11px;
+  cursor: pointer; transition: background .15s; margin-top: 8px;
+}
+.btn:hover:not(:disabled) { background: var(--accent2); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.error-msg {
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
+  color: #fca5a5; border-radius: 6px; padding: 10px 12px;
+  font-size: 13px; margin-bottom: 16px; display: none;
+}
+.error-msg.show { display: block; }
+
+.footer { margin-top: 24px; text-align: center; color: var(--text2); font-size: 12px; }
+.footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="brand">High<span>mark</span></div>
+  <div class="card">
+    <h1>Client Portal</h1>
+    <p class="sub">Sign in to manage your leads, campaigns, and analytics.</p>
+
+    <div id="errorMsg" class="error-msg"></div>
+
+    <form id="loginForm" autocomplete="on">
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" placeholder="you@company.com" required autofocus autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn" id="signInBtn">Sign in</button>
+    </form>
+  </div>
+  <div class="footer">
+    Need access? <a href="mailto:hello@whiteoutsolutions.co">Contact Highmark support</a>
+  </div>
+</div>
+
+<script>
+(async () => {
+  // ── Load Supabase config from server ──────────────────────────────────────
+  let sbClient;
+  try {
+    const cfg = await fetch('/portal/config').then(r => r.json());
+    if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) {
+      showError('Portal configuration unavailable. Contact support.');
+      return;
+    }
+    sbClient = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+
+    // If already signed in, go straight to dashboard
+    const { data: { session } } = await sbClient.auth.getSession();
+    if (session) {
+      window.location.replace('/portal/dashboard');
+      return;
+    }
+  } catch (err) {
+    showError('Could not connect to authentication service.');
+    return;
+  }
+
+  // ── Form submit ────────────────────────────────────────────────────────────
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email    = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    const btn      = document.getElementById('signInBtn');
+
+    clearError();
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+
+    try {
+      const { data, error } = await sbClient.auth.signInWithPassword({ email, password });
+      if (error) { showError(error.message); return; }
+
+      // Store the session token for the portal SPA to pick up
+      if (data.session?.access_token) {
+        localStorage.setItem('hm_portal_token', data.session.access_token);
+        localStorage.setItem('hm_portal_refresh', data.session.refresh_token ?? '');
+      }
+      window.location.replace('/portal/dashboard');
+    } catch (err) {
+      showError('Sign-in failed. Please try again.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sign in';
+    }
+  });
+
+  function showError(msg) {
+    const el = document.getElementById('errorMsg');
+    el.textContent = msg;
+    el.classList.add('show');
+  }
+  function clearError() {
+    document.getElementById('errorMsg').classList.remove('show');
+  }
+})();
+</script>
+</body>
+</html>

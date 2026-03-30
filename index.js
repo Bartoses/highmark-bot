@@ -30,6 +30,8 @@ import { scheduleFollowUps, checkAndMarkLeadEngaged } from "./followUpEngine.js"
 import { handleListScheduledMessages } from "./adminScheduledMessages.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
+import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
+import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers } from "./adminPortal.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { loadDbClients } from "./clients.js";
@@ -118,6 +120,7 @@ function requireUiAccess(req, res, next) {
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const anthropic    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const supabase     = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const requirePortalAuth = makePortalAuth(supabase);
 const crmSupabase  = process.env.CRM_SUPABASE_URL
   ? createClient(process.env.CRM_SUPABASE_URL, process.env.CRM_SUPABASE_KEY)
   : null;
@@ -1839,6 +1842,51 @@ app.get("/admin/campaigns",               requireUiAccess, (req, res) => handleL
 app.get("/admin/campaigns/:id",           requireUiAccess, (req, res) => handleGetCampaign(req, res, supabase));
 app.patch("/admin/campaigns/:id",         requireUiAccess, (req, res) => handleUpdateCampaign(req, res, supabase));
 app.post("/admin/campaigns/:id/send",     requireUiAccess, (req, res) => handleSendCampaign(req, res, supabase));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT PORTAL (Chunk 10)
+//
+// Auth: Supabase JWT (Bearer token) — separate from the UI_SECRET admin system.
+// Requires: db1_portal.sql migration + SUPABASE_ANON_KEY env var.
+//
+// Portal users are created via POST /admin/portal-users (UI_SECRET protected).
+// Roles: internal_admin (any client) | client_user (own client only).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Public config — Supabase anon key for client-side auth init (safe to expose)
+app.get("/portal/config", (_req, res) => {
+  res.json({
+    supabaseUrl:     process.env.SUPABASE_URL     ?? null,
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY ?? null,
+  });
+});
+
+// Portal static pages (no auth — frontend handles JWT redirect)
+app.get("/portal",           (_req, res) => res.redirect("/portal/login"));
+app.get("/portal/login",     (_req, res) => res.sendFile(path.join(__uiDir, "portal-login.html")));
+app.get("/portal/dashboard", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
+app.get("/portal/leads",     (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
+app.get("/portal/campaigns", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
+app.get("/portal/analytics", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
+app.get("/portal/settings",  (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
+
+// Portal API — all require valid Supabase JWT
+app.get(  "/portal/api/me",                  requirePortalAuth, (req, res) => handlePortalMe(req, res));
+app.get(  "/portal/api/dashboard",           requirePortalAuth, (req, res) => handlePortalDashboard(req, res, supabase));
+app.get(  "/portal/api/leads",               requirePortalAuth, (req, res) => handlePortalLeads(req, res, supabase));
+app.patch("/portal/api/leads/:id",           requirePortalAuth, (req, res) => handlePortalUpdateLead(req, res, supabase));
+app.get(  "/portal/api/campaigns",           requirePortalAuth, (req, res) => handlePortalCampaigns(req, res, supabase));
+app.post( "/portal/api/campaigns",           requirePortalAuth, (req, res) => handlePortalCreateCampaign(req, res, supabase));
+app.get(  "/portal/api/campaigns/:id",       requirePortalAuth, (req, res) => handlePortalGetCampaign(req, res, supabase));
+app.patch("/portal/api/campaigns/:id",       requirePortalAuth, (req, res) => handlePortalUpdateCampaign(req, res, supabase));
+app.post( "/portal/api/campaigns/:id/send",  requirePortalAuth, (req, res) => handlePortalSendCampaign(req, res, supabase));
+app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
+app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res));
+app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));
+
+// Admin portal user management (UI_SECRET — internal only)
+app.post("/admin/portal-users", requireUiAccess, (req, res) => handleCreatePortalUser(req, res, supabase));
+app.get( "/admin/portal-users", requireUiAccess, (req, res) => handleListPortalUsers(req, res, supabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SITE CONTENT MANAGEMENT

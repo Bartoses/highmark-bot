@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Highmark Portal</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:       #0d0d0d;
+  --panel:    #131313;
+  --panel2:   #1a1a1a;
+  --border:   #252525;
+  --border2:  #2e2e2e;
+  --text:     #e0e0e0;
+  --text2:    #888;
+  --text3:    #555;
+  --accent:   #10b981;
+  --accent2:  #059669;
+  --warn:     #f59e0b;
+  --danger:   #ef4444;
+  --radius:   8px;
+  --font:     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; overflow: hidden; }
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+#app { display: flex; height: 100vh; }
+#sidebar {
+  width: 200px; min-width: 200px; background: var(--panel);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  padding: 0; overflow: hidden; flex-shrink: 0;
+}
+#main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#topbar {
+  height: 48px; background: var(--panel); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 20px; flex-shrink: 0;
+}
+#content { flex: 1; overflow-y: auto; padding: 24px; }
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+.sidebar-brand {
+  padding: 16px; font-size: 15px; font-weight: 700; letter-spacing: .03em;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-brand span { color: var(--accent); }
+
+.nav-section { padding: 8px 0; flex: 1; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px; color: var(--text2); cursor: pointer;
+  border-left: 2px solid transparent; transition: all .1s;
+  font-size: 13px; user-select: none;
+}
+.nav-item:hover  { color: var(--text); background: var(--panel2); }
+.nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(16,185,129,.07); font-weight: 600; }
+.nav-icon { font-size: 15px; width: 18px; text-align: center; }
+
+.sidebar-footer {
+  padding: 12px 16px; border-top: 1px solid var(--border);
+  color: var(--text3); font-size: 11px;
+}
+.sidebar-footer .user-email { color: var(--text2); margin-bottom: 6px; font-size: 12px; word-break: break-all; }
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+.topbar-title { font-weight: 600; font-size: 14px; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.client-badge {
+  background: var(--panel2); border: 1px solid var(--border2);
+  border-radius: 100px; padding: 3px 10px; font-size: 11px; color: var(--text2);
+}
+.admin-badge { background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.3); color: var(--warn); }
+
+/* ── Sections ────────────────────────────────────────────────────────────── */
+.section { display: none; }
+.section.active { display: block; }
+.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.section-title { font-size: 17px; font-weight: 700; }
+
+/* ── Stat cards ──────────────────────────────────────────────────────────── */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; text-align: center;
+}
+.stat-card .val { font-size: 28px; font-weight: 700; color: var(--accent); }
+.stat-card .lbl { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-top: 4px; }
+
+/* ── Cards / panels ──────────────────────────────────────────────────────── */
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+.card-title { font-weight: 600; font-size: 13px; margin-bottom: 14px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; }
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+.tbl-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--panel2); }
+
+/* ── Status pills ────────────────────────────────────────────────────────── */
+.pill {
+  display: inline-block; padding: 2px 8px; border-radius: 100px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+}
+.pill-new       { background: rgba(59,130,246,.15); color: #93c5fd; }
+.pill-contacted { background: rgba(245,158,11,.15); color: #fcd34d; }
+.pill-engaged   { background: rgba(16,185,129,.15); color: #6ee7b7; }
+.pill-converted { background: rgba(16,185,129,.25); color: #34d399; }
+.pill-scheduled { background: rgba(139,92,246,.15); color: #c4b5fd; }
+.pill-closed    { background: rgba(107,114,128,.15); color: #9ca3af; }
+.pill-ignored   { background: rgba(75,85,99,.1);    color: #6b7280; }
+.pill-draft     { background: rgba(107,114,128,.15); color: #9ca3af; }
+.pill-sending   { background: rgba(245,158,11,.15);  color: #fcd34d; }
+.pill-sent      { background: rgba(16,185,129,.15);  color: #6ee7b7; }
+.pill-failed    { background: rgba(239,68,68,.15);   color: #fca5a5; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; }
+.btn-primary { background: var(--accent); color: #000; }
+.btn-primary:hover { background: var(--accent2); }
+.btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
+.btn-ghost:hover { color: var(--text); border-color: var(--text3); }
+.btn-danger { background: transparent; color: var(--danger); border: 1px solid rgba(239,68,68,.3); }
+.btn-danger:hover { background: rgba(239,68,68,.1); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-sm { padding: 5px 10px; font-size: 11px; }
+
+/* ── Filter bar ──────────────────────────────────────────────────────────── */
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.filter-bar select, .filter-bar input {
+  background: var(--panel); border: 1px solid var(--border2); color: var(--text);
+  border-radius: 6px; padding: 7px 10px; font-size: 12px; outline: none;
+}
+.filter-bar select:focus, .filter-bar input:focus { border-color: var(--accent); }
+
+/* ── Forms ───────────────────────────────────────────────────────────────── */
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 11px; font-weight: 600; color: var(--text2); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .04em; }
+.form-group input, .form-group select, .form-group textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--border2); color: var(--text);
+  border-radius: 6px; padding: 9px 12px; font-size: 13px; outline: none; font-family: var(--font);
+}
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent); }
+.form-group textarea { min-height: 100px; resize: vertical; }
+.form-hint { font-size: 11px; color: var(--text2); margin-top: 4px; }
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 100;
+  display: none; align-items: center; justify-content: center; padding: 20px;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px; width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto;
+}
+.modal-title { font-size: 15px; font-weight: 700; margin-bottom: 18px; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px; }
+
+/* ── Misc ────────────────────────────────────────────────────────────────── */
+.empty-state { text-align: center; color: var(--text3); padding: 40px; }
+.empty-state .esc-icon { font-size: 28px; margin-bottom: 8px; }
+.error-msg { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; border-radius: 6px; padding: 10px 12px; font-size: 12px; margin-bottom: 14px; }
+.success-msg { background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.3); color: #6ee7b7; border-radius: 6px; padding: 10px 12px; font-size: 12px; margin-bottom: 14px; }
+.text-muted { color: var(--text2); }
+.text-xs { font-size: 11px; }
+.row-action { cursor: pointer; color: var(--accent); font-size: 11px; }
+.row-action:hover { text-decoration: underline; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pagination { display: flex; align-items: center; gap: 8px; margin-top: 14px; justify-content: flex-end; font-size: 12px; color: var(--text2); }
+.loading { color: var(--text2); padding: 20px; text-align: center; }
+
+@media (max-width: 640px) {
+  #sidebar { display: none; }
+  #app { flex-direction: column; }
+  #content { padding: 16px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .two-col { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <nav id="sidebar">
+    <div class="sidebar-brand">High<span>mark</span></div>
+    <div class="nav-section">
+      <div class="nav-item active" data-section="dashboard">
+        <span class="nav-icon">⊞</span> Dashboard
+      </div>
+      <div class="nav-item" data-section="leads">
+        <span class="nav-icon">👤</span> Leads
+      </div>
+      <div class="nav-item" data-section="campaigns">
+        <span class="nav-icon">📣</span> Campaigns
+      </div>
+      <div class="nav-item" data-section="analytics">
+        <span class="nav-icon">📊</span> Analytics
+      </div>
+      <div class="nav-item" data-section="settings">
+        <span class="nav-icon">⚙</span> Settings
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="user-email" id="sidebarEmail">—</div>
+      <button class="btn btn-ghost btn-sm" id="signOutBtn">Sign out</button>
+    </div>
+  </nav>
+
+  <!-- ── Main ────────────────────────────────────────────────────────────── -->
+  <div id="main">
+    <div id="topbar">
+      <div class="topbar-title" id="topbarTitle">Dashboard</div>
+      <div class="topbar-right">
+        <span class="client-badge" id="clientBadge">—</span>
+      </div>
+    </div>
+
+    <div id="content">
+      <!-- DASHBOARD -->
+      <div class="section active" id="sec-dashboard">
+        <div id="dashContent"><div class="loading">Loading…</div></div>
+      </div>
+
+      <!-- LEADS -->
+      <div class="section" id="sec-leads">
+        <div class="section-header">
+          <span class="section-title">Leads</span>
+        </div>
+        <div class="filter-bar">
+          <select id="leadStatusFilter">
+            <option value="">All statuses</option>
+            <option value="new">New</option>
+            <option value="contacted">Contacted</option>
+            <option value="engaged">Engaged</option>
+            <option value="converted">Converted</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="closed">Closed</option>
+            <option value="ignored">Ignored</option>
+          </select>
+          <select id="leadTypeFilter">
+            <option value="">All types</option>
+            <option value="booking">Booking</option>
+            <option value="waitlist">Waitlist</option>
+            <option value="demo">Demo</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" id="leadsRefreshBtn">↻ Refresh</button>
+        </div>
+        <div id="leadsTable"><div class="loading">Loading…</div></div>
+        <div class="pagination" id="leadsPagination"></div>
+      </div>
+
+      <!-- CAMPAIGNS -->
+      <div class="section" id="sec-campaigns">
+        <div class="section-header">
+          <span class="section-title">Campaigns</span>
+          <button class="btn btn-primary btn-sm" id="newCampaignBtn">+ New campaign</button>
+        </div>
+        <div id="campaignsTable"><div class="loading">Loading…</div></div>
+      </div>
+
+      <!-- ANALYTICS -->
+      <div class="section" id="sec-analytics">
+        <div class="section-header">
+          <span class="section-title">Analytics</span>
+          <select id="analyticsPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
+            <option value="30">Last 30 days</option>
+            <option value="7">Last 7 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+        </div>
+        <div id="analyticsContent"><div class="loading">Loading…</div></div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="section" id="sec-settings">
+        <div class="section-header">
+          <span class="section-title">Settings</span>
+        </div>
+        <div id="settingsContent"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Lead edit modal ──────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="leadModal">
+  <div class="modal">
+    <div class="modal-title">Update Lead</div>
+    <div id="leadModalError" class="error-msg" style="display:none"></div>
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="leadModalName" readonly style="opacity:.6">
+    </div>
+    <div class="form-group">
+      <label>Phone</label>
+      <input type="text" id="leadModalPhone" readonly style="opacity:.6">
+    </div>
+    <div class="two-col">
+      <div class="form-group">
+        <label>Status</label>
+        <select id="leadModalStatus">
+          <option value="new">New</option>
+          <option value="contacted">Contacted</option>
+          <option value="engaged">Engaged</option>
+          <option value="converted">Converted</option>
+          <option value="scheduled">Scheduled</option>
+          <option value="closed">Closed</option>
+          <option value="ignored">Ignored</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <input type="text" id="leadModalType" readonly style="opacity:.6">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="leadModalNotes" placeholder="Internal notes…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="leadModalCancel">Cancel</button>
+      <button class="btn btn-primary" id="leadModalSave">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Campaign create modal ────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="campaignModal">
+  <div class="modal">
+    <div class="modal-title" id="campaignModalTitle">New Campaign</div>
+    <div id="campaignModalError" class="error-msg" style="display:none"></div>
+    <div class="form-group">
+      <label>Campaign name</label>
+      <input type="text" id="campName" placeholder="e.g. Summer Promo">
+    </div>
+    <div class="form-group">
+      <label>Audience</label>
+      <select id="campAudience">
+        <option value="all_leads">All leads (new, contacted, engaged, scheduled)</option>
+        <option value="engaged_leads">Engaged leads only</option>
+        <option value="new_leads">New leads only</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Message</label>
+      <textarea id="campMessage" placeholder="Hi {{name}}, your message here…"></textarea>
+      <div class="form-hint">Use {{name}} for first + last name, {{first_name}} for first name only.</div>
+    </div>
+    <div class="form-group">
+      <label>Schedule (optional)</label>
+      <input type="datetime-local" id="campScheduled">
+      <div class="form-hint">Leave blank to send immediately when you click Send.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="campaignModalCancel">Cancel</button>
+      <button class="btn btn-primary" id="campaignModalSave">Save draft</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Campaign detail modal ────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="campaignDetailModal">
+  <div class="modal">
+    <div class="modal-title" id="cdTitle">Campaign</div>
+    <div id="cdContent"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="cdClose">Close</button>
+      <button class="btn btn-primary" id="cdSend" style="display:none">Send now</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Highmark Client Portal — SPA
+// ─────────────────────────────────────────────────────────────────────────────
+const API  = '/portal/api';
+let token  = localStorage.getItem('hm_portal_token') ?? '';
+let me     = null;
+let leadsOffset = 0;
+const LEADS_LIMIT = 25;
+let activeLead = null;
+let activeCampaignId = null;
+
+// ── Auth + init ────────────────────────────────────────────────────────────
+async function init() {
+  if (!token) { redirectToLogin(); return; }
+
+  // Verify token with /me
+  me = await apiFetch('/me');
+  if (!me) { redirectToLogin(); return; }
+
+  // Populate header
+  document.getElementById('sidebarEmail').textContent = me.email ?? '';
+  const badgeEl = document.getElementById('clientBadge');
+  badgeEl.textContent = me.clientName ?? me.clientId ?? 'Highmark Admin';
+  if (me.isAdmin) badgeEl.classList.add('admin-badge');
+  document.title = `${me.clientName ?? 'Portal'} — Highmark`;
+
+  // Nav
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.addEventListener('click', () => switchSection(el.dataset.section));
+  });
+
+  document.getElementById('signOutBtn').addEventListener('click', signOut);
+  document.getElementById('analyticsPeriod').addEventListener('change', loadAnalytics);
+
+  // Load initial section based on URL
+  const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
+  switchSection(['dashboard','leads','campaigns','analytics','settings'].includes(urlSection) ? urlSection : 'dashboard');
+}
+
+function redirectToLogin() {
+  localStorage.removeItem('hm_portal_token');
+  window.location.replace('/portal/login');
+}
+
+async function signOut() {
+  try {
+    const cfg = await fetch('/portal/config').then(r => r.json());
+    const sb  = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    await sb.auth.signOut();
+  } catch {}
+  localStorage.removeItem('hm_portal_token');
+  localStorage.removeItem('hm_portal_refresh');
+  window.location.replace('/portal/login');
+}
+
+// ── Section routing ────────────────────────────────────────────────────────
+const sectionTitles = {
+  dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
+  analytics: 'Analytics', settings: 'Settings',
+};
+function switchSection(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`sec-${name}`)?.classList.add('active');
+  document.querySelector(`[data-section="${name}"]`)?.classList.add('active');
+  document.getElementById('topbarTitle').textContent = sectionTitles[name] ?? name;
+  history.replaceState(null, '', `/portal/${name}`);
+
+  if (name === 'dashboard')  loadDashboard();
+  if (name === 'leads')      { leadsOffset = 0; loadLeads(); setupLeadsEvents(); }
+  if (name === 'campaigns')  { loadCampaigns(); setupCampaignEvents(); }
+  if (name === 'analytics')  loadAnalytics();
+  if (name === 'settings')   loadSettings();
+}
+
+// ── API helpers ────────────────────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  try {
+    const res = await fetch(`${API}${path}`, {
+      ...opts,
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts.headers ?? {}) },
+    });
+    if (res.status === 401) { redirectToLogin(); return null; }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[API]', path, res.status, body.error);
+      return null;
+    }
+    return res.json();
+  } catch (err) {
+    console.error('[API] fetch error:', err);
+    return null;
+  }
+}
+
+async function apiPatch(path, body) {
+  return apiFetch(path, { method: 'PATCH', body: JSON.stringify(body) });
+}
+async function apiPost(path, body) {
+  return apiFetch(path, { method: 'POST', body: JSON.stringify(body) });
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function pill(status) {
+  return `<span class="pill pill-${status ?? 'unknown'}">${status ?? '—'}</span>`;
+}
+function fmt(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' });
+}
+function clientQs() {
+  return me?.isAdmin && me?.clientId ? `?client_id=${me.clientId}` : '';
+}
+
+// ── DASHBOARD ──────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  document.getElementById('dashContent').innerHTML = '<div class="loading">Loading…</div>';
+  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const d = await apiFetch(`/dashboard${clientParam}`);
+  if (!d) {
+    document.getElementById('dashContent').innerHTML = '<div class="error-msg">Failed to load dashboard. Make sure a client is selected.</div>';
+    return;
+  }
+  const l = d.leads;
+  document.getElementById('dashContent').innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="val">${l.total}</div><div class="lbl">Total Leads</div></div>
+      <div class="stat-card"><div class="val">${l.new}</div><div class="lbl">New</div></div>
+      <div class="stat-card"><div class="val">${l.engaged}</div><div class="lbl">Engaged</div></div>
+      <div class="stat-card"><div class="val">${l.converted}</div><div class="lbl">Converted</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <div class="card">
+        <div class="card-title">Recent Leads</div>
+        ${l.recent.length === 0 ? '<div class="empty-state">No leads yet</div>' : `
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Name</th><th>Status</th><th>Date</th></tr></thead>
+          <tbody>${l.recent.map(r => `<tr>
+            <td>${r.contact_name ?? r.contact_phone ?? '—'}</td>
+            <td>${pill(r.status)}</td>
+            <td class="text-muted text-xs">${fmt(r.created_at)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`}
+      </div>
+      <div class="card">
+        <div class="card-title">Recent Campaigns</div>
+        ${d.campaigns.recent.length === 0 ? '<div class="empty-state">No campaigns yet</div>' : `
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Name</th><th>Status</th><th>Sent</th></tr></thead>
+          <tbody>${d.campaigns.recent.map(c => `<tr>
+            <td>${c.name}</td>
+            <td>${pill(c.status)}</td>
+            <td class="text-muted text-xs">${c.metadata?.enqueued ?? '—'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`}
+      </div>
+    </div>
+    ${d.analytics.demoStarts > 0 ? `
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">Demo Activity (30 days)</div>
+      <div class="stats-grid" style="margin-bottom:0">
+        <div class="stat-card"><div class="val">${d.analytics.demoStarts}</div><div class="lbl">Demo starts</div></div>
+        <div class="stat-card"><div class="val">${d.analytics.demoLeadsCaptured}</div><div class="lbl">Leads captured</div></div>
+      </div>
+    </div>` : ''}
+  `;
+}
+
+// ── LEADS ──────────────────────────────────────────────────────────────────
+let leadsEventsSet = false;
+function setupLeadsEvents() {
+  if (leadsEventsSet) return;
+  leadsEventsSet = true;
+  document.getElementById('leadStatusFilter').addEventListener('change', () => { leadsOffset = 0; loadLeads(); });
+  document.getElementById('leadTypeFilter').addEventListener('change',  () => { leadsOffset = 0; loadLeads(); });
+  document.getElementById('leadsRefreshBtn').addEventListener('click',  () => { leadsOffset = 0; loadLeads(); });
+}
+
+async function loadLeads() {
+  document.getElementById('leadsTable').innerHTML = '<div class="loading">Loading…</div>';
+  const status    = document.getElementById('leadStatusFilter').value;
+  const lead_type = document.getElementById('leadTypeFilter').value;
+  const clientParam = me?.isAdmin ? `&client_id=${me.clientId ?? ''}` : '';
+  const qs = `?limit=${LEADS_LIMIT}&offset=${leadsOffset}${status ? '&status='+status : ''}${lead_type ? '&lead_type='+lead_type : ''}${clientParam}`;
+  const d  = await apiFetch(`/leads${qs}`);
+  if (!d) { document.getElementById('leadsTable').innerHTML = '<div class="error-msg">Failed to load leads.</div>'; return; }
+
+  if (d.leads.length === 0) {
+    document.getElementById('leadsTable').innerHTML = '<div class="empty-state"><div class="esc-icon">👤</div>No leads match your filter.</div>';
+    document.getElementById('leadsPagination').innerHTML = '';
+    return;
+  }
+
+  document.getElementById('leadsTable').innerHTML = `
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Name</th><th>Phone</th><th>Type</th><th>Status</th><th>Created</th><th></th></tr></thead>
+      <tbody>${d.leads.map(l => `<tr>
+        <td>${l.contact_name ?? '—'}</td>
+        <td>${l.contact_phone ?? '—'}</td>
+        <td class="text-muted">${l.lead_type ?? '—'}</td>
+        <td>${pill(l.status)}</td>
+        <td class="text-muted text-xs">${fmt(l.created_at)}</td>
+        <td><span class="row-action" data-id="${l.id}">Edit →</span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+
+  // Row edit actions
+  document.querySelectorAll('[data-id]').forEach(el => {
+    el.addEventListener('click', () => {
+      const lead = d.leads.find(l => l.id === el.dataset.id);
+      if (lead) openLeadModal(lead);
+    });
+  });
+
+  // Pagination
+  const totalPages = Math.ceil(d.total / LEADS_LIMIT);
+  const currentPage = Math.floor(leadsOffset / LEADS_LIMIT) + 1;
+  document.getElementById('leadsPagination').innerHTML = d.total > LEADS_LIMIT ? `
+    <span>${leadsOffset + 1}–${Math.min(leadsOffset + LEADS_LIMIT, d.total)} of ${d.total}</span>
+    <button class="btn btn-ghost btn-sm" ${currentPage === 1 ? 'disabled' : ''} onclick="leadsOffset -= ${LEADS_LIMIT}; loadLeads()">← Prev</button>
+    <button class="btn btn-ghost btn-sm" ${currentPage >= totalPages ? 'disabled' : ''} onclick="leadsOffset += ${LEADS_LIMIT}; loadLeads()">Next →</button>` : '';
+}
+
+function openLeadModal(lead) {
+  activeLead = lead;
+  document.getElementById('leadModalName').value   = lead.contact_name ?? '';
+  document.getElementById('leadModalPhone').value  = lead.contact_phone ?? '';
+  document.getElementById('leadModalStatus').value = lead.status ?? 'new';
+  document.getElementById('leadModalType').value   = lead.lead_type ?? '';
+  document.getElementById('leadModalNotes').value  = lead.notes ?? '';
+  document.getElementById('leadModalError').style.display = 'none';
+  document.getElementById('leadModal').classList.add('open');
+}
+document.getElementById('leadModalCancel').addEventListener('click', () => document.getElementById('leadModal').classList.remove('open'));
+document.getElementById('leadModalSave').addEventListener('click', async () => {
+  const btn = document.getElementById('leadModalSave');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  const r = await apiPatch(`/leads/${activeLead.id}`, {
+    status: document.getElementById('leadModalStatus').value,
+    notes:  document.getElementById('leadModalNotes').value,
+  });
+  btn.disabled = false;
+  btn.textContent = 'Save changes';
+  if (!r) { document.getElementById('leadModalError').textContent = 'Failed to save changes.'; document.getElementById('leadModalError').style.display = 'block'; return; }
+  document.getElementById('leadModal').classList.remove('open');
+  loadLeads();
+});
+
+// ── CAMPAIGNS ─────────────────────────────────────────────────────────────
+let campaignEventsSet = false;
+function setupCampaignEvents() {
+  if (campaignEventsSet) return;
+  campaignEventsSet = true;
+  document.getElementById('newCampaignBtn').addEventListener('click', openCampaignModal);
+  document.getElementById('campaignModalCancel').addEventListener('click', () => document.getElementById('campaignModal').classList.remove('open'));
+  document.getElementById('campaignModalSave').addEventListener('click', saveCampaignDraft);
+  document.getElementById('cdClose').addEventListener('click', () => document.getElementById('campaignDetailModal').classList.remove('open'));
+  document.getElementById('cdSend').addEventListener('click', sendCampaign);
+}
+
+async function loadCampaigns() {
+  document.getElementById('campaignsTable').innerHTML = '<div class="loading">Loading…</div>';
+  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const d = await apiFetch(`/campaigns${clientParam}`);
+  if (!d) { document.getElementById('campaignsTable').innerHTML = '<div class="error-msg">Failed to load campaigns.</div>'; return; }
+
+  if (d.campaigns.length === 0) {
+    document.getElementById('campaignsTable').innerHTML = '<div class="empty-state"><div class="esc-icon">📣</div>No campaigns yet.<br><span class="text-muted">Click "+ New campaign" to create your first one.</span></div>';
+    return;
+  }
+
+  document.getElementById('campaignsTable').innerHTML = `
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Name</th><th>Audience</th><th>Status</th><th>Recipients</th><th>Created</th><th></th></tr></thead>
+      <tbody>${d.campaigns.map(c => `<tr>
+        <td><strong>${c.name}</strong></td>
+        <td class="text-muted">${c.audience_type?.replace('_',' ') ?? '—'}</td>
+        <td>${pill(c.status)}</td>
+        <td class="text-muted">${c.metadata?.recipient_count ?? c.metadata?.enqueued ?? '—'}</td>
+        <td class="text-muted text-xs">${fmt(c.created_at)}</td>
+        <td><span class="row-action" data-cid="${c.id}">View →</span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+
+  document.querySelectorAll('[data-cid]').forEach(el => {
+    el.addEventListener('click', () => openCampaignDetail(el.dataset.cid));
+  });
+}
+
+function openCampaignModal() {
+  document.getElementById('campName').value = '';
+  document.getElementById('campMessage').value = '';
+  document.getElementById('campScheduled').value = '';
+  document.getElementById('campAudience').value = 'all_leads';
+  document.getElementById('campaignModalError').style.display = 'none';
+  document.getElementById('campaignModal').classList.add('open');
+}
+
+async function saveCampaignDraft() {
+  const btn = document.getElementById('campaignModalSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const body = {
+    name:         document.getElementById('campName').value.trim(),
+    message_body: document.getElementById('campMessage').value.trim(),
+    audience_type: document.getElementById('campAudience').value,
+    scheduled_at: document.getElementById('campScheduled').value || null,
+  };
+  if (me?.isAdmin && me.clientId) body.client_id = me.clientId;
+  const r = await apiPost('/campaigns', body);
+  btn.disabled = false; btn.textContent = 'Save draft';
+  if (!r) { document.getElementById('campaignModalError').textContent = 'Failed to create campaign.'; document.getElementById('campaignModalError').style.display = 'block'; return; }
+  document.getElementById('campaignModal').classList.remove('open');
+  loadCampaigns();
+}
+
+async function openCampaignDetail(id) {
+  activeCampaignId = id;
+  document.getElementById('cdContent').innerHTML = '<div class="loading">Loading…</div>';
+  document.getElementById('cdSend').style.display = 'none';
+  document.getElementById('campaignDetailModal').classList.add('open');
+
+  const d = await apiFetch(`/campaigns/${id}`);
+  if (!d) { document.getElementById('cdContent').innerHTML = '<div class="error-msg">Failed to load campaign.</div>'; return; }
+  const c = d.campaign; const s = d.stats;
+  document.getElementById('cdTitle').textContent = c.name;
+
+  const canSend = ['draft','scheduled'].includes(c.status);
+  if (canSend) document.getElementById('cdSend').style.display = '';
+
+  document.getElementById('cdContent').innerHTML = `
+    <div class="stats-grid" style="margin-bottom:16px">
+      <div class="stat-card"><div class="val">${s.total}</div><div class="lbl">Recipients</div></div>
+      <div class="stat-card"><div class="val">${s.sent}</div><div class="lbl">Sent</div></div>
+      <div class="stat-card"><div class="val">${s.failed}</div><div class="lbl">Failed</div></div>
+      <div class="stat-card"><div class="val">${s.pending}</div><div class="lbl">Pending</div></div>
+    </div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px;">
+      Status: ${pill(c.status)} &nbsp; Audience: <strong>${c.audience_type?.replace('_',' ')}</strong>
+    </div>
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;">
+      ${c.message_body}
+    </div>
+  `;
+}
+
+async function sendCampaign() {
+  const btn = document.getElementById('cdSend');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  const r = await apiPost(`/campaigns/${activeCampaignId}/send`, {});
+  btn.disabled = false; btn.textContent = 'Send now';
+  if (!r) { alert('Failed to send campaign. Check the console.'); return; }
+  document.getElementById('campaignDetailModal').classList.remove('open');
+  loadCampaigns();
+}
+
+// ── ANALYTICS ─────────────────────────────────────────────────────────────
+async function loadAnalytics() {
+  document.getElementById('analyticsContent').innerHTML = '<div class="loading">Loading…</div>';
+  const days = document.getElementById('analyticsPeriod').value;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const clientParam = me?.isAdmin ? `&client_id=${me.clientId ?? ''}` : '';
+  const d = await apiFetch(`/analytics?since=${since}${clientParam}`);
+  if (!d) { document.getElementById('analyticsContent').innerHTML = '<div class="error-msg">Failed to load analytics.</div>'; return; }
+
+  const lf = d.leadFunnel; const ev = d.events; const cs = d.campaigns;
+  document.getElementById('analyticsContent').innerHTML = `
+    <div class="two-col">
+      <div class="card">
+        <div class="card-title">Lead Funnel</div>
+        <div class="stats-grid" style="margin-bottom:0">
+          <div class="stat-card"><div class="val">${lf.new}</div><div class="lbl">New</div></div>
+          <div class="stat-card"><div class="val">${lf.contacted}</div><div class="lbl">Contacted</div></div>
+          <div class="stat-card"><div class="val">${lf.engaged}</div><div class="lbl">Engaged</div></div>
+          <div class="stat-card"><div class="val">${lf.converted}</div><div class="lbl">Converted</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Campaigns</div>
+        <div class="stats-grid" style="margin-bottom:0">
+          <div class="stat-card"><div class="val">${cs.total}</div><div class="lbl">Total</div></div>
+          <div class="stat-card"><div class="val">${cs.sent}</div><div class="lbl">Sent</div></div>
+          <div class="stat-card"><div class="val">${cs.draft}</div><div class="lbl">Draft</div></div>
+        </div>
+      </div>
+    </div>
+    ${Object.keys(ev).length > 0 ? `
+    <div class="card">
+      <div class="card-title">Demo Events (${days}d)</div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Event</th><th>Count</th></tr></thead>
+        <tbody>${Object.entries(ev).sort((a,b) => b[1]-a[1]).map(([k,v]) => `<tr><td>${k.replace(/_/g,' ')}</td><td><strong>${v}</strong></td></tr>`).join('')}</tbody>
+      </table></div>
+    </div>` : '<div class="card"><div class="empty-state">No demo events in this period.</div></div>'}
+    ${d.recentEvents.length > 0 ? `
+    <div class="card">
+      <div class="card-title">Recent Events</div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Event</th><th>Source</th><th>Date</th></tr></thead>
+        <tbody>${d.recentEvents.slice(0,15).map(e => `<tr>
+          <td>${e.event_name.replace(/_/g,' ')}</td>
+          <td class="text-muted">${e.source ?? '—'}</td>
+          <td class="text-muted text-xs">${fmt(e.created_at)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>` : ''}
+  `;
+}
+
+// ── SETTINGS ──────────────────────────────────────────────────────────────
+async function loadSettings() {
+  document.getElementById('settingsContent').innerHTML = '<div class="loading">Loading…</div>';
+  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const d = await apiFetch(`/settings${clientParam}`);
+  if (!d) { document.getElementById('settingsContent').innerHTML = '<div class="error-msg">Failed to load settings.</div>'; return; }
+
+  if (!d.editable) {
+    document.getElementById('settingsContent').innerHTML = `
+      <div class="card">
+        <div class="card-title">Business Settings</div>
+        <p style="color:var(--text2);font-size:12px;margin-bottom:16px;">Your account uses a managed configuration. Contact Highmark support to make changes.</p>
+        <table style="width:100%;border-collapse:collapse;">
+          ${[
+            ['Business name', d.name],
+            ['Bot name', d.botName],
+            ['Booking mode', d.bookingMode],
+            ['Support phone', d.supportPhone ?? '—'],
+            ['Support email', d.supportEmail ?? '—'],
+            ['Website', d.websiteUrl ?? '—'],
+          ].map(([k,v]) => `<tr><td style="padding:8px 0;color:var(--text2);width:160px;">${k}</td><td style="padding:8px 0;">${v}</td></tr>`).join('')}
+        </table>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('settingsContent').innerHTML = `
+    <div class="card">
+      <div class="card-title">Business Settings</div>
+      <div id="settingsMsg" style="display:none"></div>
+      <div class="two-col">
+        <div class="form-group"><label>Business name</label><input type="text" id="set_name" value="${d.name ?? ''}"></div>
+        <div class="form-group"><label>Bot name</label><input type="text" id="set_bot_name" value="${d.botName ?? ''}"></div>
+      </div>
+      <div class="form-group"><label>Tone</label><input type="text" id="set_tone" value="${d.tone ?? ''}" placeholder="e.g. warm, helpful, knowledgeable"></div>
+      <div class="two-col">
+        <div class="form-group"><label>Support phone</label><input type="text" id="set_support_phone" value="${d.supportPhone ?? ''}" placeholder="+18005551234"></div>
+        <div class="form-group"><label>Lead notification phone</label><input type="text" id="set_lead_notification_phone" value="${d.leadNotificationPhone ?? ''}"></div>
+      </div>
+      <div class="two-col">
+        <div class="form-group"><label>Support email</label><input type="email" id="set_support_email" value="${d.supportEmail ?? ''}"></div>
+        <div class="form-group"><label>Website URL</label><input type="url" id="set_website_url" value="${d.websiteUrl ?? ''}"></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+        <button class="btn btn-primary" id="settingsSaveBtn">Save changes</button>
+      </div>
+    </div>`;
+
+  document.getElementById('settingsSaveBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('settingsSaveBtn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const body = {
+      name:                    document.getElementById('set_name').value,
+      bot_name:                document.getElementById('set_bot_name').value,
+      tone:                    document.getElementById('set_tone').value,
+      support_phone:           document.getElementById('set_support_phone').value || null,
+      lead_notification_phone: document.getElementById('set_lead_notification_phone').value || null,
+      support_email:           document.getElementById('set_support_email').value || null,
+      website_url:             document.getElementById('set_website_url').value || null,
+    };
+    if (me?.isAdmin) body.client_id = me.clientId;
+    const r = await apiPatch('/settings', body);
+    btn.disabled = false; btn.textContent = 'Save changes';
+    const msgEl = document.getElementById('settingsMsg');
+    if (!r) {
+      msgEl.className = 'error-msg'; msgEl.textContent = 'Failed to save settings.'; msgEl.style.display = 'block';
+    } else {
+      msgEl.className = 'success-msg'; msgEl.textContent = 'Settings saved successfully.'; msgEl.style.display = 'block';
+      setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
+    }
+  });
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────
+init().catch(err => { console.error('Portal init error:', err); redirectToLogin(); });
+</script>
+</body>
+</html>
