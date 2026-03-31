@@ -179,12 +179,33 @@ tr:hover td { background: var(--panel2); }
 .pagination { display: flex; align-items: center; gap: 8px; margin-top: 14px; justify-content: flex-end; font-size: 12px; color: var(--text2); }
 .loading { color: var(--text2); padding: 20px; text-align: center; }
 
+/* ── Mobile bottom nav ───────────────────────────────────────────────────── */
+#mobile-nav { display: none; }
+
 @media (max-width: 640px) {
   #sidebar { display: none; }
   #app { flex-direction: column; }
-  #content { padding: 16px; }
+  #content { padding: 16px; padding-bottom: 72px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .two-col { grid-template-columns: 1fr; }
+
+  #mobile-nav {
+    display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+    background: var(--panel); border-top: 1px solid var(--border);
+    height: 56px;
+  }
+  .mob-nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; color: var(--text3); cursor: pointer; font-size: 9px; text-transform: uppercase;
+    letter-spacing: .04em; user-select: none; transition: color .1s;
+  }
+  .mob-nav-item .mob-icon { font-size: 18px; line-height: 1; }
+  .mob-nav-item.active { color: var(--accent); }
+  .mob-nav-item:hover  { color: var(--text); }
+
+  .topbar-title { font-size: 13px; }
+  .client-select { max-width: 140px; font-size: 11px; }
+  .client-badge  { display: none; }
 }
 </style>
 </head>
@@ -370,6 +391,15 @@ tr:hover td { background: var(--panel2); }
   </div>
 </div>
 
+<!-- ── Mobile bottom nav ─────────────────────────────────────────────────────── -->
+<nav id="mobile-nav">
+  <div class="mob-nav-item active" data-section="dashboard"><span class="mob-icon">⊞</span>Dashboard</div>
+  <div class="mob-nav-item" data-section="leads"><span class="mob-icon">👤</span>Leads</div>
+  <div class="mob-nav-item" data-section="campaigns"><span class="mob-icon">📣</span>Campaigns</div>
+  <div class="mob-nav-item" data-section="analytics"><span class="mob-icon">📊</span>Analytics</div>
+  <div class="mob-nav-item" data-section="settings"><span class="mob-icon">⚙</span>Settings</div>
+</nav>
+
 <!-- ── Campaign detail modal ────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="campaignDetailModal">
   <div class="modal">
@@ -422,7 +452,8 @@ async function init() {
     const clients = clientsData?.clients ?? [];
     const sel = document.getElementById('clientSelect');
     if (clients.length > 0) {
-      sel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      const shortLabel = n => n.length > 26 ? n.slice(0, 24) + '…' : n;
+      sel.innerHTML = clients.map(c => `<option value="${c.id}">${shortLabel(c.name)}</option>`).join('');
       sel.style.display = '';
       // Pre-select first client
       me.clientId = clients[0].id;
@@ -443,8 +474,8 @@ async function init() {
   badgeEl.textContent = me.clientName ?? me.clientId ?? 'Highmark Admin';
   document.title = `${me.clientName ?? 'Portal'} — Highmark`;
 
-  // Nav
-  document.querySelectorAll('.nav-item').forEach(el => {
+  // Nav (sidebar + mobile bottom bar)
+  document.querySelectorAll('.nav-item, .mob-nav-item').forEach(el => {
     el.addEventListener('click', () => switchSection(el.dataset.section));
   });
 
@@ -480,8 +511,9 @@ const sectionTitles = {
 function switchSection(name) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.mob-nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById(`sec-${name}`)?.classList.add('active');
-  document.querySelector(`[data-section="${name}"]`)?.classList.add('active');
+  document.querySelectorAll(`[data-section="${name}"]`).forEach(el => el.classList.add('active'));
   document.getElementById('topbarTitle').textContent = sectionTitles[name] ?? name;
   history.replaceState(null, '', `/portal/${name}`);
 
