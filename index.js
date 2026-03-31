@@ -1926,9 +1926,12 @@ app.post("/cron/scheduled-messages", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PUBLIC LANDING PAGE — no auth required
+// PUBLIC LANDING PAGE + COMPLIANCE PAGES — no auth required
 // ─────────────────────────────────────────────────────────────────────────────
-app.get("/home", (_req, res) => res.sendFile(path.join(__uiDir, "home.html")));
+app.get("/home",        (_req, res) => res.sendFile(path.join(__uiDir, "home.html")));
+app.get("/privacy",     (_req, res) => res.sendFile(path.join(__uiDir, "privacy.html")));
+app.get("/terms",       (_req, res) => res.sendFile(path.join(__uiDir, "terms.html")));
+app.get("/sms-consent", (_req, res) => res.sendFile(path.join(__uiDir, "sms-consent.html")));
 
 // HEALTH CHECK — Railway uses this to confirm the app is up
 // ─────────────────────────────────────────────────────────────────────────────
