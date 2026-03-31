@@ -50,7 +50,10 @@ portalAuth.js          — portal JWT middleware factory: makePortalAuth(supabas
 adminPortal.js         — portal API handlers: dashboard, leads, campaigns, analytics, settings + admin user mgmt (Chunk 10)
 db1_portal.sql         — migration: creates portal_users table for client portal auth (Chunk 10)
 public/portal-login.html — client portal login page (Supabase Auth email+password)
-public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Analytics, Settings
+public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Analytics, Settings, Users & Access
+public/portal-accept.html — invite acceptance page: validates token, sets password, auto-signs-in via anon key
+adminInvites.js        — invite lifecycle handlers: create, info, accept, revoke, resend, deactivate (Chunk 11)
+db1_portal_invites.sql — migration: creates portal_invites table with token, expiry, status constraints (Chunk 11)
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, get, update, summary routes (Chunk 5 + 8)
 adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages (Chunk 8)
@@ -625,6 +628,72 @@ This creates a Supabase Auth user and inserts the `portal_users` row in one call
 
 **To add a new portal module:** Add handler(s) to `adminPortal.js`, register routes in `index.js` under `requirePortalAuth`, add a section to `public/portal.html`.
 
+### Invite-Based Portal Access (Chunk 11)
+Controlled account provisioning — no open self-serve signup. Internal admins create invite links; clients accept to set a password and gain scoped portal access.
+
+**Invite model (`portal_invites` table):**
+- `invite_token` — 64-char hex (32 bytes `crypto.randomBytes`), unique, single-use
+- `status` — `pending | accepted | expired | revoked` (CHECK constraint)
+- `expires_at` — 72 hours from creation; auto-marked `expired` on first access after expiry
+- `client_id` — scopes the accepted user to a specific client (null = internal_admin)
+- `invited_by` — email of the admin who created the invite
+
+**Admin invite controls (UI_SECRET protected):**
+- `POST /admin/portal-invites` — create invite (`email`, `role`, `client_id`)
+- `GET  /admin/portal-invites` — list all invites (filterable by status, client_id)
+- `POST /admin/portal-invites/:id/resend` — regenerate token + extend expiry 72h
+- `POST /admin/portal-invites/:id/revoke` — mark as revoked (cannot be accepted)
+- `PATCH /admin/portal-users/:id` — deactivate/reactivate an existing portal user
+
+**Portal-auth invite controls (JWT + admin role required):**
+- `GET  /portal/api/invites` — list invites scoped to requesting admin's client
+- `POST /portal/api/invites` — create invite (internal_admin only)
+- `POST /portal/api/invites/:id/resend` — resend/refresh token
+- `POST /portal/api/invites/:id/revoke` — revoke invite
+- `GET  /portal/api/users` — list portal users (admin only)
+- `PATCH /portal/api/users/:id` — deactivate/reactivate user (admin only)
+
+**Public (no auth) invite acceptance routes:**
+- `GET /portal/api/invite-info?token=...` — validates token, returns `{ email, role, clientId }` (never echoes token)
+- `POST /portal/api/accept-invite` — `{ token, password }` → creates Supabase Auth user + `portal_users` row → marks invite `accepted`
+- `GET /portal/invite` — serves `portal-accept.html`
+- `GET /portal/users` — serves `portal.html` (Users & Access section, admin-only)
+
+**Accept flow:**
+1. Admin creates invite → gets `invite_url` (e.g. `https://.../portal/invite?token=...`)
+2. Client opens URL → `portal-accept.html` fetches invite-info to show their email
+3. Client sets password → `POST /portal/api/accept-invite` → Supabase Auth user created server-side
+4. Page signs in client-side with anon key → stores JWT in localStorage → redirects to `/portal/dashboard`
+5. Fallback: if client-side sign-in fails → redirect to `/portal/login?activated=1`
+
+**Portal UX:** Users & Access section (nav item hidden for `client_user` role via `.admin-only { display: none }`). Shows active users table, pending invites table, and "Invite user" modal with email/role/client dropdowns. Invite URL shown inline after creation with copy button.
+
+**Security:** Token not echoed in `invite-info` response. If `portal_users` insert fails after auth user created, `supabase.auth.admin.deleteUser` cleans up the orphan.
+
+**Migration required:** Run `db1_portal_invites.sql` in Supabase DB1 SQL editor before first use.
+
+```bash
+# Create invite (admin)
+curl -X POST "https://highmark-bot-production.up.railway.app/admin/portal-invites?key=YOUR_UI_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"client@example.com","role":"client_user","client_id":"csr_rea"}'
+
+# List pending invites
+curl "https://highmark-bot-production.up.railway.app/admin/portal-invites?key=YOUR_UI_SECRET&status=pending"
+
+# Revoke an invite
+curl -X POST "https://highmark-bot-production.up.railway.app/admin/portal-invites/INVITE_ID/revoke?key=YOUR_UI_SECRET"
+
+# Deactivate a user
+curl -X PATCH "https://highmark-bot-production.up.railway.app/admin/portal-users/USER_ID?key=YOUR_UI_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"active":false}'
+```
+
+**Current limitation:** No public self-serve signup. All accounts require an admin invite.
+
+**Session tip:** Start a new Claude session when moving to billing, subscriptions, or plan enforcement — this session has been focused on invite/portal access.
+
 ### Campaign Engine (campaigns.js + adminCampaigns.js — Chunk 9)
 Outbound SMS campaign system. Sends templated messages to a filtered audience, tracks delivery per recipient.
 
@@ -684,7 +753,8 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 8. ~~**Lead lifecycle + automated follow-up engine**~~ — DONE. `followUpEngine.js`: scheduleFollowUps() + checkAndMarkLeadEngaged(). DB worker sends follow-ups, stops on reply, promotes new→contacted→engaged. Run `db1_lead_followup.sql` migration. Admin: GET /admin/leads/:id, GET /admin/scheduled-messages.
 9. ~~**Campaign engine**~~ — DONE. `campaigns.js` + `adminCampaigns.js`. POST/GET/PATCH campaigns + POST :id/send. Audience targeting (all_leads/engaged_leads/new_leads), 200ms pacing, `{{name}}`/`{{first_name}}` interpolation. `campaign_recipients` updated on send/fail by scheduler. Run `db1_campaigns.sql` migration in Supabase DB1 before use.
 10. ~~**Client portal**~~ — DONE. Authenticated portal at `/portal`. Supabase Auth + `portal_users` table. Dashboard, Leads, Campaigns, Analytics, Settings. JWT-protected API with 3-layer client scoping. Run `db1_portal.sql` + set `SUPABASE_ANON_KEY` env var. Provision users via `POST /admin/portal-users?key=UI_SECRET`.
-11. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
-12. **Website** — usehighmark.com landing page served at `/home`. Next step: Start new Claude session for billing, plan enforcement, or advanced analytics.
+11. ~~**Invite-based portal access**~~ — DONE. `adminInvites.js`: tokenized invite lifecycle (create, info, accept, revoke, resend, deactivate). `portal_invites` table, 64-char token, 72h expiry, single-use. `portal-accept.html` + `GET /portal/invite`. Users & Access section in portal SPA (admin-only). Run `db1_portal_invites.sql` migration in Supabase DB1 before use.
+12. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+13. **Website** — usehighmark.com landing page served at `/home`. Next step: Start new Claude session for billing, plan enforcement, or advanced analytics.
 
-**Session tip:** Start a new Claude session when moving to billing, plan management, or advanced reporting — this session has been focused on portal/campaign/backend work.
+**Session tip:** Start a new Claude session when moving to billing, subscriptions, plan enforcement, or public website work — this session has been focused on invite/portal/backend work.
