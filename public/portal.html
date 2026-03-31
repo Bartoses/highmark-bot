@@ -545,7 +545,7 @@ async function init() {
 
   // Show admin-only UI elements + wire admin-specific controls
   if (me.isAdmin) {
-    document.querySelectorAll('.admin-only').forEach(el => el.style.display = '');
+    document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('admin-only'));
     setupInviteModal();
     preloadClients();
   }
