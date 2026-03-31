@@ -389,6 +389,7 @@ tr:hover td { background: var(--panel2); }
 const API  = '/portal/api';
 let token  = localStorage.getItem('hm_portal_token') ?? '';
 let me     = null;
+let sbClient = null;  // initialized in init() for token refresh
 let leadsOffset = 0;
 const LEADS_LIMIT = 25;
 let activeLead = null;
@@ -396,6 +397,14 @@ let activeCampaignId = null;
 
 // ── Auth + init ────────────────────────────────────────────────────────────
 async function init() {
+  // Init Supabase client for token refresh
+  try {
+    const cfg = await fetch('/portal/config').then(r => r.json());
+    if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
+      sbClient = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    }
+  } catch {}
+
   if (!token) { redirectToLogin(); return; }
 
   // Verify token with /me
@@ -484,13 +493,31 @@ function switchSection(name) {
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
-async function apiFetch(path, opts = {}) {
+async function apiFetch(path, opts = {}, _retried = false) {
   try {
     const res = await fetch(`${API}${path}`, {
       ...opts,
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts.headers ?? {}) },
     });
-    if (res.status === 401) { redirectToLogin(); return null; }
+    if (res.status === 401) {
+      // Try refreshing the Supabase session once before giving up
+      if (!_retried && sbClient) {
+        const refreshToken = localStorage.getItem('hm_portal_refresh') ?? '';
+        if (refreshToken) {
+          try {
+            const { data } = await sbClient.auth.refreshSession({ refresh_token: refreshToken });
+            if (data?.session?.access_token) {
+              token = data.session.access_token;
+              localStorage.setItem('hm_portal_token', token);
+              localStorage.setItem('hm_portal_refresh', data.session.refresh_token ?? '');
+              return apiFetch(path, opts, true);  // retry once with new token
+            }
+          } catch {}
+        }
+      }
+      redirectToLogin();
+      return null;
+    }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       console.warn('[API]', path, res.status, body.error);

@@ -105,9 +105,14 @@ input:focus { border-color: var(--accent); }
     }
     sbClient = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
 
-    // If already signed in, go straight to dashboard
+    // If already signed in, refresh + update stored tokens, then go to dashboard
     const { data: { session } } = await sbClient.auth.getSession();
     if (session) {
+      // Always write the latest (possibly auto-refreshed) tokens so dashboard never gets a stale JWT
+      if (session.access_token) {
+        localStorage.setItem('hm_portal_token', session.access_token);
+        localStorage.setItem('hm_portal_refresh', session.refresh_token ?? '');
+      }
       window.location.replace('/portal/dashboard');
       return;
     }
