@@ -578,6 +578,7 @@ const sectionTitles = {
   analytics: 'Analytics', settings: 'Settings', users: 'Users & Access',
 };
 function switchSection(name) {
+  if (name === 'users' && !me?.isAdmin) name = 'dashboard';
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.mob-nav-item').forEach(n => n.classList.remove('active'));
@@ -1039,12 +1040,13 @@ async function loadUsers() {
   } else {
     document.getElementById('usersTable').innerHTML = `
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Email</th><th>Role</th><th>Client</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Email</th><th>Role</th><th>Client</th><th>Status</th><th>Created</th><th></th></tr></thead>
         <tbody>${users.map(u => `<tr>
           <td style="font-size:12px">${u.email}</td>
           <td>${pill(u.role === 'internal_admin' ? 'admin' : 'client')}</td>
           <td class="text-muted text-xs">${u.client_id ?? '—'}</td>
           <td>${pill(u.active ? 'active' : 'inactive')}</td>
+          <td class="text-muted text-xs">${fmt(u.created_at)}</td>
           <td><button class="btn btn-ghost btn-sm" style="font-size:10px"
             onclick="toggleUser('${u.id}', ${u.active})">${u.active ? 'Deactivate' : 'Reactivate'}</button></td>
         </tr>`).join('')}</tbody>
@@ -1058,9 +1060,10 @@ async function loadUsers() {
   } else {
     document.getElementById('invitesTable').innerHTML = `
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Email</th><th>Client</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+        <thead><tr><th>Email</th><th>Role</th><th>Client</th><th>Status</th><th>Expires</th><th></th></tr></thead>
         <tbody>${invites.map(inv => `<tr>
           <td style="font-size:12px">${inv.email}</td>
+          <td>${pill(inv.role === 'internal_admin' ? 'admin' : 'client')}</td>
           <td class="text-muted text-xs">${inv.client_id ?? '—'}</td>
           <td>${pill(inv.status)}</td>
           <td class="text-muted text-xs">${inv.status === 'pending' ? fmt(inv.expires_at) : '—'}</td>

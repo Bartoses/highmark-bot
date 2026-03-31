@@ -666,14 +666,32 @@ Controlled account provisioning — no open self-serve signup. Internal admins c
 4. Page signs in client-side with anon key → stores JWT in localStorage → redirects to `/portal/dashboard`
 5. Fallback: if client-side sign-in fails → redirect to `/portal/login?activated=1`
 
-**Portal UX:** Users & Access section (nav item hidden for `client_user` role via `.admin-only { display: none }`). Shows active users table, pending invites table, and "Invite user" modal with email/role/client dropdowns. Invite URL shown inline after creation with copy button.
+**Portal UX — Users & Access section (`/portal/users`, admin-only):**
+- Nav item hidden for `client_user` role via `.admin-only { display: none }`; redirect guard in `switchSection()` prevents direct URL access
+- **Portal Users table**: Email, Role (admin/client pill), Client, Status (active/inactive), Created date, Deactivate/Reactivate button
+- **Invites table**: Email, Role, Client, Status, Expires (pending only), Resend + Revoke buttons (pending only)
+- **"+ Invite user" button**: opens modal with email field, role dropdown, client dropdown (hidden when role = internal_admin)
+- After creating/resending: invite URL shown inline with one-click copy button
+- All actions (create, resend, revoke, deactivate) refresh the tables automatically
+
+**How to invite a client user from the portal:**
+1. Log in as `internal_admin` → go to Users & Access
+2. Click "+ Invite user" → enter email, select role `Client user`, select the client
+3. Copy the invite URL → send to the client out-of-band (email, Slack, etc.)
+4. Client opens the URL → sets a password → automatically signed in → lands on dashboard
+
+**How to invite an internal admin:**
+- Same flow, but select role `Internal admin` — client dropdown is hidden (admins have access to all clients)
+
+**Resend**: generates a new token + extends expiry 72h. Shows the new URL in the modal.
+**Revoke**: immediately invalidates the invite link. Accepted invites cannot be revoked — deactivate the user instead.
 
 **Security:** Token not echoed in `invite-info` response. If `portal_users` insert fails after auth user created, `supabase.auth.admin.deleteUser` cleans up the orphan.
 
 **Migration required:** Run `db1_portal_invites.sql` in Supabase DB1 SQL editor before first use.
 
 ```bash
-# Create invite (admin)
+# Create invite via API (admin curl — or use the portal UI)
 curl -X POST "https://highmark-bot-production.up.railway.app/admin/portal-invites?key=YOUR_UI_SECRET" \
   -H "Content-Type: application/json" \
   -d '{"email":"client@example.com","role":"client_user","client_id":"csr_rea"}'

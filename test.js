@@ -2876,6 +2876,7 @@ async function main() {
   await test34(); // campaign engine: createCampaign, selectAudience, enqueueCampaign, stats, interpolation
   await test36(); // SMS compliance: STOPALL, client-aware opt-out messages, campaign opt-out filtering
   await test37(); // Invite flow: create, info, accept, revoke, resend, deactivate, lifecycle guards
+  await test38(); // Portal access management: admin happy-path (list users/invites, create, resend, revoke, toggle)
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -4145,6 +4146,322 @@ async function test37Integration() {
   usersPageRes.status === 200
     ? pass("test37: GET /portal/users serves portal.html")
     : fail("test37: /portal/users wrong status", usersPageRes.status);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+async function test38() {
+  console.log("\nTEST 38: Portal access management — admin happy-path operations\n");
+
+  const {
+    handlePortalUsers,
+    handlePortalInvites,
+    handlePortalCreateInvite,
+    handlePortalResendInvite,
+    handlePortalRevokeInvite,
+    handlePortalUpdateUser,
+  } = await import("./adminInvites.js");
+
+  function mockRes() {
+    const r = { _status: 200, _body: null };
+    r.status = (c) => { r._status = c; return r; };
+    r.json   = (b) => { r._body = b; return r; };
+    return r;
+  }
+
+  const adminReq = { portalUser: { role: "internal_admin", email: "admin@test.com" }, query: {}, body: {} };
+
+  // ── handlePortalUsers: returns users for admin ───────────────────────────
+  {
+    const res = mockRes();
+    const users = [
+      { id: "u1", email: "a@b.com", role: "client_user", client_id: "csr_rea", active: true, created_at: new Date().toISOString() },
+    ];
+    const mockSb = {
+      from: () => ({ select: () => ({ order: () => ({ data: users, error: null }) }) }),
+    };
+    await handlePortalUsers({ ...adminReq }, res, mockSb);
+    res._status === 200 && Array.isArray(res._body?.users)
+      ? pass("test38: handlePortalUsers returns 200 with users array for admin")
+      : fail("test38: handlePortalUsers wrong response", JSON.stringify(res._body));
+    res._body?.users?.length === 1
+      ? pass("test38: handlePortalUsers returns correct user count")
+      : fail("test38: handlePortalUsers wrong user count", res._body?.users?.length);
+  }
+
+  // ── handlePortalUsers: DB error → 500 ───────────────────────────────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({ select: () => ({ order: () => ({ data: null, error: { message: "DB error" } }) }) }),
+    };
+    await handlePortalUsers({ ...adminReq }, res, mockSb);
+    res._status === 500
+      ? pass("test38: handlePortalUsers returns 500 on DB error")
+      : fail("test38: handlePortalUsers DB error wrong status", res._status);
+  }
+
+  // ── handlePortalInvites: returns invites for admin ───────────────────────
+  {
+    const res = mockRes();
+    const invites = [
+      { id: "i1", email: "c@d.com", role: "client_user", client_id: "csr_rea",
+        invited_by: "admin@test.com", status: "pending",
+        expires_at: new Date(Date.now() + 86400000).toISOString(),
+        accepted_at: null, created_at: new Date().toISOString() },
+    ];
+    const mockSb = {
+      from: () => ({ select: () => ({ order: () => ({ data: invites, error: null }) }) }),
+    };
+    await handlePortalInvites({ ...adminReq }, res, mockSb);
+    res._status === 200 && Array.isArray(res._body?.invites)
+      ? pass("test38: handlePortalInvites returns 200 with invites array for admin")
+      : fail("test38: handlePortalInvites wrong response", JSON.stringify(res._body));
+    res._body?.invites?.[0]?.role === "client_user"
+      ? pass("test38: handlePortalInvites invite includes role field")
+      : fail("test38: handlePortalInvites missing role", res._body?.invites?.[0]);
+  }
+
+  // ── handlePortalCreateInvite: client_user + client_id → 201 ──────────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }),
+        insert: (row) => ({
+          select: () => ({
+            single: async () => ({
+              data: { id: "inv-new", email: row.email, role: row.role, client_id: row.client_id,
+                      invited_by: row.invited_by, status: "pending",
+                      expires_at: row.expires_at, created_at: new Date().toISOString() },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    };
+    const req = { ...adminReq, body: { email: "user@client.com", role: "client_user", client_id: "csr_rea" } };
+    await handlePortalCreateInvite(req, res, mockSb);
+    res._status === 201 && res._body?.invite_url?.includes("/portal/invite?token=")
+      ? pass("test38: handlePortalCreateInvite creates client_user invite (201 + invite_url)")
+      : fail("test38: client_user invite wrong response", JSON.stringify(res._body));
+  }
+
+  // ── handlePortalCreateInvite: internal_admin without client_id → 201 ─────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }),
+        insert: (row) => ({
+          select: () => ({
+            single: async () => ({
+              data: { id: "inv-admin", email: row.email, role: row.role, client_id: null,
+                      invited_by: row.invited_by, status: "pending",
+                      expires_at: row.expires_at, created_at: new Date().toISOString() },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    };
+    const req = { ...adminReq, body: { email: "newadmin@test.com", role: "internal_admin" } };
+    await handlePortalCreateInvite(req, res, mockSb);
+    res._status === 201
+      ? pass("test38: handlePortalCreateInvite creates internal_admin invite without client_id (201)")
+      : fail("test38: admin invite wrong status", res._status);
+  }
+
+  // ── handlePortalCreateInvite: client_user missing client_id → 400 ────────
+  {
+    const res = mockRes();
+    const req = { ...adminReq, body: { email: "x@y.com", role: "client_user" } };
+    await handlePortalCreateInvite(req, res, { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }) }) });
+    res._status === 400 && res._body?.error?.includes("client_id")
+      ? pass("test38: handlePortalCreateInvite returns 400 when client_user missing client_id")
+      : fail("test38: missing client_id wrong response", res._status);
+  }
+
+  // ── handlePortalCreateInvite: duplicate pending → 409 ────────────────────
+  {
+    const res = mockRes();
+    const req = { ...adminReq, body: { email: "dup@test.com", role: "client_user", client_id: "csr_rea" } };
+    const mockSb = {
+      from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: "existing", status: "pending" } }) }) }) }) }),
+    };
+    await handlePortalCreateInvite(req, res, mockSb);
+    res._status === 409
+      ? pass("test38: handlePortalCreateInvite returns 409 for duplicate pending invite")
+      : fail("test38: duplicate pending wrong status", res._status);
+  }
+
+  // ── handlePortalResendInvite: pending invite → new invite_url ────────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({
+              data: { id: "i5", email: "r@t.com", status: "pending" },
+              error: null,
+            }),
+          }),
+        }),
+        update: () => ({
+          eq: () => ({
+            select: () => ({
+              single: async () => ({
+                data: { id: "i5", email: "r@t.com", role: "client_user", client_id: "csr_rea",
+                        invited_by: "admin", status: "pending",
+                        expires_at: new Date(Date.now() + 86400000).toISOString(),
+                        created_at: new Date().toISOString() },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    };
+    const req = { ...adminReq, params: { id: "i5" } };
+    await handlePortalResendInvite(req, res, mockSb);
+    res._status === 200 && res._body?.invite_url?.includes("/portal/invite?token=")
+      ? pass("test38: handlePortalResendInvite returns new invite_url for pending invite")
+      : fail("test38: resend wrong response", JSON.stringify(res._body));
+  }
+
+  // ── handlePortalResendInvite: accepted invite → 409 ──────────────────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({
+              data: { id: "i6", email: "r@t.com", status: "accepted" },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    };
+    const req = { ...adminReq, params: { id: "i6" } };
+    await handlePortalResendInvite(req, res, mockSb);
+    res._status === 409
+      ? pass("test38: handlePortalResendInvite returns 409 for accepted invite")
+      : fail("test38: accepted resend wrong status", res._status);
+  }
+
+  // ── handlePortalRevokeInvite: pending invite → { ok: true } ──────────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({
+              data: { id: "i7", email: "v@w.com", status: "pending" },
+              error: null,
+            }),
+          }),
+        }),
+        update: () => ({
+          // revokeInvite update chain: .update().eq() → { error }
+          eq: async () => ({ error: null }),
+        }),
+      }),
+    };
+    const req = { ...adminReq, params: { id: "i7" } };
+    await handlePortalRevokeInvite(req, res, mockSb);
+    res._status === 200 && res._body?.ok === true
+      ? pass("test38: handlePortalRevokeInvite returns { ok: true } for pending invite")
+      : fail("test38: revoke wrong response", JSON.stringify(res._body));
+  }
+
+  // ── handlePortalRevokeInvite: already-revoked → 409 ──────────────────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({
+              data: { id: "i8", email: "v@w.com", status: "revoked" },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    };
+    const req = { ...adminReq, params: { id: "i8" } };
+    await handlePortalRevokeInvite(req, res, mockSb);
+    res._status === 409
+      ? pass("test38: handlePortalRevokeInvite returns 409 for already-revoked invite")
+      : fail("test38: already-revoked wrong status", res._status);
+  }
+
+  // ── handlePortalUpdateUser: deactivate → success ─────────────────────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({
+              data: { id: "pu1", email: "u@v.com", role: "client_user", client_id: "csr_rea", active: true },
+              error: null,
+            }),
+          }),
+        }),
+        update: () => ({
+          eq: () => ({
+            select: () => ({
+              single: async () => ({
+                data: { id: "pu1", email: "u@v.com", role: "client_user", client_id: "csr_rea", active: false },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    };
+    const req = { ...adminReq, params: { id: "pu1" }, body: { active: false } };
+    await handlePortalUpdateUser(req, res, mockSb);
+    res._status === 200 && res._body?.portalUser?.active === false
+      ? pass("test38: handlePortalUpdateUser deactivates user (active: false)")
+      : fail("test38: deactivate wrong response", JSON.stringify(res._body));
+  }
+
+  // ── handlePortalUpdateUser: reactivate → success ─────────────────────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({
+              data: { id: "pu2", email: "u@v.com", role: "client_user", client_id: "csr_rea", active: false },
+              error: null,
+            }),
+          }),
+        }),
+        update: () => ({
+          eq: () => ({
+            select: () => ({
+              single: async () => ({
+                data: { id: "pu2", email: "u@v.com", role: "client_user", client_id: "csr_rea", active: true },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    };
+    const req = { ...adminReq, params: { id: "pu2" }, body: { active: true } };
+    await handlePortalUpdateUser(req, res, mockSb);
+    res._status === 200 && res._body?.portalUser?.active === true
+      ? pass("test38: handlePortalUpdateUser reactivates user (active: true)")
+      : fail("test38: reactivate wrong response", JSON.stringify(res._body));
+  }
 }
 
 main().catch((e) => {
