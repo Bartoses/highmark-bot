@@ -202,11 +202,20 @@ tr:hover td { background: var(--panel2); }
   .mob-nav-item .mob-icon { font-size: 18px; line-height: 1; }
   .mob-nav-item.active { color: var(--accent); }
   .mob-nav-item:hover  { color: var(--text); }
-
   .topbar-title { font-size: 13px; }
   .client-select { max-width: 140px; font-size: 11px; }
   .client-badge  { display: none; }
 }
+/* Admin-only nav items — hidden until admin status confirmed in JS */
+.admin-only { display: none; }
+/* Invite URL copy box */
+.invite-url-box {
+  background: var(--bg); border: 1px solid var(--border2);
+  border-radius: 8px; padding: 10px 14px; font-size: 11px;
+  color: var(--accent); word-break: break-all; margin: 10px 0;
+  cursor: pointer; user-select: all;
+}
+.invite-url-box:hover { border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -230,6 +239,9 @@ tr:hover td { background: var(--panel2); }
       </div>
       <div class="nav-item" data-section="settings">
         <span class="nav-icon">⚙</span> Settings
+      </div>
+      <div class="nav-item admin-only" data-section="users">
+        <span class="nav-icon">🔑</span> Users
       </div>
     </div>
     <div class="sidebar-footer">
@@ -310,6 +322,24 @@ tr:hover td { background: var(--panel2); }
           <span class="section-title">Settings</span>
         </div>
         <div id="settingsContent"><div class="loading">Loading…</div></div>
+      </div>
+
+      <!-- USERS (admin only) -->
+      <div class="section" id="sec-users">
+        <div class="section-header">
+          <span class="section-title">Users &amp; Access</span>
+          <button class="btn btn-primary btn-sm" id="newInviteBtn">+ Invite user</button>
+        </div>
+        <div class="two-col">
+          <div>
+            <div class="card-title" style="margin-bottom:12px;">Portal Users</div>
+            <div id="usersTable"><div class="loading">Loading…</div></div>
+          </div>
+          <div>
+            <div class="card-title" style="margin-bottom:12px;">Invites</div>
+            <div id="invitesTable"><div class="loading">Loading…</div></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -398,7 +428,38 @@ tr:hover td { background: var(--panel2); }
   <div class="mob-nav-item" data-section="campaigns"><span class="mob-icon">📣</span>Campaigns</div>
   <div class="mob-nav-item" data-section="analytics"><span class="mob-icon">📊</span>Analytics</div>
   <div class="mob-nav-item" data-section="settings"><span class="mob-icon">⚙</span>Settings</div>
+  <div class="mob-nav-item admin-only" data-section="users"><span class="mob-icon">🔑</span>Users</div>
 </nav>
+
+<!-- ── Invite user modal ─────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="inviteModal">
+  <div class="modal">
+    <div class="modal-title">Invite Portal User</div>
+    <div id="inviteModalResult" style="display:none"></div>
+    <div id="inviteModalForm">
+      <div id="inviteModalError" class="error-msg" style="display:none"></div>
+      <div class="form-group">
+        <label>Email address</label>
+        <input type="email" id="inviteEmail" placeholder="client@example.com">
+      </div>
+      <div class="form-group">
+        <label>Client</label>
+        <select id="inviteClient"></select>
+      </div>
+      <div class="form-group">
+        <label>Role</label>
+        <select id="inviteRole">
+          <option value="client_user">Client user (scoped to one client)</option>
+          <option value="internal_admin">Internal admin (all clients)</option>
+        </select>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="inviteModalCancel">Cancel</button>
+        <button class="btn btn-primary" id="inviteModalSend">Create invite link</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ── Campaign detail modal ────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="campaignDetailModal">
@@ -482,9 +543,17 @@ async function init() {
   document.getElementById('signOutBtn').addEventListener('click', signOut);
   document.getElementById('analyticsPeriod').addEventListener('change', loadAnalytics);
 
+  // Show admin-only UI elements + wire admin-specific controls
+  if (me.isAdmin) {
+    document.querySelectorAll('.admin-only').forEach(el => el.style.display = '');
+    setupInviteModal();
+    preloadClients();
+  }
+
   // Load initial section based on URL
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
-  switchSection(['dashboard','leads','campaigns','analytics','settings'].includes(urlSection) ? urlSection : 'dashboard');
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','users'];
+  switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
 }
 
 function redirectToLogin() {
@@ -506,7 +575,7 @@ async function signOut() {
 // ── Section routing ────────────────────────────────────────────────────────
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
-  analytics: 'Analytics', settings: 'Settings',
+  analytics: 'Analytics', settings: 'Settings', users: 'Users & Access',
 };
 function switchSection(name) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
@@ -522,6 +591,7 @@ function switchSection(name) {
   if (name === 'campaigns')  { loadCampaigns(); setupCampaignEvents(); }
   if (name === 'analytics')  loadAnalytics();
   if (name === 'settings')   loadSettings();
+  if (name === 'users')      loadUsers();
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -948,6 +1018,170 @@ async function loadSettings() {
       setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
     }
   });
+}
+
+// ── USERS & ACCESS (admin only) ────────────────────────────────────────────
+let allClientsCache = [];
+
+async function loadUsers() {
+  document.getElementById('usersTable').innerHTML   = '<div class="loading">Loading…</div>';
+  document.getElementById('invitesTable').innerHTML = '<div class="loading">Loading…</div>';
+
+  const [usersData, invitesData] = await Promise.all([
+    apiFetch('/users'),
+    apiFetch('/invites'),
+  ]);
+
+  // Users table
+  const users = usersData?.users ?? [];
+  if (users.length === 0) {
+    document.getElementById('usersTable').innerHTML = '<div class="empty-state">No portal users yet.</div>';
+  } else {
+    document.getElementById('usersTable').innerHTML = `
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Email</th><th>Role</th><th>Client</th><th>Status</th><th></th></tr></thead>
+        <tbody>${users.map(u => `<tr>
+          <td style="font-size:12px">${u.email}</td>
+          <td>${pill(u.role === 'internal_admin' ? 'admin' : 'client')}</td>
+          <td class="text-muted text-xs">${u.client_id ?? '—'}</td>
+          <td>${pill(u.active ? 'active' : 'inactive')}</td>
+          <td><button class="btn btn-ghost btn-sm" style="font-size:10px"
+            onclick="toggleUser('${u.id}', ${u.active})">${u.active ? 'Deactivate' : 'Reactivate'}</button></td>
+        </tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+
+  // Invites table
+  const invites = invitesData?.invites ?? [];
+  if (invites.length === 0) {
+    document.getElementById('invitesTable').innerHTML = '<div class="empty-state">No invites yet.</div>';
+  } else {
+    document.getElementById('invitesTable').innerHTML = `
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Email</th><th>Client</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+        <tbody>${invites.map(inv => `<tr>
+          <td style="font-size:12px">${inv.email}</td>
+          <td class="text-muted text-xs">${inv.client_id ?? '—'}</td>
+          <td>${pill(inv.status)}</td>
+          <td class="text-muted text-xs">${inv.status === 'pending' ? fmt(inv.expires_at) : '—'}</td>
+          <td style="display:flex;gap:4px;flex-wrap:wrap">
+            ${inv.status === 'pending' ? `
+              <button class="btn btn-ghost btn-sm" style="font-size:10px"
+                onclick="doResendInvite('${inv.id}')">Resend</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--danger)"
+                onclick="doRevokeInvite('${inv.id}')">Revoke</button>` : ''}
+          </td>
+        </tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+
+  // Wire invite button
+  const newBtn = document.getElementById('newInviteBtn');
+  newBtn.onclick = null;
+  newBtn.addEventListener('click', openInviteModal);
+}
+
+async function toggleUser(id, currentlyActive) {
+  const ok = confirm(`${currentlyActive ? 'Deactivate' : 'Reactivate'} this portal user?`);
+  if (!ok) return;
+  const r = await apiFetch(`/users/${id}`, { method: 'PATCH', body: JSON.stringify({ active: !currentlyActive }) });
+  if (r) loadUsers();
+}
+
+async function doResendInvite(id) {
+  const r = await apiFetch(`/invites/${id}/resend`, { method: 'POST', body: '{}' });
+  if (!r) { alert('Failed to resend invite.'); return; }
+  showInviteResult(r.invite_url, r.invite.email, 'Invite link refreshed');
+  loadUsers();
+}
+
+async function doRevokeInvite(id) {
+  const ok = confirm('Revoke this invite? The link will stop working.');
+  if (!ok) return;
+  const r = await apiFetch(`/invites/${id}/revoke`, { method: 'POST', body: '{}' });
+  if (r) loadUsers();
+}
+
+function openInviteModal() {
+  // Populate client dropdown
+  const sel = document.getElementById('inviteClient');
+  const roleEl = document.getElementById('inviteRole');
+  sel.innerHTML = (allClientsCache.length > 0
+    ? allClientsCache.map(c => `<option value="${c.id}">${c.name}</option>`)
+    : ['<option value="">— no clients —</option>']
+  ).join('');
+
+  // Hide client selector when admin role selected
+  roleEl.onchange = () => {
+    sel.closest('.form-group').style.display = roleEl.value === 'internal_admin' ? 'none' : '';
+  };
+
+  document.getElementById('inviteEmail').value = '';
+  document.getElementById('inviteModalError').style.display = 'none';
+  document.getElementById('inviteModalResult').style.display = 'none';
+  document.getElementById('inviteModalForm').style.display   = '';
+  document.getElementById('inviteModal').classList.add('open');
+}
+
+async function sendInvite() {
+  const email    = document.getElementById('inviteEmail').value.trim();
+  const role     = document.getElementById('inviteRole').value;
+  const clientId = role === 'internal_admin' ? null : document.getElementById('inviteClient').value;
+  const errEl    = document.getElementById('inviteModalError');
+  const btn      = document.getElementById('inviteModalSend');
+
+  if (!email) { errEl.textContent = 'Email is required.'; errEl.style.display = 'block'; return; }
+  errEl.style.display = 'none';
+  btn.disabled = true; btn.textContent = 'Creating…';
+
+  const r = await apiFetch('/invites', { method: 'POST', body: JSON.stringify({ email, role, client_id: clientId }) });
+  btn.disabled = false; btn.textContent = 'Create invite link';
+
+  if (!r) {
+    errEl.textContent = 'Failed to create invite. Try again.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  document.getElementById('inviteModalForm').style.display   = 'none';
+  showInviteResult(r.invite_url, email, 'Invite created');
+  loadUsers();
+}
+
+function showInviteResult(url, email, heading) {
+  const resEl = document.getElementById('inviteModalResult');
+  resEl.innerHTML = `
+    <div style="margin-bottom:14px;font-weight:600;color:var(--accent)">✓ ${heading}</div>
+    <p style="color:var(--text2);font-size:12px;margin-bottom:8px;">
+      Send this link to <strong>${email}</strong>. It expires in 72 hours and can only be used once.
+    </p>
+    <div class="invite-url-box" id="inviteUrlBox">${url}</div>
+    <p style="color:var(--text2);font-size:11px;margin-top:6px;">Click the link above to copy it.</p>
+    <div class="modal-footer" style="margin-top:16px">
+      <button class="btn btn-primary" onclick="copyInviteUrl('${url}')">Copy link</button>
+      <button class="btn btn-ghost" id="inviteModalDone">Done</button>
+    </div>`;
+  resEl.style.display = '';
+  document.getElementById('inviteModalDone').onclick = () => {
+    document.getElementById('inviteModal').classList.remove('open');
+  };
+}
+
+async function copyInviteUrl(url) {
+  try { await navigator.clipboard.writeText(url); alert('Invite link copied!'); } catch { alert(url); }
+}
+
+function setupInviteModal() {
+  document.getElementById('inviteModalCancel').addEventListener('click', () => {
+    document.getElementById('inviteModal').classList.remove('open');
+  });
+  document.getElementById('inviteModalSend').addEventListener('click', sendInvite);
+}
+
+// Pre-load clients for invite modal dropdown
+async function preloadClients() {
+  const d = await apiFetch('/clients');
+  allClientsCache = d?.clients ?? [];
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────

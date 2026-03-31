@@ -32,6 +32,7 @@ import { handleListClients, handleGetClient, handleCreateClient, handleUpdateCli
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
 import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
 import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients } from "./adminPortal.js";
+import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { loadDbClients } from "./clients.js";
@@ -1874,6 +1875,12 @@ app.get("/portal/leads",     (_req, res) => res.sendFile(path.join(__uiDir, "por
 app.get("/portal/campaigns", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
 app.get("/portal/analytics", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
 app.get("/portal/settings",  (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
+app.get("/portal/users",     (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
+
+// Portal invite acceptance — public, no auth (serves portal-accept.html)
+app.get("/portal/invite",             (_req, res) => res.sendFile(path.join(__uiDir, "portal-accept.html")));
+app.get("/portal/api/invite-info",    (req, res) => handleInviteInfo(req, res, supabase));
+app.post("/portal/api/accept-invite", (req, res) => handleAcceptInvite(req, res, supabase));
 
 // Portal API — all require valid Supabase JWT
 app.get(  "/portal/api/me",                  requirePortalAuth, (req, res) => handlePortalMe(req, res));
@@ -1889,10 +1896,23 @@ app.post( "/portal/api/campaigns/:id/send",  requirePortalAuth, (req, res) => ha
 app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
 app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res));
 app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));
+// Portal invite + user management — requirePortalAuth (internal_admin role enforced inside handlers)
+app.get(  "/portal/api/users",               requirePortalAuth, (req, res) => handlePortalUsers(req, res, supabase));
+app.patch("/portal/api/users/:id",           requirePortalAuth, (req, res) => handlePortalUpdateUser(req, res, supabase));
+app.get(  "/portal/api/invites",             requirePortalAuth, (req, res) => handlePortalInvites(req, res, supabase));
+app.post( "/portal/api/invites",             requirePortalAuth, (req, res) => handlePortalCreateInvite(req, res, supabase));
+app.post( "/portal/api/invites/:id/resend",  requirePortalAuth, (req, res) => handlePortalResendInvite(req, res, supabase));
+app.post( "/portal/api/invites/:id/revoke",  requirePortalAuth, (req, res) => handlePortalRevokeInvite(req, res, supabase));
 
 // Admin portal user management (UI_SECRET — internal only)
-app.post("/admin/portal-users", requireUiAccess, (req, res) => handleCreatePortalUser(req, res, supabase));
-app.get( "/admin/portal-users", requireUiAccess, (req, res) => handleListPortalUsers(req, res, supabase));
+app.post( "/admin/portal-users",             requireUiAccess, (req, res) => handleCreatePortalUser(req, res, supabase));
+app.get(  "/admin/portal-users",             requireUiAccess, (req, res) => handleListPortalUsers(req, res, supabase));
+app.patch("/admin/portal-users/:id",         requireUiAccess, (req, res) => handleUpdatePortalUser(req, res, supabase));
+// Admin invite management (UI_SECRET — internal only)
+app.post("/admin/portal-invites",            requireUiAccess, (req, res) => handleCreateInvite(req, res, supabase));
+app.get( "/admin/portal-invites",            requireUiAccess, (req, res) => handleListInvites(req, res, supabase));
+app.post("/admin/portal-invites/:id/resend", requireUiAccess, (req, res) => handleResendInvite(req, res, supabase));
+app.post("/admin/portal-invites/:id/revoke", requireUiAccess, (req, res) => handleRevokeInvite(req, res, supabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SITE CONTENT MANAGEMENT
