@@ -292,7 +292,7 @@ export async function handlePortalUpdateCampaign(req, res, supabase) {
 }
 
 // ── POST /portal/api/campaigns/:id/send ──────────────────────────────────────
-export async function handlePortalSendCampaign(req, res, supabase) {
+export async function handlePortalSendCampaign(req, res, supabase, crmSupabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   const clientId = resolvePortalClientId(req);
 
@@ -307,7 +307,7 @@ export async function handlePortalSendCampaign(req, res, supabase) {
 
   const fromPhone = req.body?.from_phone ?? process.env.TWILIO_PHONE_NUMBER ?? null;
   try {
-    const result = await enqueueCampaign(supabase, campaign, fromPhone);
+    const result = await enqueueCampaign(supabase, campaign, fromPhone, crmSupabase);
     return res.json({ ok: true, ...result });
   } catch (err) {
     return res.status(500).json({ error: err.message });

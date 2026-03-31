@@ -138,7 +138,7 @@ export async function handleUpdateCampaign(req, res, supabase) {
 // ── POST /admin/campaigns/:id/send ────────────────────────────────────────────
 // Enqueues the campaign: selects audience, creates recipients, schedules messages.
 // Body: { from_phone } (optional — falls back to TWILIO_PHONE_NUMBER)
-export async function handleSendCampaign(req, res, supabase) {
+export async function handleSendCampaign(req, res, supabase, crmSupabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
 
   const { id } = req.params;
@@ -161,7 +161,7 @@ export async function handleSendCampaign(req, res, supabase) {
   }
 
   try {
-    const result = await enqueueCampaign(supabase, campaign, fromPhone);
+    const result = await enqueueCampaign(supabase, campaign, fromPhone, crmSupabase);
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error("[ADMIN CAMPAIGNS] send error:", err.message);

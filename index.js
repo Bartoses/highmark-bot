@@ -1143,14 +1143,14 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
   // 3. OPT-OUT check — MUST be first (TCPA legal requirement)
   if (OPT_OUT_KEYWORDS.includes(msgUpper) && crmSupabase) {
-    await handleOptOutKeyword(fromNumber, toNumber, twilioClient, crmSupabase);
+    await handleOptOutKeyword(fromNumber, toNumber, twilioClient, crmSupabase, client?.name);
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
 
   // 4. OPT-IN check
   if (OPT_IN_KEYWORDS.includes(msgUpper) && crmSupabase) {
-    await handleOptInKeyword(fromNumber, toNumber, twilioClient, crmSupabase);
+    await handleOptInKeyword(fromNumber, toNumber, twilioClient, crmSupabase, client?.name);
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
@@ -1843,7 +1843,7 @@ app.post("/admin/campaigns",              requireUiAccess, (req, res) => handleC
 app.get("/admin/campaigns",               requireUiAccess, (req, res) => handleListCampaigns(req, res, supabase));
 app.get("/admin/campaigns/:id",           requireUiAccess, (req, res) => handleGetCampaign(req, res, supabase));
 app.patch("/admin/campaigns/:id",         requireUiAccess, (req, res) => handleUpdateCampaign(req, res, supabase));
-app.post("/admin/campaigns/:id/send",     requireUiAccess, (req, res) => handleSendCampaign(req, res, supabase));
+app.post("/admin/campaigns/:id/send",     requireUiAccess, (req, res) => handleSendCampaign(req, res, supabase, crmSupabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT PORTAL (Chunk 10)
@@ -1882,7 +1882,7 @@ app.get(  "/portal/api/campaigns",           requirePortalAuth, (req, res) => ha
 app.post( "/portal/api/campaigns",           requirePortalAuth, (req, res) => handlePortalCreateCampaign(req, res, supabase));
 app.get(  "/portal/api/campaigns/:id",       requirePortalAuth, (req, res) => handlePortalGetCampaign(req, res, supabase));
 app.patch("/portal/api/campaigns/:id",       requirePortalAuth, (req, res) => handlePortalUpdateCampaign(req, res, supabase));
-app.post( "/portal/api/campaigns/:id/send",  requirePortalAuth, (req, res) => handlePortalSendCampaign(req, res, supabase));
+app.post( "/portal/api/campaigns/:id/send",  requirePortalAuth, (req, res) => handlePortalSendCampaign(req, res, supabase, crmSupabase));
 app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
 app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res));
 app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));

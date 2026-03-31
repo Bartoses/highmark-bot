@@ -111,7 +111,7 @@ export async function selectAudience(supabase, { clientId, audienceType }) {
 // fromPhone: the Twilio number to send from (stored in metadata for the worker)
 // Returns { recipientCount, enqueued, skipped }
 
-export async function enqueueCampaign(supabase, campaign, fromPhone) {
+export async function enqueueCampaign(supabase, campaign, fromPhone, crmSupabase) {
   const now = Date.now();
 
   // 1. Select audience
@@ -131,17 +131,36 @@ export async function enqueueCampaign(supabase, campaign, fromPhone) {
     return { recipientCount: 0, enqueued: 0, skipped: 0 };
   }
 
+  // 1b. Filter opted-out leads at enqueue time (defense-in-depth — scheduler also checks)
+  let eligibleLeads = leads;
+  let optedOutSkipped = 0;
+  if (crmSupabase) {
+    try {
+      const { data: optOuts } = await crmSupabase.from("opt_outs").select("phone");
+      const optOutSet = new Set((optOuts ?? []).map((o) => o.phone));
+      eligibleLeads = leads.filter((l) => {
+        if (optOutSet.has(l.contact_phone)) { optedOutSkipped++; return false; }
+        return true;
+      });
+      if (optedOutSkipped > 0) {
+        console.log(`[CAMPAIGNS] ${campaign.id} — skipped ${optedOutSkipped} opted-out leads`);
+      }
+    } catch (err) {
+      console.error("[CAMPAIGNS] opt-out pre-filter failed, proceeding without filter:", err.message);
+    }
+  }
+
   // Determine send_at base: scheduled campaigns use scheduled_at, immediate use now
   const sendBase = campaign.scheduled_at
     ? new Date(campaign.scheduled_at).getTime()
     : now;
 
   let enqueued = 0;
-  let skipped  = 0;
+  let skipped  = optedOutSkipped;
 
   // 2 + 3. Create recipient rows and schedule messages
-  for (let i = 0; i < leads.length; i++) {
-    const lead = leads[i];
+  for (let i = 0; i < eligibleLeads.length; i++) {
+    const lead = eligibleLeads[i];
 
     try {
       // Insert recipient record
@@ -200,11 +219,12 @@ export async function enqueueCampaign(supabase, campaign, fromPhone) {
       recipient_count: leads.length,
       enqueued,
       skipped,
+      opted_out_skipped: optedOutSkipped,
       from_phone: fromPhone ?? null,
     },
   }).eq("id", campaign.id);
 
-  console.log(`[CAMPAIGNS] ${campaign.id} "${campaign.name}" → status=${newStatus}, enqueued=${enqueued}/${leads.length}`);
+  console.log(`[CAMPAIGNS] ${campaign.id} "${campaign.name}" → status=${newStatus}, enqueued=${enqueued}/${leads.length}${optedOutSkipped ? ` (${optedOutSkipped} opted-out skipped)` : ""}`);
 
   // Analytics
   trackDemoEvent(supabase, {
@@ -213,7 +233,7 @@ export async function enqueueCampaign(supabase, campaign, fromPhone) {
     metadata:  { campaign_id: campaign.id, enqueued, skipped, recipient_count: leads.length },
   });
 
-  return { recipientCount: leads.length, enqueued, skipped };
+  return { recipientCount: leads.length, enqueued, skipped, optedOutSkipped };
 }
 
 // ── getCampaignStats ──────────────────────────────────────────────────────────

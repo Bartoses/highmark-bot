@@ -8,7 +8,7 @@
 // CLIENT_CONFIG
 const CLIENT_ID = process.env.CLIENT_ID || "csr_rea";
 
-export const OPT_OUT_KEYWORDS = ["STOP", "UNSUBSCRIBE", "CANCEL", "QUIT", "END"];
+export const OPT_OUT_KEYWORDS = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "QUIT", "END"];
 export const OPT_IN_KEYWORDS  = ["START", "UNSTOP"];
 
 const CAMPAIGN_BATCH_SIZE     = 10;
@@ -31,7 +31,7 @@ export async function checkOptOut(phone, crmSupabase) {
   }
 }
 
-export async function handleOptOutKeyword(phone, fromNumber, twilioClient, crmSupabase) {
+export async function handleOptOutKeyword(phone, fromNumber, twilioClient, crmSupabase, clientName) {
   try {
     // Add to opt_outs (ignore conflict if already there)
     await crmSupabase
@@ -44,8 +44,9 @@ export async function handleOptOutKeyword(phone, fromNumber, twilioClient, crmSu
       .update({ opted_in: false, opted_out_at: new Date().toISOString() })
       .eq("phone", phone);
 
+    const businessLine = clientName ? ` from ${clientName}` : "";
     await twilioClient.messages.create({
-      body: "You've been unsubscribed. Reply START anytime to resubscribe.",
+      body: `You've been unsubscribed and will no longer receive messages${businessLine}. Reply START to resubscribe.`,
       from: fromNumber,
       to:   phone,
     });
@@ -54,7 +55,7 @@ export async function handleOptOutKeyword(phone, fromNumber, twilioClient, crmSu
   }
 }
 
-export async function handleOptInKeyword(phone, fromNumber, twilioClient, crmSupabase) {
+export async function handleOptInKeyword(phone, fromNumber, twilioClient, crmSupabase, clientName) {
   try {
     await crmSupabase.from("opt_outs").delete().eq("phone", phone);
 
@@ -63,8 +64,9 @@ export async function handleOptInKeyword(phone, fromNumber, twilioClient, crmSup
       .update({ opted_in: true, opted_out_at: null })
       .eq("phone", phone);
 
+    const businessLine = clientName ? ` ${clientName}` : "";
     await twilioClient.messages.create({
-      body: "You're resubscribed! Text us anytime 🏔",
+      body: `You're resubscribed to${businessLine} messages. Text us anytime.`,
       from: fromNumber,
       to:   phone,
     });
