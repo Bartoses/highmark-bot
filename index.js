@@ -1144,6 +1144,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   // 3. OPT-OUT check — MUST be first (TCPA legal requirement)
   if (OPT_OUT_KEYWORDS.includes(msgUpper) && crmSupabase) {
     await handleOptOutKeyword(fromNumber, toNumber, twilioClient, crmSupabase, client?.name);
+    if (isUiReq(req)) return res.json({ reply: `You've been unsubscribed${client?.name ? ` from ${client.name}` : ""}. Reply START to resubscribe.` });
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
@@ -1151,6 +1152,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   // 4. OPT-IN check
   if (OPT_IN_KEYWORDS.includes(msgUpper) && crmSupabase) {
     await handleOptInKeyword(fromNumber, toNumber, twilioClient, crmSupabase, client?.name);
+    if (isUiReq(req)) return res.json({ reply: `You're resubscribed${client?.name ? ` to ${client.name} messages` : ""}. Text us anytime.` });
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
@@ -1158,7 +1160,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   // 4.5. HELP keyword — required by TCPA/CTIA. Works even if opted out.
   if (msgUpper === "HELP") {
     const helpText = `${client.name} SMS: info & booking assistance. Msg freq varies. Msg & data rates may apply. Reply STOP to unsubscribe. Support: ${client.supportPhone}`;
-    if (process.env.TEST_MODE === "true") return res.json({ reply: helpText });
+    if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply: helpText });
     await twilioClient.messages.create({ body: helpText, from: toNumber, to: fromNumber })
       .catch((err) => console.error("[HELP] Twilio send error:", err.message));
     res.set("Content-Type", "text/xml");
@@ -1170,6 +1172,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     const isOptedOut = await checkOptOut(fromNumber, crmSupabase);
     if (isOptedOut) {
       console.log(`[OPT-OUT] Dropping message from opted-out number ${fromNumber}`);
+      if (isUiReq(req)) return res.json({ reply: "[opted out — message dropped]" });
       res.set("Content-Type", "text/xml");
       return res.send("<Response></Response>");
     }
