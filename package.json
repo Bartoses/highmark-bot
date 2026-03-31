@@ -12,6 +12,9 @@
     "chat": "node chat.js",
     "ui": "TEST_MODE=true node --env-file=.env index.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
     "@supabase/supabase-js": "^2.39.0",

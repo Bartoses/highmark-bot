@@ -1159,7 +1159,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   if (msgUpper === "HELP") {
     const helpText = `${client.name} SMS: info & booking assistance. Msg freq varies. Msg & data rates may apply. Reply STOP to unsubscribe. Support: ${client.supportPhone}`;
     if (process.env.TEST_MODE === "true") return res.json({ reply: helpText });
-    await twilioClient.messages.create({ body: helpText, from: toNumber, to: fromNumber });
+    await twilioClient.messages.create({ body: helpText, from: toNumber, to: fromNumber })
+      .catch((err) => console.error("[HELP] Twilio send error:", err.message));
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
@@ -1220,7 +1221,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
     if (process.env.TEST_MODE === "true") return res.json({ reply: opener });
 
-    await twilioClient.messages.create({ body: opener, from: toNumber, to: fromNumber });
+    await twilioClient.messages.create({ body: opener, from: toNumber, to: fromNumber })
+      .catch((err) => console.error("[DEMO] Twilio send error:", err.message));
 
     // Notify owner when a prospect triggers DEMO (not SUMMITDEMO)
     if (msgUpper === "DEMO" && process.env.CONFIRMATIONS_TEST_PHONE) {
@@ -1986,6 +1988,13 @@ async function main() {
   initKnowledgeBase(supabase, anthropic).catch(console.error);
   initClients(supabase).catch(console.error);
 }
+
+// Safety net — log unhandled rejections without crashing the process.
+// Individual handlers use .catch() but this prevents any stray promise from
+// taking down the server (e.g. Twilio RestException on invalid phone numbers).
+process.on("unhandledRejection", (reason) => {
+  console.error("[UNHANDLED REJECTION] Caught — server continuing:", reason?.message ?? reason);
+});
 
 const __filename = fileURLToPath(import.meta.url);
 if (process.argv[1] === __filename) {
