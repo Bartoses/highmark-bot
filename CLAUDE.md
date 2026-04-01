@@ -31,14 +31,20 @@ Before starting any new feature or task, read the `Roadmap` file in this directo
 Roadmap                — project phases, priorities, next 5 builds — READ THIS BEFORE STARTING ANY TASK
 clients.js             — per-client configuration registry + resolveClient(toNumber) — ADD NEW CLIENTS HERE
 index.js               — main Express server, SMS webhook, all bot logic, booking state machine
-knowledgeBase.js       — FH items (24hr cron) + FH availability (3hr cron) + weather (1hr cron) + website (7-day cron, hash-gated)
+knowledgeBase.js       — FH items (24hr cron) + FH availability (3hr cron) + weather (1hr cron) + website (7-day cron, hash-gated) + crawler cron wiring
+crawler.js             — Phase 2 whole-site crawler: crawlSite, classifyPageType, extractPageFacts (Haiku, hash-gated), buildCrawlerContext, runCrawlerForClient
+db1_client_pages.sql   — migration: creates client_pages table for page-level website content storage (Phase 2)
+db1_crawl_settings.sql — migration: adds crawl_settings JSONB column to clients table (Phase 2)
+phoneUtils.js          — phone normalization: normalizePhone, isValidPhone, formatPhoneForDisplay (Phase 1)
+livetruth.js           — live availability truth: isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction (Phase 1)
+conversationEngine.js  — config-driven conversation: getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction (Chunk 16)
 bookingConfirmations.js — FareHarbor webhook receiver + 30min polling + confirmation texts
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging; opt_outs writes to DB1, contacts mirror to DB2
 db1_opt_outs.sql       — migration: creates opt_outs table in DB1 (run once; replaces DB2 opt_outs as authoritative store)
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (638 tests), spawns its own server on port 3099
+test.js                — automated test suite (788 tests), spawns its own server on port 3099
 demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
 demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
 db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
@@ -567,11 +573,51 @@ DYNAMIC BOOKING LINKS: <per-item FH URLs, auto-updated from cached PKs>
 | Weather | Every 1hr | JS from OpenWeather (Steamboat + Rabbit Ears Pass + Storm Peak summit) — no Claude |
 | Snow conditions | Every 3hr (offset :30) | SNOTEL 4 stations + CAIC avalanche danger — no Claude |
 | Website (policies, FAQ) | Monday 3am | Single Haiku call, hash-gated — skips if content unchanged |
+| Whole-site crawl | Monday 4am | `crawler.js`: BFS crawl + per-page Haiku, hash-gated |
 
 - `buildFhSummary()` formats availability string directly in JS
 - `getPriceRange()` reads `customer_type_rates[].total_including_tax` from FH API
 - `extractMeaningfulText()` pre-filters HTML to pricing/policy content before Claude
 - `hashContent()` SHA-256s the pre-processed text — Claude skipped if hash matches last run
+- `buildCrawlerContext(clientId, supabase)` assembles context from `client_pages` table; `getKnowledgeContext` prefers this over legacy website KB when crawler data exists
+
+### Whole-Site Crawler (crawler.js — Phase 2)
+Per-client website crawler that stores page-level facts and assembles compact bot context.
+
+**How it works:**
+1. `crawlSite(primaryUrl, options)` — BFS from primary URL, follows same-domain links; skips junk paths (wp-admin, query strings, images, cart, login, etc.); configurable `maxDepth` (default 2) + `maxPages` (default 20)
+2. `classifyPageType(url, title, text)` — classifies each page into one of 10 types: `homepage|services|pricing|booking|faq|policies|hours|contact|seasonal|other`
+3. `extractPageFacts(page, client, anthropic)` — single Haiku call per page; **hash-gated** (skips if `content_hash` unchanged); returns `{ summary, key_facts[] }`
+4. `buildCrawlerContext(clientId, supabase)` — assembles from `client_pages` table, ordered by type priority (homepage > services > pricing > …), capped at 1500 chars
+5. `runCrawlerForClient(supabase, anthropic, client)` — orchestrates full pipeline; called from weekly cron + startup check
+
+**Enabling crawl for a client:**
+- Static clients (`clients.js`): add `crawlSettings: { enabled: true, primaryUrl: "https://..." }` to the client object
+- DB-backed clients: run `db1_crawl_settings.sql` migration, then update via `PATCH /admin/clients/:id { "crawl_settings": { "enabled": true, "primary_url": "https://..." } }`
+
+**crawl_settings object fields:**
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | false | Must be true to activate |
+| `primary_url` | (websiteUrl) | Root URL to start crawl from |
+| `seed_urls` | [] | Additional starting pages |
+| `max_depth` | 2 | Link-hop depth limit |
+| `max_pages` | 20 | Total page fetch cap |
+| `deny_patterns` | [] | URL substrings to skip (e.g. "/blog") |
+
+**Context in system prompt:**
+When crawler data exists, `getKnowledgeContext` outputs a `WEBSITE KNOWLEDGE:` block instead of the legacy `BUSINESS INFO:` block. Example:
+```
+WEBSITE KNOWLEDGE:
+Overview: Colorado Sled Rentals — guided snowmobile tours + self-guided rentals in Steamboat Springs — guided tours from $189; rentals from $149
+Services: Rabbit Ears Adventures guided tours: 2-hour, half-day, full-day — group sizes 2-8; minimum age 16
+Pricing: Tours from $189/person, rentals from $149 — deposit required at booking
+Policies: 14-day cancellation for full refund — minimum age 16; weight limit 275lbs; closed-toe shoes required
+Hours: Open daily 8am-5pm December through March
+Contact: 970-555-0001; info@coloradosled.com
+```
+
+**DB migration required:** Run `db1_client_pages.sql` + `db1_crawl_settings.sql` in Supabase DB1 SQL editor before first use.
 
 ### FareHarbor API Notes
 - Items endpoint: `/companies/{shortname}/items/` — returns catalog with pricing
@@ -874,5 +920,7 @@ Merges DB-backed settings into the static client object on every SMS request.
 19. ~~**Portal Tools nav + homepage login**~~ — DONE. Admin-only Tools section in portal sidebar links to all test consoles and Highmark website. Homepage `/home` nav has "Client login" link to `/portal/login`.
 20. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
 21. **Website** — usehighmark.com landing page served at `/home`. Client login link added. Next step: billing, plan enforcement, or advanced analytics.
+22. ~~**Phase 1: Live truth + phone normalization**~~ — DONE. `livetruth.js`: availability-sensitive detection (9 regex patterns), FH cached truth resolver (reads `knowledge_base` table, no extra API calls), `buildTruthInstruction` injects grounding constraint into DEFAULT Claude block. `phoneUtils.js`: `normalizePhone` (E.164), `isValidPhone`, `formatPhoneForDisplay`. Phones normalized in leads.js, crm.js, adminPortal.js. 760/760 tests pass.
+23. ~~**Phase 2: Whole-site crawler + structured knowledge**~~ — DONE. `crawler.js`: same-domain BFS crawl, junk-path filtering, 10-type page classification, Haiku fact extraction per page (hash-gated), compact context builder (`buildCrawlerContext`) from `client_pages` table. `knowledgeBase.js` wires cron (Monday 4am) + startup check + prefers crawler context over legacy website KB in `getKnowledgeContext`. Migrations: `db1_client_pages.sql` + `db1_crawl_settings.sql`. Enable per client via `crawlSettings: { enabled: true, primaryUrl: "https://..." }` in `clients.js` or via `crawl_settings` JSONB on DB-backed clients. 788/788 tests pass.
 
 **Session tip:** Start a new Claude session when moving to billing, subscriptions, plan enforcement, or public website work.
