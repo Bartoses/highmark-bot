@@ -808,6 +808,47 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 - `clients` table in Supabase keyed by `to_number`
 - Load config at request time, no redeploy needed
 
+### Runtime Config Loader (clientConfig.js — Chunk 14)
+Merges DB-backed settings into the static client object on every SMS request.
+
+**`getRuntimeClientConfig(client, supabase)`** — called in index.js after opted-out gate, before demo/bot logic.
+
+**What it does:**
+- For static clients (csr_rea, lone_pine): fetches DB row and applies overrides for botName, tone, feature toggles, bookingLink
+- For DB-backed clients (`_fromDb: true`): skips DB fetch (already applied via `loadDbClients()`)
+- Normalizes `api_live_booking` → `fareharbor` (runtime alias, identical behavior)
+- Builds `client.scrapeSources` array from `client_scrape_sources` table (fallback: `client.scrapeUrls`)
+- Builds `client.bookingLinks` array from `client_booking_options` table (fallback: `client.bookingUrls`)
+- Ensures `client.humanHandoffEnabled` is always a boolean (default: `true`)
+
+**New booking modes (VALID_BOOKING_MODES):**
+| Mode | Behavior |
+|---|---|
+| `fareharbor` | FH API real-time availability (existing) |
+| `api_live_booking` | Alias for fareharbor — normalized at runtime |
+| `informational` | Q&A + phone CTA + optional lead capture (existing) |
+| `lead_capture` | Structured 3-step lead collection (existing) |
+| `call_only` | Phone CTA only, no booking links shown |
+| `static_links` | Numbered list of `bookingLinks` shown to guest |
+| `hybrid` | Booking links + phone CTA |
+
+**Feature toggle enforcement:**
+- `humanHandoffEnabled: false` — suppresses both auto-frustrated and explicit handoff routing (falls through to Claude)
+- `leadCaptureEnabled` — already enforced via `client.bookingMode === "informational" && client.leadCaptureEnabled`
+- `campaignsEnabled` / `followupsEnabled` — portal display gates; scheduler enforcement is a future task
+
+**New tables (optional migrations — run when ready to manage via portal):**
+- `client_scrape_sources` — per-client URL management: url, label, source_type, active, sort_order
+- `client_booking_options` — per-client booking links: type, title, description, url, metadata_json, sort_order
+
+**`dbRowToClient()` in clients.js** now maps: `campaigns_enabled`, `followups_enabled`, `human_handoff_enabled`, `booking_link`.
+
+**`resolveClientById(id)`** — new export from clients.js; resolves by ID (not phone number).
+
+**`knowledgeBase.js`** — init + all cron jobs use `getAllClients()` instead of `CLIENTS` (was missing DB-backed clients). `refreshWebsiteKnowledge` accepts `scrapeSources` array from getRuntimeClientConfig.
+
+**SETTINGS_HELP** — exported constant with human-readable descriptions for each settings field; for future portal tooltip UI.
+
 ---
 
 ## Known TODOs (Before Full Production)
@@ -825,6 +866,7 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 11. ~~**Invite-based portal access**~~ — DONE. `adminInvites.js`: tokenized invite lifecycle (create, info, accept, revoke, resend, deactivate). `portal_invites` table, 64-char token, 72h expiry, single-use. `portal-accept.html` + `GET /portal/invite`. Users & Access section in portal SPA. Run `db1_portal_invites.sql` migration in Supabase DB1 before use.
 12. ~~**client_admin role**~~ — DONE. Self-service user management for business accounts. `client_admin` can invite/manage users within their own client; blocked from `internal_admin` escalation. `isClientAdmin` flag on req.portalUser. Users & Access nav visible to `client_admin`. Role pill: admin/mgr/client. Run `db1_client_admin.sql` migration in Supabase DB1 before use.
 13. ~~**Portal settings — feature toggles + RBAC**~~ — DONE. Settings UI has three subsections: General, Booking (booking_link, human_handoff toggle), Features (campaigns, followups, lead_capture, waitlist toggles). GET/PATCH /portal/api/settings returns + saves all toggle fields. `client_user` blocked from PATCH settings and POST/PATCH/send campaigns (403). `handleCreatePortalUser` now accepts `client_admin` role. Run `db1_client_settings.sql` migration in Supabase DB1. 638/638 tests pass.
+14. ~~**Runtime config loader + multi-source scraping + flexible booking modes**~~ — DONE. `clientConfig.js`: `getRuntimeClientConfig(client, supabase)` merges DB settings per request; `humanHandoffEnabled=false` suppresses handoff routing; `api_live_booking` normalizes to `fareharbor`. `clients.js`: `dbRowToClient()` maps new toggle columns; `resolveClientById(id)` added. `knowledgeBase.js`: init + crons use `getAllClients()` (was missing DB-backed clients); `refreshWebsiteKnowledge` supports `scrapeSources`. `adminClients.js`: adds `call_only`, `static_links`, `api_live_booking`, `hybrid` to `VALID_BOOKING_MODES`. `index.js`: enriches client per-request; routes `call_only`/`static_links`/`hybrid` booking intents. Optional migrations: `db1_scrape_sources.sql` (multi-source scraping table) + `db1_booking_options.sql` (per-client booking links table). 664/664 tests pass.
 15. ~~**Branded opener**~~ — DONE. CSR/REA first message now includes business name in all three seasonal variants. `getSeasonalOpener(client, seasonOverride?)` exported and testable.
 16. ~~**opt_outs to DB1**~~ — DONE. TCPA compliance now universal (all clients). Moved from DB2 CRM to DB1. `db1_opt_outs.sql` migration required. DB2 contacts.opted_in still mirrors for CRM. Scheduler check updated. Bot opt-out guards no longer gated on `crmSupabase`.
 17. ~~**client_id attribution fix**~~ — DONE. `saveConversation` now always writes `client_id` on every upsert (was missing, defaulted to `csr_rea` for all clients). Lone Pine and future clients correctly attributed.
