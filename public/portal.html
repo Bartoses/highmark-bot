@@ -133,6 +133,8 @@ tr:hover td { background: var(--panel2); }
 .pill-sending   { background: rgba(245,158,11,.15);  color: #fcd34d; }
 .pill-sent      { background: rgba(16,185,129,.15);  color: #6ee7b7; }
 .pill-failed    { background: rgba(239,68,68,.15);   color: #fca5a5; }
+.pill-green     { background: rgba(16,185,129,.15);  color: #6ee7b7; }
+.pill-gray      { background: rgba(107,114,128,.15); color: #9ca3af; }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; }
@@ -1050,29 +1052,53 @@ async function loadSettings() {
   const d = await apiFetch(`/settings${clientParam}`);
   if (!d) { document.getElementById('settingsContent').innerHTML = '<div class="error-msg">Failed to load settings.</div>'; return; }
 
-  if (!d.editable) {
+  const canEdit = d.editable && me?.isClientAdmin;
+
+  function row(label, value) {
+    return `<tr><td style="padding:8px 0;color:var(--text2);width:160px;font-size:13px;">${label}</td><td style="padding:8px 0;font-size:13px;">${value ?? '—'}</td></tr>`;
+  }
+  function tog(label, val) {
+    return `<tr><td style="padding:8px 0;color:var(--text2);width:160px;font-size:13px;">${label}</td><td style="padding:8px 0;"><span class="pill ${val ? 'pill-green' : 'pill-gray'}">${val ? 'On' : 'Off'}</span></td></tr>`;
+  }
+
+  if (!canEdit) {
     document.getElementById('settingsContent').innerHTML = `
       <div class="card">
-        <div class="card-title">Business Settings</div>
-        <p style="color:var(--text2);font-size:12px;margin-bottom:16px;">Your account uses a managed configuration. Contact Highmark support to make changes.</p>
+        <div class="card-title">General</div>
+        ${!d.editable ? '<p style="color:var(--text2);font-size:12px;margin-bottom:12px;">This account uses a managed configuration. Contact Highmark support to make changes.</p>' : ''}
         <table style="width:100%;border-collapse:collapse;">
-          ${[
-            ['Business name', d.name],
-            ['Bot name', d.botName],
-            ['Booking mode', d.bookingMode],
-            ['Support phone', d.supportPhone ?? '—'],
-            ['Support email', d.supportEmail ?? '—'],
-            ['Website', d.websiteUrl ?? '—'],
-          ].map(([k,v]) => `<tr><td style="padding:8px 0;color:var(--text2);width:160px;">${k}</td><td style="padding:8px 0;">${v}</td></tr>`).join('')}
+          ${row('Business name', d.name)}
+          ${row('Bot name', d.botName)}
+          ${row('Booking mode', d.bookingMode)}
+          ${row('Support phone', d.supportPhone)}
+          ${row('Support email', d.supportEmail)}
+          ${row('Website', d.websiteUrl)}
+        </table>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <div class="card-title">Booking</div>
+        <table style="width:100%;border-collapse:collapse;">
+          ${row('Booking link', d.bookingLink)}
+          ${tog('Human handoff', d.humanHandoffEnabled)}
+        </table>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <div class="card-title">Features</div>
+        <table style="width:100%;border-collapse:collapse;">
+          ${tog('Campaigns', d.campaignsEnabled)}
+          ${tog('Follow-ups', d.followupsEnabled)}
+          ${tog('Lead capture', d.leadCaptureEnabled)}
+          ${tog('Waitlist', d.waitlistEnabled)}
         </table>
       </div>`;
     return;
   }
 
+  // Editable form — three subsections
   document.getElementById('settingsContent').innerHTML = `
     <div class="card">
-      <div class="card-title">Business Settings</div>
-      <div id="settingsMsg" style="display:none"></div>
+      <div class="card-title">General</div>
+      <div id="settingsMsg" style="display:none;margin-bottom:12px;"></div>
       <div class="two-col">
         <div class="form-group"><label>Business name</label><input type="text" id="set_name" value="${d.name ?? ''}"></div>
         <div class="form-group"><label>Bot name</label><input type="text" id="set_bot_name" value="${d.botName ?? ''}"></div>
@@ -1086,31 +1112,71 @@ async function loadSettings() {
         <div class="form-group"><label>Support email</label><input type="email" id="set_support_email" value="${d.supportEmail ?? ''}"></div>
         <div class="form-group"><label>Website URL</label><input type="url" id="set_website_url" value="${d.websiteUrl ?? ''}"></div>
       </div>
-      <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-        <button class="btn btn-primary" id="settingsSaveBtn">Save changes</button>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">Booking</div>
+      <div class="form-group">
+        <label>Booking link <span style="color:var(--text2);font-size:11px;">(shown to guests when booking mode is informational)</span></label>
+        <input type="url" id="set_booking_link" value="${d.bookingLink ?? ''}" placeholder="https://…">
       </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
+        <input type="checkbox" id="set_human_handoff" ${d.humanHandoffEnabled ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
+        <label for="set_human_handoff" style="cursor:pointer;font-size:13px;">Human handoff enabled <span style="color:var(--text2);font-size:11px;">(guests can request to speak to a person)</span></label>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">Features</div>
+      <div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">
+        ${[
+          ['set_campaigns',   d.campaignsEnabled,    'Campaigns',   'Enable outbound SMS campaign sending'],
+          ['set_followups',   d.followupsEnabled,    'Follow-ups',  'Automatically follow up on captured leads'],
+          ['set_lead_capture',d.leadCaptureEnabled,  'Lead capture','Collect contact info from interested guests'],
+          ['set_waitlist',    d.waitlistEnabled,     'Waitlist',    'Allow guests to join a waitlist when tours are full'],
+        ].map(([id,val,label,desc]) => `
+          <div style="display:flex;align-items:center;gap:12px;">
+            <input type="checkbox" id="${id}" ${val ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
+            <label for="${id}" style="cursor:pointer;">
+              <span style="font-size:13px;font-weight:500;">${label}</span>
+              <span style="display:block;color:var(--text2);font-size:11px;">${desc}</span>
+            </label>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+      <button class="btn btn-primary" id="settingsSaveBtn">Save changes</button>
     </div>`;
 
   document.getElementById('settingsSaveBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('settingsSaveBtn');
+    const btn   = document.getElementById('settingsSaveBtn');
+    const msgEl = document.getElementById('settingsMsg');
     btn.disabled = true; btn.textContent = 'Saving…';
+
     const body = {
-      name:                    document.getElementById('set_name').value,
-      bot_name:                document.getElementById('set_bot_name').value,
-      tone:                    document.getElementById('set_tone').value,
-      support_phone:           document.getElementById('set_support_phone').value || null,
-      lead_notification_phone: document.getElementById('set_lead_notification_phone').value || null,
-      support_email:           document.getElementById('set_support_email').value || null,
-      website_url:             document.getElementById('set_website_url').value || null,
+      name:                    document.getElementById('set_name').value.trim() || null,
+      bot_name:                document.getElementById('set_bot_name').value.trim() || null,
+      tone:                    document.getElementById('set_tone').value.trim() || null,
+      support_phone:           document.getElementById('set_support_phone').value.trim() || null,
+      lead_notification_phone: document.getElementById('set_lead_notification_phone').value.trim() || null,
+      support_email:           document.getElementById('set_support_email').value.trim() || null,
+      website_url:             document.getElementById('set_website_url').value.trim() || null,
+      booking_link:            document.getElementById('set_booking_link').value.trim() || null,
+      human_handoff_enabled:   document.getElementById('set_human_handoff').checked,
+      campaigns_enabled:       document.getElementById('set_campaigns').checked,
+      followups_enabled:       document.getElementById('set_followups').checked,
+      lead_capture_enabled:    document.getElementById('set_lead_capture').checked,
+      waitlist_enabled:        document.getElementById('set_waitlist').checked,
     };
     if (me?.isAdmin) body.client_id = me.clientId;
+
     const r = await apiPatch('/settings', body);
     btn.disabled = false; btn.textContent = 'Save changes';
-    const msgEl = document.getElementById('settingsMsg');
     if (!r) {
       msgEl.className = 'error-msg'; msgEl.textContent = 'Failed to save settings.'; msgEl.style.display = 'block';
     } else {
-      msgEl.className = 'success-msg'; msgEl.textContent = 'Settings saved successfully.'; msgEl.style.display = 'block';
+      msgEl.className = 'success-msg'; msgEl.textContent = 'Settings saved.'; msgEl.style.display = 'block';
       setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
     }
   });

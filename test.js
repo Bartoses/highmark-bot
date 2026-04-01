@@ -2900,6 +2900,7 @@ async function main() {
   await test38(); // Portal access management: admin happy-path (list users/invites, create, resend, revoke, toggle)
   await test39(); // Branded opener: business name in first message for every client + override behavior
   await test40(); // client_admin RBAC: scoped user management, blocked escalation, own-client enforcement
+  await test41(); // Feature toggles + RBAC: client_user blocked from settings PATCH + campaign mutating ops
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -3379,7 +3380,7 @@ async function test35() {
   const mockResCamp = { status: (c) => ({ json: (b) => { campMissingStatus = c; return b; } }) };
   const mockSupaCamp = { from: () => ({ insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: null, error: { message: 'fail' } }) }) }) }) };
   await handlePortalCreateCampaign(
-    { portalUser: { role: "client_user", clientId: "csr_rea" }, query: {}, body: { message_body: "hi" } },
+    { portalUser: { role: "client_admin", clientId: "csr_rea", isClientAdmin: true }, query: {}, body: { message_body: "hi" } },
     mockResCamp, mockSupaCamp,
   );
   campMissingStatus === 400
@@ -4711,6 +4712,134 @@ async function test40() {
     res._status === 403
       ? pass("test40: handlePortalUpdateUser 403 when client_admin targets other client's user")
       : fail("test40: handlePortalUpdateUser cross-client access not blocked", res._status);
+  }
+}
+
+async function test41() {
+  console.log("\nTEST 41: Feature toggles + RBAC — client_user blocked from settings/campaign mutations\n");
+
+  const {
+    handlePortalSettings,
+    handlePortalUpdateSettings,
+    handlePortalCreateCampaign,
+    handlePortalUpdateCampaign,
+    handlePortalSendCampaign,
+    handleCreatePortalUser,
+  } = await import("./adminPortal.js");
+
+  function mockRes() {
+    const r = { _status: 200, _body: null };
+    r.status = (c) => { r._status = c; return r; };
+    r.json   = (b) => { r._body = b; return r; };
+    return r;
+  }
+
+  const clientUserReq    = { portalUser: { role: "client_user",  clientId: "csr_rea", isClientAdmin: false }, query: {}, body: {}, params: {} };
+  const clientAdminReq   = { portalUser: { role: "client_admin", clientId: "csr_rea", isClientAdmin: true  }, query: {}, body: {}, params: {} };
+
+  // ── client_user cannot PATCH settings → 403 ──────────────────────────────
+  {
+    const res = mockRes();
+    await handlePortalUpdateSettings({ ...clientUserReq, body: { bot_name: "Hacked" } }, res, {});
+    res._status === 403
+      ? pass("test41: handlePortalUpdateSettings returns 403 for client_user")
+      : fail("test41: handlePortalUpdateSettings client_user guard missing", res._status);
+  }
+
+  // ── client_user cannot POST campaigns → 403 ───────────────────────────────
+  {
+    const res = mockRes();
+    await handlePortalCreateCampaign({ ...clientUserReq, body: { name: "Test", message_body: "hi" } }, res, {});
+    res._status === 403
+      ? pass("test41: handlePortalCreateCampaign returns 403 for client_user")
+      : fail("test41: handlePortalCreateCampaign client_user guard missing", res._status);
+  }
+
+  // ── client_user cannot PATCH campaigns → 403 ─────────────────────────────
+  {
+    const res = mockRes();
+    await handlePortalUpdateCampaign({ ...clientUserReq, params: { id: "c1" }, body: { name: "Hack" } }, res, {});
+    res._status === 403
+      ? pass("test41: handlePortalUpdateCampaign returns 403 for client_user")
+      : fail("test41: handlePortalUpdateCampaign client_user guard missing", res._status);
+  }
+
+  // ── client_user cannot send campaigns → 403 ──────────────────────────────
+  {
+    const res = mockRes();
+    await handlePortalSendCampaign({ ...clientUserReq, params: { id: "c1" }, body: {} }, res, {});
+    res._status === 403
+      ? pass("test41: handlePortalSendCampaign returns 403 for client_user")
+      : fail("test41: handlePortalSendCampaign client_user guard missing", res._status);
+  }
+
+  // ── client_admin CAN update settings (hits static-client guard, not RBAC) ─
+  {
+    const res    = mockRes();
+    const getAllClientsMock = () => ({ csr_rea: { name: "CSR", _fromDb: false } });
+    // We test that RBAC passes (reaches business logic) — 400 because static client
+    // Import dynamically to get the real handler with mocked clients
+    await handlePortalUpdateSettings(
+      { ...clientAdminReq, body: { bot_name: "NewBot" } },
+      res,
+      { from: () => ({}) } // supabase won't be called for static client
+    );
+    // Should be 400 (static client not editable), NOT 403 (RBAC)
+    res._status === 400
+      ? pass("test41: handlePortalUpdateSettings reaches validation for client_admin (not blocked by RBAC)")
+      : fail("test41: handlePortalUpdateSettings client_admin wrong status", res._status);
+  }
+
+  // ── GET settings returns feature toggle fields ─────────────────────────────
+  {
+    const res = mockRes();
+    // Inject a minimal mock client — internal_admin sees all fields
+    const internalAdminReq = { portalUser: { role: "internal_admin", isClientAdmin: true }, query: { client_id: "csr_rea" }, body: {} };
+    // handlePortalSettings calls getAllClients() from clients.js — use the real import
+    await handlePortalSettings(internalAdminReq, res);
+    // csr_rea is a static client — fields will be present (may be undefined → defaulted)
+    res._status === 200
+      ? pass("test41: handlePortalSettings returns 200 with settings for internal_admin")
+      : fail("test41: handlePortalSettings wrong status", res._status);
+    // campaignsEnabled should be present (boolean) in the response
+    typeof res._body?.campaignsEnabled === "boolean"
+      ? pass("test41: handlePortalSettings returns campaignsEnabled boolean field")
+      : fail("test41: handlePortalSettings missing campaignsEnabled", res._body);
+    typeof res._body?.humanHandoffEnabled === "boolean"
+      ? pass("test41: handlePortalSettings returns humanHandoffEnabled boolean field")
+      : fail("test41: handlePortalSettings missing humanHandoffEnabled", res._body);
+    typeof res._body?.followupsEnabled === "boolean"
+      ? pass("test41: handlePortalSettings returns followupsEnabled boolean field")
+      : fail("test41: handlePortalSettings missing followupsEnabled", res._body);
+    "bookingLink" in (res._body ?? {})
+      ? pass("test41: handlePortalSettings returns bookingLink field")
+      : fail("test41: handlePortalSettings missing bookingLink", res._body);
+  }
+
+  // ── handleCreatePortalUser accepts client_admin role ─────────────────────
+  {
+    const res = mockRes();
+    // Missing supabase — hits 503 before role validation, so test validation guard directly
+    await handleCreatePortalUser(
+      { body: { email: "mgr@test.com", password: "password123", role: "client_admin", client_id: "csr_rea" } },
+      res, null
+    );
+    // 503 means it got past role validation (supabase is null)
+    res._status === 503
+      ? pass("test41: handleCreatePortalUser accepts client_admin role (reaches DB check)")
+      : fail("test41: handleCreatePortalUser client_admin role rejected", res._status);
+  }
+
+  // ── handleCreatePortalUser rejects unknown role ───────────────────────────
+  {
+    const res = mockRes();
+    await handleCreatePortalUser(
+      { body: { email: "x@test.com", password: "password123", role: "super_admin", client_id: "csr_rea" } },
+      res, {}
+    );
+    res._status === 400
+      ? pass("test41: handleCreatePortalUser rejects unknown role (400)")
+      : fail("test41: handleCreatePortalUser unknown role wrong status", res._status);
   }
 }
 

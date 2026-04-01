@@ -29,7 +29,8 @@ import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.j
 
 const VALID_LEAD_STATUSES = ["new", "contacted", "engaged", "scheduled", "converted", "closed", "ignored"];
 
-// Safe client fields a portal user can edit (DB-backed clients only)
+// Safe client fields a portal user can edit (DB-backed clients only).
+// Text fields — values passed through as-is.
 const EDITABLE_SETTINGS = {
   name:                    "name",
   bot_name:                "bot_name",
@@ -38,7 +39,26 @@ const EDITABLE_SETTINGS = {
   support_email:           "support_email",
   lead_notification_phone: "lead_notification_phone",
   website_url:             "website_url",
+  booking_link:            "booking_link",
 };
+
+// Boolean feature toggles — validated separately to ensure boolean type.
+const EDITABLE_TOGGLES = [
+  "campaigns_enabled",
+  "followups_enabled",
+  "human_handoff_enabled",
+  "lead_capture_enabled",
+  "waitlist_enabled",
+];
+
+// Guard: mutating operations (settings PATCH, campaign create/edit/send) require client_admin+.
+function requireClientAdmin(req, res) {
+  if (!req.portalUser?.isClientAdmin) {
+    res.status(403).json({ error: "Admin access required — client_admin or internal_admin role needed" });
+    return false;
+  }
+  return true;
+}
 
 // ── GET /portal/api/clients ───────────────────────────────────────────────────
 // internal_admin: returns all active clients (id + name)
@@ -226,6 +246,7 @@ export async function handlePortalCampaigns(req, res, supabase) {
 // ── POST /portal/api/campaigns ────────────────────────────────────────────────
 export async function handlePortalCreateCampaign(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id is required" });
 
@@ -265,6 +286,7 @@ export async function handlePortalGetCampaign(req, res, supabase) {
 // ── PATCH /portal/api/campaigns/:id ──────────────────────────────────────────
 export async function handlePortalUpdateCampaign(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
   const clientId = resolvePortalClientId(req);
 
   const { id } = req.params;
@@ -295,6 +317,7 @@ export async function handlePortalUpdateCampaign(req, res, supabase) {
 // ── POST /portal/api/campaigns/:id/send ──────────────────────────────────────
 export async function handlePortalSendCampaign(req, res, supabase, crmSupabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
   const clientId = resolvePortalClientId(req);
 
   const { id } = req.params;
@@ -390,14 +413,23 @@ export async function handlePortalSettings(req, res) {
     leadNotificationPhone:   client.leadNotificationPhone ?? null,
     websiteUrl:              client.websiteUrl            ?? null,
     bookingMode:             client.bookingMode,
+    bookingLink:             client.bookingLink           ?? null,
+    // Feature toggles
+    campaignsEnabled:        client.campaignsEnabled      ?? false,
+    followupsEnabled:        client.followupsEnabled      ?? false,
+    humanHandoffEnabled:     client.humanHandoffEnabled   ?? true,
+    leadCaptureEnabled:      client.leadCaptureEnabled    ?? false,
+    waitlistEnabled:         client.waitlistEnabled       ?? false,
     editable:                !!client._fromDb,
   });
 }
 
 // ── PATCH /portal/api/settings ────────────────────────────────────────────────
 // Only DB-backed clients can be edited. Static clients return 400.
+// Requires client_admin or internal_admin role.
 export async function handlePortalUpdateSettings(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id is required" });
 
@@ -411,8 +443,18 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
   }
 
   const updates = { updated_at: new Date().toISOString() };
+  // Text fields
   for (const [reqKey, dbKey] of Object.entries(EDITABLE_SETTINGS)) {
     if (req.body[reqKey] !== undefined) updates[dbKey] = req.body[reqKey];
+  }
+  // Boolean feature toggles
+  for (const field of EDITABLE_TOGGLES) {
+    if (req.body[field] !== undefined) {
+      if (typeof req.body[field] !== "boolean") {
+        return res.status(400).json({ error: `${field} must be a boolean` });
+      }
+      updates[field] = req.body[field];
+    }
   }
 
   if (Object.keys(updates).length === 1) {
@@ -449,11 +491,11 @@ export async function handleCreatePortalUser(req, res, supabase) {
 
   if (!email)    return res.status(400).json({ error: "email is required" });
   if (!password) return res.status(400).json({ error: "password is required" });
-  if (!["internal_admin", "client_user"].includes(role)) {
-    return res.status(400).json({ error: "role must be internal_admin or client_user" });
+  if (!["internal_admin", "client_admin", "client_user"].includes(role)) {
+    return res.status(400).json({ error: "role must be internal_admin, client_admin, or client_user" });
   }
-  if (role === "client_user" && !client_id) {
-    return res.status(400).json({ error: "client_id is required for client_user role" });
+  if ((role === "client_user" || role === "client_admin") && !client_id) {
+    return res.status(400).json({ error: "client_id is required for client_user and client_admin roles" });
   }
 
   // Create Supabase Auth user (auto-confirm email)
