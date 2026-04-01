@@ -377,6 +377,12 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </select>
   </div>
   <div class="panel-section">
+    <div class="section-label">Guest identity</div>
+    <label class="form-label">From phone (simulated guest)</label>
+    <input class="phone-input" id="from-phone-mobile" value="+15550000099" placeholder="+15550000099"
+           oninput="State.fromPhone = this.value; document.getElementById('from-phone').value = this.value">
+  </div>
+  <div class="panel-section">
     <div class="section-label">Scenarios</div>
     <div id="mobile-scenario-list"></div>
   </div>
@@ -407,7 +413,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         <div class="section-label">Guest identity</div>
         <label class="form-label">From phone (simulated guest)</label>
         <input class="phone-input" id="from-phone" value="+15550000099" placeholder="+15550000099"
-               oninput="State.fromPhone = this.value">
+               oninput="State.fromPhone = this.value; document.getElementById('from-phone-mobile').value = this.value">
         <label class="form-label" style="margin-top:4px">Name (for booking previews)</label>
         <input class="form-input" id="guest-name" value="Test Guest"
                oninput="State.booking.contactName = this.value">
