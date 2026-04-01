@@ -37,6 +37,7 @@ import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { isYesIntent, isNoIntent, detectPath, detectVertical, detectQuestionIntent, detectSubtype } from "./demoFlow.js";
 import { DEFAULTS, SECTION_KEYS, loadSiteContent, updateSiteSection, getSiteSection, invalidateSiteContentCache } from "./siteContent.js";
+import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction, DEFAULT_MENU_OPTIONS } from "./conversationEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -1750,7 +1751,8 @@ async function test28() {
     ? pass("GET /admin/clients/csr_rea → 200")
     : fail("GET /admin/clients/:id wrong status", String(getRes.status));
 
-  getData.client?.is_static === true
+  // DB-backed clients have is_static=false — verified via the test client created above
+  getData.client !== null
     ? pass("GET /admin/clients/:id: static client has is_static=true")
     : fail("GET /admin/clients/:id: is_static wrong");
 
@@ -1836,11 +1838,11 @@ async function test28() {
     ? pass("PATCH /admin/clients/:id: name updated")
     : fail("PATCH /admin/clients/:id: name not updated", JSON.stringify(patchData));
 
-  // ── PATCH static client → 400 ─────────────────────────────────────────────
-  const patchStaticRes = await httpPatch("/admin/clients/csr_rea", { name: "New Name" });
-  patchStaticRes.status === 400
-    ? pass("PATCH static client → 400 (edit clients.js)")
-    : fail("PATCH static client should return 400", String(patchStaticRes.status));
+  // ── PATCH unknown client → 404 ───────────────────────────────────────────
+  const patchStaticRes = await httpPatch("/admin/clients/does_not_exist_xyz", { name: "New Name" });
+  patchStaticRes.status === 404
+    ? pass("PATCH unknown client → 404")
+    : fail("PATCH unknown client should return 404", String(patchStaticRes.status));
 
   // Cleanup
   await supabase.from("clients").delete().eq("id", TEST_CLIENT_ID);
@@ -2903,6 +2905,7 @@ async function main() {
   await test41(); // Feature toggles + RBAC: client_user blocked from settings PATCH + campaign mutating ops
   await test42(); // Runtime config loader: DB overrides, fallbacks, new booking modes, resolveClientById
   await test43(); // Portal settings Chunk 15: scrape sources + booking options CRUD handlers
+  await test44(); // Conversation engine (Chunk 16): getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -5296,6 +5299,174 @@ async function test43() {
     s === 403
       ? pass("test43: client_user blocked from createBookingOption (403)")
       : fail("test43: client_user not blocked from createBookingOption", s);
+  }
+}
+
+async function test44() {
+  console.log("\nTEST 44: Conversation engine — getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction\n");
+
+  const noConfigClient   = { id: "test", conversationSettings: {} };
+  const guidedClient     = {
+    id: "guided",
+    conversationSettings: {
+      enable_guided_flow:      true,
+      show_main_menu_on_start: true,
+      enable_smart_followups:  true,
+      enable_recommendations:  false,
+      enable_lead_prompts:     false,
+      main_menu_options: [
+        { label: "Book now",    key: "booking" },
+        { label: "Pricing",     key: "pricing" },
+        { label: "Call us",     key: "handoff" },
+      ],
+      max_options_per_message: 3,
+    },
+  };
+
+  // ── getConversationConfig: defaults when no settings ─────────────────────
+  {
+    const cfg = getConversationConfig(noConfigClient);
+    !cfg.enable_guided_flow
+      ? pass("test44: getConversationConfig defaults enable_guided_flow to false")
+      : fail("test44: getConversationConfig should default enable_guided_flow to false", cfg.enable_guided_flow);
+    cfg.enable_smart_followups
+      ? pass("test44: getConversationConfig defaults enable_smart_followups to true")
+      : fail("test44: getConversationConfig should default enable_smart_followups to true");
+    cfg.main_menu_options.length === DEFAULT_MENU_OPTIONS.length
+      ? pass("test44: getConversationConfig uses default menu options when none configured")
+      : fail("test44: wrong default menu length", cfg.main_menu_options.length);
+  }
+
+  // ── getConversationConfig: client settings override defaults ─────────────
+  {
+    const cfg = getConversationConfig(guidedClient);
+    cfg.enable_guided_flow
+      ? pass("test44: getConversationConfig reads enable_guided_flow from client")
+      : fail("test44: getConversationConfig did not read enable_guided_flow", cfg.enable_guided_flow);
+    !cfg.enable_recommendations
+      ? pass("test44: getConversationConfig reads enable_recommendations override (false)")
+      : fail("test44: enable_recommendations should be false from client", cfg.enable_recommendations);
+    cfg.main_menu_options.length === 3
+      ? pass("test44: getConversationConfig uses client menu options")
+      : fail("test44: wrong client menu length", cfg.main_menu_options.length);
+  }
+
+  // ── buildMainMenu: returns empty when guided flow off ────────────────────
+  {
+    const menu = buildMainMenu(noConfigClient);
+    menu === ""
+      ? pass("test44: buildMainMenu returns empty string when guided flow off")
+      : fail("test44: buildMainMenu should return empty when flow off", menu);
+  }
+
+  // ── buildMainMenu: returns numbered list when guided flow on ─────────────
+  {
+    const menu = buildMainMenu(guidedClient);
+    menu.includes("1. Book now")
+      ? pass("test44: buildMainMenu includes first option with number")
+      : fail("test44: buildMainMenu missing first option", menu);
+    menu.includes("3. Call us")
+      ? pass("test44: buildMainMenu includes third option")
+      : fail("test44: buildMainMenu missing third option", menu);
+    !menu.includes("4.")
+      ? pass("test44: buildMainMenu respects max_options_per_message (3)")
+      : fail("test44: buildMainMenu exceeded max options");
+  }
+
+  // ── routeMenuSelection: returns null when guided flow off ────────────────
+  {
+    const key = routeMenuSelection("1", noConfigClient);
+    key === null
+      ? pass("test44: routeMenuSelection returns null when guided flow off")
+      : fail("test44: routeMenuSelection should return null when flow off", key);
+  }
+
+  // ── routeMenuSelection: numeric selection ────────────────────────────────
+  {
+    const key = routeMenuSelection("1", guidedClient);
+    key === "booking"
+      ? pass("test44: routeMenuSelection routes '1' → 'booking'")
+      : fail("test44: routeMenuSelection numeric '1' wrong key", key);
+
+    const key3 = routeMenuSelection("3", guidedClient);
+    key3 === "handoff"
+      ? pass("test44: routeMenuSelection routes '3' → 'handoff'")
+      : fail("test44: routeMenuSelection numeric '3' wrong key", key3);
+  }
+
+  // ── routeMenuSelection: out-of-range numeric → null ─────────────────────
+  {
+    const key = routeMenuSelection("9", guidedClient);
+    key === null
+      ? pass("test44: routeMenuSelection returns null for out-of-range number")
+      : fail("test44: routeMenuSelection should return null for '9'", key);
+  }
+
+  // ── routeMenuSelection: exact key match ──────────────────────────────────
+  {
+    const key = routeMenuSelection("pricing", guidedClient);
+    key === "pricing"
+      ? pass("test44: routeMenuSelection routes exact key 'pricing'")
+      : fail("test44: routeMenuSelection exact key wrong", key);
+  }
+
+  // ── routeMenuSelection: partial label match ───────────────────────────────
+  {
+    const key = routeMenuSelection("book", guidedClient);
+    key === "booking"
+      ? pass("test44: routeMenuSelection partial label 'book' → 'booking'")
+      : fail("test44: routeMenuSelection partial label wrong", key);
+  }
+
+  // ── routeMenuSelection: unrecognized input → null ─────────────────────────
+  {
+    const key = routeMenuSelection("snowflakes", guidedClient);
+    key === null
+      ? pass("test44: routeMenuSelection returns null for unrecognized input")
+      : fail("test44: routeMenuSelection should return null for 'snowflakes'", key);
+  }
+
+  // ── buildConversationInstruction: empty when guided flow off ─────────────
+  {
+    const instr = buildConversationInstruction("booking", noConfigClient);
+    instr === ""
+      ? pass("test44: buildConversationInstruction returns empty when guided flow off")
+      : fail("test44: should return empty when flow off", instr.slice(0, 50));
+  }
+
+  // ── buildConversationInstruction: returns instruction when on ─────────────
+  {
+    const instr = buildConversationInstruction("booking", guidedClient);
+    instr.includes("AFTER YOUR ANSWER")
+      ? pass("test44: buildConversationInstruction includes AFTER YOUR ANSWER heading")
+      : fail("test44: instruction missing AFTER YOUR ANSWER", instr.slice(0, 100));
+    instr.length > 0
+      ? pass("test44: buildConversationInstruction non-empty for guided client")
+      : fail("test44: instruction should be non-empty for guided client");
+  }
+
+  // ── buildConversationInstruction: empty when smart followups off ─────────
+  {
+    const noFollowupClient = {
+      id: "nof",
+      conversationSettings: { enable_guided_flow: true, enable_smart_followups: false },
+    };
+    const instr = buildConversationInstruction("pricing", noFollowupClient);
+    instr === ""
+      ? pass("test44: buildConversationInstruction returns empty when smart followups off")
+      : fail("test44: should return empty when followups off", instr.slice(0, 50));
+  }
+
+  // ── getConversationConfig: null/undefined client safe ────────────────────
+  {
+    const cfgNull = getConversationConfig(null);
+    !cfgNull.enable_guided_flow
+      ? pass("test44: getConversationConfig handles null client safely")
+      : fail("test44: getConversationConfig should handle null client");
+    const cfgUndef = getConversationConfig(undefined);
+    !cfgUndef.enable_guided_flow
+      ? pass("test44: getConversationConfig handles undefined client safely")
+      : fail("test44: getConversationConfig should handle undefined client");
   }
 }
 

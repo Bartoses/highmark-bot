@@ -108,6 +108,11 @@ function applyDbOverrides(client, dbRow) {
   if (dbRow.twilio_account_sid)     merged.twilioAccountSid    = dbRow.twilio_account_sid;
   if (dbRow.twilio_auth_token)      merged.twilioAuthToken     = dbRow.twilio_auth_token;
 
+  // Conversation settings — db1_conversation_settings.sql
+  if (dbRow.conversation_settings != null) {
+    merged.conversationSettings = dbRow.conversation_settings;
+  }
+
   // Feature toggles — preserve false values (explicit null/undefined check)
   if (dbRow.campaigns_enabled     != null) merged.campaignsEnabled    = dbRow.campaigns_enabled;
   if (dbRow.followups_enabled     != null) merged.followupsEnabled    = dbRow.followups_enabled;

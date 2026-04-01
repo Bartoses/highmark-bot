@@ -1327,9 +1327,83 @@ async function loadSettings() {
       </div>
     </div>
 
+    <div class="card" style="margin-top:16px;" id="convCard">
+      <div class="card-title">Conversation</div>
+      <div class="form-hint" style="margin-bottom:14px;">Guided conversation flow and AI response behavior. All features are off by default — no existing behavior changes until enabled.</div>
+      ${(() => {
+        const cs = d.conversationSettings ?? {};
+        const toggles = [
+          ['conv_guided_flow',      cs.enable_guided_flow      ?? false, 'Guided flow (master switch)', 'Enables menu-based navigation — guests can reply with a number to jump to a topic'],
+          ['conv_menu_on_start',    cs.show_main_menu_on_start ?? false, 'Show menu on first message',  'Appends the numbered menu to the opener so guests immediately see their options'],
+          ['conv_smart_followups',  cs.enable_smart_followups  ?? true,  'Smart follow-ups',           'Claude weaves 1–2 natural next-step suggestions into each response'],
+          ['conv_recommendations',  cs.enable_recommendations  ?? true,  'Recommendations',             'Allow suggestion-style responses when guest asks "what\\'s best for me?"'],
+          ['conv_lead_prompts',     cs.enable_lead_prompts     ?? true,  'Lead prompts',                'Proactively offer to collect contact info when guest shows strong intent'],
+        ];
+        return `<div class="toggle-list">${toggles.map(([id, val, label, desc]) => `
+          <div class="toggle-row">
+            <label class="toggle">
+              <input type="checkbox" id="${id}" ${val && canEdit ? 'checked' : ''} ${!canEdit ? 'disabled' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+            <label for="${id}" style="cursor:pointer;">
+              <span style="font-weight:600;">${label}</span>
+              <span style="display:block;color:var(--text2);font-size:11px;">${desc}</span>
+            </label>
+          </div>`).join('')}
+        </div>`;
+      })()}
+      <div style="margin-top:18px;">
+        <div style="font-weight:600;margin-bottom:4px;">Main menu options</div>
+        <div class="form-hint" style="margin-bottom:10px;">Numbered options shown when guided flow is enabled. Guests reply with a number to jump to a topic.</div>
+        <div id="convMenuList" style="margin-bottom:8px;"></div>
+        ${canEdit ? `<button class="btn" onclick="convAddMenuItem()" style="font-size:12px;padding:4px 10px;">+ Add option</button>` : ''}
+      </div>
+    </div>
+
     <div style="display:flex;justify-content:flex-end;margin-top:16px;">
       <button class="btn btn-primary" id="settingsSaveBtn">Save changes</button>
     </div>`;
+
+  // Render conversation menu items
+  const _defaultMenuKeys = ['booking','pricing','conditions','recommendations','handoff'];
+  const _defaultMenuLabels = { booking:'Book / availability', pricing:'Pricing', conditions:'Conditions', recommendations:'Recommendations', handoff:'Talk to someone' };
+  let _convMenuItems = (d.conversationSettings?.main_menu_options ?? _defaultMenuKeys.map(k => ({ label: _defaultMenuLabels[k], key: k })));
+
+  function convRenderMenu() {
+    const list = document.getElementById('convMenuList');
+    if (!list) return;
+    list.innerHTML = _convMenuItems.map((opt, i) => `
+      <div class="scrape-row" style="gap:8px;padding:6px 10px;" data-idx="${i}">
+        <span style="color:var(--text2);font-size:12px;min-width:16px;">${i+1}.</span>
+        ${canEdit ? `
+          <input type="text" value="${opt.label}" placeholder="Label" style="flex:1;font-size:13px;" onchange="convUpdateMenuItem(${i},'label',this.value)">
+          <input type="text" value="${opt.key}" placeholder="key" style="width:110px;font-size:13px;" onchange="convUpdateMenuItem(${i},'key',this.value)">
+          <button class="btn" style="padding:2px 8px;font-size:11px;" onclick="convMoveMenuItem(${i},-1)" ${i===0?'disabled':''}>↑</button>
+          <button class="btn" style="padding:2px 8px;font-size:11px;" onclick="convMoveMenuItem(${i},1)" ${i===_convMenuItems.length-1?'disabled':''}>↓</button>
+          <button class="btn btn-danger" style="padding:2px 8px;font-size:11px;" onclick="convRemoveMenuItem(${i})">✕</button>
+        ` : `<span style="font-size:13px;">${opt.label}</span><span style="color:var(--text2);font-size:12px;">${opt.key}</span>`}
+      </div>`).join('');
+  }
+  window.convAddMenuItem = () => {
+    _convMenuItems = [..._convMenuItems, { label: '', key: '' }];
+    convRenderMenu();
+  };
+  window.convUpdateMenuItem = (i, field, val) => {
+    _convMenuItems = _convMenuItems.map((o, idx) => idx === i ? { ...o, [field]: val } : o);
+  };
+  window.convMoveMenuItem = (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= _convMenuItems.length) return;
+    const arr = [..._convMenuItems];
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    _convMenuItems = arr;
+    convRenderMenu();
+  };
+  window.convRemoveMenuItem = (i) => {
+    _convMenuItems = _convMenuItems.filter((_, idx) => idx !== i);
+    convRenderMenu();
+  };
+  convRenderMenu();
 
   document.getElementById('settingsSaveBtn').addEventListener('click', async () => {
     const btn   = document.getElementById('settingsSaveBtn');
@@ -1358,6 +1432,14 @@ async function loadSettings() {
       ...(document.getElementById('set_twilio_auth_token').value.trim()
         ? { twilio_auth_token: document.getElementById('set_twilio_auth_token').value.trim() }
         : {}),
+      conversation_settings: {
+        enable_guided_flow:      document.getElementById('conv_guided_flow').checked,
+        show_main_menu_on_start: document.getElementById('conv_menu_on_start').checked,
+        enable_smart_followups:  document.getElementById('conv_smart_followups').checked,
+        enable_recommendations:  document.getElementById('conv_recommendations').checked,
+        enable_lead_prompts:     document.getElementById('conv_lead_prompts').checked,
+        main_menu_options:       _convMenuItems.filter(o => o.label && o.key),
+      },
     };
     if (me?.isAdmin) body.client_id = me.clientId;
 

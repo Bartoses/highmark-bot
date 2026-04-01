@@ -38,6 +38,7 @@ import { loadSiteContent } from "./siteContent.js";
 import { loadDbClients } from "./clients.js";
 import { handleDemoFlow } from "./demoFlow.js";
 import { getRuntimeClientConfig } from "./clientConfig.js";
+import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction } from "./conversationEngine.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1293,7 +1294,26 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   const intent       = detectIntent(rawBody);
   const sentiment    = detectSentiment(rawBody);
   const returning    = !isNew && isReturningGuest(convo);
-  const buyingSignals = detectBuyingSignals(rawBody, convo);
+  const buyingSignals    = detectBuyingSignals(rawBody, convo);
+  const convConfig       = getConversationConfig(client);
+
+  // 9.5. Menu selection routing — only when guided flow is enabled and not mid-flow.
+  //      Maps "1" / "booking" / "pricing" → intent key, which the routing block below handles.
+  //      Guards: skip if in active booking/lead step, or if flagged for name capture.
+  const menuKey = (
+    convConfig.enable_guided_flow &&
+    !convo.bookingStep &&
+    !convo.leadStep &&
+    !convo.waitlistPending &&
+    !convo.leadCapturePendingName
+  ) ? routeMenuSelection(rawBody, client) : null;
+
+  // Override intent if the message is a menu selection — existing routing handles it
+  let effectiveIntent = intent;
+  if (menuKey) {
+    effectiveIntent = menuKey === "recommendations" ? "recommendation" : menuKey;
+    console.log(`[MENU] "${rawBody.trim()}" → menu key: ${menuKey} (intent override: ${effectiveIntent})`);
+  }
 
   // 10. Update consecutive frustrated counter
   if (sentiment === "frustrated") {
@@ -1400,7 +1420,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
     // 12. Explicit handoff intent — try lead capture first, phone as escape hatch
     //     Skipped when humanHandoffEnabled is false (falls through to Claude default)
-    else if (intent === "handoff" && client.humanHandoffEnabled !== false) {
+    else if (effectiveIntent === "handoff" && client.humanHandoffEnabled !== false) {
       convo.handoff = true;
       console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
       if (client.waitlistEnabled !== false) {
@@ -1422,7 +1442,13 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           `Hey! You're all set for ${convo.bookingData.activity} on ${convo.bookingData.date}. Any questions before your adventure? 🏔`
         );
       } else {
-        replyText = enforceLength(getSeasonalOpener(client));
+        let opener = getSeasonalOpener(client);
+        // If guided flow + show_main_menu_on_start: append numbered menu to opener
+        if (convConfig.enable_guided_flow && convConfig.show_main_menu_on_start) {
+          const menu = buildMainMenu(client);
+          if (menu) opener = `${opener}\n\n${menu}`;
+        }
+        replyText = enforceLength(opener);
       }
     }
 
@@ -1482,7 +1508,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
 
     // BOOKING INTENT — call_only: route directly to phone CTA (no booking links)
-    else if (intent === "booking" && client.bookingMode === "call_only") {
+    else if (effectiveIntent === "booking" && client.bookingMode === "call_only") {
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
       replyText = await getClaudeReply(
         convo, client, season, knowledgeCtx,
@@ -1491,7 +1517,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
 
     // BOOKING INTENT — static_links or hybrid: show numbered booking link list
-    else if (intent === "booking" && (client.bookingMode === "static_links" || client.bookingMode === "hybrid")) {
+    else if (effectiveIntent === "booking" && (client.bookingMode === "static_links" || client.bookingMode === "hybrid")) {
       const links = (client.bookingLinks ?? []).filter((l) => l.url);
       if (links.length === 0) {
         // No links configured — fall back to phone CTA
@@ -1600,7 +1626,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
     // LEAD CAPTURE FLOW — informational clients with lead capture enabled
     // ── Step null → 1: booking intent starts the flow ──────────────────────
-    else if (intent === "booking" && client.bookingMode === "informational" && client.leadCaptureEnabled && convo.leadStep === null) {
+    else if (effectiveIntent === "booking" && client.bookingMode === "informational" && client.leadCaptureEnabled && convo.leadStep === null) {
       convo.leadStep = 1;
       convo.leadData = { service: null, callback: null, timeframe: null };
       replyText = enforceLength(
@@ -1664,7 +1690,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
 
     // BOOKING INTENT — informational clients without lead capture: phone CTA via Claude
-    else if (intent === "booking" && client.bookingMode === "informational") {
+    else if (effectiveIntent === "booking" && client.bookingMode === "informational") {
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
       replyText = await getClaudeReply(
         convo, client, season, knowledgeCtx,
@@ -1681,10 +1707,12 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const responsePlan    = buildResponsePlan(intent, sentiment, buyingSignals, convo, client);
       const planInstruction = formatResponsePlanInstruction(responsePlan, client);
 
-      // Combine availability context with plan instruction
+      // Combine availability context with plan instruction and conversation guidance
+      const convInstruction = buildConversationInstruction(effectiveIntent, client);
       let extraInstruction = [
-        availCtx      ? `Live availability data: ${availCtx}` : null,
+        availCtx        ? `Live availability data: ${availCtx}` : null,
         planInstruction || null,
+        convInstruction || null,
       ].filter(Boolean).join("\n\n") || null;
 
       // 480 chars (3 texts) — never cut off mid-thought

@@ -273,6 +273,8 @@ function dbRowToClient(row) {
     messagingServiceSid:   row.messaging_service_sid  ?? null,
     twilioAccountSid:      row.twilio_account_sid      ?? null,
     twilioAuthToken:       row.twilio_auth_token       ?? null,
+    // Conversation settings added in db1_conversation_settings.sql
+    conversationSettings:  row.conversation_settings  ?? {},
     _fromDb:      true,
   };
 }

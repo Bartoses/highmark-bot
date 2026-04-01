@@ -463,6 +463,8 @@ export async function handlePortalSettings(req, res, supabase) {
     messagingServiceSid:     client.messagingServiceSid   ?? null,
     twilioAccountSid:        client.twilioAccountSid      ?? null,
     // Auth token intentionally omitted from GET — write-only in portal
+    // Conversation settings (db1_conversation_settings.sql)
+    conversationSettings:    client.conversationSettings  ?? {},
     // Scrape sources + booking options (from DB; empty if tables not yet migrated)
     scrapeSources,
     bookingLinks,
@@ -527,6 +529,7 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
       messaging_service_sid:   client.messagingServiceSid ?? null,
       twilio_account_sid:      client.twilioAccountSid    ?? null,
       twilio_auth_token:       client.twilioAuthToken     ?? null,
+      conversation_settings:   client.conversationSettings ?? {},
       created_at:              new Date().toISOString(),
       updated_at:              new Date().toISOString(),
     };
@@ -547,6 +550,14 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
       }
       updates[field] = req.body[field];
     }
+  }
+
+  // conversation_settings — JSON object, validated and stored as-is
+  if (req.body.conversation_settings !== undefined) {
+    if (typeof req.body.conversation_settings !== "object" || Array.isArray(req.body.conversation_settings)) {
+      return res.status(400).json({ error: "conversation_settings must be a JSON object" });
+    }
+    updates.conversation_settings = req.body.conversation_settings;
   }
 
   if (Object.keys(updates).length === 1) {
