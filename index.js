@@ -1071,7 +1071,7 @@ async function getConversation(fromNumber, toNumber) {
   };
 }
 
-async function saveConversation(fromNumber, toNumber, convo) {
+async function saveConversation(fromNumber, toNumber, convo, clientId) {
   // Persist stage + leadCaptureAttempted inside booking_data to avoid schema changes
   const bookingData = {
     ...(convo.bookingData ?? {}),
@@ -1094,6 +1094,7 @@ async function saveConversation(fromNumber, toNumber, convo) {
       lead_data:              convo.leadData,
       waitlist_pending:       convo.waitlistPending,
       waitlist_context:       convo.waitlistContext,
+      client_id:              clientId ?? process.env.CLIENT_ID ?? "csr_rea",
       updated_at:             new Date().toISOString(),
     },
     { onConflict: "from_number,to_number" }
@@ -1192,7 +1193,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       testMode: process.env.TEST_MODE === "true", isNew, convo,
       source: isUiReq(req) ? "ui" : "sms",
     });
-    await saveConversation(fromNumber, toNumber, convo);
+    await saveConversation(fromNumber, toNumber, convo, client?.id);
     if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply, meta: { mode: "demo" } });
     await twilioClient.messages.create({ body: reply, from: toNumber, to: fromNumber })
       .catch((err) => console.error("[DEMO] Twilio send error:", err.message));
@@ -1663,7 +1664,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     });
 
     // 23. Save conversation to Supabase
-    await saveConversation(fromNumber, toNumber, convo);
+    await saveConversation(fromNumber, toNumber, convo, client.id);
 
     // 24. Upsert contact to CRM + auto-tag (only for clients with CRM enabled)
     if (client.crmEnabled && crmSupabase) {
