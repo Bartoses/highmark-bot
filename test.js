@@ -281,9 +281,12 @@ async function test6() {
     : fail("getCurrentSeason invalid", season);
 
   const opener = getSeasonalOpener();
-  opener.length > 0 && opener.length <= 160
+  opener.length > 0 && opener.length <= 320
     ? pass(`getSeasonalOpener: ${opener.length} chars`)
     : fail("getSeasonalOpener out of bounds", `${opener.length} chars`);
+  opener.includes("Colorado Sled Rentals")
+    ? pass("getSeasonalOpener (csr_rea): includes business name")
+    : fail("getSeasonalOpener (csr_rea): missing business name", opener);
 
   buildSystemPrompt("winter", "").length > 100
     ? pass("buildSystemPrompt('winter') non-empty")
@@ -416,7 +419,7 @@ async function test11() {
   await resetConvo(TEST_PHONE);
 
   const r1 = await sendSms("hello");
-  r1.length <= 160
+  r1.length <= 320
     ? pass(`Message 1: ${r1.length} chars`)
     : fail("Message 1 too long", `${r1.length} chars`);
   /summit|steamboat|snowmobile|rzr|adventure|snow/i.test(r1)
@@ -2877,6 +2880,7 @@ async function main() {
   await test36(); // SMS compliance: STOPALL, client-aware opt-out messages, campaign opt-out filtering
   await test37(); // Invite flow: create, info, accept, revoke, resend, deactivate, lifecycle guards
   await test38(); // Portal access management: admin happy-path (list users/invites, create, resend, revoke, toggle)
+  await test39(); // Branded opener: business name in first message for every client + override behavior
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -4461,6 +4465,81 @@ async function test38() {
     res._status === 200 && res._body?.portalUser?.active === true
       ? pass("test38: handlePortalUpdateUser reactivates user (active: true)")
       : fail("test38: reactivate wrong response", JSON.stringify(res._body));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+async function test39() {
+  console.log("\nTEST 39: Branded opener — business name in first message\n");
+
+  // ── csr_rea: winter opener includes business name ──────────────────────────
+  {
+    const opener = getSeasonalOpener({ id: "csr_rea", name: "Colorado Sled Rentals + Rabbit Ears Adventures", openerText: null }, "winter");
+    opener.includes("Colorado Sled Rentals")
+      ? pass("test39: csr_rea winter opener includes business name")
+      : fail("test39: csr_rea winter opener missing business name", opener);
+    opener.includes("Summit")
+      ? pass("test39: csr_rea winter opener still includes bot name")
+      : fail("test39: csr_rea winter opener missing Summit", opener);
+    opener.length <= 320
+      ? pass(`test39: csr_rea winter opener within length limit (${opener.length} chars)`)
+      : fail("test39: csr_rea winter opener too long", opener.length);
+  }
+
+  // ── csr_rea: summer opener includes business name ──────────────────────────
+  {
+    const opener = getSeasonalOpener({ id: "csr_rea", name: "Colorado Sled Rentals + Rabbit Ears Adventures", openerText: null }, "summer");
+    opener.includes("Colorado Sled Rentals")
+      ? pass("test39: csr_rea summer opener includes business name")
+      : fail("test39: csr_rea summer opener missing business name", opener);
+    opener.includes("RZR")
+      ? pass("test39: csr_rea summer opener mentions RZR")
+      : fail("test39: csr_rea summer opener missing RZR", opener);
+  }
+
+  // ── csr_rea: shoulder opener includes business name ────────────────────────
+  {
+    const opener = getSeasonalOpener({ id: "csr_rea", name: "Colorado Sled Rentals + Rabbit Ears Adventures", openerText: null }, "shoulder");
+    opener.includes("Colorado Sled Rentals")
+      ? pass("test39: csr_rea shoulder opener includes business name")
+      : fail("test39: csr_rea shoulder opener missing business name", opener);
+  }
+
+  // ── csr_rea: multi-brand name appears in full ──────────────────────────────
+  {
+    const opener = getSeasonalOpener({ id: "csr_rea", name: "Colorado Sled Rentals + Rabbit Ears Adventures", openerText: null }, "winter");
+    opener.includes("Rabbit Ears Adventures")
+      ? pass("test39: csr_rea opener includes full multi-brand name")
+      : fail("test39: csr_rea opener missing Rabbit Ears Adventures", opener);
+  }
+
+  // ── lone_pine: openerText override used as-is (includes business name) ─────
+  {
+    const loneOpener = "Hey! Lone Pine Performance here — suspension and performance work for bikes, motos, and snow. What can I help you with?";
+    const opener = getSeasonalOpener({ id: "lone_pine", name: "Lone Pine Performance", openerText: loneOpener }, "winter");
+    opener === loneOpener
+      ? pass("test39: lone_pine uses openerText override verbatim")
+      : fail("test39: lone_pine opener wrong", opener);
+    opener.includes("Lone Pine Performance")
+      ? pass("test39: lone_pine opener includes business name")
+      : fail("test39: lone_pine opener missing business name", opener);
+  }
+
+  // ── custom client with openerText override ─────────────────────────────────
+  {
+    const override = "Welcome to Acme Outdoors — your mountain adventure guide. What can we help with?";
+    const opener = getSeasonalOpener({ id: "acme", name: "Acme Outdoors", openerText: override }, "winter");
+    opener === override
+      ? pass("test39: custom openerText override takes precedence over seasonal logic")
+      : fail("test39: override not respected", opener);
+  }
+
+  // ── generic informational client without openerText ────────────────────────
+  {
+    const opener = getSeasonalOpener({ id: "test_biz", name: "Test Business", openerText: null, services: ["widget repair", "custom builds"] }, "winter");
+    opener.includes("Test Business")
+      ? pass("test39: generic fallback includes business name")
+      : fail("test39: generic fallback missing business name", opener);
   }
 }
 

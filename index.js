@@ -137,17 +137,18 @@ export function getCurrentSeason() {
 }
 
 // client param is optional — defaults to csr_rea for backward compatibility
-export function getSeasonalOpener(client) {
+export function getSeasonalOpener(client, seasonOverride) {
   const c      = (client && typeof client === "object") ? client : getDefaultClient();
-  const season = getCurrentSeason();
+  const season = seasonOverride ?? getCurrentSeason();
 
   // Use client-configured opener if provided (e.g. Lone Pine)
   if (c.openerText) return c.openerText;
 
   if (c.id === "csr_rea") {
-    if (season === "winter")  return "Hey! I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?";
-    if (season === "summer")  return "Hey! I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?";
-    return "Hey! I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?";
+    const biz = c.name; // "Colorado Sled Rentals + Rabbit Ears Adventures"
+    if (season === "winter")  return `Hey! You're texting ${biz}. I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?`;
+    if (season === "summer")  return `Hey! You're texting ${biz}. I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?`;
+    return `Hey! You're texting ${biz}. I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?`;
   }
 
   // Generic fallback for informational clients without openerText
