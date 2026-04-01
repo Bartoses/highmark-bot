@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS clients (
   timezone                    TEXT NOT NULL DEFAULT 'America/Denver',
   hours                       JSONB,
   booking_mode                TEXT NOT NULL DEFAULT 'informational'
-                              CHECK (booking_mode IN ('fareharbor', 'informational', 'lead_capture')),
+                              CHECK (booking_mode IN ('fareharbor', 'informational', 'lead_capture', 'call_only', 'static_links', 'api_live_booking', 'hybrid', 'demo')),
   fareharbor_enabled          BOOLEAN NOT NULL DEFAULT false,
   crm_enabled                 BOOLEAN NOT NULL DEFAULT false,
   confirmation_texts_enabled  BOOLEAN NOT NULL DEFAULT false,
