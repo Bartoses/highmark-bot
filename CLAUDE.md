@@ -38,7 +38,7 @@ db1_opt_outs.sql       — migration: creates opt_outs table in DB1 (run once; r
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (626 tests), spawns its own server on port 3099
+test.js                — automated test suite (638 tests), spawns its own server on port 3099
 demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
 demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
 db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
@@ -625,14 +625,37 @@ This creates a Supabase Auth user and inserts the `portal_users` row in one call
 - `PATCH /portal/api/campaigns/:id` — edit draft campaign
 - `POST /portal/api/campaigns/:id/send` — send/enqueue campaign
 - `GET /portal/api/analytics` — event funnel, lead funnel, campaign summary
-- `GET /portal/api/settings` — client settings (safe fields only)
-- `PATCH /portal/api/settings` — update DB-backed client settings (static clients: read-only)
+- `GET /portal/api/settings` — client settings: identity, contact, booking, feature toggles
+- `PATCH /portal/api/settings` — update DB-backed client settings; requires `client_admin` or `internal_admin` role; `client_user` → 403
 
 **Admin routes (UI_SECRET protected — internal only):**
-- `POST /admin/portal-users` — create portal user
+- `POST /admin/portal-users` — create portal user (accepts internal_admin, client_admin, client_user)
 - `GET /admin/portal-users` — list portal users
 
 **Settings editing:** Only DB-backed clients (created via `POST /admin/clients`) can be edited. Static clients (`csr_rea`, `lone_pine`) return `editable: false` with a read-only view.
+
+**Settings fields returned by GET /portal/api/settings:**
+- Identity: `name`, `botName`, `tone`
+- Contact: `supportPhone`, `supportEmail`, `leadNotificationPhone`, `websiteUrl`
+- Booking: `bookingMode`, `bookingLink`, `humanHandoffEnabled`
+- Features: `campaignsEnabled`, `followupsEnabled`, `leadCaptureEnabled`, `waitlistEnabled`
+
+**Settings UI subsections (portal.html):**
+- **General** — name, bot name, tone, support phone, lead notification phone, email, website
+- **Booking** — booking link URL field + human handoff checkbox
+- **Features** — toggle checkboxes for campaigns, follow-ups, lead capture, waitlist
+- Read-only clients see all subsections with On/Off pills (no edit controls)
+
+**RBAC on mutating portal operations:**
+- `PATCH /portal/api/settings` — `client_admin` or `internal_admin` only
+- `POST /portal/api/campaigns` — `client_admin` or `internal_admin` only
+- `PATCH /portal/api/campaigns/:id` — `client_admin` or `internal_admin` only
+- `POST /portal/api/campaigns/:id/send` — `client_admin` or `internal_admin` only
+- `client_user` → 403 on all of the above
+
+**DB migrations required for settings features:**
+- `db1_clients.sql` — base clients table (Chunk 6)
+- `db1_client_settings.sql` — adds campaigns_enabled, followups_enabled, human_handoff_enabled, booking_link, settings_json (run after db1_clients.sql)
 
 **What stays unchanged:** The internal testing UI at `/ui?key=...`, all `/admin/*` routes (UI_SECRET), and all `/sms` bot logic are completely untouched. The portal is an additive layer.
 
@@ -800,13 +823,14 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 9. ~~**Campaign engine**~~ — DONE. `campaigns.js` + `adminCampaigns.js`. POST/GET/PATCH campaigns + POST :id/send. Audience targeting (all_leads/engaged_leads/new_leads), 200ms pacing, `{{name}}`/`{{first_name}}` interpolation. `campaign_recipients` updated on send/fail by scheduler. Run `db1_campaigns.sql` migration in Supabase DB1 before use.
 10. ~~**Client portal**~~ — DONE. Authenticated portal at `/portal`. Supabase Auth + `portal_users` table. Dashboard, Leads, Campaigns, Analytics, Settings. JWT-protected API with 3-layer client scoping. Run `db1_portal.sql` + set `SUPABASE_ANON_KEY` env var. Provision users via `POST /admin/portal-users?key=UI_SECRET`.
 11. ~~**Invite-based portal access**~~ — DONE. `adminInvites.js`: tokenized invite lifecycle (create, info, accept, revoke, resend, deactivate). `portal_invites` table, 64-char token, 72h expiry, single-use. `portal-accept.html` + `GET /portal/invite`. Users & Access section in portal SPA. Run `db1_portal_invites.sql` migration in Supabase DB1 before use.
-12. ~~**client_admin role**~~ — DONE. Self-service user management for business accounts. `client_admin` can invite/manage users within their own client; blocked from `internal_admin` escalation. `isClientAdmin` flag on req.portalUser. Users & Access nav visible to `client_admin`. Role pill: admin/mgr/client. Run `db1_client_admin.sql` migration in Supabase DB1 before use. 626/626 tests pass.
-13. ~~**Branded opener**~~ — DONE. CSR/REA first message now includes business name in all three seasonal variants. `getSeasonalOpener(client, seasonOverride?)` exported and testable.
-14. ~~**opt_outs to DB1**~~ — DONE. TCPA compliance now universal (all clients). Moved from DB2 CRM to DB1. `db1_opt_outs.sql` migration required. DB2 contacts.opted_in still mirrors for CRM. Scheduler check updated. Bot opt-out guards no longer gated on `crmSupabase`.
-15. ~~**client_id attribution fix**~~ — DONE. `saveConversation` now always writes `client_id` on every upsert (was missing, defaulted to `csr_rea` for all clients). Lone Pine and future clients correctly attributed.
-16. ~~**Test data tagging**~~ — DONE. UI console sessions: `session_type='test'` on new conversations, `source='ui'` on leads. Filter/delete with `WHERE session_type='test'` or `WHERE source='ui'` in DB1.
-17. ~~**Portal Tools nav + homepage login**~~ — DONE. Admin-only Tools section in portal sidebar links to all test consoles and Highmark website. Homepage `/home` nav has "Client login" link to `/portal/login`.
-18. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
-19. **Website** — usehighmark.com landing page served at `/home`. Client login link added. Next step: billing, plan enforcement, or advanced analytics.
+12. ~~**client_admin role**~~ — DONE. Self-service user management for business accounts. `client_admin` can invite/manage users within their own client; blocked from `internal_admin` escalation. `isClientAdmin` flag on req.portalUser. Users & Access nav visible to `client_admin`. Role pill: admin/mgr/client. Run `db1_client_admin.sql` migration in Supabase DB1 before use.
+13. ~~**Portal settings — feature toggles + RBAC**~~ — DONE. Settings UI has three subsections: General, Booking (booking_link, human_handoff toggle), Features (campaigns, followups, lead_capture, waitlist toggles). GET/PATCH /portal/api/settings returns + saves all toggle fields. `client_user` blocked from PATCH settings and POST/PATCH/send campaigns (403). `handleCreatePortalUser` now accepts `client_admin` role. Run `db1_client_settings.sql` migration in Supabase DB1. 638/638 tests pass.
+15. ~~**Branded opener**~~ — DONE. CSR/REA first message now includes business name in all three seasonal variants. `getSeasonalOpener(client, seasonOverride?)` exported and testable.
+16. ~~**opt_outs to DB1**~~ — DONE. TCPA compliance now universal (all clients). Moved from DB2 CRM to DB1. `db1_opt_outs.sql` migration required. DB2 contacts.opted_in still mirrors for CRM. Scheduler check updated. Bot opt-out guards no longer gated on `crmSupabase`.
+17. ~~**client_id attribution fix**~~ — DONE. `saveConversation` now always writes `client_id` on every upsert (was missing, defaulted to `csr_rea` for all clients). Lone Pine and future clients correctly attributed.
+18. ~~**Test data tagging**~~ — DONE. UI console sessions: `session_type='test'` on new conversations, `source='ui'` on leads. Filter/delete with `WHERE session_type='test'` or `WHERE source='ui'` in DB1.
+19. ~~**Portal Tools nav + homepage login**~~ — DONE. Admin-only Tools section in portal sidebar links to all test consoles and Highmark website. Homepage `/home` nav has "Client login" link to `/portal/login`.
+20. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+21. **Website** — usehighmark.com landing page served at `/home`. Client login link added. Next step: billing, plan enforcement, or advanced analytics.
 
 **Session tip:** Start a new Claude session when moving to billing, subscriptions, plan enforcement, or public website work.
