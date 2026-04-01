@@ -338,7 +338,9 @@ export async function handlePortalSendCampaign(req, res, supabase, crmSupabase) 
     return res.status(409).json({ error: `Campaign is already in status "${campaign.status}"` });
   }
 
-  const fromPhone = req.body?.from_phone ?? process.env.TWILIO_PHONE_NUMBER ?? null;
+  // Prefer: explicit override → client's configured outbound phone → global env var
+  const client = getAllClients()[campaign.client_id];
+  const fromPhone = req.body?.from_phone ?? client?.outboundPhone ?? process.env.TWILIO_PHONE_NUMBER ?? null;
   try {
     const result = await enqueueCampaign(supabase, campaign, fromPhone, crmSupabase);
     return res.json({ ok: true, ...result });

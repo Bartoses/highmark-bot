@@ -19,6 +19,7 @@ import {
   enqueueCampaign,
   getCampaignStats,
 } from "./campaigns.js";
+import { getAllClients } from "./clients.js";
 
 // ── POST /admin/campaigns ─────────────────────────────────────────────────────
 export async function handleCreateCampaign(req, res, supabase) {
@@ -142,7 +143,6 @@ export async function handleSendCampaign(req, res, supabase, crmSupabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
 
   const { id } = req.params;
-  const fromPhone = req.body?.from_phone ?? process.env.TWILIO_PHONE_NUMBER ?? null;
 
   // Fetch campaign
   const { data: campaign, error: fetchErr } = await supabase
@@ -152,6 +152,10 @@ export async function handleSendCampaign(req, res, supabase, crmSupabase) {
     .single();
 
   if (fetchErr || !campaign) return res.status(404).json({ error: "Campaign not found" });
+
+  // Prefer: explicit override → client's configured outbound phone → global env var
+  const client = getAllClients()[campaign.client_id];
+  const fromPhone = req.body?.from_phone ?? client?.outboundPhone ?? process.env.TWILIO_PHONE_NUMBER ?? null;
 
   // Only draft or scheduled campaigns can be sent
   if (!["draft", "scheduled"].includes(campaign.status)) {

@@ -1173,6 +1173,33 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     return res.send("<Response></Response>");
   }
 
+  // 4.6. RESETNOW — universal reset keyword (owner / demo use).
+  //      Clears the conversation and sends the appropriate opener for this client.
+  if (msgUpper === "RESETNOW") {
+    await supabase.from("conversations").delete()
+      .eq("from_number", fromNumber).eq("to_number", toNumber);
+    let opener;
+    if (client.isDemo) {
+      const season = getCurrentSeason();
+      if (season === "winter") {
+        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about snowmobiling, conditions, or booking in Steamboat. Go ahead!";
+      } else if (season === "summer") {
+        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about RZR adventures, trails, or booking in Steamboat. Go ahead!";
+      } else {
+        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about adventures, conditions, or booking in Steamboat. Go ahead!";
+      }
+    } else {
+      opener = client.openerText ?? getSeasonalOpener(client);
+    }
+    opener = enforceLength(opener);
+    console.log(`[RESET] RESETNOW from ${fromNumber} on ${toNumber} — conversation cleared`);
+    if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply: opener });
+    await twilioClient.messages.create({ body: opener, from: toNumber, to: fromNumber })
+      .catch((err) => console.error("[RESET] Twilio send error:", err.message));
+    res.set("Content-Type", "text/xml");
+    return res.send("<Response></Response>");
+  }
+
   // 5. Opted-out gate — drop silently if this number has opted out (DB1, all clients)
   const isOptedOut = await checkOptOut(fromNumber, supabase);
   if (isOptedOut) {
@@ -1313,7 +1340,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         source:       isUiReq(req) ? "ui" : "sms",
       });
       if (waitlistLead) {
-        scheduleFollowUps(supabase, waitlistLead, toNumber); // fire-and-forget
+        scheduleFollowUps(supabase, waitlistLead, client.outboundPhone || toNumber); // fire-and-forget
       }
       notifyBusinessOfLead(
         twilioClient, client, fromNumber, toNumber,
@@ -1620,7 +1647,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       });
 
       if (savedLead) {
-        scheduleFollowUps(supabase, savedLead, toNumber); // fire-and-forget
+        scheduleFollowUps(supabase, savedLead, client.outboundPhone || toNumber); // fire-and-forget
       }
 
       notifyBusinessOfLead(
