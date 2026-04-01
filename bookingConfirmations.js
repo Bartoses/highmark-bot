@@ -11,6 +11,7 @@
 import fetch from "node-fetch";
 import cron from "node-cron";
 import { scheduleMessage } from "./scheduler.js";
+import { getAllClients } from "./clients.js";
 
 const FAREHARBOR_BASE = "https://fareharbor.com/api/external/v1";
 
@@ -154,6 +155,17 @@ function normalizePhone(phone) {
   return phone; // already normalized or international
 }
 
+// Resolve a client by FareHarbor company shortname.
+// Searches all clients (static + DB-backed) for one that owns the given FH company.
+function resolveClientByFHCompany(shortname) {
+  if (!shortname) return null;
+  for (const client of Object.values(getAllClients())) {
+    const companies = client.fareharborCompanies ?? [];
+    if (companies.some((c) => c.shortname === shortname)) return client;
+  }
+  return null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PROCESS A SINGLE BOOKING EVENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +173,10 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
   const status     = booking.status;
   const guestPhone = normalizePhone(booking.contact?.phone);
   const bookingPk  = String(booking.pk);
-  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+
+  // Resolve which client owns this booking's FH company → use their outbound phone
+  const fhClient   = resolveClientByFHCompany(booking.company?.shortname);
+  const fromNumber = fhClient?.outboundPhone ?? process.env.TWILIO_PHONE_NUMBER;
 
   if (!guestPhone) {
     console.warn(`[CONFIRM] Booking ${bookingPk} has no guest phone — skipping.`);
@@ -263,8 +278,10 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
       phone:        sendTo,
       body:         buildFollowUpText(booking),
       message_type: "booking_followup",
+      client_id:    fhClient?.id ?? null,
       send_at:      followUpAt,
       metadata:     {
+        from_phone:  fromNumber,
         booking_pk:  bookingPk,
         guest_phone: guestPhone,
         test_mode:   testMode,
