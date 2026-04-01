@@ -426,6 +426,20 @@ export async function handlePortalSettings(req, res, supabase) {
     if (!bkRes.error)  bookingLinks  = bkRes.data  ?? [];
   }
 
+  // If no DB scrape sources exist, surface the static scrapeUrls so the portal
+  // reflects what the bot is actually using (read-only — no id, no delete button).
+  if (!scrapeSources.length && client.scrapeUrls?.length) {
+    scrapeSources = client.scrapeUrls.map((url, i) => ({
+      id:          null,   // no id = portal treats as read-only (can't delete)
+      url,
+      label:       null,
+      source_type: "website",
+      active:      true,
+      sort_order:  i,
+      _static:     true,   // flag for UI to show "(from config)" badge
+    }));
+  }
+
   return res.json({
     clientId,
     name:                    client.name,

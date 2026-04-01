@@ -1384,16 +1384,23 @@ function onBookingModeChange() {
 
 function renderScrapeSourcesTable(sources, canEdit) {
   if (!sources.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0;">No sources added yet.</div>';
-  return `<div class="tbl-wrap"><table>
+  const hasStatic = sources.some(s => s._static);
+  const staticNote = hasStatic
+    ? `<div style="font-size:11px;color:var(--text2);margin-bottom:8px;">These sources are configured in code. Add a source above to override them per-client.</div>`
+    : '';
+  return staticNote + `<div class="tbl-wrap"><table>
     <thead><tr><th>Label / URL</th><th>Type</th><th>Status</th>${canEdit ? '<th></th>' : ''}</tr></thead>
     <tbody>${sources.map(s => `<tr>
-      <td><div style="font-size:12px;font-weight:500;">${s.label ?? '—'}</div>
+      <td><div style="font-size:12px;font-weight:500;">${s.label ?? s.url.replace(/https?:\/\//, '').split('/')[0]}</div>
           <div style="font-size:11px;color:var(--text2);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.url}</div></td>
       <td class="text-muted text-xs">${s.source_type}</td>
-      <td><span class="pill ${s.active ? 'pill-green' : 'pill-gray'}">${s.active ? 'Active' : 'Off'}</span></td>
-      ${canEdit ? `<td style="white-space:nowrap">
+      <td>${s._static
+        ? `<span class="pill pill-gray" style="font-size:10px;">From config</span>`
+        : `<span class="pill ${s.active ? 'pill-green' : 'pill-gray'}">${s.active ? 'Active' : 'Off'}</span>`
+      }</td>
+      ${canEdit ? `<td style="white-space:nowrap">${s._static ? '' : `
         <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="toggleSrc('${s.id}',${!s.active})">${s.active ? 'Disable' : 'Enable'}</button>
-        <button class="btn btn-danger btn-sm" style="font-size:10px;margin-left:4px" onclick="deleteSrc('${s.id}')">Delete</button>
+        <button class="btn btn-danger btn-sm" style="font-size:10px;margin-left:4px" onclick="deleteSrc('${s.id}')">Delete</button>`}
       </td>` : ''}
     </tr>`).join('')}</tbody>
   </table></div>`;
