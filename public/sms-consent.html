@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SMS Messaging Consent — Highmark</title>
-  <meta name="description" content="How Highmark handles SMS opt-in, consent language, and message delivery on behalf of client businesses.">
+  <meta name="description" content="How to opt in to SMS messaging from Highmark-powered businesses, including keyword opt-in, consent language, and opt-out instructions.">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -111,6 +111,68 @@
     .callout p:last-child { margin-bottom: 0; }
     .callout.accent { border-color: rgba(59,130,246,.3); background: var(--accent-dim); }
     .callout.accent p { color: #93c5fd; }
+    .callout.green {
+      border-color: rgba(34,197,94,.3);
+      background: rgba(34,197,94,.07);
+    }
+    .callout.green p { color: #86efac; }
+
+    /* ── Keyword opt-in hero block ── */
+    .optin-block {
+      background: var(--surface);
+      border: 1px solid rgba(59,130,246,.3);
+      border-radius: 12px;
+      padding: 28px 28px 24px;
+      margin: 24px 0 28px;
+    }
+    .optin-block .optin-label {
+      font-size: .75rem; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--accent);
+      margin-bottom: 10px;
+    }
+    .optin-block .optin-copy {
+      font-size: .97rem; color: var(--muted); line-height: 1.65;
+    }
+    .optin-block .optin-copy strong { color: var(--text); }
+
+    /* ── SMS exchange demo ── */
+    .sms-demo {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 20px 20px;
+      margin: 20px 0;
+    }
+    .sms-demo .demo-label {
+      font-size: .75rem; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .sms-row { display: flex; margin-bottom: 10px; }
+    .sms-row:last-child { margin-bottom: 0; }
+    .sms-row.user { justify-content: flex-end; }
+    .sms-row.biz  { justify-content: flex-start; }
+    .sms-bubble {
+      max-width: 82%;
+      padding: 10px 14px;
+      border-radius: 16px;
+      font-size: .9rem;
+      line-height: 1.5;
+    }
+    .sms-row.user .sms-bubble {
+      background: #1d4ed8;
+      color: #dbeafe;
+      border-bottom-right-radius: 4px;
+    }
+    .sms-row.biz .sms-bubble {
+      background: var(--card-hover);
+      color: var(--muted);
+      border-bottom-left-radius: 4px;
+    }
+    .sms-sender {
+      font-size: .74rem; font-weight: 600;
+      color: #475569; margin-bottom: 3px;
+      padding: 0 4px;
+    }
+    .sms-row.user .sms-sender { text-align: right; }
 
     /* ── Example consent block ── */
     .consent-example {
@@ -208,6 +270,7 @@
     @media (max-width: 640px) {
       .page-header { padding: 40px 0 28px; }
       .prose { padding: 32px 0 60px; }
+      .optin-block { padding: 20px 18px; }
     }
   </style>
 </head>
@@ -223,10 +286,10 @@
 <div class="page-header">
   <div class="container">
     <h1>SMS Messaging Consent</h1>
-    <p class="meta">Last updated: March 30, 2026</p>
+    <p class="meta">Last updated: April 1, 2026</p>
     <p>
-      This page explains how Highmark's SMS messaging works, how consent is collected,
-      and what you can expect when you receive a text from a Highmark-powered business.
+      This page explains how to opt in to SMS messaging from a Highmark-powered business,
+      what you will receive, and how to stop at any time.
     </p>
   </div>
 </div>
@@ -234,7 +297,61 @@
 <div class="container">
   <div class="prose">
 
-    <!-- ── Section 1: How It Works ── -->
+    <!-- ── Section 1: Keyword Opt-In ── -->
+    <h2>How to Opt In by Texting START</h2>
+    <p>
+      Businesses that use Highmark support keyword opt-in. You can begin receiving SMS messages
+      from a Highmark-powered business by texting <span class="kw">START</span> to their number.
+    </p>
+
+    <div class="optin-block">
+      <div class="optin-label">Opt-In Consent Language</div>
+      <div class="optin-copy">
+        By texting <strong>START</strong> to a Highmark-powered business number, you agree to receive
+        SMS messages from <strong>[Business Name]</strong> via Highmark for customer support, booking
+        assistance, and service updates. <strong>Consent is not a condition of purchase.</strong>
+        Message frequency varies. Message and data rates may apply.
+        Reply <strong>STOP</strong> to unsubscribe at any time. Reply <strong>HELP</strong> for help.
+        <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a>
+      </div>
+    </div>
+
+    <p>
+      When you text <span class="kw">START</span>, the business will send a confirmation message
+      before any other messages are sent. Here is an example of that exchange:
+    </p>
+
+    <div class="sms-demo">
+      <div class="demo-label">Example opt-in exchange</div>
+
+      <div class="sms-row user">
+        <div>
+          <div class="sms-sender">You</div>
+          <div class="sms-bubble">START</div>
+        </div>
+      </div>
+
+      <div class="sms-row biz">
+        <div>
+          <div class="sms-sender">[Business Name]</div>
+          <div class="sms-bubble">
+            You are now opted in to receive messages from [Business Name] powered by Highmark.
+            Message frequency varies. Msg &amp; data rates may apply.
+            Reply STOP to unsubscribe or HELP for help.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout green">
+      <p>
+        <strong>Messaging is optional.</strong> You are not required to opt in to receive
+        SMS messages as a condition of making a purchase, booking a service, or accessing
+        any business's offerings. Consent is entirely voluntary.
+      </p>
+    </div>
+
+    <!-- ── Section 2: How It Works (Platform Flow) ── -->
     <h2>How Messaging Works</h2>
     <p>
       Highmark is an AI SMS concierge platform. We provide the messaging technology —
@@ -245,52 +362,43 @@
       <div class="flow-step">
         <div class="flow-num">1</div>
         <div class="flow-text">
-          <strong>A business collects your phone number</strong>
-          <p>You provide your number directly to the business — on their website, at point of booking, or by texting them first.</p>
+          <strong>You opt in</strong>
+          <p>You opt in by texting START to a business's number, or by providing your phone number
+          and agreeing to receive messages on a business's website or booking form.</p>
         </div>
       </div>
       <div class="flow-step">
         <div class="flow-num">2</div>
         <div class="flow-text">
           <strong>You agree to receive messages</strong>
-          <p>At the point of collection, the business displays clear opt-in language. You consent to receive SMS from that specific business.</p>
+          <p>At the point of opt-in, clear consent language is displayed. You agree to receive
+          SMS from that specific business only. Consent is not shared across businesses.</p>
         </div>
       </div>
       <div class="flow-step">
         <div class="flow-num">3</div>
         <div class="flow-text">
           <strong>Highmark delivers the messages</strong>
-          <p>Highmark's AI concierge sends and receives messages on behalf of the business. Messages relate only to your relationship with that business.</p>
+          <p>Highmark's AI concierge sends and receives messages on behalf of the business.
+          Messages relate only to your relationship with that business.</p>
         </div>
       </div>
       <div class="flow-step">
         <div class="flow-num">4</div>
         <div class="flow-text">
           <strong>You stay in control</strong>
-          <p>Reply STOP at any time to unsubscribe. No further messages are sent. Reply START to re-enable if you change your mind.</p>
+          <p>Reply STOP at any time to unsubscribe. No further messages are sent.
+          Reply START to re-enable if you change your mind.</p>
         </div>
       </div>
     </div>
 
-    <!-- ── Section 2: Consent Language ── -->
-    <h2>Example Consent Language</h2>
+    <!-- ── Section 3: Web Form Opt-In (Alternative) ── -->
+    <h2>Alternative: Opt In via Web Form</h2>
     <p>
-      Businesses using Highmark are required to display opt-in language similar to the
-      following at the point where your phone number is collected:
-    </p>
-    <div class="consent-example">
-      "By providing your phone number, you agree to receive SMS messages from
-      <strong>[Business Name]</strong> via Highmark for customer support, booking assistance,
-      and service updates. Message frequency varies. Message and data rates may apply.
-      Reply <strong>STOP</strong> to unsubscribe or <strong>HELP</strong> for help.
-      <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a>"
-    </div>
-
-    <!-- ── Section 3: Example Checkbox ── -->
-    <h2>Example Opt-In Checkbox</h2>
-    <p>
-      On client websites with a phone number form field, consent is captured with a
-      checkbox like this:
+      Some businesses collect phone numbers through a web form and present opt-in consent
+      at that point. This is an alternative to the keyword opt-in flow. When this method
+      is used, consent is captured with a checkbox similar to this:
     </p>
     <div class="checkbox-demo">
       <div class="demo-label">Example — as seen on a business's website</div>
@@ -299,9 +407,9 @@
         <label for="exampleConsent">
           By checking this box, you agree to receive SMS messages from
           <strong>[Business Name]</strong> via Highmark for customer support, booking
-          assistance, and service updates. Message frequency varies. Message and data
-          rates may apply. Reply <strong>STOP</strong> to unsubscribe or
-          <strong>HELP</strong> for help.
+          assistance, and service updates. Consent is not a condition of purchase.
+          Message frequency varies. Message and data rates may apply.
+          Reply <strong>STOP</strong> to unsubscribe or <strong>HELP</strong> for help.
           <a href="/privacy">Privacy Policy</a> ·
           <a href="/terms">Terms of Service</a>
         </label>
@@ -313,51 +421,49 @@
     </p>
 
     <!-- ── Section 4: Message Types ── -->
-    <h2>Types of Messages</h2>
+    <h2>Types of Messages You May Receive</h2>
     <p>Depending on your interaction, messages may include:</p>
     <ul>
       <li><strong>Customer support</strong> — answers to questions about services, pricing, and availability</li>
       <li><strong>Booking assistance</strong> — help selecting tours, rentals, appointments, or services</li>
       <li><strong>Confirmations</strong> — reservation or appointment confirmations after a booking</li>
       <li><strong>Service updates</strong> — relevant changes or updates related to your booking or inquiry</li>
-      <li><strong>Follow-up</strong> — a single follow-up if your inquiry wasn't completed</li>
+      <li><strong>Follow-up</strong> — a single follow-up if your inquiry was not completed</li>
     </ul>
 
     <!-- ── Section 5: Frequency ── -->
-    <h2>Message Frequency</h2>
+    <h2>Message Frequency and Rates</h2>
     <div class="callout">
       <p>
         Message frequency varies based on your level of interaction with the business.
         You may receive a few messages during an active inquiry or booking process, and
-        fewer or none after that. Message and data rates may apply.
+        fewer or none after that. Message and data rates may apply depending on your carrier.
       </p>
     </div>
 
-    <!-- ── Section 6: Opt-Out ── -->
-    <h2>How to Opt Out</h2>
+    <!-- ── Section 6: Opt-Out / Keywords ── -->
+    <h2>STOP, HELP, and START</h2>
     <p>
-      You are always in control of whether you receive messages. Standard SMS keywords
-      are supported:
+      Standard SMS keywords are always supported, regardless of the business or conversation state:
     </p>
     <ul>
-      <li>Reply <span class="kw">STOP</span> — immediately unsubscribes you. A confirmation is sent; no further messages are sent.</li>
-      <li>Reply <span class="kw">START</span> or <span class="kw">UNSTOP</span> — re-enables messaging if you previously opted out.</li>
-      <li>Reply <span class="kw">HELP</span> — returns program info and a support contact.</li>
+      <li>Reply <span class="kw">STOP</span> — immediately unsubscribes you from that business's messages. A single confirmation is sent; no further messages are sent after that.</li>
+      <li>Reply <span class="kw">UNSTOP</span> or <span class="kw">START</span> — re-enables messaging if you previously opted out.</li>
+      <li>Reply <span class="kw">HELP</span> — returns program information and a support contact number.</li>
     </ul>
     <p>
-      These keywords work regardless of the business or conversation state.
-      Opt-outs are processed before any other message handling.
+      Opt-outs are processed before any other message handling. They are immediate and reliable.
     </p>
 
-    <!-- ── Section 7: Business Responsibility ── -->
+    <!-- ── Section 7: Business Responsibility and Consent Scope ── -->
     <h2>Business Responsibility and Consent Scope</h2>
     <p>
       Each business that uses Highmark is individually responsible for:
     </p>
     <ul>
-      <li>Collecting your consent at the point of phone number collection</li>
       <li>Displaying clear opt-in disclosure language before messaging begins</li>
       <li>Using messages only for the purposes disclosed at opt-in</li>
+      <li>Honoring opt-out requests immediately and permanently</li>
     </ul>
     <div class="callout accent">
       <p>
@@ -376,7 +482,7 @@
     </div>
     <p>
       Questions about how messaging works? Contact us at
-      <a href="mailto:hello@whiteoutsolutions.co">hello@whiteoutsolutions.co</a>.
+      <a href="mailto:sean@usehighmark.com">sean@usehighmark.com</a>.
     </p>
 
   </div>
@@ -392,9 +498,9 @@
     </div>
     <p>
       <strong style="color:var(--muted)">Highmark</strong> by
-      <a href="mailto:hello@whiteoutsolutions.co">Whiteout Solutions</a>
+      <a href="https://usehighmark.com">Whiteout Solutions</a>
       &nbsp;·&nbsp;
-      <a href="mailto:hello@whiteoutsolutions.co">hello@whiteoutsolutions.co</a>
+      <a href="mailto:sean@usehighmark.com">sean@usehighmark.com</a>
       &nbsp;·&nbsp;
       Steamboat Springs, CO
     </p>

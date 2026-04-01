@@ -99,7 +99,16 @@
       background: var(--card); border: 1px solid var(--border);
       border-radius: 10px; padding: 18px 22px; margin: 20px 0;
     }
-    .callout p { margin-bottom: 0; }
+    .callout p { margin-bottom: 8px; }
+    .callout p:last-child { margin-bottom: 0; }
+
+    .kw {
+      display: inline-block;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 6px; padding: 2px 10px;
+      font-family: monospace; font-size: .88rem; font-weight: 700;
+      color: #22c55e; letter-spacing: .03em;
+    }
 
     footer {
       background: var(--surface); border-top: 1px solid var(--border);
@@ -129,7 +138,7 @@
 <div class="page-header">
   <div class="container">
     <h1>Terms of Service</h1>
-    <p class="meta">Last updated: March 30, 2026 &nbsp;·&nbsp; Effective: March 30, 2026</p>
+    <p class="meta">Last updated: April 1, 2026 &nbsp;·&nbsp; Effective: April 1, 2026</p>
   </div>
 </div>
 
@@ -160,10 +169,23 @@
 
     <h2>Opting In to Receive Messages</h2>
     <p>
-      You opt in to receive SMS messages when you provide your phone number to a
-      Highmark-powered business and agree to their opt-in disclosure. Opt-in consent is
-      specific to each business — consent with one business is not applied to any other.
+      You may opt in to receive SMS messages from a Highmark-powered business in two ways:
     </p>
+    <ul>
+      <li><strong>Keyword opt-in</strong> — by texting <span class="kw">START</span> to a Highmark-powered business number, you are providing express written consent to receive SMS messages from that business via Highmark.</li>
+      <li><strong>Web form opt-in</strong> — by submitting your phone number through a business's website or booking form and agreeing to the opt-in disclosure presented at that point.</li>
+    </ul>
+    <div class="callout">
+      <p>
+        <strong>Consent is not a condition of purchase.</strong> You are not required to opt in to
+        receive SMS messages in order to make a purchase, complete a booking, or access any
+        business's services. Messaging is entirely optional.
+      </p>
+      <p>
+        Opt-in consent is specific to each business. Consenting to receive messages from one
+        Highmark-powered business does not apply to any other business on the platform.
+      </p>
+    </div>
 
     <h2>Types of Messages You May Receive</h2>
     <p>Depending on your interaction, you may receive messages related to:</p>
@@ -184,16 +206,17 @@
       </p>
     </div>
 
-    <h2>Opting Out</h2>
+    <h2>Opting Out — STOP, START, and HELP</h2>
     <p>
-      You can stop receiving messages at any time by replying <strong>STOP</strong> to any
-      message. You'll receive one confirmation that you've been unsubscribed. After opting out,
-      no further messages will be sent to your number from that business.
+      You can stop receiving messages at any time. Standard SMS keywords are always supported:
     </p>
+    <ul>
+      <li>Reply <span class="kw">STOP</span> — immediately ends all messages from that business. One confirmation is sent; no further messages after that.</li>
+      <li>Reply <span class="kw">START</span> or <span class="kw">UNSTOP</span> — re-enables messaging if you previously opted out.</li>
+      <li>Reply <span class="kw">HELP</span> — returns program information and a support contact number.</li>
+    </ul>
     <p>
-      To re-enable messaging, reply <strong>START</strong> or <strong>UNSTOP</strong>.
-      To get help, reply <strong>HELP</strong> — you'll receive a message with program info
-      and a support contact.
+      Opt-outs are processed before any other message handling and take effect immediately.
     </p>
 
     <h2>Acceptable Use</h2>
@@ -236,7 +259,8 @@
     <p>
       Your use of Highmark-powered messaging is also governed by our
       <a href="/privacy">Privacy Policy</a>, which explains how we collect, use, and
-      protect your information.
+      protect your information. For details on how we handle SMS opt-in and consent data,
+      see our <a href="/sms-consent">SMS Consent</a> page.
     </p>
 
     <h2>Changes to These Terms</h2>
@@ -249,7 +273,8 @@
     <h2>Contact</h2>
     <p>Questions about these Terms? Reach us at:</p>
     <ul>
-      <li>Email: <a href="mailto:hello@whiteoutsolutions.co">hello@whiteoutsolutions.co</a></li>
+      <li>Email: <a href="mailto:sean@usehighmark.com">sean@usehighmark.com</a></li>
+      <li>Website: <a href="https://usehighmark.com">usehighmark.com</a></li>
       <li>Company: Whiteout Solutions</li>
       <li>Location: Steamboat Springs, CO</li>
     </ul>
@@ -267,9 +292,9 @@
     </div>
     <p>
       <strong style="color:var(--muted)">Highmark</strong> by
-      <a href="mailto:hello@whiteoutsolutions.co">Whiteout Solutions</a>
+      <a href="https://usehighmark.com">Whiteout Solutions</a>
       &nbsp;·&nbsp;
-      <a href="mailto:hello@whiteoutsolutions.co">hello@whiteoutsolutions.co</a>
+      <a href="mailto:sean@usehighmark.com">sean@usehighmark.com</a>
       &nbsp;·&nbsp;
       Steamboat Springs, CO
     </p>

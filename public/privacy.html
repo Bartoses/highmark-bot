@@ -33,7 +33,6 @@
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
 
-    /* ── NAV ── */
     nav {
       position: sticky; top: 0; z-index: 100;
       background: rgba(9,13,24,.9);
@@ -58,7 +57,6 @@
     }
     .nav-cta:hover { background: #2563eb; text-decoration: none; }
 
-    /* ── CONTENT ── */
     .page-header {
       padding: 64px 0 40px;
       border-bottom: 1px solid var(--border);
@@ -68,9 +66,7 @@
       font-weight: 800; letter-spacing: -.03em;
       margin-bottom: 10px;
     }
-    .page-header .meta {
-      font-size: .88rem; color: var(--muted);
-    }
+    .page-header .meta { font-size: .88rem; color: var(--muted); }
 
     .prose {
       max-width: 760px;
@@ -105,18 +101,11 @@
       background: var(--card); border: 1px solid var(--border);
       border-radius: 10px; padding: 18px 22px; margin: 20px 0;
     }
-    .callout p { margin-bottom: 0; }
-
-    .placeholder {
-      color: #f59e0b; font-weight: 600;
-      background: rgba(245,158,11,.1);
-      padding: 1px 6px; border-radius: 4px;
-      font-size: .9em;
-    }
+    .callout p { margin-bottom: 8px; }
+    .callout p:last-child { margin-bottom: 0; }
 
     .container { max-width: var(--max); margin: 0 auto; padding: 0 20px; }
 
-    /* ── FOOTER ── */
     footer {
       background: var(--surface); border-top: 1px solid var(--border);
       padding: 28px 0; text-align: center;
@@ -135,7 +124,6 @@
 </head>
 <body>
 
-<!-- ── NAV ── -->
 <nav>
   <div class="inner">
     <a href="/home" class="nav-logo">High<span>mark</span></a>
@@ -143,15 +131,13 @@
   </div>
 </nav>
 
-<!-- ── PAGE HEADER ── -->
 <div class="page-header">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p class="meta">Last updated: March 30, 2026 &nbsp;·&nbsp; Effective: March 30, 2026</p>
+    <p class="meta">Last updated: April 1, 2026 &nbsp;·&nbsp; Effective: April 1, 2026</p>
   </div>
 </div>
 
-<!-- ── PROSE ── -->
 <div class="container">
   <div class="prose">
 
@@ -164,8 +150,9 @@
     </p>
     <p>
       When you receive a text message from a business that uses Highmark, the message is sent
-      on behalf of that specific business. Highmark processes the message; the business you
-      engaged with remains responsible for obtaining your consent.
+      on behalf of that specific business. Highmark processes the message as a platform provider;
+      the business you engaged with is responsible for collecting your consent and ensuring
+      messages are appropriate.
     </p>
 
     <h2>What Information We Collect</h2>
@@ -181,7 +168,7 @@
     <h2>How We Use Your Information</h2>
     <p>We use the information we collect to:</p>
     <ul>
-      <li>Respond to your inquiries and provide customer support</li>
+      <li>Respond to your inquiries and provide customer support on behalf of the business</li>
       <li>Assist with booking, scheduling, and service information</li>
       <li>Send confirmations, updates, and relevant service communications</li>
       <li>Operate and improve the Highmark platform</li>
@@ -191,14 +178,20 @@
     <h2>How We Process Data on Behalf of Businesses</h2>
     <p>
       Highmark acts as a data processor on behalf of the businesses ("clients") that use our
-      platform. Each client is responsible for collecting your consent before you receive messages.
-      Your data is used exclusively in the context of your relationship with that specific business.
+      platform. Each client business is responsible for collecting your consent before you
+      receive messages from them. Your data is used exclusively in the context of your
+      relationship with that specific business.
+    </p>
+    <p>
+      Opt-in consent is business-specific. If you consent to receive messages from one
+      Highmark-powered business, that consent does not carry over to any other business on
+      the platform. Each business manages its own opt-in independently.
     </p>
     <div class="callout">
       <p>
         <strong>Your information is not sold.</strong> We do not sell, rent, or trade your personal
-        information to third parties. Your data with one Highmark client is not shared with or
-        visible to any other Highmark client.
+        information to third parties. Your data associated with one Highmark client is not shared
+        with or visible to any other Highmark client.
       </p>
     </div>
 
@@ -211,12 +204,20 @@
     </ul>
     <p>We do not share your data across unrelated businesses on the Highmark platform.</p>
 
-    <h2>SMS Messaging and Rates</h2>
+    <h2>SMS Messaging, Consent, and Opt-Out</h2>
     <p>
       If you opt in to receive SMS messages from a Highmark-powered business, standard message
       and data rates may apply depending on your carrier plan. Message frequency varies based
-      on your level of engagement. You can opt out at any time by replying <strong>STOP</strong>
-      to any message.
+      on your level of engagement with that business.
+    </p>
+    <p>
+      You can opt out of messaging at any time by replying <strong>STOP</strong> to any message.
+      Your opt-out will be processed immediately. To re-enable messages, reply <strong>START</strong>
+      or <strong>UNSTOP</strong>. For program information or support, reply <strong>HELP</strong>.
+    </p>
+    <p>
+      For full details on how opt-in and opt-out work, see our
+      <a href="/sms-consent">SMS Consent</a> page.
     </p>
 
     <h2>Data Retention</h2>
@@ -237,7 +238,7 @@
     </ul>
     <p>
       To exercise these rights, contact us at
-      <a href="mailto:hello@whiteoutsolutions.co">hello@whiteoutsolutions.co</a>.
+      <a href="mailto:sean@usehighmark.com">sean@usehighmark.com</a>.
     </p>
 
     <h2>Security</h2>
@@ -259,7 +260,8 @@
       If you have questions about this Privacy Policy or how your data is handled:
     </p>
     <ul>
-      <li>Email: <a href="mailto:hello@whiteoutsolutions.co">hello@whiteoutsolutions.co</a></li>
+      <li>Email: <a href="mailto:sean@usehighmark.com">sean@usehighmark.com</a></li>
+      <li>Website: <a href="https://usehighmark.com">usehighmark.com</a></li>
       <li>Company: Whiteout Solutions</li>
       <li>Location: Steamboat Springs, CO</li>
     </ul>
@@ -267,7 +269,6 @@
   </div>
 </div>
 
-<!-- ── FOOTER ── -->
 <footer>
   <div class="container">
     <div class="footer-links">
@@ -278,9 +279,9 @@
     </div>
     <p>
       <strong style="color:var(--muted)">Highmark</strong> by
-      <a href="mailto:hello@whiteoutsolutions.co">Whiteout Solutions</a>
+      <a href="https://usehighmark.com">Whiteout Solutions</a>
       &nbsp;·&nbsp;
-      <a href="mailto:hello@whiteoutsolutions.co">hello@whiteoutsolutions.co</a>
+      <a href="mailto:sean@usehighmark.com">sean@usehighmark.com</a>
       &nbsp;·&nbsp;
       Steamboat Springs, CO
     </p>
