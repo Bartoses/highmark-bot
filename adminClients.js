@@ -13,7 +13,15 @@
 
 import { getAllClients, loadDbClients } from "./clients.js";
 
-export const VALID_BOOKING_MODES = ["fareharbor", "informational", "lead_capture"];
+export const VALID_BOOKING_MODES = [
+  "fareharbor",        // FH API real-time availability (Tier 2)
+  "informational",     // Q&A + phone CTA (+ optional lead capture)
+  "lead_capture",      // structured 3-step lead collection
+  "call_only",         // phone CTA only — no booking links shown
+  "static_links",      // show numbered booking link list from client_booking_options
+  "api_live_booking",  // alias for fareharbor (normalized at runtime)
+  "hybrid",            // booking links + phone CTA
+];
 const PHONE_RE = /^\+\d{7,15}$/;
 const SLUG_RE  = /^[a-z0-9_]+$/;
 

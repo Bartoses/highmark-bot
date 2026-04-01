@@ -263,6 +263,11 @@ function dbRowToClient(row) {
     active:       row.active          ?? true,
     websiteUrl:   row.website_url     ?? null,
     staticFacts:  row.static_facts    ?? null,
+    // Settings columns added in db1_client_settings.sql
+    campaignsEnabled:    row.campaigns_enabled    ?? false,
+    followupsEnabled:    row.followups_enabled    ?? false,
+    humanHandoffEnabled: row.human_handoff_enabled ?? true,
+    bookingLink:         row.booking_link          ?? null,
     _fromDb:      true,
   };
 }
@@ -305,4 +310,10 @@ export function resolveClient(toNumber) {
 // Convenience: get default client (csr_rea) for tests and backward-compat callers
 export function getDefaultClient() {
   return CLIENTS.csr_rea;
+}
+
+// Resolve a client by id (not phone number). Checks DB-loaded clients first, then static.
+export function resolveClientById(id) {
+  if (!id) return null;
+  return _runtimeClients[id] ?? CLIENTS[id] ?? null;
 }

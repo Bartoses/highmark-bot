@@ -37,6 +37,7 @@ import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } 
 import { loadSiteContent } from "./siteContent.js";
 import { loadDbClients } from "./clients.js";
 import { handleDemoFlow } from "./demoFlow.js";
+import { getRuntimeClientConfig } from "./clientConfig.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1133,7 +1134,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   const toNumber   = req.body.To;
 
   // Resolve which client this inbound number belongs to
-  const client = resolveClient(toNumber);
+  let client = resolveClient(toNumber);
 
   // 1. Parse + validate
   if (!rawBody || !fromNumber) {
@@ -1183,6 +1184,11 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   // 5.5. Mark lead ENGAGED if this is a reply from a lead we've been following up with.
   //      Fire-and-forget — never delays the SMS response.
   checkAndMarkLeadEngaged(supabase, fromNumber);
+
+  // 5.6. Enrich client config with DB-backed settings (feature toggles, booking links, scrape sources).
+  //      Merges portal settings into the runtime client object for this request.
+  //      Falls back safely if DB is unavailable or tables don't exist yet.
+  client = await getRuntimeClientConfig(client, supabase);
 
   // 6. Demo mode — deterministic guided sales demo, no AI/API calls
   //    Triggered when the inbound Twilio number routes to a bookingMode==="demo" client.
@@ -1347,7 +1353,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     if (!replyText) {
 
     // 11. Sentiment escalation → auto-handoff after 2 consecutive frustrated messages
-    if (convo.consecutiveFrustrated >= 2 && !convo.handoff) {
+    //     Skipped when humanHandoffEnabled is false (bot stays in conversation)
+    if (convo.consecutiveFrustrated >= 2 && !convo.handoff && client.humanHandoffEnabled !== false) {
       convo.handoff = true;
       console.log(`[HANDOFF] Auto-escalation (frustrated x${convo.consecutiveFrustrated}) — ${fromNumber}`);
       if (client.waitlistEnabled !== false) {
@@ -1364,7 +1371,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
 
     // 12. Explicit handoff intent — try lead capture first, phone as escape hatch
-    else if (intent === "handoff") {
+    //     Skipped when humanHandoffEnabled is false (falls through to Claude default)
+    else if (intent === "handoff" && client.humanHandoffEnabled !== false) {
       convo.handoff = true;
       console.log(`[HANDOFF] Explicit request — ${fromNumber}`);
       if (client.waitlistEnabled !== false) {
@@ -1443,6 +1451,34 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       };
       replyText = enforceLength(buildLeadCapturePrompt(client, buyingSignals.inferredGoal));
       console.log(`[LEAD] Proactive capture triggered — stage: ${convo.stage}, signal: ${buyingSignals.strength}, goal: ${buyingSignals.inferredGoal} — ${fromNumber}`);
+    }
+
+    // BOOKING INTENT — call_only: route directly to phone CTA (no booking links)
+    else if (intent === "booking" && client.bookingMode === "call_only") {
+      const knowledgeCtx = await getKnowledgeContext(supabase, client);
+      replyText = await getClaudeReply(
+        convo, client, season, knowledgeCtx,
+        `Guest wants to book. ${client.name} books by phone only — no online booking. Direct them to call ${client.handoffPhone}${client.supportEmail ? ` or email ${client.supportEmail}` : ""}. Keep it warm and brief.`
+      );
+    }
+
+    // BOOKING INTENT — static_links or hybrid: show numbered booking link list
+    else if (intent === "booking" && (client.bookingMode === "static_links" || client.bookingMode === "hybrid")) {
+      const links = (client.bookingLinks ?? []).filter((l) => l.url);
+      if (links.length === 0) {
+        // No links configured — fall back to phone CTA
+        const knowledgeCtx = await getKnowledgeContext(supabase, client);
+        replyText = await getClaudeReply(
+          convo, client, season, knowledgeCtx,
+          `Guest wants to book. No booking links are configured yet. Direct them to call ${client.handoffPhone}. Keep it warm and brief.`
+        );
+      } else {
+        const numbered = links
+          .map((l, i) => `${i + 1}. ${l.title}${l.description ? ` — ${l.description}` : ""}: ${l.url}`)
+          .join("\n");
+        const hybridCta = client.bookingMode === "hybrid" ? `\n\nOr call us: ${client.handoffPhone}` : "";
+        replyText = enforceLength(`Here are your booking options:\n${numbered}${hybridCta}`, 640);
+      }
     }
 
     // BOOKING FLOW — state machine (fareharbor clients only)

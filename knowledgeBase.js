@@ -13,7 +13,7 @@ import fetch from "node-fetch";
 import { createHash } from "crypto";
 import { parse as parseHtml } from "node-html-parser";
 import cron from "node-cron";
-import { CLIENTS, getDefaultClient } from "./clients.js";
+import { getDefaultClient, getAllClients } from "./clients.js";
 
 const FAREHARBOR_BASE     = "https://fareharbor.com/api/external/v1";
 const OPENWEATHER_BASE    = "https://api.openweathermap.org/data/2.5";
@@ -25,11 +25,11 @@ const ONE_HOUR_MS         = 60 * 60 * 1000;
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
-// Returns flat array of all FH companies across all configured clients.
+// Returns flat array of all FH companies across all configured clients (static + DB).
 // Used by getFareHarborAvailability to resolve a companyId to API credentials.
 function getAllFhCompanies() {
   const companies = [];
-  for (const client of Object.values(CLIENTS)) {
+  for (const client of Object.values(getAllClients())) {
     companies.push(...(client.fareharborCompanies ?? []));
   }
   return companies;
@@ -486,14 +486,18 @@ function hashContent(text) {
 // Runs every 7 days.
 // ─────────────────────────────────────────────────────────────────────────────
 async function refreshWebsiteKnowledge(supabase, anthropic, client) {
-  if (!client.scrapeUrls?.length) return; // nothing to scrape for this client
+  // Support scrapeSources array (from getRuntimeClientConfig) or fall back to scrapeUrls
+  const urls = client.scrapeSources?.filter((s) => s.active !== false).map((s) => s.url)
+               ?? client.scrapeUrls
+               ?? [];
+  if (!urls.length) return; // nothing to scrape for this client
 
   const kbKey       = `${client.id}_website_knowledge`;
   const hashKey     = `website_content_hash_${client.id}`;
   const scrapeKey   = `last_website_scrape_${client.id}`;
 
   const pageTexts = [];
-  for (const url of client.scrapeUrls) {
+  for (const url of urls) {
     try {
       const res  = await fetch(url, { timeout: 10000 });
       const html = await res.text();
@@ -596,7 +600,7 @@ Pages:\n${combinedText}`,
 
 // Called at server startup. Checks if refresh is needed, runs it, sets up crons.
 export async function initKnowledgeBase(supabase, anthropic) {
-  const allClients = Object.values(CLIENTS);
+  const allClients = Object.values(getAllClients()); // includes DB-backed clients loaded at startup
 
   try {
     // ── FareHarbor items + availability — per FH-enabled client ──────────────
@@ -650,14 +654,14 @@ export async function initKnowledgeBase(supabase, anthropic) {
 
   // FH items: refresh every 24 hours (catalog rarely changes)
   cron.schedule("0 2 * * *", () => {
-    for (const c of Object.values(CLIENTS)) {
+    for (const c of Object.values(getAllClients())) {
       if (c.fareharborEnabled && c.fareharborCompanies?.length) refreshFareHarborItems(supabase, c);
     }
   });
 
   // FH availability: refresh every 3 hours (slots change throughout the day)
   cron.schedule("0 */3 * * *", () => {
-    for (const c of Object.values(CLIENTS)) {
+    for (const c of Object.values(getAllClients())) {
       if (c.fareharborEnabled && c.fareharborCompanies?.length) refreshFareHarborAvailability(supabase, c);
     }
   });
@@ -669,14 +673,14 @@ export async function initKnowledgeBase(supabase, anthropic) {
 
   // Snow conditions (SNOTEL + CAIC): refresh every 3 hours
   cron.schedule("30 */3 * * *", () => {
-    const sc = Object.values(CLIENTS).find((c) => c.snotelStations?.length > 0);
+    const sc = Object.values(getAllClients()).find((c) => c.snotelStations?.length > 0);
     if (sc) refreshSnowConditions(supabase, sc);
   });
 
   // Website: check every 7 days (hash-gated, Haiku only when content changes)
   cron.schedule("0 3 * * 1", () => {
-    for (const c of Object.values(CLIENTS)) {
-      if (c.scrapeUrls?.length) refreshWebsiteKnowledge(supabase, anthropic, c);
+    for (const c of Object.values(getAllClients())) {
+      if (c.scrapeUrls?.length || c.scrapeSources?.length) refreshWebsiteKnowledge(supabase, anthropic, c);
     }
   });
 

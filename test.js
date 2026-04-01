@@ -2901,6 +2901,7 @@ async function main() {
   await test39(); // Branded opener: business name in first message for every client + override behavior
   await test40(); // client_admin RBAC: scoped user management, blocked escalation, own-client enforcement
   await test41(); // Feature toggles + RBAC: client_user blocked from settings PATCH + campaign mutating ops
+  await test42(); // Runtime config loader: DB overrides, fallbacks, new booking modes, resolveClientById
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -4840,6 +4841,221 @@ async function test41() {
     res._status === 400
       ? pass("test41: handleCreatePortalUser rejects unknown role (400)")
       : fail("test41: handleCreatePortalUser unknown role wrong status", res._status);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test42 — Runtime config loader: DB overrides, fallbacks, normalization
+// ─────────────────────────────────────────────────────────────────────────────
+async function test42() {
+  console.log("\nTEST 42: Runtime config loader — DB overrides, fallbacks, new booking modes\n");
+
+  const { getRuntimeClientConfig, SETTINGS_HELP } = await import("./clientConfig.js");
+  const { resolveClientById, CLIENTS } = await import("./clients.js");
+  const { VALID_BOOKING_MODES } = await import("./adminClients.js");
+
+  const csrRea   = CLIENTS.csr_rea;
+  const lonePine = CLIENTS.lone_pine;
+
+  // ── VALID_BOOKING_MODES includes all new modes ────────────────────────────
+  const newModes = ["call_only", "static_links", "api_live_booking", "hybrid"];
+  const missingModes = newModes.filter((m) => !VALID_BOOKING_MODES.includes(m));
+  missingModes.length === 0
+    ? pass("test42: VALID_BOOKING_MODES includes all new booking modes")
+    : fail("test42: missing booking modes", missingModes.join(", "));
+
+  // ── SETTINGS_HELP is exported with expected keys ──────────────────────────
+  const requiredHelpKeys = ["bot_name", "tone", "booking_mode", "human_handoff_enabled", "lead_capture_enabled"];
+  const missingHelpKeys  = requiredHelpKeys.filter((k) => !(k in SETTINGS_HELP));
+  missingHelpKeys.length === 0
+    ? pass("test42: SETTINGS_HELP exports required keys")
+    : fail("test42: SETTINGS_HELP missing keys", missingHelpKeys.join(", "));
+
+  // ── No DB row → static config returned unchanged (with defaults added) ────
+  {
+    const nullSupa = null; // no supabase
+    const result   = await getRuntimeClientConfig(csrRea, nullSupa);
+    result.id === "csr_rea"
+      ? pass("test42: no supabase → returns static client id unchanged")
+      : fail("test42: id changed with no supabase", result.id);
+    result.bookingMode === "fareharbor"
+      ? pass("test42: no supabase → bookingMode unchanged (fareharbor)")
+      : fail("test42: bookingMode changed with no supabase", result.bookingMode);
+    Array.isArray(result.scrapeSources)
+      ? pass("test42: no supabase → scrapeSources is always an array")
+      : fail("test42: scrapeSources not array with no supabase", typeof result.scrapeSources);
+    Array.isArray(result.bookingLinks)
+      ? pass("test42: no supabase → bookingLinks is always an array")
+      : fail("test42: bookingLinks not array with no supabase", typeof result.bookingLinks);
+    result.scrapeSources.length === csrRea.scrapeUrls.length
+      ? pass("test42: scrapeSources falls back to scrapeUrls length")
+      : fail("test42: scrapeSources length mismatch", `${result.scrapeSources.length} vs ${csrRea.scrapeUrls.length}`);
+  }
+
+  // ── humanHandoffEnabled defaults to true when not set ────────────────────
+  {
+    const bare = { id: "test", scrapeUrls: [], bookingUrls: {}, _fromDb: false };
+    const result = await getRuntimeClientConfig(bare, null);
+    result.humanHandoffEnabled === true
+      ? pass("test42: humanHandoffEnabled defaults to true when unset")
+      : fail("test42: humanHandoffEnabled wrong default", result.humanHandoffEnabled);
+  }
+
+  // ── api_live_booking → fareharbor normalization ───────────────────────────
+  {
+    const apiClient = { ...csrRea, bookingMode: "api_live_booking", _fromDb: true };
+    const result    = await getRuntimeClientConfig(apiClient, null);
+    result.bookingMode === "fareharbor"
+      ? pass("test42: api_live_booking normalized to fareharbor")
+      : fail("test42: api_live_booking not normalized", result.bookingMode);
+  }
+
+  // ── DB row overrides static fields ────────────────────────────────────────
+  {
+    const mockSupa = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({
+              data: {
+                bot_name:             "Overridden Bot",
+                tone:                 "very formal",
+                campaigns_enabled:    true,
+                followups_enabled:    false,
+                human_handoff_enabled: false,
+                lead_capture_enabled:  true,
+                waitlist_enabled:     false,
+                booking_link:         "https://example.com/book",
+                booking_mode:         null, // null should not override
+              },
+            }),
+          }),
+        }),
+        order: () => ({ data: [], error: null }),
+      }),
+    };
+    const result = await getRuntimeClientConfig(lonePine, mockSupa);
+    result.botName === "Overridden Bot"
+      ? pass("test42: DB row overrides botName for static client")
+      : fail("test42: botName not overridden", result.botName);
+    result.tone === "very formal"
+      ? pass("test42: DB row overrides tone for static client")
+      : fail("test42: tone not overridden", result.tone);
+    result.campaignsEnabled === true
+      ? pass("test42: DB campaigns_enabled override applied")
+      : fail("test42: campaignsEnabled not overridden", result.campaignsEnabled);
+    result.humanHandoffEnabled === false
+      ? pass("test42: DB human_handoff_enabled=false applied (preserves false)")
+      : fail("test42: humanHandoffEnabled false not applied", result.humanHandoffEnabled);
+    result.bookingLink === "https://example.com/book"
+      ? pass("test42: DB booking_link override applied")
+      : fail("test42: bookingLink not overridden", result.bookingLink);
+    // null bookingMode should not override static value
+    result.bookingMode === "informational"
+      ? pass("test42: null DB booking_mode does not override static value")
+      : fail("test42: null DB booking_mode incorrectly overrode static", result.bookingMode);
+  }
+
+  // ── DB-backed client (_fromDb: true) → skip DB fetch, still normalize ─────
+  {
+    let dbFetched = false;
+    const mockSupa = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => { dbFetched = true; return { data: null }; },
+          }),
+        }),
+        order: () => ({ data: [], error: null }),
+      }),
+    };
+    const dbClient = { ...csrRea, _fromDb: true, bookingMode: "api_live_booking" };
+    const result   = await getRuntimeClientConfig(dbClient, mockSupa);
+    !dbFetched
+      ? pass("test42: DB-backed client skips fetchDbRow (already in memory)")
+      : fail("test42: DB-backed client made unnecessary DB fetch");
+    result.bookingMode === "fareharbor"
+      ? pass("test42: DB-backed client still gets api_live_booking normalization")
+      : fail("test42: DB-backed normalization failed", result.bookingMode);
+  }
+
+  // ── scrapeSources from DB when table has rows ─────────────────────────────
+  {
+    const dbSources = [
+      { url: "https://example.com/", label: "Home", source_type: "website", sort_order: 0 },
+      { url: "https://example.com/faq", label: "FAQ", source_type: "faq", sort_order: 1 },
+    ];
+    const mockSupa = {
+      from: (table) => {
+        if (table === "client_scrape_sources") return {
+          select: () => ({ eq: () => ({ eq: () => ({ order: () => ({ data: dbSources, error: null }) }) }) }),
+        };
+        if (table === "client_booking_options") return {
+          select: () => ({ eq: () => ({ eq: () => ({ order: () => ({ data: [], error: null }) }) }) }),
+        };
+        // clients table for static client DB fetch
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) };
+      },
+    };
+    const result = await getRuntimeClientConfig(lonePine, mockSupa);
+    result.scrapeSources?.length === 2
+      ? pass("test42: scrapeSources loaded from DB when table has rows")
+      : fail("test42: scrapeSources from DB wrong count", result.scrapeSources?.length);
+    result.scrapeUrls?.length === 2
+      ? pass("test42: scrapeUrls kept in sync with DB scrapeSources")
+      : fail("test42: scrapeUrls not synced from DB sources", result.scrapeUrls?.length);
+    result.scrapeSources?.[1]?.source_type === "faq"
+      ? pass("test42: scrapeSources preserves source_type field")
+      : fail("test42: source_type missing", result.scrapeSources?.[1]);
+  }
+
+  // ── bookingLinks from DB when table has rows ──────────────────────────────
+  {
+    const dbLinks = [
+      { type: "link", title: "Book Now", description: "Main booking", url: "https://book.example.com", metadata_json: null, sort_order: 0 },
+    ];
+    const mockSupa = {
+      from: (table) => {
+        if (table === "client_booking_options") return {
+          select: () => ({ eq: () => ({ eq: () => ({ order: () => ({ data: dbLinks, error: null }) }) }) }),
+        };
+        if (table === "client_scrape_sources") return {
+          select: () => ({ eq: () => ({ eq: () => ({ order: () => ({ data: [], error: null }) }) }) }),
+        };
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) };
+      },
+    };
+    const result = await getRuntimeClientConfig(lonePine, mockSupa);
+    result.bookingLinks?.length === 1
+      ? pass("test42: bookingLinks loaded from DB when table has rows")
+      : fail("test42: bookingLinks from DB wrong count", result.bookingLinks?.length);
+    result.bookingLinks?.[0]?.title === "Book Now"
+      ? pass("test42: bookingLinks preserves title from DB")
+      : fail("test42: bookingLinks title wrong", result.bookingLinks?.[0]?.title);
+  }
+
+  // ── bookingLinks fallback to bookingUrls when table is empty ─────────────
+  {
+    const result = await getRuntimeClientConfig(csrRea, null); // no supabase = fallback
+    const bookingUrlCount = Object.keys(csrRea.bookingUrls ?? {}).length;
+    result.bookingLinks?.length === bookingUrlCount
+      ? pass("test42: bookingLinks falls back to bookingUrls entries")
+      : fail("test42: bookingLinks fallback count wrong", `${result.bookingLinks?.length} vs ${bookingUrlCount}`);
+    result.bookingLinks?.every((l) => l.url && l.title)
+      ? pass("test42: bookingLinks fallback entries have title and url")
+      : fail("test42: bookingLinks fallback entries malformed", result.bookingLinks?.[0]);
+  }
+
+  // ── resolveClientById finds static clients by id ──────────────────────────
+  {
+    const found = resolveClientById("lone_pine");
+    found?.id === "lone_pine"
+      ? pass("test42: resolveClientById finds lone_pine")
+      : fail("test42: resolveClientById lone_pine not found", found?.id);
+    const notFound = resolveClientById("nonexistent_client_xyz");
+    notFound === null
+      ? pass("test42: resolveClientById returns null for unknown id")
+      : fail("test42: resolveClientById returned non-null for unknown id", notFound);
   }
 }
 
