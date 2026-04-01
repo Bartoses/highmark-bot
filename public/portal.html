@@ -219,6 +219,18 @@ tr:hover td { background: var(--panel2); }
 }
 /* Admin-only nav items — hidden until admin status confirmed in JS */
 .admin-only { display: none; }
+
+/* More section link list (mobile) */
+.more-link-list { display: flex; flex-direction: column; gap: 2px; }
+.more-link-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 4px; font-size: 14px; color: var(--text);
+  border-bottom: 1px solid var(--border); cursor: pointer;
+  text-decoration: none; transition: color .1s;
+}
+.more-link-item:last-child { border-bottom: none; }
+.more-link-item:hover { color: var(--accent); text-decoration: none; }
+.more-link-arrow { margin-left: auto; color: var(--text3); font-size: 18px; }
 /* Invite URL copy box */
 .invite-url-box {
   background: var(--bg); border: 1px solid var(--border2);
@@ -374,6 +386,51 @@ tr:hover td { background: var(--panel2); }
   </div>
 </div>
 
+      <!-- MORE (mobile-only) -->
+      <div class="section" id="sec-more">
+        <div class="card" style="margin-bottom:12px;">
+          <div class="card-title" style="margin-bottom:14px;">Account</div>
+          <div style="font-size:13px;color:var(--text2);margin-bottom:16px;" id="moreEmail">—</div>
+          <button class="btn btn-ghost btn-sm" id="moreSignOutBtn" style="width:100%;">Sign out</button>
+        </div>
+
+        <div class="card" style="margin-bottom:12px;">
+          <div class="card-title" style="margin-bottom:14px;">Settings &amp; Access</div>
+          <div class="more-link-list">
+            <div class="more-link-item" onclick="switchSection('settings')">
+              <span>⚙</span> Settings
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item admin-only" onclick="switchSection('users')">
+              <span>🔑</span> Users &amp; Access
+              <span class="more-link-arrow">›</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card admin-only">
+          <div class="card-title" style="margin-bottom:14px;">Tools</div>
+          <div class="more-link-list">
+            <a class="more-link-item" href="/ui?key=highmark2026&client=csr_rea" target="_blank">
+              <span>🖥</span> Test Console — CSR/REA
+              <span class="more-link-arrow">↗</span>
+            </a>
+            <a class="more-link-item" href="/ui?key=highmark2026&client=lone_pine" target="_blank">
+              <span>🖥</span> Test Console — Lone Pine
+              <span class="more-link-arrow">↗</span>
+            </a>
+            <a class="more-link-item" href="/ui?key=highmark2026&client=highmark_demo" target="_blank">
+              <span>🖥</span> Test Console — Demo
+              <span class="more-link-arrow">↗</span>
+            </a>
+            <a class="more-link-item" href="https://www.usehighmark.com/home" target="_blank">
+              <span>🌐</span> Highmark website
+              <span class="more-link-arrow">↗</span>
+            </a>
+          </div>
+        </div>
+      </div>
+
 <!-- ── Lead edit modal ──────────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="leadModal">
   <div class="modal">
@@ -456,8 +513,7 @@ tr:hover td { background: var(--panel2); }
   <div class="mob-nav-item" data-section="leads"><span class="mob-icon">👤</span>Leads</div>
   <div class="mob-nav-item" data-section="campaigns"><span class="mob-icon">📣</span>Campaigns</div>
   <div class="mob-nav-item" data-section="analytics"><span class="mob-icon">📊</span>Analytics</div>
-  <div class="mob-nav-item" data-section="settings"><span class="mob-icon">⚙</span>Settings</div>
-  <div class="mob-nav-item admin-only" data-section="users"><span class="mob-icon">🔑</span>Users</div>
+  <div class="mob-nav-item" data-section="more"><span class="mob-icon">☰</span>More</div>
 </nav>
 
 <!-- ── Invite user modal ─────────────────────────────────────────────────────── -->
@@ -533,6 +589,7 @@ async function init() {
 
   // Populate header
   document.getElementById('sidebarEmail').textContent = me.email ?? '';
+  document.getElementById('moreEmail').textContent = me.email ?? '';
   const badgeEl = document.getElementById('clientBadge');
   if (me.isAdmin) badgeEl.classList.add('admin-badge');
 
@@ -570,6 +627,7 @@ async function init() {
   });
 
   document.getElementById('signOutBtn').addEventListener('click', signOut);
+  document.getElementById('moreSignOutBtn').addEventListener('click', signOut);
   document.getElementById('analyticsPeriod').addEventListener('change', loadAnalytics);
 
   // Show admin-only UI elements + wire admin-specific controls
@@ -604,7 +662,7 @@ async function signOut() {
 // ── Section routing ────────────────────────────────────────────────────────
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
-  analytics: 'Analytics', settings: 'Settings', users: 'Users & Access',
+  analytics: 'Analytics', settings: 'Settings', users: 'Users & Access', more: 'More',
 };
 function switchSection(name) {
   if (name === 'users' && !me?.isAdmin) name = 'dashboard';
