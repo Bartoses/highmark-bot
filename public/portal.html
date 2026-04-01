@@ -1325,9 +1325,7 @@ async function loadSettings() {
     const r = await apiPatch('/settings', body);
     btn.disabled = false; btn.textContent = 'Save changes';
     if (!r) {
-      const errText = !_settingsData?.editable
-        ? 'This is a static client (defined in clients.js). Settings changes must be made in code or by migrating to a DB-backed client.'
-        : 'Failed to save settings.';
+      const errText = 'Failed to save settings. Try again — if the error persists, contact Highmark support.';
       msgEl.className = 'error-msg'; msgEl.textContent = errText; msgEl.style.display = 'block';
     } else {
       msgEl.className = 'success-msg'; msgEl.textContent = 'Settings saved.'; msgEl.style.display = 'block';

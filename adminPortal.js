@@ -460,10 +460,48 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
   const clients = getAllClients();
   const client  = clients[clientId];
   if (!client) return res.status(404).json({ error: "Client not found" });
+
+  // If client is static (defined in clients.js, no DB row), auto-promote it to DB-backed.
+  // This seeds the clients table from the static config so future edits persist.
   if (!client._fromDb) {
-    return res.status(400).json({
-      error: "Static clients cannot be edited via portal — contact Highmark to update your configuration",
-    });
+    if (!req.portalUser?.isAdmin) {
+      return res.status(400).json({
+        error: "Static clients cannot be edited via portal — contact Highmark to update your configuration",
+      });
+    }
+    // Seed the DB row from the static client config
+    const seed = {
+      id:                      clientId,
+      slug:                    client.slug     ?? clientId,
+      name:                    client.name,
+      bot_name:                client.botName  ?? null,
+      tone:                    client.tone     ?? null,
+      inbound_phones:          client.inboundPhones ?? [],
+      support_phone:           client.supportPhone  ?? null,
+      handoff_phone:           client.handoffPhone  ?? null,
+      support_email:           client.supportEmail  ?? null,
+      address:                 client.address       ?? null,
+      timezone:                client.timezone      ?? "America/Denver",
+      hours:                   client.hours         ?? null,
+      booking_mode:            client.bookingMode   ?? "informational",
+      fareharbor_enabled:      client.fareharborEnabled  ?? false,
+      crm_enabled:             client.crmEnabled         ?? false,
+      lead_capture_enabled:    client.leadCaptureEnabled ?? false,
+      waitlist_enabled:        client.waitlistEnabled    ?? true,
+      lead_notification_phone: client.leadNotificationPhone ?? null,
+      scrape_urls:             client.scrapeUrls  ?? [],
+      services:                client.services    ?? [],
+      website_url:             client.websiteUrl  ?? null,
+      active:                  true,
+      campaigns_enabled:       client.campaignsEnabled    ?? false,
+      followups_enabled:       client.followupsEnabled    ?? false,
+      human_handoff_enabled:   client.humanHandoffEnabled ?? true,
+      booking_link:            client.bookingLink         ?? null,
+      created_at:              new Date().toISOString(),
+      updated_at:              new Date().toISOString(),
+    };
+    const { error: seedErr } = await supabase.from("clients").upsert(seed, { onConflict: "id" });
+    if (seedErr) return res.status(500).json({ error: `Failed to promote client to DB: ${seedErr.message}` });
   }
 
   const updates = { updated_at: new Date().toISOString() };
