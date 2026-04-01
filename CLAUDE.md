@@ -38,7 +38,7 @@ db1_opt_outs.sql       — migration: creates opt_outs table in DB1 (run once; r
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (619 tests), spawns its own server on port 3099
+test.js                — automated test suite (626 tests), spawns its own server on port 3099
 demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
 demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
 db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
@@ -593,12 +593,15 @@ Authenticated client-facing portal for managing leads, campaigns, analytics, and
 **Auth model:**
 - Supabase Auth (email + password)
 - `portal_users` table: maps `auth_user_id` → `role` + `client_id`
-- Roles: `internal_admin` (can access any client via `?client_id=`), `client_user` (locked to own `client_id`)
+- Roles:
+  - `internal_admin` — Highmark staff, can access any client via `?client_id=`, see all Tools
+  - `client_admin` — Business admin, scoped to own client; can invite/manage users within their account; cannot invite `internal_admin`
+  - `client_user` — Read-only access, scoped to own client
 - JWT validated server-side on every `/portal/api/*` request via `makePortalAuth(supabase)` middleware
 
 **Client scoping:** Enforced server-side at three layers:
 1. Middleware: validates JWT, attaches `req.portalUser`
-2. `resolvePortalClientId(req)`: derives effective `client_id` (client_user ignored query param; admin uses it)
+2. `resolvePortalClientId(req)`: derives effective `client_id` (client_user + client_admin always use own; internal_admin uses query param)
 3. DB query: every query explicitly filters `.eq("client_id", resolvedClientId)`
 
 **Required env var:** `SUPABASE_ANON_KEY` — the Supabase project's anon key (safe to expose to browsers). Returned by `GET /portal/config`. NEVER use `SUPABASE_KEY` (service role) client-side.
@@ -675,22 +678,24 @@ Controlled account provisioning — no open self-serve signup. Internal admins c
 4. Page signs in client-side with anon key → stores JWT in localStorage → redirects to `/portal/dashboard`
 5. Fallback: if client-side sign-in fails → redirect to `/portal/login?activated=1`
 
-**Portal UX — Users & Access section (`/portal/users`, admin-only):**
-- Nav item hidden for `client_user` role via `.admin-only { display: none }`; redirect guard in `switchSection()` prevents direct URL access
-- **Portal Users table**: Email, Role (admin/client pill), Client, Status (active/inactive), Created date, Deactivate/Reactivate button
+**Portal UX — Users & Access section (`/portal/users`):**
+- Visible to `client_admin` AND `internal_admin` (`.client-admin-only { display: none }`); `client_user` still blocked by `switchSection()` guard
+- **Portal Users table**: Email, Role (admin/mgr/client pill), Client, Status (active/inactive), Created date, Deactivate/Reactivate button
 - **Invites table**: Email, Role, Client, Status, Expires (pending only), Resend + Revoke buttons (pending only)
-- **"+ Invite user" button**: opens modal with email field, role dropdown, client dropdown (hidden when role = internal_admin)
+- **"+ Invite user" button**: modal shows email, role dropdown, client dropdown
+  - `client_admin`: client dropdown hidden (always own client); `internal_admin` role option hidden
+  - `internal_admin`: sees all options including `internal_admin` role and client selector
 - After creating/resending: invite URL shown inline with one-click copy button
 - All actions (create, resend, revoke, deactivate) refresh the tables automatically
 
-**How to invite a client user from the portal:**
-1. Log in as `internal_admin` → go to Users & Access
-2. Click "+ Invite user" → enter email, select role `Client user`, select the client
+**How to invite a client user from the portal (as internal_admin or client_admin):**
+1. Log in → go to Users & Access → click "+ Invite user"
+2. Enter email, select role (`Client user` or `Client admin`), select client (internal_admin only)
 3. Copy the invite URL → send to the client out-of-band (email, Slack, etc.)
 4. Client opens the URL → sets a password → automatically signed in → lands on dashboard
 
-**How to invite an internal admin:**
-- Same flow, but select role `Internal admin` — client dropdown is hidden (admins have access to all clients)
+**How to invite an internal admin (internal_admin only):**
+- Same flow, but select role `Internal admin` — client dropdown is hidden
 
 **Resend**: generates a new token + extends expiry 72h. Shows the new URL in the modal.
 **Revoke**: immediately invalidates the invite link. Accepted invites cannot be revoked — deactivate the user instead.
@@ -794,13 +799,14 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 8. ~~**Lead lifecycle + automated follow-up engine**~~ — DONE. `followUpEngine.js`: scheduleFollowUps() + checkAndMarkLeadEngaged(). DB worker sends follow-ups, stops on reply, promotes new→contacted→engaged. Run `db1_lead_followup.sql` migration. Admin: GET /admin/leads/:id, GET /admin/scheduled-messages.
 9. ~~**Campaign engine**~~ — DONE. `campaigns.js` + `adminCampaigns.js`. POST/GET/PATCH campaigns + POST :id/send. Audience targeting (all_leads/engaged_leads/new_leads), 200ms pacing, `{{name}}`/`{{first_name}}` interpolation. `campaign_recipients` updated on send/fail by scheduler. Run `db1_campaigns.sql` migration in Supabase DB1 before use.
 10. ~~**Client portal**~~ — DONE. Authenticated portal at `/portal`. Supabase Auth + `portal_users` table. Dashboard, Leads, Campaigns, Analytics, Settings. JWT-protected API with 3-layer client scoping. Run `db1_portal.sql` + set `SUPABASE_ANON_KEY` env var. Provision users via `POST /admin/portal-users?key=UI_SECRET`.
-11. ~~**Invite-based portal access**~~ — DONE. `adminInvites.js`: tokenized invite lifecycle (create, info, accept, revoke, resend, deactivate). `portal_invites` table, 64-char token, 72h expiry, single-use. `portal-accept.html` + `GET /portal/invite`. Users & Access section in portal SPA (admin-only). Run `db1_portal_invites.sql` migration in Supabase DB1 before use.
-12. ~~**Branded opener**~~ — DONE. CSR/REA first message now includes business name in all three seasonal variants. `getSeasonalOpener(client, seasonOverride?)` exported and testable. 619/619 tests pass.
-13. ~~**opt_outs to DB1**~~ — DONE. TCPA compliance now universal (all clients). Moved from DB2 CRM to DB1. `db1_opt_outs.sql` migration required. DB2 contacts.opted_in still mirrors for CRM. Scheduler check updated. Bot opt-out guards no longer gated on `crmSupabase`.
-14. ~~**client_id attribution fix**~~ — DONE. `saveConversation` now always writes `client_id` on every upsert (was missing, defaulted to `csr_rea` for all clients). Lone Pine and future clients correctly attributed.
-15. ~~**Test data tagging**~~ — DONE. UI console sessions: `session_type='test'` on new conversations, `source='ui'` on leads. Filter/delete with `WHERE session_type='test'` or `WHERE source='ui'` in DB1.
-16. ~~**Portal Tools nav + homepage login**~~ — DONE. Admin-only Tools section in portal sidebar links to all test consoles and Highmark website. Homepage `/home` nav has "Client login" link to `/portal/login`.
-17. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
-18. **Website** — usehighmark.com landing page served at `/home`. Client login link added. Next step: billing, plan enforcement, or advanced analytics.
+11. ~~**Invite-based portal access**~~ — DONE. `adminInvites.js`: tokenized invite lifecycle (create, info, accept, revoke, resend, deactivate). `portal_invites` table, 64-char token, 72h expiry, single-use. `portal-accept.html` + `GET /portal/invite`. Users & Access section in portal SPA. Run `db1_portal_invites.sql` migration in Supabase DB1 before use.
+12. ~~**client_admin role**~~ — DONE. Self-service user management for business accounts. `client_admin` can invite/manage users within their own client; blocked from `internal_admin` escalation. `isClientAdmin` flag on req.portalUser. Users & Access nav visible to `client_admin`. Role pill: admin/mgr/client. Run `db1_client_admin.sql` migration in Supabase DB1 before use. 626/626 tests pass.
+13. ~~**Branded opener**~~ — DONE. CSR/REA first message now includes business name in all three seasonal variants. `getSeasonalOpener(client, seasonOverride?)` exported and testable.
+14. ~~**opt_outs to DB1**~~ — DONE. TCPA compliance now universal (all clients). Moved from DB2 CRM to DB1. `db1_opt_outs.sql` migration required. DB2 contacts.opted_in still mirrors for CRM. Scheduler check updated. Bot opt-out guards no longer gated on `crmSupabase`.
+15. ~~**client_id attribution fix**~~ — DONE. `saveConversation` now always writes `client_id` on every upsert (was missing, defaulted to `csr_rea` for all clients). Lone Pine and future clients correctly attributed.
+16. ~~**Test data tagging**~~ — DONE. UI console sessions: `session_type='test'` on new conversations, `source='ui'` on leads. Filter/delete with `WHERE session_type='test'` or `WHERE source='ui'` in DB1.
+17. ~~**Portal Tools nav + homepage login**~~ — DONE. Admin-only Tools section in portal sidebar links to all test consoles and Highmark website. Homepage `/home` nav has "Client login" link to `/portal/login`.
+18. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+19. **Website** — usehighmark.com landing page served at `/home`. Client login link added. Next step: billing, plan enforcement, or advanced analytics.
 
 **Session tip:** Start a new Claude session when moving to billing, subscriptions, plan enforcement, or public website work.
