@@ -146,10 +146,11 @@ export function getSeasonalOpener(client, seasonOverride) {
   if (c.openerText) return c.openerText;
 
   if (c.id === "csr_rea") {
-    const biz = c.name; // "Colorado Sled Rentals + Rabbit Ears Adventures"
-    if (season === "winter")  return `Hey! You're texting ${biz}. I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?`;
-    if (season === "summer")  return `Hey! You're texting ${biz}. I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?`;
-    return `Hey! You're texting ${biz}. I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?`;
+    const biz = c.name;
+    const bot = c.botName ?? "Summit";
+    if (season === "winter")  return `Hey! You're texting ${biz}. I'm ${bot} 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?`;
+    if (season === "summer")  return `Hey! You're texting ${biz}. I'm ${bot} 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?`;
+    return `Hey! You're texting ${biz}. I'm ${bot} 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?`;
   }
 
   // Generic fallback for informational clients without openerText
@@ -1191,8 +1192,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   client = await getRuntimeClientConfig(client, supabase);
 
   // 6. Demo mode — deterministic guided sales demo, no AI/API calls
-  //    Triggered when the inbound Twilio number routes to a bookingMode==="demo" client.
-  if (client.bookingMode === "demo") {
+  //    Triggered when bookingMode==="demo" OR isDemo flag (protects against DB overriding bookingMode).
+  if (client.bookingMode === "demo" || client.isDemo) {
     const { isNew, convo } = await getConversation(fromNumber, toNumber);
     if (isNew && isUiReq(req)) convo.sessionType = "test";
     const { reply } = await handleDemoFlow({

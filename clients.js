@@ -281,9 +281,18 @@ export function loadDbClients(rows) {
   }
 }
 
-// Returns merged registry: static CLIENTS + DB-loaded clients (DB takes precedence)
+// Returns merged registry: DB-backed clients merged ON TOP of static defaults.
+// This ensures promoted clients keep static-only fields (isDemo, handoffReply
+// functions, fareharborCompanies, snotelStations, etc.) while DB values override
+// editable fields (botName, tone, supportPhone, feature toggles, etc.).
 export function getAllClients() {
-  return { ...CLIENTS, ..._runtimeClients };
+  const merged = { ...CLIENTS };
+  for (const [id, dbClient] of Object.entries(_runtimeClients)) {
+    // If a static entry exists for this ID, spread static first then DB overrides.
+    // DB fields take precedence for editable settings; static fields fill the rest.
+    merged[id] = { ...(CLIENTS[id] ?? {}), ...dbClient };
+  }
+  return merged;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -294,8 +303,11 @@ export function getAllClients() {
 // ─────────────────────────────────────────────────────────────────────────────
 export function resolveClient(toNumber) {
   if (toNumber) {
-    for (const client of Object.values(_runtimeClients)) {
-      if (client.inboundPhones.includes(toNumber)) return client;
+    // Check DB-backed clients first, merging static base so static-only fields survive
+    for (const [id, dbClient] of Object.entries(_runtimeClients)) {
+      if (dbClient.inboundPhones.includes(toNumber)) {
+        return { ...(CLIENTS[id] ?? {}), ...dbClient };
+      }
     }
     for (const client of Object.values(CLIENTS)) {
       if (client.inboundPhones.includes(toNumber)) return client;
@@ -315,5 +327,6 @@ export function getDefaultClient() {
 // Resolve a client by id (not phone number). Checks DB-loaded clients first, then static.
 export function resolveClientById(id) {
   if (!id) return null;
-  return _runtimeClients[id] ?? CLIENTS[id] ?? null;
+  if (_runtimeClients[id]) return { ...(CLIENTS[id] ?? {}), ..._runtimeClients[id] };
+  return CLIENTS[id] ?? null;
 }

@@ -99,7 +99,8 @@ function applyDbOverrides(client, dbRow) {
   if (dbRow.handoff_phone) merged.handoffPhone  = dbRow.handoff_phone;
   if (dbRow.support_email) merged.supportEmail  = dbRow.support_email;
   if (dbRow.booking_link)  merged.bookingLink   = dbRow.booking_link;
-  if (dbRow.booking_mode)  merged.bookingMode   = dbRow.booking_mode;
+  // Don't override bookingMode for demo clients — it's identity, not configurable setting
+  if (dbRow.booking_mode && !client.isDemo)  merged.bookingMode = dbRow.booking_mode;
 
   // Feature toggles — preserve false values (explicit null/undefined check)
   if (dbRow.campaigns_enabled     != null) merged.campaignsEnabled    = dbRow.campaigns_enabled;
