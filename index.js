@@ -1188,6 +1188,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   //    Triggered when the inbound Twilio number routes to a bookingMode==="demo" client.
   if (client.bookingMode === "demo") {
     const { isNew, convo } = await getConversation(fromNumber, toNumber);
+    if (isNew && isUiReq(req)) convo.sessionType = "test";
     const { reply } = await handleDemoFlow({
       supabase, twilioClient, fromNumber, toNumber, rawBody,
       testMode: process.env.TEST_MODE === "true", isNew, convo,
@@ -1250,6 +1251,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
   // 6. Load conversation from Supabase
   const { isNew, convo } = await getConversation(fromNumber, toNumber);
+  // Mark UI console sessions as test so they're filterable in the DB
+  if (isNew && isUiReq(req)) convo.sessionType = "test";
 
   // 7-9. Classify
   const season       = getCurrentSeason();
@@ -1300,6 +1303,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         service,
         timeframe:    date,
         leadType:     "waitlist",
+        source:       isUiReq(req) ? "ui" : "sms",
       });
       if (waitlistLead) {
         scheduleFollowUps(supabase, waitlistLead, toNumber); // fire-and-forget
@@ -1575,6 +1579,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         contactPhone,
         service:   convo.leadData.service,
         timeframe: convo.leadData.timeframe,
+        source:    isUiReq(req) ? "ui" : "sms",
       });
 
       if (savedLead) {

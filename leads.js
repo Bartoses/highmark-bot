@@ -16,7 +16,7 @@
 export async function saveLead(supabase, {
   clientId, fromNumber, contactPhone, contactEmail,
   name, service, timeframe, leadType = "booking",
-  businessName = null, website = null,
+  businessName = null, website = null, source = "sms",
 }) {
   if (!supabase) return null;
   try {
@@ -27,7 +27,7 @@ export async function saveLead(supabase, {
       contact_name:        name         ?? null,
       requested_service:   service      ?? null,
       preferred_timeframe: timeframe    ?? null,
-      source:              "sms",
+      source,
       status:              "new",
       lead_type:           leadType,
     };
