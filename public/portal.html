@@ -672,7 +672,8 @@ function switchSection(name) {
   document.getElementById(`sec-${name}`)?.classList.add('active');
   document.querySelectorAll(`[data-section="${name}"]`).forEach(el => el.classList.add('active'));
   document.getElementById('topbarTitle').textContent = sectionTitles[name] ?? name;
-  history.replaceState(null, '', `/portal/${name}`);
+  // 'more' is mobile-only UI — no server route exists for it
+  if (name !== 'more') history.replaceState(null, '', `/portal/${name}`);
 
   if (name === 'dashboard')  loadDashboard();
   if (name === 'leads')      { leadsOffset = 0; loadLeads(); setupLeadsEvents(); }
