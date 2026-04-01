@@ -26,6 +26,9 @@
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients, loadDbClients } from "./clients.js";
 import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.js";
+import { VALID_BOOKING_MODES } from "./adminClients.js";
+
+const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
 const VALID_LEAD_STATUSES = ["new", "contacted", "engaged", "scheduled", "converted", "closed", "ignored"];
 
@@ -40,6 +43,7 @@ const EDITABLE_SETTINGS = {
   lead_notification_phone: "lead_notification_phone",
   website_url:             "website_url",
   booking_link:            "booking_link",
+  booking_mode:            "booking_mode",
 };
 
 // Boolean feature toggles — validated separately to ensure boolean type.
@@ -395,13 +399,25 @@ export async function handlePortalAnalytics(req, res, supabase) {
 }
 
 // ── GET /portal/api/settings ──────────────────────────────────────────────────
-export async function handlePortalSettings(req, res) {
+export async function handlePortalSettings(req, res, supabase) {
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id is required" });
 
   const clients = getAllClients();
   const client  = clients[clientId];
   if (!client) return res.status(404).json({ error: "Client not found" });
+
+  // Load scrape sources + booking options (non-fatal if tables don't exist yet)
+  let scrapeSources = [];
+  let bookingLinks  = [];
+  if (supabase) {
+    const [srcRes, bkRes] = await Promise.all([
+      supabase.from("client_scrape_sources").select("*").eq("client_id", clientId).order("sort_order"),
+      supabase.from("client_booking_options").select("*").eq("client_id", clientId).order("sort_order"),
+    ]);
+    if (!srcRes.error) scrapeSources = srcRes.data ?? [];
+    if (!bkRes.error)  bookingLinks  = bkRes.data  ?? [];
+  }
 
   return res.json({
     clientId,
@@ -421,6 +437,9 @@ export async function handlePortalSettings(req, res) {
     leadCaptureEnabled:      client.leadCaptureEnabled    ?? false,
     waitlistEnabled:         client.waitlistEnabled       ?? false,
     editable:                !!client._fromDb,
+    // Scrape sources + booking options (from DB; empty if tables not yet migrated)
+    scrapeSources,
+    bookingLinks,
   });
 }
 
@@ -432,6 +451,11 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
   if (!requireClientAdmin(req, res)) return;
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  // Validate booking_mode early — before editability check so validation errors are distinct
+  if (req.body.booking_mode !== undefined && !VALID_BOOKING_MODES.includes(req.body.booking_mode)) {
+    return res.status(400).json({ error: `Invalid booking_mode. Valid: ${VALID_BOOKING_MODES.join(", ")}` });
+  }
 
   const clients = getAllClients();
   const client  = clients[clientId];
@@ -474,6 +498,198 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
     clientId,
     updated: Object.keys(updates).filter(k => k !== "updated_at"),
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRAPE SOURCES CRUD — /portal/api/scrape-sources
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── GET /portal/api/scrape-sources ───────────────────────────────────────────
+export async function handlePortalScrapeSources(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { data, error } = await supabase
+    .from("client_scrape_sources")
+    .select("*")
+    .eq("client_id", clientId)
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    if (error.message?.includes("does not exist")) return res.json({ sources: [] });
+    return res.status(500).json({ error: error.message });
+  }
+  return res.json({ sources: data ?? [] });
+}
+
+// ── POST /portal/api/scrape-sources ──────────────────────────────────────────
+export async function handlePortalCreateScrapeSource(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { url, label, source_type = "website", active = true, sort_order = 0 } = req.body;
+  if (!url) return res.status(400).json({ error: "url is required" });
+  if (!VALID_SOURCE_TYPES.includes(source_type)) {
+    return res.status(400).json({ error: `Invalid source_type. Valid: ${VALID_SOURCE_TYPES.join(", ")}` });
+  }
+
+  const { data, error } = await supabase
+    .from("client_scrape_sources")
+    .insert({ client_id: clientId, url, label: label ?? null, source_type, active, sort_order })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.message?.includes("does not exist")) {
+      return res.status(503).json({ error: "Run db1_scrape_sources.sql migration first" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  return res.status(201).json({ source: data });
+}
+
+// ── PATCH /portal/api/scrape-sources/:id ─────────────────────────────────────
+export async function handlePortalUpdateScrapeSource(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: existing, error: fetchErr } = await supabase
+    .from("client_scrape_sources").select("id, client_id").eq("id", id).single();
+  if (fetchErr || !existing) return res.status(404).json({ error: "Source not found" });
+  if (existing.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
+
+  const allowed = ["url", "label", "source_type", "active", "sort_order"];
+  const updates = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No updatable fields provided" });
+  }
+
+  const { data, error } = await supabase
+    .from("client_scrape_sources").update(updates).eq("id", id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ source: data });
+}
+
+// ── DELETE /portal/api/scrape-sources/:id ────────────────────────────────────
+export async function handlePortalDeleteScrapeSource(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: existing, error: fetchErr } = await supabase
+    .from("client_scrape_sources").select("id, client_id").eq("id", id).single();
+  if (fetchErr || !existing) return res.status(404).json({ error: "Source not found" });
+  if (existing.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
+
+  const { error } = await supabase.from("client_scrape_sources").delete().eq("id", id);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKING OPTIONS CRUD — /portal/api/booking-options
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── GET /portal/api/booking-options ──────────────────────────────────────────
+export async function handlePortalBookingOptions(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { data, error } = await supabase
+    .from("client_booking_options")
+    .select("*")
+    .eq("client_id", clientId)
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    if (error.message?.includes("does not exist")) return res.json({ options: [] });
+    return res.status(500).json({ error: error.message });
+  }
+  return res.json({ options: data ?? [] });
+}
+
+// ── POST /portal/api/booking-options ─────────────────────────────────────────
+export async function handlePortalCreateBookingOption(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { url, title, description, type = "link", active = true, sort_order = 0, metadata_json } = req.body;
+  if (!url)   return res.status(400).json({ error: "url is required" });
+  if (!title) return res.status(400).json({ error: "title is required" });
+
+  const { data, error } = await supabase
+    .from("client_booking_options")
+    .insert({ client_id: clientId, url, title, description: description ?? null, type, active, sort_order, metadata_json: metadata_json ?? null })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.message?.includes("does not exist")) {
+      return res.status(503).json({ error: "Run db1_booking_options.sql migration first" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  return res.status(201).json({ option: data });
+}
+
+// ── PATCH /portal/api/booking-options/:id ────────────────────────────────────
+export async function handlePortalUpdateBookingOption(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: existing, error: fetchErr } = await supabase
+    .from("client_booking_options").select("id, client_id").eq("id", id).single();
+  if (fetchErr || !existing) return res.status(404).json({ error: "Option not found" });
+  if (existing.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
+
+  const allowed = ["url", "title", "description", "type", "active", "sort_order", "metadata_json"];
+  const updates = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No updatable fields provided" });
+  }
+
+  const { data, error } = await supabase
+    .from("client_booking_options").update(updates).eq("id", id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ option: data });
+}
+
+// ── DELETE /portal/api/booking-options/:id ───────────────────────────────────
+export async function handlePortalDeleteBookingOption(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: existing, error: fetchErr } = await supabase
+    .from("client_booking_options").select("id, client_id").eq("id", id).single();
+  if (fetchErr || !existing) return res.status(404).json({ error: "Option not found" });
+  if (existing.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
+
+  const { error } = await supabase.from("client_booking_options").delete().eq("id", id);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

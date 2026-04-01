@@ -2902,6 +2902,7 @@ async function main() {
   await test40(); // client_admin RBAC: scoped user management, blocked escalation, own-client enforcement
   await test41(); // Feature toggles + RBAC: client_user blocked from settings PATCH + campaign mutating ops
   await test42(); // Runtime config loader: DB overrides, fallbacks, new booking modes, resolveClientById
+  await test43(); // Portal settings Chunk 15: scrape sources + booking options CRUD handlers
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -5056,6 +5057,245 @@ async function test42() {
     notFound === null
       ? pass("test42: resolveClientById returns null for unknown id")
       : fail("test42: resolveClientById returned non-null for unknown id", notFound);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test43 — Portal settings Chunk 15: scrape sources + booking options CRUD
+// ─────────────────────────────────────────────────────────────────────────────
+async function test43() {
+  const {
+    handlePortalSettings,
+    handlePortalUpdateSettings,
+    handlePortalScrapeSources,
+    handlePortalCreateScrapeSource,
+    handlePortalUpdateScrapeSource,
+    handlePortalDeleteScrapeSource,
+    handlePortalBookingOptions,
+    handlePortalCreateBookingOption,
+    handlePortalUpdateBookingOption,
+    handlePortalDeleteBookingOption,
+  } = await import("./adminPortal.js");
+
+  // Shared mock supabase with tables
+  const mockSrc = [{ id: "src1", client_id: "demo_client", url: "https://a.com", source_type: "website", active: true, sort_order: 0 }];
+  const mockBk  = [{ id: "bk1",  client_id: "demo_client", url: "https://b.com", title: "Tour 1", active: true, sort_order: 0 }];
+
+  function makeMockSb(srcRows, bkRows) {
+    return {
+      from(table) {
+        return {
+          select() { return this; },
+          insert(row) { return { select() { return { single: async () => ({ data: { id: "newid", ...row }, error: null }) }; } }; },
+          update(row) { return { eq() { return this; }, select() { return { single: async () => ({ data: { id: "src1", ...row }, error: null }) }; } }; },
+          delete() { return { eq() { return this; }, async then(fn) { fn({ data: null, error: null }); } }; },
+          eq()    { return this; },
+          order() { return this; },
+          single: async () => table === "client_scrape_sources"
+            ? { data: srcRows?.[0] ?? null, error: srcRows?.length ? null : { message: "not found" } }
+            : { data: bkRows?.[0]  ?? null, error: bkRows?.length  ? null : { message: "not found" } },
+          then(fn) { fn({ data: table === "client_scrape_sources" ? srcRows : bkRows, error: null }); return this; },
+        };
+      },
+    };
+  }
+
+  const adminReq = (body = {}, params = {}) => ({
+    portalUser: { role: "internal_admin", clientId: "demo_client", isAdmin: true, isClientAdmin: true },
+    query:  { client_id: "demo_client" },
+    params,
+    body,
+  });
+
+  // ── handlePortalSettings returns scrapeSources and bookingLinks ─────────────
+  {
+    const mockSb = {
+      from() {
+        return {
+          select() { return this; },
+          eq()    { return this; },
+          order() { return { then(fn) { fn({ data: [], error: null }); return this; } }; },
+        };
+      },
+    };
+    let settingsBody = null;
+    // internal_admin must supply client_id in query
+    const req = { portalUser: { role: "internal_admin", clientId: "csr_rea", isAdmin: true }, query: { client_id: "csr_rea" } };
+    await handlePortalSettings(req, { status(c) { return { json() {} }; }, json(b) { settingsBody = b; } }, mockSb);
+    Array.isArray(settingsBody?.scrapeSources) && Array.isArray(settingsBody?.bookingLinks)
+      ? pass("test43: handlePortalSettings returns scrapeSources and bookingLinks arrays")
+      : fail("test43: handlePortalSettings missing scrapeSources/bookingLinks", settingsBody);
+  }
+
+  // ── handlePortalUpdateSettings rejects invalid booking_mode ─────────────────
+  {
+    let rejStatus = null;
+    const r = { status(c) { rejStatus = c; return { json() {} }; } };
+    // booking_mode validated early (before _fromDb check) — any valid client_id works
+    const reqBm = {
+      portalUser: { role: "internal_admin", isAdmin: true, isClientAdmin: true, clientId: "csr_rea" },
+      query: { client_id: "csr_rea" },
+      body: { booking_mode: "invalid_mode_xyz" },
+    };
+    const mockSb2 = { from() { return { select() { return this; }, eq() { return this; }, single: async () => ({ data: null, error: null }) }; } };
+    await handlePortalUpdateSettings(reqBm, r, mockSb2);
+    rejStatus === 400
+      ? pass("test43: handlePortalUpdateSettings rejects invalid booking_mode with 400")
+      : fail("test43: handlePortalUpdateSettings wrong status for invalid booking_mode", rejStatus);
+  }
+
+  // ── handlePortalScrapeSources returns 503 when no supabase ─────────────────
+  {
+    let s = null;
+    await handlePortalScrapeSources(adminReq(), { status(c) { s = c; return { json() {} }; } }, null);
+    s === 503
+      ? pass("test43: handlePortalScrapeSources returns 503 when no supabase")
+      : fail("test43: handlePortalScrapeSources wrong status for no supabase", s);
+  }
+
+  // ── handlePortalScrapeSources returns sources array ─────────────────────────
+  {
+    let body = null;
+    const mockSb = makeMockSb(mockSrc, []);
+    await handlePortalScrapeSources(adminReq(), { json(b) { body = b; } }, mockSb);
+    Array.isArray(body?.sources)
+      ? pass("test43: handlePortalScrapeSources returns sources array")
+      : fail("test43: handlePortalScrapeSources bad response", body);
+  }
+
+  // ── handlePortalCreateScrapeSource requires url ──────────────────────────────
+  {
+    let s = null;
+    const mockSb = makeMockSb([], []);
+    await handlePortalCreateScrapeSource(adminReq({ label: "No URL" }), { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 400
+      ? pass("test43: handlePortalCreateScrapeSource requires url (400)")
+      : fail("test43: handlePortalCreateScrapeSource wrong status for missing url", s);
+  }
+
+  // ── handlePortalCreateScrapeSource rejects invalid source_type ──────────────
+  {
+    let s = null;
+    const mockSb = makeMockSb([], []);
+    await handlePortalCreateScrapeSource(adminReq({ url: "https://x.com", source_type: "badtype" }), { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 400
+      ? pass("test43: handlePortalCreateScrapeSource rejects invalid source_type (400)")
+      : fail("test43: handlePortalCreateScrapeSource wrong status for bad source_type", s);
+  }
+
+  // ── handlePortalUpdateScrapeSource enforces ownership ───────────────────────
+  {
+    let s = null;
+    const differentClientSrc = [{ id: "src1", client_id: "other_client" }];
+    const mockSb = makeMockSb(differentClientSrc, []);
+    const req = { ...adminReq({}, { id: "src1" }), query: { client_id: "demo_client" } };
+    req.portalUser = { role: "client_admin", clientId: "demo_client", isClientAdmin: true };
+    await handlePortalUpdateScrapeSource(req, { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 403
+      ? pass("test43: handlePortalUpdateScrapeSource blocks cross-client update (403)")
+      : fail("test43: handlePortalUpdateScrapeSource wrong status for cross-client", s);
+  }
+
+  // ── handlePortalDeleteScrapeSource enforces ownership ───────────────────────
+  {
+    let s = null;
+    const differentClientSrc = [{ id: "src1", client_id: "other_client" }];
+    const mockSb = makeMockSb(differentClientSrc, []);
+    const req = { ...adminReq({}, { id: "src1" }), query: { client_id: "demo_client" } };
+    req.portalUser = { role: "client_admin", clientId: "demo_client", isClientAdmin: true };
+    await handlePortalDeleteScrapeSource(req, { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 403
+      ? pass("test43: handlePortalDeleteScrapeSource blocks cross-client delete (403)")
+      : fail("test43: handlePortalDeleteScrapeSource wrong status for cross-client", s);
+  }
+
+  // ── handlePortalBookingOptions returns 503 when no supabase ─────────────────
+  {
+    let s = null;
+    await handlePortalBookingOptions(adminReq(), { status(c) { s = c; return { json() {} }; } }, null);
+    s === 503
+      ? pass("test43: handlePortalBookingOptions returns 503 when no supabase")
+      : fail("test43: handlePortalBookingOptions wrong status for no supabase", s);
+  }
+
+  // ── handlePortalBookingOptions returns options array ─────────────────────────
+  {
+    let body = null;
+    const mockSb = makeMockSb([], mockBk);
+    await handlePortalBookingOptions(adminReq(), { json(b) { body = b; } }, mockSb);
+    Array.isArray(body?.options)
+      ? pass("test43: handlePortalBookingOptions returns options array")
+      : fail("test43: handlePortalBookingOptions bad response", body);
+  }
+
+  // ── handlePortalCreateBookingOption requires url ─────────────────────────────
+  {
+    let s = null;
+    const mockSb = makeMockSb([], []);
+    await handlePortalCreateBookingOption(adminReq({ title: "Tour" }), { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 400
+      ? pass("test43: handlePortalCreateBookingOption requires url (400)")
+      : fail("test43: handlePortalCreateBookingOption wrong status for missing url", s);
+  }
+
+  // ── handlePortalCreateBookingOption requires title ───────────────────────────
+  {
+    let s = null;
+    const mockSb = makeMockSb([], []);
+    await handlePortalCreateBookingOption(adminReq({ url: "https://x.com" }), { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 400
+      ? pass("test43: handlePortalCreateBookingOption requires title (400)")
+      : fail("test43: handlePortalCreateBookingOption wrong status for missing title", s);
+  }
+
+  // ── handlePortalUpdateBookingOption enforces ownership ───────────────────────
+  {
+    let s = null;
+    const differentClientBk = [{ id: "bk1", client_id: "other_client" }];
+    const mockSb = makeMockSb([], differentClientBk);
+    const req = { ...adminReq({}, { id: "bk1" }), query: { client_id: "demo_client" } };
+    req.portalUser = { role: "client_admin", clientId: "demo_client", isClientAdmin: true };
+    await handlePortalUpdateBookingOption(req, { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 403
+      ? pass("test43: handlePortalUpdateBookingOption blocks cross-client update (403)")
+      : fail("test43: handlePortalUpdateBookingOption wrong status for cross-client", s);
+  }
+
+  // ── handlePortalDeleteBookingOption enforces ownership ───────────────────────
+  {
+    let s = null;
+    const differentClientBk = [{ id: "bk1", client_id: "other_client" }];
+    const mockSb = makeMockSb([], differentClientBk);
+    const req = { ...adminReq({}, { id: "bk1" }), query: { client_id: "demo_client" } };
+    req.portalUser = { role: "client_admin", clientId: "demo_client", isClientAdmin: true };
+    await handlePortalDeleteBookingOption(req, { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 403
+      ? pass("test43: handlePortalDeleteBookingOption blocks cross-client delete (403)")
+      : fail("test43: handlePortalDeleteBookingOption wrong status for cross-client", s);
+  }
+
+  // ── client_user blocked from scrape source mutation ──────────────────────────
+  {
+    let s = null;
+    const roReq = adminReq({ url: "https://x.com" });
+    roReq.portalUser = { role: "client_user", clientId: "demo_client", isClientAdmin: false };
+    const mockSb = makeMockSb([], []);
+    await handlePortalCreateScrapeSource(roReq, { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 403
+      ? pass("test43: client_user blocked from createScrapeSource (403)")
+      : fail("test43: client_user not blocked from createScrapeSource", s);
+  }
+
+  // ── client_user blocked from booking option mutation ─────────────────────────
+  {
+    let s = null;
+    const roReq = adminReq({ url: "https://x.com", title: "Tour" });
+    roReq.portalUser = { role: "client_user", clientId: "demo_client", isClientAdmin: false };
+    const mockSb = makeMockSb([], []);
+    await handlePortalCreateBookingOption(roReq, { status(c) { s = c; return { json() {} }; } }, mockSb);
+    s === 403
+      ? pass("test43: client_user blocked from createBookingOption (403)")
+      : fail("test43: client_user not blocked from createBookingOption", s);
   }
 }
 

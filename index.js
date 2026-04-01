@@ -31,7 +31,7 @@ import { handleListScheduledMessages } from "./adminScheduledMessages.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
 import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
-import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients } from "./adminPortal.js";
+import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption } from "./adminPortal.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
@@ -1936,8 +1936,18 @@ app.get(  "/portal/api/campaigns/:id",       requirePortalAuth, (req, res) => ha
 app.patch("/portal/api/campaigns/:id",       requirePortalAuth, (req, res) => handlePortalUpdateCampaign(req, res, supabase));
 app.post( "/portal/api/campaigns/:id/send",  requirePortalAuth, (req, res) => handlePortalSendCampaign(req, res, supabase, crmSupabase));
 app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
-app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res));
+app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res, supabase));
 app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));
+// Scrape sources CRUD
+app.get(   "/portal/api/scrape-sources",         requirePortalAuth, (req, res) => handlePortalScrapeSources(req, res, supabase));
+app.post(  "/portal/api/scrape-sources",         requirePortalAuth, (req, res) => handlePortalCreateScrapeSource(req, res, supabase));
+app.patch( "/portal/api/scrape-sources/:id",     requirePortalAuth, (req, res) => handlePortalUpdateScrapeSource(req, res, supabase));
+app.delete("/portal/api/scrape-sources/:id",     requirePortalAuth, (req, res) => handlePortalDeleteScrapeSource(req, res, supabase));
+// Booking options CRUD
+app.get(   "/portal/api/booking-options",        requirePortalAuth, (req, res) => handlePortalBookingOptions(req, res, supabase));
+app.post(  "/portal/api/booking-options",        requirePortalAuth, (req, res) => handlePortalCreateBookingOption(req, res, supabase));
+app.patch( "/portal/api/booking-options/:id",    requirePortalAuth, (req, res) => handlePortalUpdateBookingOption(req, res, supabase));
+app.delete("/portal/api/booking-options/:id",    requirePortalAuth, (req, res) => handlePortalDeleteBookingOption(req, res, supabase));
 // Portal invite + user management — requirePortalAuth (internal_admin role enforced inside handlers)
 app.get(  "/portal/api/users",               requirePortalAuth, (req, res) => handlePortalUsers(req, res, supabase));
 app.patch("/portal/api/users/:id",           requirePortalAuth, (req, res) => handlePortalUpdateUser(req, res, supabase));

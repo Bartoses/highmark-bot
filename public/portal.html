@@ -563,6 +563,62 @@ tr:hover td { background: var(--panel2); }
   </div>
 </div>
 
+<!-- ── Scrape source modal ────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="srcModal">
+  <div class="modal">
+    <div class="modal-title">Add Knowledge Source</div>
+    <div id="srcModalError" class="error-msg" style="display:none"></div>
+    <div class="form-group">
+      <label>URL</label>
+      <input type="url" id="srcModalUrl" placeholder="https://example.com/faq">
+      <div class="form-hint">Public URL the bot will scrape for knowledge base content</div>
+    </div>
+    <div class="form-group">
+      <label>Label <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+      <input type="text" id="srcModalLabel" placeholder="FAQ page">
+    </div>
+    <div class="form-group">
+      <label>Type</label>
+      <select id="srcModalType">
+        <option value="website">Website (general)</option>
+        <option value="faq">FAQ</option>
+        <option value="booking">Booking info</option>
+        <option value="policies">Policies</option>
+        <option value="blog">Blog</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('srcModal').classList.remove('open')">Cancel</button>
+      <button class="btn btn-primary" id="srcModalSave" onclick="saveSrcModal()">Add source</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Booking option modal ───────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="bkModal">
+  <div class="modal">
+    <div class="modal-title">Add Booking Option</div>
+    <div id="bkModalError" class="error-msg" style="display:none"></div>
+    <div class="form-group">
+      <label>Title</label>
+      <input type="text" id="bkModalTitle" placeholder="e.g. Guided Snowmobile Tour">
+      <div class="form-hint">Shown as a numbered menu item when guests ask to book</div>
+    </div>
+    <div class="form-group">
+      <label>URL</label>
+      <input type="url" id="bkModalUrl" placeholder="https://fareharbor.com/…">
+    </div>
+    <div class="form-group">
+      <label>Description <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+      <input type="text" id="bkModalDesc" placeholder="e.g. 2hr guided tour, up to 6 guests">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('bkModal').classList.remove('open')">Cancel</button>
+      <button class="btn btn-primary" id="bkModalSave" onclick="saveBkModal()">Add option</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
 // Highmark Client Portal — SPA
@@ -1046,11 +1102,14 @@ async function loadAnalytics() {
 }
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────
+let _settingsData = null; // cached settings for modal callbacks
+
 async function loadSettings() {
   document.getElementById('settingsContent').innerHTML = '<div class="loading">Loading…</div>';
   const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
   const d = await apiFetch(`/settings${clientParam}`);
   if (!d) { document.getElementById('settingsContent').innerHTML = '<div class="error-msg">Failed to load settings.</div>'; return; }
+  _settingsData = d;
 
   const canEdit = d.editable && me?.isClientAdmin;
 
@@ -1061,7 +1120,24 @@ async function loadSettings() {
     return `<tr><td style="padding:8px 0;color:var(--text2);width:160px;font-size:13px;">${label}</td><td style="padding:8px 0;"><span class="pill ${val ? 'pill-green' : 'pill-gray'}">${val ? 'On' : 'Off'}</span></td></tr>`;
   }
 
+  const BOOKING_MODE_LABELS = {
+    fareharbor: 'FareHarbor (live availability)',
+    informational: 'Informational (Q&A + links)',
+    lead_capture: 'Lead capture',
+    call_only: 'Call only (phone CTA)',
+    static_links: 'Static links',
+    api_live_booking: 'API live booking',
+    hybrid: 'Hybrid (links + lead capture)',
+  };
+
   if (!canEdit) {
+    const srcRows = (d.scrapeSources ?? []).map(s =>
+      `<tr><td>${s.label ?? s.url}</td><td class="text-muted text-xs">${s.source_type}</td><td><span class="pill ${s.active ? 'pill-green' : 'pill-gray'}">${s.active ? 'Active' : 'Off'}</span></td></tr>`
+    ).join('') || `<tr><td colspan="3" style="color:var(--text3);padding:8px 0;">No sources configured.</td></tr>`;
+    const bkRows = (d.bookingLinks ?? []).map(b =>
+      `<tr><td>${b.title ?? b.url}</td><td class="text-muted text-xs" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${b.url}</td><td><span class="pill ${b.active ? 'pill-green' : 'pill-gray'}">${b.active ? 'Active' : 'Off'}</span></td></tr>`
+    ).join('') || `<tr><td colspan="3" style="color:var(--text3);padding:8px 0;">No booking options configured.</td></tr>`;
+
     document.getElementById('settingsContent').innerHTML = `
       <div class="card">
         <div class="card-title">General</div>
@@ -1069,11 +1145,18 @@ async function loadSettings() {
         <table style="width:100%;border-collapse:collapse;">
           ${row('Business name', d.name)}
           ${row('Bot name', d.botName)}
-          ${row('Booking mode', d.bookingMode)}
+          ${row('Booking mode', BOOKING_MODE_LABELS[d.bookingMode] ?? d.bookingMode)}
           ${row('Support phone', d.supportPhone)}
           ${row('Support email', d.supportEmail)}
           ${row('Website', d.websiteUrl)}
         </table>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <div class="card-title">Knowledge Sources</div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>URL / Label</th><th>Type</th><th>Status</th></tr></thead>
+          <tbody>${srcRows}</tbody>
+        </table></div>
       </div>
       <div class="card" style="margin-top:16px;">
         <div class="card-title">Booking</div>
@@ -1081,6 +1164,11 @@ async function loadSettings() {
           ${row('Booking link', d.bookingLink)}
           ${tog('Human handoff', d.humanHandoffEnabled)}
         </table>
+        ${(d.bookingLinks ?? []).length > 0 ? `<div style="margin-top:12px;"><div class="card-title" style="margin-bottom:8px;">Booking Options</div>
+          <div class="tbl-wrap"><table>
+            <thead><tr><th>Title</th><th>URL</th><th>Status</th></tr></thead>
+            <tbody>${bkRows}</tbody>
+          </table></div></div>` : ''}
       </div>
       <div class="card" style="margin-top:16px;">
         <div class="card-title">Features</div>
@@ -1094,35 +1182,70 @@ async function loadSettings() {
     return;
   }
 
-  // Editable form — three subsections
+  // Editable form — four subsections
+  const modeOptions = Object.entries(BOOKING_MODE_LABELS).map(([val, lbl]) =>
+    `<option value="${val}" ${d.bookingMode === val ? 'selected' : ''}>${lbl}</option>`
+  ).join('');
+
+  const srcTableHtml = renderScrapeSourcesTable(d.scrapeSources ?? [], canEdit);
+  const bkTableHtml  = renderBookingOptionsTable(d.bookingLinks ?? [], canEdit, d.bookingMode);
+
   document.getElementById('settingsContent').innerHTML = `
     <div class="card">
       <div class="card-title">General</div>
       <div id="settingsMsg" style="display:none;margin-bottom:12px;"></div>
       <div class="two-col">
         <div class="form-group"><label>Business name</label><input type="text" id="set_name" value="${d.name ?? ''}"></div>
-        <div class="form-group"><label>Bot name</label><input type="text" id="set_bot_name" value="${d.botName ?? ''}"></div>
+        <div class="form-group"><label>Bot name</label><input type="text" id="set_bot_name" value="${d.botName ?? ''}">
+          <div class="form-hint">Name the bot uses in conversations (e.g. "Summit")</div></div>
       </div>
-      <div class="form-group"><label>Tone</label><input type="text" id="set_tone" value="${d.tone ?? ''}" placeholder="e.g. warm, helpful, knowledgeable"></div>
+      <div class="form-group"><label>Tone</label><input type="text" id="set_tone" value="${d.tone ?? ''}" placeholder="e.g. warm, helpful, knowledgeable">
+        <div class="form-hint">One-line personality description injected into every response</div></div>
       <div class="two-col">
-        <div class="form-group"><label>Support phone</label><input type="text" id="set_support_phone" value="${d.supportPhone ?? ''}" placeholder="+18005551234"></div>
-        <div class="form-group"><label>Lead notification phone</label><input type="text" id="set_lead_notification_phone" value="${d.leadNotificationPhone ?? ''}"></div>
+        <div class="form-group"><label>Support phone</label><input type="text" id="set_support_phone" value="${d.supportPhone ?? ''}" placeholder="+18005551234">
+          <div class="form-hint">Shown in HELP replies and handoff messages</div></div>
+        <div class="form-group"><label>Lead notification phone</label><input type="text" id="set_lead_notification_phone" value="${d.leadNotificationPhone ?? ''}">
+          <div class="form-hint">SMS destination for new lead notifications</div></div>
       </div>
       <div class="two-col">
         <div class="form-group"><label>Support email</label><input type="email" id="set_support_email" value="${d.supportEmail ?? ''}"></div>
-        <div class="form-group"><label>Website URL</label><input type="url" id="set_website_url" value="${d.websiteUrl ?? ''}"></div>
+        <div class="form-group"><label>Website URL</label><input type="url" id="set_website_url" value="${d.websiteUrl ?? ''}">
+          <div class="form-hint">Used as the default scrape source for the knowledge base</div></div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div class="card-title" style="margin-bottom:0;">Knowledge Sources</div>
+        <button class="btn btn-ghost btn-sm" onclick="openSrcModal()">+ Add source</button>
+      </div>
+      <div class="form-hint" style="margin-bottom:12px;">URLs the bot scrapes weekly to build its knowledge base. Add your FAQ page, pricing page, or any public content URL.</div>
+      <div id="srcTable">${srcTableHtml}</div>
     </div>
 
     <div class="card" style="margin-top:16px;">
       <div class="card-title">Booking</div>
       <div class="form-group">
-        <label>Booking link <span style="color:var(--text2);font-size:11px;">(shown to guests when booking mode is informational)</span></label>
+        <label>Booking mode</label>
+        <select id="set_booking_mode" onchange="onBookingModeChange()">${modeOptions}</select>
+        <div class="form-hint">Controls how the bot handles booking requests from guests</div>
+      </div>
+      <div class="form-group" id="bookingLinkGroup">
+        <label>Fallback booking link <span style="color:var(--text2);font-size:11px;">(shown when no specific options match)</span></label>
         <input type="url" id="set_booking_link" value="${d.bookingLink ?? ''}" placeholder="https://…">
       </div>
-      <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
+      <div style="display:flex;align-items:center;gap:12px;">
         <input type="checkbox" id="set_human_handoff" ${d.humanHandoffEnabled ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
-        <label for="set_human_handoff" style="cursor:pointer;font-size:13px;">Human handoff enabled <span style="color:var(--text2);font-size:11px;">(guests can request to speak to a person)</span></label>
+        <label for="set_human_handoff" style="cursor:pointer;font-size:13px;">Human handoff enabled
+          <span style="display:block;color:var(--text2);font-size:11px;">Guests can text "speak to a person" to get routed to your team</span></label>
+      </div>
+      <div id="bkSection" style="margin-top:20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;">Booking Options</div>
+          <button class="btn btn-ghost btn-sm" onclick="openBkModal()">+ Add option</button>
+        </div>
+        <div class="form-hint" style="margin-bottom:10px;">Numbered menu items sent to guests when they ask to book. Each option needs a title and a URL.</div>
+        <div id="bkTable">${bkTableHtml}</div>
       </div>
     </div>
 
@@ -1130,10 +1253,10 @@ async function loadSettings() {
       <div class="card-title">Features</div>
       <div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">
         ${[
-          ['set_campaigns',   d.campaignsEnabled,    'Campaigns',   'Enable outbound SMS campaign sending'],
-          ['set_followups',   d.followupsEnabled,    'Follow-ups',  'Automatically follow up on captured leads'],
-          ['set_lead_capture',d.leadCaptureEnabled,  'Lead capture','Collect contact info from interested guests'],
-          ['set_waitlist',    d.waitlistEnabled,     'Waitlist',    'Allow guests to join a waitlist when tours are full'],
+          ['set_campaigns',    d.campaignsEnabled,   'Campaigns',    'Enable outbound SMS campaign sending to leads'],
+          ['set_followups',    d.followupsEnabled,   'Follow-ups',   'Automatically follow up on captured leads (1 day + 3 day)'],
+          ['set_lead_capture', d.leadCaptureEnabled, 'Lead capture', 'Collect contact info from interested guests during conversation'],
+          ['set_waitlist',     d.waitlistEnabled,    'Waitlist',     'Allow guests to join a waitlist when requested tours are full'],
         ].map(([id,val,label,desc]) => `
           <div style="display:flex;align-items:center;gap:12px;">
             <input type="checkbox" id="${id}" ${val ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
@@ -1162,6 +1285,7 @@ async function loadSettings() {
       lead_notification_phone: document.getElementById('set_lead_notification_phone').value.trim() || null,
       support_email:           document.getElementById('set_support_email').value.trim() || null,
       website_url:             document.getElementById('set_website_url').value.trim() || null,
+      booking_mode:            document.getElementById('set_booking_mode').value,
       booking_link:            document.getElementById('set_booking_link').value.trim() || null,
       human_handoff_enabled:   document.getElementById('set_human_handoff').checked,
       campaigns_enabled:       document.getElementById('set_campaigns').checked,
@@ -1180,6 +1304,143 @@ async function loadSettings() {
       setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
     }
   });
+
+  onBookingModeChange(); // init conditional visibility
+}
+
+function onBookingModeChange() {
+  const mode = document.getElementById('set_booking_mode')?.value ?? '';
+  const showBk = ['static_links', 'hybrid'].includes(mode);
+  const bkSection = document.getElementById('bkSection');
+  if (bkSection) bkSection.style.display = showBk ? '' : 'none';
+}
+
+function renderScrapeSourcesTable(sources, canEdit) {
+  if (!sources.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0;">No sources added yet.</div>';
+  return `<div class="tbl-wrap"><table>
+    <thead><tr><th>Label / URL</th><th>Type</th><th>Status</th>${canEdit ? '<th></th>' : ''}</tr></thead>
+    <tbody>${sources.map(s => `<tr>
+      <td><div style="font-size:12px;font-weight:500;">${s.label ?? '—'}</div>
+          <div style="font-size:11px;color:var(--text2);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.url}</div></td>
+      <td class="text-muted text-xs">${s.source_type}</td>
+      <td><span class="pill ${s.active ? 'pill-green' : 'pill-gray'}">${s.active ? 'Active' : 'Off'}</span></td>
+      ${canEdit ? `<td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="toggleSrc('${s.id}',${!s.active})">${s.active ? 'Disable' : 'Enable'}</button>
+        <button class="btn btn-danger btn-sm" style="font-size:10px;margin-left:4px" onclick="deleteSrc('${s.id}')">Delete</button>
+      </td>` : ''}
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+function renderBookingOptionsTable(options, canEdit, mode) {
+  if (!options.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0;">No booking options added yet.</div>';
+  return `<div class="tbl-wrap"><table>
+    <thead><tr><th>#</th><th>Title</th><th>URL</th><th>Status</th>${canEdit ? '<th></th>' : ''}</tr></thead>
+    <tbody>${options.map((b, i) => `<tr>
+      <td style="color:var(--text3);font-size:11px;">${i + 1}</td>
+      <td><div style="font-size:12px;font-weight:500;">${b.title}</div>
+          ${b.description ? `<div style="font-size:11px;color:var(--text2);">${b.description}</div>` : ''}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--text2);">${b.url}</td>
+      <td><span class="pill ${b.active ? 'pill-green' : 'pill-gray'}">${b.active ? 'Active' : 'Off'}</span></td>
+      ${canEdit ? `<td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="toggleBk('${b.id}',${!b.active})">${b.active ? 'Disable' : 'Enable'}</button>
+        <button class="btn btn-danger btn-sm" style="font-size:10px;margin-left:4px" onclick="deleteBk('${b.id}')">Delete</button>
+      </td>` : ''}
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+// ── Scrape source modal ────────────────────────────────────────────────────
+function openSrcModal() {
+  document.getElementById('srcModalError').style.display = 'none';
+  document.getElementById('srcModalUrl').value   = '';
+  document.getElementById('srcModalLabel').value = '';
+  document.getElementById('srcModalType').value  = 'website';
+  document.getElementById('srcModal').classList.add('open');
+}
+
+async function saveSrcModal() {
+  const btn = document.getElementById('srcModalSave');
+  const errEl = document.getElementById('srcModalError');
+  const url   = document.getElementById('srcModalUrl').value.trim();
+  const label = document.getElementById('srcModalLabel').value.trim();
+  const type  = document.getElementById('srcModalType').value;
+  if (!url) { errEl.textContent = 'URL is required.'; errEl.style.display = 'block'; return; }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const body = { url, label: label || null, source_type: type };
+  if (me?.isAdmin) body.client_id = me.clientId;
+  const r = await apiFetch('/scrape-sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  btn.disabled = false; btn.textContent = 'Add source';
+  if (!r || r.error) { errEl.textContent = r?.error ?? 'Failed to add source.'; errEl.style.display = 'block'; return; }
+  document.getElementById('srcModal').classList.remove('open');
+  const sources = [...(_settingsData.scrapeSources ?? []), r.source];
+  _settingsData.scrapeSources = sources;
+  document.getElementById('srcTable').innerHTML = renderScrapeSourcesTable(sources, true);
+}
+
+async function toggleSrc(id, active) {
+  const body = { active };
+  if (me?.isAdmin) body.client_id = me.clientId;
+  const r = await apiFetch(`/scrape-sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r || r.error) { alert(r?.error ?? 'Failed to update source.'); return; }
+  _settingsData.scrapeSources = (_settingsData.scrapeSources ?? []).map(s => s.id === id ? r.source : s);
+  document.getElementById('srcTable').innerHTML = renderScrapeSourcesTable(_settingsData.scrapeSources, true);
+}
+
+async function deleteSrc(id) {
+  if (!confirm('Delete this scrape source?')) return;
+  const qp = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const r = await apiFetch(`/scrape-sources/${id}${qp}`, { method: 'DELETE' });
+  if (!r || r.error) { alert(r?.error ?? 'Failed to delete source.'); return; }
+  _settingsData.scrapeSources = (_settingsData.scrapeSources ?? []).filter(s => s.id !== id);
+  document.getElementById('srcTable').innerHTML = renderScrapeSourcesTable(_settingsData.scrapeSources, true);
+}
+
+// ── Booking option modal ───────────────────────────────────────────────────
+function openBkModal() {
+  document.getElementById('bkModalError').style.display = 'none';
+  document.getElementById('bkModalTitle').value = '';
+  document.getElementById('bkModalUrl').value   = '';
+  document.getElementById('bkModalDesc').value  = '';
+  document.getElementById('bkModal').classList.add('open');
+}
+
+async function saveBkModal() {
+  const btn   = document.getElementById('bkModalSave');
+  const errEl = document.getElementById('bkModalError');
+  const title = document.getElementById('bkModalTitle').value.trim();
+  const url   = document.getElementById('bkModalUrl').value.trim();
+  const desc  = document.getElementById('bkModalDesc').value.trim();
+  if (!url)   { errEl.textContent = 'URL is required.';   errEl.style.display = 'block'; return; }
+  if (!title) { errEl.textContent = 'Title is required.'; errEl.style.display = 'block'; return; }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const body = { url, title, description: desc || null };
+  if (me?.isAdmin) body.client_id = me.clientId;
+  const r = await apiFetch('/booking-options', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  btn.disabled = false; btn.textContent = 'Add option';
+  if (!r || r.error) { errEl.textContent = r?.error ?? 'Failed to add option.'; errEl.style.display = 'block'; return; }
+  document.getElementById('bkModal').classList.remove('open');
+  const opts = [...(_settingsData.bookingLinks ?? []), r.option];
+  _settingsData.bookingLinks = opts;
+  document.getElementById('bkTable').innerHTML = renderBookingOptionsTable(opts, true, _settingsData.bookingMode);
+}
+
+async function toggleBk(id, active) {
+  const body = { active };
+  if (me?.isAdmin) body.client_id = me.clientId;
+  const r = await apiFetch(`/booking-options/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r || r.error) { alert(r?.error ?? 'Failed to update option.'); return; }
+  _settingsData.bookingLinks = (_settingsData.bookingLinks ?? []).map(b => b.id === id ? r.option : b);
+  document.getElementById('bkTable').innerHTML = renderBookingOptionsTable(_settingsData.bookingLinks, true, _settingsData.bookingMode);
+}
+
+async function deleteBk(id) {
+  if (!confirm('Delete this booking option?')) return;
+  const qp = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const r = await apiFetch(`/booking-options/${id}${qp}`, { method: 'DELETE' });
+  if (!r || r.error) { alert(r?.error ?? 'Failed to delete option.'); return; }
+  _settingsData.bookingLinks = (_settingsData.bookingLinks ?? []).filter(b => b.id !== id);
+  document.getElementById('bkTable').innerHTML = renderBookingOptionsTable(_settingsData.bookingLinks, true, _settingsData.bookingMode);
 }
 
 // ── USERS & ACCESS (admin only) ────────────────────────────────────────────
