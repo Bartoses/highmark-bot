@@ -1336,7 +1336,7 @@ async function loadSettings() {
           ['conv_guided_flow',      cs.enable_guided_flow      ?? false, 'Guided flow (master switch)', 'Enables menu-based navigation — guests can reply with a number to jump to a topic'],
           ['conv_menu_on_start',    cs.show_main_menu_on_start ?? false, 'Show menu on first message',  'Appends the numbered menu to the opener so guests immediately see their options'],
           ['conv_smart_followups',  cs.enable_smart_followups  ?? true,  'Smart follow-ups',           'Claude weaves 1–2 natural next-step suggestions into each response'],
-          ['conv_recommendations',  cs.enable_recommendations  ?? true,  'Recommendations',             'Allow suggestion-style responses when guest asks "what\\'s best for me?"'],
+          ['conv_recommendations',  cs.enable_recommendations  ?? true,  'Recommendations',             'Allow suggestion-style responses for guest recommendation requests'],
           ['conv_lead_prompts',     cs.enable_lead_prompts     ?? true,  'Lead prompts',                'Proactively offer to collect contact info when guest shows strong intent'],
         ];
         return `<div class="toggle-list">${toggles.map(([id, val, label, desc]) => `
