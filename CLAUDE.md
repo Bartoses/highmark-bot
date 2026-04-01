@@ -33,11 +33,12 @@ clients.js             — per-client configuration registry + resolveClient(toN
 index.js               — main Express server, SMS webhook, all bot logic, booking state machine
 knowledgeBase.js       — FH items (24hr cron) + FH availability (3hr cron) + weather (1hr cron) + website (7-day cron, hash-gated)
 bookingConfirmations.js — FareHarbor webhook receiver + 30min polling + confirmation texts
-crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging
+crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging; opt_outs writes to DB1, contacts mirror to DB2
+db1_opt_outs.sql       — migration: creates opt_outs table in DB1 (run once; replaces DB2 opt_outs as authoritative store)
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
-test.js                — automated test suite (538 tests), spawns its own server on port 3099
+test.js                — automated test suite (619 tests), spawns its own server on port 3099
 demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
 demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
 db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
@@ -257,8 +258,8 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
   booking_data:           { activity, date, groupSize, company, booking_pk, menuOptions },
   handoff:                false,
   consecutive_frustrated: 0,
-  session_type:           "live" | "test",
-  client_id:              "csr_rea"
+  session_type:           "live" | "test",   // "test" for UI console sessions
+  client_id:              "csr_rea"           // set from resolveClient(toNumber) — always correct
 }
 ```
 
@@ -293,6 +294,14 @@ Used by Lone Pine Performance — collects service request without pretending to
 - `crmEnabled` — gates all CRM upsert/tagging; `false` means no contact records created
 - `openerText` — first-message text (overrides getSeasonalOpener generic logic)
 - `handoffReply(phone)` — function returning text sent on explicit handoff intent
+
+### Branded Openers (getSeasonalOpener)
+`getSeasonalOpener(client, seasonOverride?)` — exported from index.js. CSR/REA openers now include the business name in all seasonal variants:
+- **Winter**: `"Hey! You're texting Colorado Sled Rentals + Rabbit Ears Adventures. I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?"`
+- **Summer**: `"Hey! You're texting Colorado Sled Rentals + Rabbit Ears Adventures. I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?"`
+- **Shoulder**: `"Hey! You're texting Colorado Sled Rentals + Rabbit Ears Adventures. I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?"`
+- `openerText` override (e.g. Lone Pine) takes precedence over seasonal logic
+- `seasonOverride` optional second param enables deterministic testing of specific seasonal branches
 
 ### Admin Lead Management (adminLeads.js — Chunk 5)
 Internal API for viewing and updating captured leads. Protected by `requireUiAccess` (same `UI_SECRET` as the UI console).
@@ -744,6 +753,20 @@ curl -X POST "https://highmark-bot-production.up.railway.app/admin/campaigns?key
 curl -X POST "https://highmark-bot-production.up.railway.app/admin/campaigns/CAMPAIGN_ID/send?key=YOUR_UI_SECRET"
 ```
 
+### DB1 vs DB2 — What Lives Where
+- **DB1 (primary)**: conversations, leads, scheduled_messages, confirmations_sent, campaigns (Chunk 9), campaign_recipients, portal_users, portal_invites, clients, demo_events, knowledge_base, opt_outs (all clients)
+- **DB2 (CSR/REA CRM)**: contacts, campaign_sends, opt_outs (mirror only — DB1 is authoritative)
+
+**opt_outs split:** Bot writes STOP/START to DB1 `opt_outs` (universal). When `client.crmEnabled=true`, also mirrors `contacts.opted_in` to DB2 for CRM accuracy. Scheduler opt-out check uses DB1 only. Run `db1_opt_outs.sql` migration in Supabase DB1 before first use.
+
+**To clear test opt-outs:** `DELETE FROM opt_outs;` in Supabase DB1 (not DB2).
+
+**To clean up test data from the UI console:**
+```sql
+DELETE FROM conversations WHERE session_type = 'test';
+DELETE FROM leads WHERE source = 'ui';
+```
+
 ### DB2 CRM Security
 - RLS enabled on all 4 tables: contacts, campaigns, campaign_sends, opt_outs
 - Service role key bypasses RLS automatically — bot is unaffected
@@ -772,7 +795,12 @@ Currently one Railway deployment = one client. When managing 4+ clients:
 9. ~~**Campaign engine**~~ — DONE. `campaigns.js` + `adminCampaigns.js`. POST/GET/PATCH campaigns + POST :id/send. Audience targeting (all_leads/engaged_leads/new_leads), 200ms pacing, `{{name}}`/`{{first_name}}` interpolation. `campaign_recipients` updated on send/fail by scheduler. Run `db1_campaigns.sql` migration in Supabase DB1 before use.
 10. ~~**Client portal**~~ — DONE. Authenticated portal at `/portal`. Supabase Auth + `portal_users` table. Dashboard, Leads, Campaigns, Analytics, Settings. JWT-protected API with 3-layer client scoping. Run `db1_portal.sql` + set `SUPABASE_ANON_KEY` env var. Provision users via `POST /admin/portal-users?key=UI_SECRET`.
 11. ~~**Invite-based portal access**~~ — DONE. `adminInvites.js`: tokenized invite lifecycle (create, info, accept, revoke, resend, deactivate). `portal_invites` table, 64-char token, 72h expiry, single-use. `portal-accept.html` + `GET /portal/invite`. Users & Access section in portal SPA (admin-only). Run `db1_portal_invites.sql` migration in Supabase DB1 before use.
-12. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
-13. **Website** — usehighmark.com landing page served at `/home`. Next step: Start new Claude session for billing, plan enforcement, or advanced analytics.
+12. ~~**Branded opener**~~ — DONE. CSR/REA first message now includes business name in all three seasonal variants. `getSeasonalOpener(client, seasonOverride?)` exported and testable. 619/619 tests pass.
+13. ~~**opt_outs to DB1**~~ — DONE. TCPA compliance now universal (all clients). Moved from DB2 CRM to DB1. `db1_opt_outs.sql` migration required. DB2 contacts.opted_in still mirrors for CRM. Scheduler check updated. Bot opt-out guards no longer gated on `crmSupabase`.
+14. ~~**client_id attribution fix**~~ — DONE. `saveConversation` now always writes `client_id` on every upsert (was missing, defaulted to `csr_rea` for all clients). Lone Pine and future clients correctly attributed.
+15. ~~**Test data tagging**~~ — DONE. UI console sessions: `session_type='test'` on new conversations, `source='ui'` on leads. Filter/delete with `WHERE session_type='test'` or `WHERE source='ui'` in DB1.
+16. ~~**Portal Tools nav + homepage login**~~ — DONE. Admin-only Tools section in portal sidebar links to all test consoles and Highmark website. Homepage `/home` nav has "Client login" link to `/portal/login`.
+17. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+18. **Website** — usehighmark.com landing page served at `/home`. Client login link added. Next step: billing, plan enforcement, or advanced analytics.
 
-**Session tip:** Start a new Claude session when moving to billing, subscriptions, plan enforcement, or public website work — this session has been focused on invite/portal/backend work.
+**Session tip:** Start a new Claude session when moving to billing, subscriptions, plan enforcement, or public website work.
