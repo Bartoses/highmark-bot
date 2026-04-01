@@ -38,6 +38,8 @@ import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { isYesIntent, isNoIntent, detectPath, detectVertical, detectQuestionIntent, detectSubtype } from "./demoFlow.js";
 import { DEFAULTS, SECTION_KEYS, loadSiteContent, updateSiteSection, getSiteSection, invalidateSiteContentCache } from "./siteContent.js";
 import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction, DEFAULT_MENU_OPTIONS } from "./conversationEngine.js";
+import { normalizePhone, isValidPhone, formatPhoneForDisplay } from "./phoneUtils.js";
+import { isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -2908,6 +2910,8 @@ async function main() {
   await test43(); // Portal settings Chunk 15: scrape sources + booking options CRUD handlers
   await test44(); // Conversation engine (Chunk 16): getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction
   await test45(); // Demo alignment (Chunk 17): demo uses convConfig, menu routing, lead prompt gate, scheduleFollowUps with outboundPhone
+  await test46(); // Phone utilities (Phase 1): normalizePhone, isValidPhone, formatPhoneForDisplay
+  await test47(); // Live truth resolver (Phase 1): isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -5633,6 +5637,289 @@ async function test45() {
     !lc.includes("what would you like") && !lc.includes("what's your name") && !lc.includes("whats your name")
       ? pass("test45: guided flow OFF → native detectPath '3' routes to pricing (not menu fallback)")
       : fail("test45: detectPath '3' did not route to pricing with guided flow off", result.reply.slice(0, 100));
+  }
+}
+
+async function test46() {
+  console.log("\nTEST 46: Phone utilities — normalizePhone, isValidPhone, formatPhoneForDisplay\n");
+
+  // ── normalizePhone: 10-digit US ────────────────────────────────────────────
+  normalizePhone("9704391707") === "+19704391707"
+    ? pass("test46: normalizePhone 10-digit US → E.164")
+    : fail("test46: 10-digit US normalization", normalizePhone("9704391707"));
+
+  // ── normalizePhone: 11-digit US with leading 1 ─────────────────────────────
+  normalizePhone("19704391707") === "+19704391707"
+    ? pass("test46: normalizePhone 11-digit US (1XXXXXXXXXX) → E.164")
+    : fail("test46: 11-digit US normalization", normalizePhone("19704391707"));
+
+  // ── normalizePhone: already E.164 unchanged ─────────────────────────────────
+  normalizePhone("+19704391707") === "+19704391707"
+    ? pass("test46: normalizePhone valid E.164 unchanged")
+    : fail("test46: E.164 should be unchanged", normalizePhone("+19704391707"));
+
+  // ── normalizePhone: strips display characters ───────────────────────────────
+  normalizePhone("(970) 439-1707") === "+19704391707"
+    ? pass("test46: normalizePhone strips parentheses, spaces, dashes")
+    : fail("test46: display format stripping", normalizePhone("(970) 439-1707"));
+
+  normalizePhone("970.439.1707") === "+19704391707"
+    ? pass("test46: normalizePhone strips dots")
+    : fail("test46: dot-separated normalization", normalizePhone("970.439.1707"));
+
+  // ── normalizePhone: E.164 with display chars ────────────────────────────────
+  normalizePhone("+1 970 439 1707") === "+19704391707"
+    ? pass("test46: normalizePhone E.164 with spaces normalized")
+    : fail("test46: E.164 with spaces", normalizePhone("+1 970 439 1707"));
+
+  // ── normalizePhone: invalid returns null ────────────────────────────────────
+  normalizePhone("12345") === null
+    ? pass("test46: normalizePhone too-short number returns null")
+    : fail("test46: too-short should be null", normalizePhone("12345"));
+
+  normalizePhone("not-a-phone") === null
+    ? pass("test46: normalizePhone invalid string returns null")
+    : fail("test46: invalid string should be null", normalizePhone("not-a-phone"));
+
+  normalizePhone(null) === null
+    ? pass("test46: normalizePhone null input returns null")
+    : fail("test46: null input should be null", normalizePhone(null));
+
+  normalizePhone("") === null
+    ? pass("test46: normalizePhone empty string returns null")
+    : fail("test46: empty string should be null", normalizePhone(""));
+
+  // ── isValidPhone ─────────────────────────────────────────────────────────────
+  isValidPhone("+19704391707")
+    ? pass("test46: isValidPhone true for valid E.164")
+    : fail("test46: should be valid");
+
+  isValidPhone("(970) 439-1707")
+    ? pass("test46: isValidPhone true for display format")
+    : fail("test46: display format should be valid");
+
+  !isValidPhone("12345")
+    ? pass("test46: isValidPhone false for too-short number")
+    : fail("test46: too-short should be invalid");
+
+  !isValidPhone("not-a-phone")
+    ? pass("test46: isValidPhone false for garbage input")
+    : fail("test46: garbage should be invalid");
+
+  // ── formatPhoneForDisplay ─────────────────────────────────────────────────────
+  formatPhoneForDisplay("+19704391707") === "(970) 439-1707"
+    ? pass("test46: formatPhoneForDisplay US E.164 → display format")
+    : fail("test46: display format wrong", formatPhoneForDisplay("+19704391707"));
+
+  formatPhoneForDisplay("+447911123456") === "+447911123456"
+    ? pass("test46: formatPhoneForDisplay non-US returned unchanged")
+    : fail("test46: non-US should be unchanged", formatPhoneForDisplay("+447911123456"));
+
+  formatPhoneForDisplay(null) === null
+    ? pass("test46: formatPhoneForDisplay null returns null")
+    : fail("test46: null should return null", formatPhoneForDisplay(null));
+}
+
+async function test47() {
+  console.log("\nTEST 47: Live truth resolver — isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction\n");
+
+  // ── isAvailabilitySensitive: matches availability phrases ─────────────────
+  const sensitivePhrases = [
+    "do you have availability",
+    "can I book a tour",
+    "are you running this weekend",
+    "any openings?",
+    "do you have open slots",
+    "is there still space",
+    "can I reserve a sled",
+    "are you still operating",
+    "I want to schedule",
+    "do you take reservations",
+  ];
+  for (const phrase of sensitivePhrases) {
+    isAvailabilitySensitive(phrase)
+      ? pass(`test47: "${phrase.slice(0,30)}" recognized as availability-sensitive`)
+      : fail(`test47: should be availability-sensitive`, phrase);
+  }
+
+  // ── isAvailabilitySensitive: ignores unrelated messages ──────────────────
+  const nonSensitive = [
+    "What are your prices?",
+    "Tell me about the guides",
+    "What should I wear?",
+    "Hello!",
+    "Thanks for the info",
+  ];
+  for (const phrase of nonSensitive) {
+    !isAvailabilitySensitive(phrase)
+      ? pass(`test47: "${phrase.slice(0,30)}" correctly not availability-sensitive`)
+      : fail(`test47: should NOT be availability-sensitive`, phrase);
+  }
+
+  // ── resolveLiveTruth: returns null for null client ────────────────────────
+  {
+    const result = await resolveLiveTruth("do you have availability", null, {});
+    result === null
+      ? pass("test47: resolveLiveTruth returns null for null client")
+      : fail("test47: should return null for null client", result);
+  }
+
+  // ── resolveLiveTruth: returns null for non-sensitive message ──────────────
+  {
+    const client = { fareharborEnabled: true, fareharborCompanies: [{ id: "csr" }] };
+    const result = await resolveLiveTruth("What should I wear?", client, {});
+    result === null
+      ? pass("test47: resolveLiveTruth returns null for non-sensitive message")
+      : fail("test47: should return null for non-sensitive message", result);
+  }
+
+  // ── resolveLiveTruth: returns null for non-FH client ─────────────────────
+  {
+    const client = { fareharborEnabled: false, fareharborCompanies: [] };
+    const result = await resolveLiveTruth("do you have availability", client, {});
+    result === null
+      ? pass("test47: resolveLiveTruth returns null for non-FH client")
+      : fail("test47: should return null for non-FH client", result);
+  }
+
+  // ── resolveLiveTruth: available when items have open days ─────────────────
+  {
+    const client = {
+      fareharborEnabled: true,
+      fareharborCompanies: [{ id: "csr" }],
+    };
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          in: async () => ({
+            data: [{
+              key: "csr_fareharbor",
+              fetched_at: new Date().toISOString(),
+              data: {
+                availabilityData: {
+                  "Guided Snowmobile Tour": { pk: 1, open_days: 5, next_open: "2026-04-10T10:00:00Z" },
+                  "Self-Guided Rental":     { pk: 2, open_days: 3, next_open: "2026-04-08T09:00:00Z" },
+                },
+              },
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    };
+    const result = await resolveLiveTruth("do you have availability", client, mockSb);
+    result?.status === "available"
+      ? pass("test47: resolveLiveTruth returns 'available' when items have open slots")
+      : fail("test47: should be available", result?.status);
+    result?.domain === "booking"
+      ? pass("test47: resolveLiveTruth domain is 'booking'")
+      : fail("test47: domain should be 'booking'", result?.domain);
+    result?.matchingEntities?.length === 2
+      ? pass("test47: resolveLiveTruth matchingEntities includes all open items")
+      : fail("test47: wrong entity count", result?.matchingEntities?.length);
+  }
+
+  // ── resolveLiveTruth: unavailable when all items have zero open days ───────
+  {
+    const client = {
+      fareharborEnabled: true,
+      fareharborCompanies: [{ id: "rea" }],
+    };
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          in: async () => ({
+            data: [{
+              key: "rea_fareharbor",
+              fetched_at: new Date().toISOString(),
+              data: {
+                availabilityData: {
+                  "2hr Snowmobile Tour": { pk: 10, open_days: 0, next_open: null },
+                  "3hr Snowmobile Tour": { pk: 11, open_days: 0, next_open: null },
+                },
+              },
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    };
+    const result = await resolveLiveTruth("are you running tours?", client, mockSb);
+    result?.status === "unavailable"
+      ? pass("test47: resolveLiveTruth returns 'unavailable' when no open slots")
+      : fail("test47: should be unavailable", result?.status);
+    result?.reason === "no_future_slots"
+      ? pass("test47: resolveLiveTruth reason is 'no_future_slots'")
+      : fail("test47: wrong reason", result?.reason);
+    result?.recommendedNextAction === "handoff"
+      ? pass("test47: resolveLiveTruth recommends 'handoff' when unavailable")
+      : fail("test47: wrong recommendedNextAction", result?.recommendedNextAction);
+  }
+
+  // ── resolveLiveTruth: unknown when DB returns empty rows ──────────────────
+  {
+    const client = {
+      fareharborEnabled: true,
+      fareharborCompanies: [{ id: "csr" }],
+    };
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          in: async () => ({ data: [], error: null }),
+        }),
+      }),
+    };
+    const result = await resolveLiveTruth("do you have openings?", client, mockSb);
+    result?.status === "unknown"
+      ? pass("test47: resolveLiveTruth returns 'unknown' when no KB rows found")
+      : fail("test47: should be unknown when no rows", result?.status);
+    result?.reason === "integration_error"
+      ? pass("test47: resolveLiveTruth reason is 'integration_error' when no rows")
+      : fail("test47: wrong reason for no rows", result?.reason);
+  }
+
+  // ── buildTruthInstruction: empty for null and available ───────────────────
+  {
+    buildTruthInstruction(null) === ""
+      ? pass("test47: buildTruthInstruction returns empty for null")
+      : fail("test47: should return empty for null");
+    buildTruthInstruction({ status: "available" }) === ""
+      ? pass("test47: buildTruthInstruction returns empty for available (KB sufficient)")
+      : fail("test47: should return empty for available");
+  }
+
+  // ── buildTruthInstruction: strong warning for unavailable ─────────────────
+  {
+    const instr = buildTruthInstruction({
+      status: "unavailable",
+      reason: "no_future_slots",
+      matchingEntities: [],
+    });
+    instr.includes("NO open booking slots")
+      ? pass("test47: buildTruthInstruction includes unavailability warning")
+      : fail("test47: unavailable instruction missing key phrase", instr.slice(0, 80));
+    instr.includes("Do NOT suggest")
+      ? pass("test47: buildTruthInstruction explicitly prohibits suggesting availability")
+      : fail("test47: instruction should prohibit suggesting availability");
+  }
+
+  // ── buildTruthInstruction: uncertainty warning for unknown ────────────────
+  {
+    const instr = buildTruthInstruction({ status: "unknown", reason: "integration_error", matchingEntities: [] });
+    instr.includes("Do NOT state or imply")
+      ? pass("test47: buildTruthInstruction warns against fabricating for unknown")
+      : fail("test47: unknown instruction missing uncertainty warning", instr.slice(0, 80));
+  }
+
+  // ── limited status: correct recommendation ───────────────────────────────
+  {
+    const instr = buildTruthInstruction({
+      status: "limited",
+      matchingEntities: [{ name: "Guided Tour", openDays: 3 }],
+    });
+    instr.includes("1 offering")
+      ? pass("test47: buildTruthInstruction limited mentions open offerings")
+      : fail("test47: limited instruction missing offering count", instr.slice(0, 80));
   }
 }
 

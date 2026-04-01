@@ -7,6 +7,8 @@
 // Flow: booking intent → ask service → ask callback → ask timeframe → save + notify
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { normalizePhone } from "./phoneUtils.js";
+
 /**
  * Save a captured lead to the leads table in DB1.
  * Returns the created lead row (including id) on success, null on failure (non-throwing).
@@ -20,10 +22,13 @@ export async function saveLead(supabase, {
 }) {
   if (!supabase) return null;
   try {
+    // Normalize contact phone for consistent dedup and CRM matching.
+    // fromNumber from Twilio is already E.164; contactPhone may be user-entered.
+    const normalizedContact = normalizePhone(contactPhone) ?? contactPhone;
     const row = {
       client_id:           clientId,
       from_number:         fromNumber,
-      contact_phone:       contactPhone,
+      contact_phone:       normalizedContact,
       contact_name:        name         ?? null,
       requested_service:   service      ?? null,
       preferred_timeframe: timeframe    ?? null,

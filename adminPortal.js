@@ -27,6 +27,7 @@ import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients, loadDbClients } from "./clients.js";
 import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.js";
 import { VALID_BOOKING_MODES } from "./adminClients.js";
+import { normalizePhone, isValidPhone } from "./phoneUtils.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
@@ -535,6 +536,22 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
     };
     const { error: seedErr } = await supabase.from("clients").upsert(seed, { onConflict: "id" });
     if (seedErr) return res.status(500).json({ error: `Failed to promote client to DB: ${seedErr.message}` });
+  }
+
+  // Normalize and validate operational phone fields (Twilio send targets)
+  // Display phones (support_phone, handoff_phone) are left as-is — they appear in bot messages.
+  const OPERATIONAL_PHONE_FIELDS = ["outbound_phone", "lead_notification_phone"];
+  for (const field of OPERATIONAL_PHONE_FIELDS) {
+    const val = req.body[field];
+    if (val == null) continue; // not being updated
+    if (val === "") continue;  // clearing the field — allow empty
+    const normalized = normalizePhone(val);
+    if (!normalized) {
+      return res.status(400).json({
+        error: `${field} must be a valid phone number (E.164 or US 10-digit). Got: "${val}"`,
+      });
+    }
+    req.body[field] = normalized; // replace with canonical form before saving
   }
 
   const updates = { updated_at: new Date().toISOString() };

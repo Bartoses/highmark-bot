@@ -39,6 +39,7 @@ import { loadDbClients } from "./clients.js";
 import { handleDemoFlow } from "./demoFlow.js";
 import { getRuntimeClientConfig } from "./clientConfig.js";
 import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction } from "./conversationEngine.js";
+import { resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1703,6 +1704,12 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo, client);
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
 
+      // Live truth — resolve before Claude to prevent pitching unavailable offerings.
+      // Uses cached KB availability data (no extra API calls). Returns null for
+      // non-availability messages or non-FH clients.
+      const liveTruth        = await resolveLiveTruth(rawBody, client, supabase);
+      const truthInstruction = buildTruthInstruction(liveTruth);
+
       // Build deterministic response plan — tells Claude what to do and what is forbidden
       const responsePlan    = buildResponsePlan(intent, sentiment, buyingSignals, convo, client);
       const planInstruction = formatResponsePlanInstruction(responsePlan, client);
@@ -1710,9 +1717,10 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       // Combine availability context with plan instruction and conversation guidance
       const convInstruction = buildConversationInstruction(effectiveIntent, client);
       let extraInstruction = [
-        availCtx        ? `Live availability data: ${availCtx}` : null,
-        planInstruction || null,
-        convInstruction || null,
+        availCtx          ? `Live availability data: ${availCtx}` : null,
+        planInstruction   || null,
+        convInstruction   || null,
+        truthInstruction  || null,
       ].filter(Boolean).join("\n\n") || null;
 
       // 480 chars (3 texts) — never cut off mid-thought

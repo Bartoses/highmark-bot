@@ -8,6 +8,8 @@
 // CLIENT_CONFIG
 const CLIENT_ID = process.env.CLIENT_ID || "csr_rea";
 
+import { normalizePhone } from "./phoneUtils.js";
+
 export const OPT_OUT_KEYWORDS = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "QUIT", "END"];
 export const OPT_IN_KEYWORDS  = ["START", "UNSTOP"];
 
@@ -89,12 +91,15 @@ export async function handleOptInKeyword(phone, fromNumber, twilioClient, supaba
 
 export async function upsertContact(phone, data, crmSupabase) {
   if (!phone || !crmSupabase) return;
+  // Normalize to E.164 for consistent dedup — phone from Twilio is already E.164,
+  // but user-entered values (CRM imports, settings) may vary.
+  const normalizedPhone = normalizePhone(phone) ?? phone;
   try {
     // Check if contact exists to handle tags merge
     const { data: existing } = await crmSupabase
       .from("contacts")
       .select("tags, total_bookings, opted_in")
-      .eq("phone", phone)
+      .eq("phone", normalizedPhone)
       .single();
 
     const existingTags = existing?.tags ?? [];
@@ -102,7 +107,7 @@ export async function upsertContact(phone, data, crmSupabase) {
     const mergedTags   = [...new Set([...existingTags, ...newTags])];
 
     const upsertData = {
-      phone,
+      phone: normalizedPhone,
       first_name:    data.firstName ?? null,
       last_name:     data.lastName  ?? null,
       email:         data.email     ?? null,
