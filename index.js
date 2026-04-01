@@ -19,6 +19,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
 import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborKbRow, getFareHarborAvailability } from "./knowledgeBase.js";
+import { runCrawlerForClient } from "./crawler.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
@@ -31,7 +32,7 @@ import { handleListScheduledMessages } from "./adminScheduledMessages.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
 import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
-import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption } from "./adminPortal.js";
+import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption, handlePortalCrawlPages } from "./adminPortal.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
@@ -2012,6 +2013,20 @@ app.get(   "/portal/api/booking-options",        requirePortalAuth, (req, res) =
 app.post(  "/portal/api/booking-options",        requirePortalAuth, (req, res) => handlePortalCreateBookingOption(req, res, supabase));
 app.patch( "/portal/api/booking-options/:id",    requirePortalAuth, (req, res) => handlePortalUpdateBookingOption(req, res, supabase));
 app.delete("/portal/api/booking-options/:id",    requirePortalAuth, (req, res) => handlePortalDeleteBookingOption(req, res, supabase));
+// Crawler pages + manual trigger
+app.get( "/portal/api/crawl-pages", requirePortalAuth, (req, res) => handlePortalCrawlPages(req, res, supabase));
+app.post("/portal/api/crawl-now",   requirePortalAuth, async (req, res) => {
+  if (!req.portalUser?.isAdmin) return res.status(403).json({ error: "Admin only" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+  const client = getAllClients()[clientId];
+  if (!client)  return res.status(404).json({ error: "Client not found" });
+  if (!client.crawlSettings?.enabled) return res.status(400).json({ error: "Crawler not enabled for this client" });
+  runCrawlerForClient(supabase, anthropic, client).catch((err) =>
+    console.error(`[CRAWLER] Portal-triggered crawl failed for ${clientId}:`, err.message)
+  );
+  res.json({ ok: true, message: "Crawl started — check back in a few minutes" });
+});
 // Portal invite + user management — requirePortalAuth (internal_admin role enforced inside handlers)
 app.get(  "/portal/api/users",               requirePortalAuth, (req, res) => handlePortalUsers(req, res, supabase));
 app.patch("/portal/api/users/:id",           requirePortalAuth, (req, res) => handlePortalUpdateUser(req, res, supabase));

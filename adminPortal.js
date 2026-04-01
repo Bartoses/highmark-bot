@@ -466,6 +466,8 @@ export async function handlePortalSettings(req, res, supabase) {
     // Auth token intentionally omitted from GET — write-only in portal
     // Conversation settings (db1_conversation_settings.sql)
     conversationSettings:    client.conversationSettings  ?? {},
+    // Crawl settings (db1_crawl_settings.sql)
+    crawlSettings:           client.crawlSettings         ?? {},
     // Scrape sources + booking options (from DB; empty if tables not yet migrated)
     scrapeSources,
     bookingLinks,
@@ -575,6 +577,14 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
       return res.status(400).json({ error: "conversation_settings must be a JSON object" });
     }
     updates.conversation_settings = req.body.conversation_settings;
+  }
+
+  // crawl_settings — JSON object; store snake_case keys as-is (dbRowToClient normalizes)
+  if (req.body.crawl_settings !== undefined) {
+    if (typeof req.body.crawl_settings !== "object" || Array.isArray(req.body.crawl_settings)) {
+      return res.status(400).json({ error: "crawl_settings must be a JSON object" });
+    }
+    updates.crawl_settings = req.body.crawl_settings;
   }
 
   if (Object.keys(updates).length === 1) {
@@ -842,6 +852,30 @@ export async function handleCreatePortalUser(req, res, supabase) {
 
   console.log(`[PORTAL ADMIN] Created portal user: ${email} (role=${role}, client=${client_id ?? "admin"})`);
   return res.status(201).json({ portalUser: data });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CRAWLER PAGES — /portal/api/crawl-pages
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── GET /portal/api/crawl-pages ───────────────────────────────────────────────
+// Returns all crawled pages for the client. Gracefully empty if table not yet migrated.
+export async function handlePortalCrawlPages(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  const { data, error } = await supabase
+    .from("client_pages")
+    .select("id, url, page_type, title, status, fetched_at, summary, error_message")
+    .eq("client_id", clientId)
+    .order("fetched_at", { ascending: false });
+
+  if (error) {
+    if (error.message?.includes("does not exist")) return res.json({ pages: [], total: 0 });
+    return res.status(500).json({ error: error.message });
+  }
+  return res.json({ pages: data ?? [], total: (data ?? []).length });
 }
 
 // ── GET /admin/portal-users ───────────────────────────────────────────────────

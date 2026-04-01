@@ -97,6 +97,16 @@ export const CLIENTS = {
 
     // Text sent when an explicit handoff is triggered (intent="handoff" or 2x frustrated)
     handoffReply: (phone) => `Great question for our team! Give us a call at ${phone} and we'll get you sorted 🤙`,
+
+    // Phase 2: whole-site crawler — seed from both primary domains
+    crawlSettings: {
+      enabled:      true,
+      primaryUrl:   "https://coloradosledrentals.com/",
+      seedUrls:     ["https://www.rabbitearsadventures.com/"],
+      maxDepth:     2,
+      maxPages:     30,
+      denyPatterns: [],
+    },
   },
 
   // ── Lone Pine Performance ─────────────────────────────────────────────────
@@ -173,6 +183,16 @@ export const CLIENTS = {
 
     // Text sent when an explicit handoff is triggered (intent="handoff" or 2x frustrated)
     handoffReply: (phone) => `Great question for Jake! Give him a call at ${phone} and he'll get you sorted 🔧`,
+
+    // Phase 2: whole-site crawler
+    crawlSettings: {
+      enabled:      true,
+      primaryUrl:   "https://lonepineperformance.com/",
+      seedUrls:     [],
+      maxDepth:     2,
+      maxPages:     20,
+      denyPatterns: [],
+    },
   },
 
   // ── Highmark Demo ─────────────────────────────────────────────────────────
@@ -227,6 +247,20 @@ export const CLIENTS = {
 // ─────────────────────────────────────────────────────────────────────────────
 const _runtimeClients = {};
 
+// Normalize crawl_settings JSONB (snake_case from DB or portal) → camelCase client object
+// Supports both formats so static clients and DB-backed clients stay consistent.
+function normalizeCrawlSettings(cs) {
+  if (!cs || typeof cs !== "object") return {};
+  return {
+    enabled:      cs.enabled      ?? false,
+    primaryUrl:   cs.primaryUrl   ?? cs.primary_url   ?? null,
+    seedUrls:     cs.seedUrls     ?? cs.seed_urls     ?? [],
+    maxDepth:     cs.maxDepth     ?? cs.max_depth     ?? 2,
+    maxPages:     cs.maxPages     ?? cs.max_pages     ?? 20,
+    denyPatterns: cs.denyPatterns ?? cs.deny_patterns ?? [],
+  };
+}
+
 // Convert a Supabase clients table row → client config object (same shape as CLIENTS)
 function dbRowToClient(row) {
   const template = row.handoff_reply_template;
@@ -275,8 +309,8 @@ function dbRowToClient(row) {
     twilioAuthToken:       row.twilio_auth_token       ?? null,
     // Conversation settings added in db1_conversation_settings.sql
     conversationSettings:  row.conversation_settings  ?? {},
-    // Crawl settings added in db1_crawl_settings.sql
-    crawlSettings:         row.crawl_settings          ?? {},
+    // Crawl settings added in db1_crawl_settings.sql — normalize snake_case → camelCase
+    crawlSettings:         normalizeCrawlSettings(row.crawl_settings ?? {}),
     _fromDb:      true,
   };
 }
