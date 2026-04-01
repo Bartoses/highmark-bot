@@ -2045,7 +2045,8 @@ async function test29() {
   await sendSms("Hey", DEMO_PHONE_D, DEMO_PHONE);
 
   const menuCmd = await sendSms("MENU", DEMO_PHONE_D, DEMO_PHONE);
-  /1️⃣|2️⃣|3️⃣|4️⃣/.test(menuCmd)
+  // Accept both emoji-numbered (1️⃣) and plain-numbered (1.) formats — depends on portal guided-flow setting
+  /1️⃣|2️⃣|1\. /.test(menuCmd)
     ? pass("Demo: MENU → main product menu shown")
     : fail("Demo: MENU broken", menuCmd.slice(0, 100));
 
@@ -2906,6 +2907,7 @@ async function main() {
   await test42(); // Runtime config loader: DB overrides, fallbacks, new booking modes, resolveClientById
   await test43(); // Portal settings Chunk 15: scrape sources + booking options CRUD handlers
   await test44(); // Conversation engine (Chunk 16): getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction
+  await test45(); // Demo alignment (Chunk 17): demo uses convConfig, menu routing, lead prompt gate, scheduleFollowUps with outboundPhone
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -5467,6 +5469,170 @@ async function test44() {
     !cfgUndef.enable_guided_flow
       ? pass("test44: getConversationConfig handles undefined client safely")
       : fail("test44: getConversationConfig should handle undefined client");
+  }
+}
+
+async function test45() {
+  console.log("\nTEST 45: Demo alignment — convConfig integration, menu routing, lead prompt gate\n");
+
+  const { handleDemoFlow } = await import("./demoFlow.js");
+
+  // Minimal mock supabase that no-ops all calls
+  const noopSb = {
+    from: () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: null, error: null }) }) }) }),
+  };
+
+  function makeDemoConvo() {
+    return { messages: [], bookingStep: null, bookingData: {}, handoff: false, consecutiveFrustrated: 0 };
+  }
+
+  // ── null client: convConfig defaults, no crash ────────────────────────────
+  {
+    const convo = makeDemoConvo();
+    const result = await handleDemoFlow({
+      supabase: noopSb, twilioClient: null, fromNumber: "+15550000001",
+      toNumber: "+18668906657", rawBody: "hello", testMode: true,
+      isNew: true, convo, client: null, source: "test",
+    });
+    typeof result.reply === "string" && result.reply.length > 0
+      ? pass("test45: handleDemoFlow handles null client without crash")
+      : fail("test45: null client caused crash or empty reply", result);
+  }
+
+  // ── guided flow OFF → opener is standard OPENER (no extra menu) ──────────
+  {
+    const convo = makeDemoConvo();
+    const clientNoFlow = { id: "highmark_demo", conversationSettings: { enable_guided_flow: false } };
+    const result = await handleDemoFlow({
+      supabase: noopSb, twilioClient: null, fromNumber: "+15550000002",
+      toNumber: "+18668906657", rawBody: "hi", testMode: true,
+      isNew: true, convo, client: clientNoFlow, source: "test",
+    });
+    result.reply.includes("Highmark")
+      ? pass("test45: guided flow OFF → opener includes Highmark branding")
+      : fail("test45: opener missing Highmark branding", result.reply.slice(0, 80));
+  }
+
+  // ── guided flow ON + show_menu_on_start → opener has config menu appended ─
+  {
+    const convo = makeDemoConvo();
+    const clientGuided = {
+      id: "highmark_demo",
+      conversationSettings: {
+        enable_guided_flow: true,
+        show_main_menu_on_start: true,
+        enable_lead_prompts: true,
+        main_menu_options: [
+          { label: "What we do",  key: "overview" },
+          { label: "Pricing",     key: "pricing"  },
+          { label: "Get started", key: "handoff"  },
+        ],
+      },
+    };
+    const result = await handleDemoFlow({
+      supabase: noopSb, twilioClient: null, fromNumber: "+15550000003",
+      toNumber: "+18668906657", rawBody: "hi", testMode: true,
+      isNew: true, convo, client: clientGuided, source: "test",
+    });
+    result.reply.includes("1. What we do")
+      ? pass("test45: guided flow ON + show_menu_on_start → config menu appended to opener")
+      : fail("test45: config menu missing from opener", result.reply.slice(0, 120));
+    result.reply.includes("Highmark")
+      ? pass("test45: opener still includes Highmark branding with guided menu")
+      : fail("test45: Highmark branding missing when guided flow on", result.reply.slice(0, 120));
+  }
+
+  // ── enable_lead_prompts OFF → YES does not trigger lead capture ───────────
+  {
+    const convo = makeDemoConvo();
+    // Seed a browsing state first
+    convo.bookingData = { _demo: { step: "browsing", qaCount: 1, vertical: "default", subtypeKey: null, path: null, exploredPaths: [], leadName: null, leadBusiness: null, prevStep: null } };
+    const clientNoLeads = {
+      id: "highmark_demo",
+      conversationSettings: {
+        enable_guided_flow: true,
+        enable_lead_prompts: false,
+        main_menu_options: [{ label: "Pricing", key: "pricing" }],
+      },
+    };
+    const result = await handleDemoFlow({
+      supabase: noopSb, twilioClient: null, fromNumber: "+15550000004",
+      toNumber: "+18668906657", rawBody: "yes", testMode: true,
+      isNew: false, convo, client: clientNoLeads, source: "test",
+    });
+    // Should NOT ask for name (lead capture blocked)
+    !result.reply.toLowerCase().includes("what's your name") && !result.reply.toLowerCase().includes("whats your name")
+      ? pass("test45: enable_lead_prompts OFF → YES in browsing does not start lead capture")
+      : fail("test45: lead capture started despite enable_lead_prompts=false", result.reply.slice(0, 80));
+  }
+
+  // ── guided flow ON → "pricing" key routes to pricing answer ──────────────
+  {
+    const convo = makeDemoConvo();
+    convo.bookingData = { _demo: { step: "browsing", qaCount: 0, vertical: "default", subtypeKey: null, path: null, exploredPaths: [], leadName: null, leadBusiness: null, prevStep: null } };
+    const clientPricingKey = {
+      id: "highmark_demo",
+      conversationSettings: {
+        enable_guided_flow: true,
+        enable_lead_prompts: true,
+        main_menu_options: [
+          { label: "What we do", key: "overview" },
+          { label: "Pricing",    key: "pricing"  },
+        ],
+      },
+    };
+    const result = await handleDemoFlow({
+      supabase: noopSb, twilioClient: null, fromNumber: "+15550000005",
+      toNumber: "+18668906657", rawBody: "pricing", testMode: true,
+      isNew: false, convo, client: clientPricingKey, source: "test",
+    });
+    // Should return pricing content (not lead capture, not menu fallback)
+    const lc = result.reply.toLowerCase();
+    !lc.includes("what's your name") && !lc.includes("what would you like")
+      ? pass("test45: 'pricing' key in guided flow routes to pricing content, not menu fallback")
+      : fail("test45: pricing key did not route to pricing", result.reply.slice(0, 80));
+  }
+
+  // ── MENU global command uses config menu when guided flow on ──────────────
+  {
+    const convo = makeDemoConvo();
+    convo.bookingData = { _demo: { step: "browsing", qaCount: 2, vertical: "default", subtypeKey: null, path: null, exploredPaths: [1], leadName: null, leadBusiness: null, prevStep: null } };
+    const clientMenu = {
+      id: "highmark_demo",
+      conversationSettings: {
+        enable_guided_flow: true,
+        enable_lead_prompts: true,
+        main_menu_options: [
+          { label: "Book now", key: "booking" },
+          { label: "Pricing",  key: "pricing" },
+        ],
+      },
+    };
+    const result = await handleDemoFlow({
+      supabase: noopSb, twilioClient: null, fromNumber: "+15550000006",
+      toNumber: "+18668906657", rawBody: "MENU", testMode: true,
+      isNew: false, convo, client: clientMenu, source: "test",
+    });
+    result.reply.includes("1. Book now")
+      ? pass("test45: MENU command returns config-driven menu when guided flow on")
+      : fail("test45: MENU did not return config menu", result.reply.slice(0, 80));
+  }
+
+  // ── guided flow OFF → native demo detectPath still works ─────────────────
+  {
+    const convo = makeDemoConvo();
+    convo.bookingData = { _demo: { step: "browsing", qaCount: 0, vertical: "default", subtypeKey: null, path: null, exploredPaths: [], leadName: null, leadBusiness: null, prevStep: null } };
+    const clientNoGuided = { id: "highmark_demo", conversationSettings: { enable_guided_flow: false, enable_lead_prompts: true } };
+    const result = await handleDemoFlow({
+      supabase: noopSb, twilioClient: null, fromNumber: "+15550000007",
+      toNumber: "+18668906657", rawBody: "3", testMode: true,
+      isNew: false, convo, client: clientNoGuided, source: "test",
+    });
+    // "3" → Pricing (path 3 in demo) — check that it's NOT the menu fallback or name-ask
+    const lc = result.reply.toLowerCase();
+    !lc.includes("what would you like") && !lc.includes("what's your name") && !lc.includes("whats your name")
+      ? pass("test45: guided flow OFF → native detectPath '3' routes to pricing (not menu fallback)")
+      : fail("test45: detectPath '3' did not route to pricing with guided flow off", result.reply.slice(0, 100));
   }
 }
 

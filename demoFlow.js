@@ -45,6 +45,7 @@ import { saveLead } from "./leads.js";
 import { scheduleFollowUps } from "./followUpEngine.js";
 import { loadSiteContent } from "./siteContent.js";
 import { trackDemoEvent } from "./demoAnalytics.js";
+import { getConversationConfig, buildMainMenu, routeMenuSelection } from "./conversationEngine.js";
 
 // ── Highmark product knowledge ───────────────────────────────────────────────
 // Static defaults used when site_content DB is unavailable.
@@ -588,8 +589,21 @@ export function detectQuestionIntent(body) {
 }
 
 // ── Demo menu builder ─────────────────────────────────────────────────────────
+// When the demo client has a custom guided-flow menu configured in the portal,
+// use buildMainMenu() from conversationEngine instead of the hardcoded list.
+// Falls back to the hardcoded demo menu when enable_guided_flow is off or
+// no custom menu options are configured.
 
-function buildDemoMenu(exploredPaths = [], vertical = "default") {
+function buildDemoMenu(exploredPaths = [], vertical = "default", convConfig = null) {
+  // Config-driven menu: use conversationEngine's menu when guided flow + custom options
+  if (convConfig?.enable_guided_flow && convConfig.main_menu_options?.length) {
+    const lines = [];
+    convConfig.main_menu_options.forEach((opt, i) => {
+      lines.push(`${i + 1}. ${opt.label}`);
+    });
+    return lines.join("\n");
+  }
+  // Default hardcoded demo menu
   const v = VERTICALS[vertical] || VERTICALS.default;
   const lines = [`${v.menuContext}\n\nWhat do you want to see?\n`];
   for (const [k, p] of Object.entries(PATHS)) {
@@ -680,13 +694,17 @@ function getDemoNotifyPhone() {
 // Called from index.js when client.bookingMode === "demo"
 // Returns { reply: string }
 // ─────────────────────────────────────────────────────────────────────────────
-export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNumber, rawBody, testMode, isNew, convo, source = "sms" }) {
+export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNumber, rawBody, testMode, isNew, convo, client = null, source = "sms" }) {
   const body      = rawBody.trim();
   const bodyUpper = body.toUpperCase();
 
   // Load live product knowledge from site_content (same source as the website).
   // Falls back to HM_DEFAULTS if DB unavailable. Cached for 5 min per siteContent.js.
   const hm = await buildHm(supabase);
+
+  // Conversation config — drives guided menus, smart followups, lead prompts.
+  // Safe with null client — getConversationConfig returns defaults (all off).
+  const convConfig = getConversationConfig(client);
 
   console.log(`[DEMO] ${fromNumber} → "${body.slice(0, 40)}"`);
 
@@ -704,7 +722,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
   // ── Global: MENU ───────────────────────────────────────────────────────────
   if (bodyUpper === "MENU" || bodyUpper === "OPTIONS") {
     transition(convo, "browsing");
-    return { reply: MAIN_MENU };
+    return { reply: convConfig.enable_guided_flow ? buildDemoMenu([], "default", convConfig) : MAIN_MENU };
   }
 
   // ── Global: BACK ───────────────────────────────────────────────────────────
@@ -713,12 +731,12 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     const prev  = state.prevStep;
     if (prev && prev !== "start") {
       setState(convo, { step: prev, prevStep: null });
-      if (prev === "browsing")  return { reply: MAIN_MENU };
-      if (prev === "demo_menu") return { reply: buildDemoMenu(state.exploredPaths ?? [], state.vertical ?? "default") };
+      if (prev === "browsing")  return { reply: convConfig.enable_guided_flow ? buildDemoMenu([], "default", convConfig) : MAIN_MENU };
+      if (prev === "demo_menu") return { reply: buildDemoMenu(state.exploredPaths ?? [], state.vertical ?? "default", convConfig) };
       if (prev === "demo_path" && state.path) return { reply: PATHS[state.path].getIntro(state.vertical ?? "default", state.exploredPaths ?? [], state.subtypeKey ?? null) };
     }
     transition(convo, "browsing");
-    return { reply: MAIN_MENU };
+    return { reply: convConfig.enable_guided_flow ? buildDemoMenu([], "default", convConfig) : MAIN_MENU };
   }
 
   const state = getState(convo);
@@ -731,6 +749,11 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     });
     console.log(`[DEMO] New visitor — ${fromNumber}`);
     trackDemoEvent(supabase, { eventName: "demo_started", fromNumber, source }); // fire-and-forget
+    // If guided flow + show menu on start: append config-driven menu after opener
+    if (convConfig.enable_guided_flow && convConfig.show_main_menu_on_start) {
+      const menu = buildDemoMenu([], "default", convConfig);
+      return { reply: menu ? `${OPENER}\n\n${menu}` : OPENER };
+    }
     return { reply: OPENER };
   }
 
@@ -739,31 +762,45 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     const vertical = state.vertical ?? "default";
     const qaCount  = state.qaCount ?? 0;
 
-    // YES intent or "4" → lead capture
-    if (isYesIntent(body)) {
+    // YES intent or "4" → lead capture (gated by enable_lead_prompts if guided flow on)
+    if (isYesIntent(body) && (convConfig.enable_lead_prompts || !convConfig.enable_guided_flow)) {
       trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, source });
       trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, source });
       transition(convo, "lead_name");
       return { reply: "Let's get started! What's your name?" };
     }
 
-    // "2" → See a demo → ask business type
+    // Config-driven menu routing: check routeMenuSelection before detectPath
+    // This intercepts numbered or keyword replies against the configured menu.
+    const menuKey = convConfig.enable_guided_flow ? routeMenuSelection(body, client) : null;
+
+    // "2" / demo key → See a demo → ask business type
     const path = detectPath(body);
-    if (path === 2) {
+    if (path === 2 || menuKey === "demo") {
       transition(convo, "awaiting_demo_type");
       return { reply: `What kind of business are you in?\n\nThis lets me show you the most relevant example.\n(e.g. tours, salon, restaurant, gym, contractor)` };
     }
 
-    // "1" → What Highmark does
-    if (path === 1) {
+    // "1" / overview key → What Highmark does
+    if (path === 1 || menuKey === "overview" || menuKey === "features") {
       setState(convo, { qaCount: qaCount + 1 });
       return { reply: `${hm.overview}\n\n${qaFollowon("overview", qaCount + 1)}` };
     }
 
-    // "3" → Pricing
-    if (path === 3) {
+    // "3" / pricing key → Pricing
+    if (path === 3 || menuKey === "pricing") {
       setState(convo, { qaCount: qaCount + 1 });
       return { reply: `${hm.pricing}\n\n${qaFollowon("pricing", qaCount + 1)}` };
+    }
+
+    // Handoff key → lead capture CTA
+    if (menuKey === "handoff") {
+      if (convConfig.enable_lead_prompts || !convConfig.enable_guided_flow) {
+        trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, source });
+        trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, source });
+        transition(convo, "lead_name");
+        return { reply: "Let's get started! What's your name?" };
+      }
     }
 
     // Direct question about Highmark
@@ -774,7 +811,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     }
 
     // Fallback — rephrase the main menu
-    return { reply: MAIN_MENU };
+    return { reply: convConfig.enable_guided_flow ? buildDemoMenu([], vertical, convConfig) : MAIN_MENU };
   }
 
   // ── awaiting_demo_type ─────────────────────────────────────────────────────
@@ -809,27 +846,28 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
   if (state.step === "demo_menu") {
     const vertical   = state.vertical   ?? "default";
     const subtypeKey = state.subtypeKey ?? null;
-    if (isYesIntent(body)) {
+    if (isYesIntent(body) && (convConfig.enable_lead_prompts || !convConfig.enable_guided_flow)) {
       trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, vertical, subtypeKey, source });
       trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, vertical, subtypeKey, source });
       transition(convo, "lead_name");
       return { reply: "Let's get started! What's your name?" };
     }
-    const path = detectPath(body);
+    const menuKey = convConfig.enable_guided_flow ? routeMenuSelection(body, client) : null;
+    const path = detectPath(body) || (menuKey === "demo" ? 2 : menuKey === "pricing" ? 3 : null);
     if (path) {
       const ep = addExplored(state.exploredPaths, path);
       transition(convo, "demo_path", { path, exploredPaths: ep });
       trackDemoEvent(supabase, { eventName: "demo_path_selected", fromNumber, demoPath: path, vertical, subtypeKey, source });
       return { reply: PATHS[path].getIntro(vertical, ep, subtypeKey) };
     }
-    return { reply: buildDemoMenu(state.exploredPaths ?? [], vertical) };
+    return { reply: buildDemoMenu(state.exploredPaths ?? [], vertical, convConfig) };
   }
 
   // ── demo_path → any reply shows followup ──────────────────────────────────
   if (state.step === "demo_path") {
     const vertical   = state.vertical   ?? "default";
     const subtypeKey = state.subtypeKey ?? null;
-    if (!state.path) { transition(convo, "demo_menu"); return { reply: buildDemoMenu(state.exploredPaths ?? [], vertical) }; }
+    if (!state.path) { transition(convo, "demo_menu"); return { reply: buildDemoMenu(state.exploredPaths ?? [], vertical, convConfig) }; }
     if (isYesIntent(body)) {
       trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, demoPath: state.path, vertical, subtypeKey, source });
       trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
@@ -858,7 +896,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     }
     if (isNoIntent(body)) {
       transition(convo, "browsing");
-      return { reply: MAIN_MENU };
+      return { reply: convConfig.enable_guided_flow ? buildDemoMenu([], vertical, convConfig) : MAIN_MENU };
     }
     trackDemoEvent(supabase, { eventName: "demo_cta_shown", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
     transition(convo, "demo_cta");
@@ -869,7 +907,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
   if (state.step === "demo_cta") {
     const vertical   = state.vertical   ?? "default";
     const subtypeKey = state.subtypeKey ?? null;
-    if (isYesIntent(body)) {
+    if (isYesIntent(body) && (convConfig.enable_lead_prompts || !convConfig.enable_guided_flow)) {
       trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, demoPath: state.path, vertical, subtypeKey, source });
       trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
       transition(convo, "lead_name");
@@ -877,7 +915,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     }
     if (isNoIntent(body)) {
       transition(convo, "browsing");
-      return { reply: MAIN_MENU };
+      return { reply: convConfig.enable_guided_flow ? buildDemoMenu([], vertical, convConfig) : MAIN_MENU };
     }
     const path = detectPath(body);
     if (path) {
@@ -929,7 +967,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       }
 
       if (savedLead) {
-        scheduleFollowUps(supabase, savedLead, toNumber); // fire-and-forget
+        scheduleFollowUps(supabase, savedLead, client?.outboundPhone || toNumber); // fire-and-forget
       }
 
       trackDemoEvent(supabase, {

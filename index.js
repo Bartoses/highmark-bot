@@ -1226,7 +1226,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     if (isNew && isUiReq(req)) convo.sessionType = "test";
     const { reply } = await handleDemoFlow({
       supabase, twilioClient, fromNumber, toNumber, rawBody,
-      testMode: process.env.TEST_MODE === "true", isNew, convo,
+      testMode: process.env.TEST_MODE === "true", isNew, convo, client,
       source: isUiReq(req) ? "ui" : "sms",
     });
     await saveConversation(fromNumber, toNumber, convo, client?.id);
