@@ -57,6 +57,17 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .nav-item:hover  { color: var(--text); background: var(--panel2); }
 .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(16,185,129,.07); font-weight: 600; }
 .nav-icon { font-size: 15px; width: 18px; text-align: center; }
+.nav-section-label {
+  padding: 10px 16px 4px; font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  color: var(--text3); text-transform: uppercase;
+}
+.nav-ext-link {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px; color: var(--text2); cursor: pointer;
+  border-left: 2px solid transparent; transition: all .1s;
+  font-size: 13px; user-select: none; text-decoration: none;
+}
+.nav-ext-link:hover { color: var(--text); background: var(--panel2); text-decoration: none; }
 
 .sidebar-footer {
   padding: 12px 16px; border-top: 1px solid var(--border);
@@ -244,6 +255,24 @@ tr:hover td { background: var(--panel2); }
         <span class="nav-icon">🔑</span> Users
       </div>
     </div>
+
+    <!-- Internal tools — admin only -->
+    <div class="nav-section admin-only" id="toolsNav">
+      <div class="nav-section-label">Tools</div>
+      <a class="nav-ext-link" href="/ui?key=highmark2026&client=csr_rea" target="_blank">
+        <span class="nav-icon">🖥</span> Test Console (CSR)
+      </a>
+      <a class="nav-ext-link" href="/ui?key=highmark2026&client=lone_pine" target="_blank">
+        <span class="nav-icon">🖥</span> Test Console (LP)
+      </a>
+      <a class="nav-ext-link" href="/ui?key=highmark2026&client=highmark_demo" target="_blank">
+        <span class="nav-icon">🖥</span> Test Console (Demo)
+      </a>
+      <a class="nav-ext-link" href="https://www.usehighmark.com/home" target="_blank">
+        <span class="nav-icon">🌐</span> Highmark website
+      </a>
+    </div>
+
     <div class="sidebar-footer">
       <div class="user-email" id="sidebarEmail">—</div>
       <button class="btn btn-ghost btn-sm" id="signOutBtn">Sign out</button>

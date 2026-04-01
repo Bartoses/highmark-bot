@@ -69,6 +69,12 @@
       transition: background .15s;
     }
     .nav-cta:hover { background: #2563eb; text-decoration: none; }
+    .nav-login {
+      color: var(--muted); font-size: .88rem; font-weight: 500;
+      white-space: nowrap; transition: color .15s;
+    }
+    .nav-login:hover { color: var(--text); text-decoration: none; }
+    .nav-right { display: flex; align-items: center; gap: 16px; }
 
     /* ── HERO ── */
     .hero {
@@ -343,7 +349,10 @@
 <nav>
   <div class="inner">
     <a href="/" class="nav-logo">High<span>mark</span></a>
-    <a href="sms:+18668906657?body=DEMO" class="nav-cta">Text the demo →</a>
+    <div class="nav-right">
+      <a href="https://highmark-bot-production.up.railway.app/portal/login" class="nav-login">Client login</a>
+      <a href="sms:+18668906657?body=DEMO" class="nav-cta">Text the demo →</a>
+    </div>
   </div>
 </nav>
 
