@@ -14,6 +14,7 @@ import { createHash } from "crypto";
 import { parse as parseHtml } from "node-html-parser";
 import cron from "node-cron";
 import { getDefaultClient, getAllClients } from "./clients.js";
+import { runCrawlerForClient, buildCrawlerContext } from "./crawler.js";
 
 const FAREHARBOR_BASE     = "https://fareharbor.com/api/external/v1";
 const OPENWEATHER_BASE    = "https://api.openweathermap.org/data/2.5";
@@ -684,6 +685,27 @@ export async function initKnowledgeBase(supabase, anthropic) {
     }
   });
 
+  // Crawler (Phase 2): whole-site crawl every 7 days — per client with crawlSettings.enabled
+  cron.schedule("0 4 * * 1", () => {
+    for (const c of Object.values(getAllClients())) {
+      if (c.crawlSettings?.enabled) runCrawlerForClient(supabase, anthropic, c);
+    }
+  });
+
+  // Crawler startup: run if enabled and never crawled (no rows in client_pages)
+  for (const c of Object.values(getAllClients())) {
+    if (!c.crawlSettings?.enabled) continue;
+    supabase
+      .from("client_pages")
+      .select("id")
+      .eq("client_id", c.id)
+      .limit(1)
+      .then(({ data }) => {
+        if (!data?.length) runCrawlerForClient(supabase, anthropic, c);
+      })
+      .catch(() => {});
+  }
+
   console.log("[KB] Knowledge base initialized.");
 }
 
@@ -763,11 +785,17 @@ export async function getKnowledgeContext(supabase, client = null) {
         : "";
     }
 
+    // Phase 2: crawler knowledge (page-level facts) — prefer over single-page website summary
+    const crawlerCtx     = await buildCrawlerContext(c.id, supabase);
+
     const weatherSection = weatherSummary ? `WEATHER (${date}): ${weatherSummary}\n`      : "";
     const snowSection    = snowSummary    ? `SNOW CONDITIONS (${date}): ${snowSummary}\n` : "";
     const availSection   = availSummary   ? `AVAILABILITY: ${availSummary}\n`             : "";
     const itemsSection   = itemsSummary   ? `TOUR DETAILS: ${itemsSummary}\n`             : "";
-    const websiteSection = websiteSummary ? `BUSINESS INFO: ${websiteSummary}\n`          : "";
+    // Use crawler context if available; fall back to single-page website summary
+    const websiteSection = crawlerCtx     ? `${crawlerCtx}\n`
+                         : websiteSummary ? `BUSINESS INFO: ${websiteSummary}\n`
+                         : "";
 
     return `${opsSection}${weatherSection}${snowSection}${availSection}${itemsSection}${websiteSection}${linkSection}`.trim();
   } catch {

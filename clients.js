@@ -275,6 +275,8 @@ function dbRowToClient(row) {
     twilioAuthToken:       row.twilio_auth_token       ?? null,
     // Conversation settings added in db1_conversation_settings.sql
     conversationSettings:  row.conversation_settings  ?? {},
+    // Crawl settings added in db1_crawl_settings.sql
+    crawlSettings:         row.crawl_settings          ?? {},
     _fromDb:      true,
   };
 }

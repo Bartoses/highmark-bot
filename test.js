@@ -40,6 +40,14 @@ import { DEFAULTS, SECTION_KEYS, loadSiteContent, updateSiteSection, getSiteSect
 import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction, DEFAULT_MENU_OPTIONS } from "./conversationEngine.js";
 import { normalizePhone, isValidPhone, formatPhoneForDisplay } from "./phoneUtils.js";
 import { isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
+import {
+  classifyPageType,
+  normalizeCrawlUrl,
+  isJunkPath,
+  extractPageLinks,
+  extractPageTitle,
+  buildCrawlerContext,
+} from "./crawler.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -2912,6 +2920,7 @@ async function main() {
   await test45(); // Demo alignment (Chunk 17): demo uses convConfig, menu routing, lead prompt gate, scheduleFollowUps with outboundPhone
   await test46(); // Phone utilities (Phase 1): normalizePhone, isValidPhone, formatPhoneForDisplay
   await test47(); // Live truth resolver (Phase 1): isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction
+  await test48(); // Crawler (Phase 2): classifyPageType, normalizeCrawlUrl, isJunkPath, extractPageLinks, extractPageTitle, buildCrawlerContext
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -5920,6 +5929,286 @@ async function test47() {
     instr.includes("1 offering")
       ? pass("test47: buildTruthInstruction limited mentions open offerings")
       : fail("test47: limited instruction missing offering count", instr.slice(0, 80));
+  }
+}
+
+async function test48() {
+  console.log("\n── test48: Crawler (Phase 2) ─────────────────────────────────────────────");
+
+  // ── classifyPageType: homepage URL ────────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/", "Home", "");
+    t === "homepage"
+      ? pass("test48: classifyPageType root path → homepage")
+      : fail("test48: classifyPageType root path", `got ${t}`);
+  }
+
+  // ── classifyPageType: /index.html ─────────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/index.html", "Home", "");
+    t === "homepage"
+      ? pass("test48: classifyPageType /index.html → homepage")
+      : fail("test48: classifyPageType /index.html", `got ${t}`);
+  }
+
+  // ── classifyPageType: pricing URL ────────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/pricing", "Pricing", "");
+    t === "pricing"
+      ? pass("test48: classifyPageType /pricing → pricing")
+      : fail("test48: classifyPageType /pricing", `got ${t}`);
+  }
+
+  // ── classifyPageType: pricing by title keyword ─────────────────────────
+  {
+    const t = classifyPageType("https://example.com/info", "Our Rates", "");
+    t === "pricing"
+      ? pass("test48: classifyPageType 'Our Rates' title → pricing")
+      : fail("test48: classifyPageType title rates", `got ${t}`);
+  }
+
+  // ── classifyPageType: services URL ────────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/services", "What We Offer", "");
+    t === "services"
+      ? pass("test48: classifyPageType /services → services")
+      : fail("test48: classifyPageType /services", `got ${t}`);
+  }
+
+  // ── classifyPageType: tours URL ──────────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/tours", "Our Tours", "");
+    t === "services"
+      ? pass("test48: classifyPageType /tours → services")
+      : fail("test48: classifyPageType /tours", `got ${t}`);
+  }
+
+  // ── classifyPageType: faq URL ─────────────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/faq", "FAQ", "");
+    t === "faq"
+      ? pass("test48: classifyPageType /faq → faq")
+      : fail("test48: classifyPageType /faq", `got ${t}`);
+  }
+
+  // ── classifyPageType: contact URL ─────────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/contact", "Contact Us", "");
+    t === "contact"
+      ? pass("test48: classifyPageType /contact → contact")
+      : fail("test48: classifyPageType /contact", `got ${t}`);
+  }
+
+  // ── classifyPageType: policies URL ───────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/policies", "Cancellation Policy", "");
+    t === "policies"
+      ? pass("test48: classifyPageType /policies → policies")
+      : fail("test48: classifyPageType /policies", `got ${t}`);
+  }
+
+  // ── classifyPageType: booking URL ─────────────────────────────────────────
+  {
+    const t = classifyPageType("https://example.com/booking", "Book Now", "");
+    t === "booking"
+      ? pass("test48: classifyPageType /booking → booking")
+      : fail("test48: classifyPageType /booking", `got ${t}`);
+  }
+
+  // ── classifyPageType: unknown falls through to other ─────────────────────
+  {
+    const t = classifyPageType("https://example.com/gallery", "Photos", "");
+    t === "other"
+      ? pass("test48: classifyPageType /gallery → other")
+      : fail("test48: classifyPageType /gallery", `got ${t}`);
+  }
+
+  // ── normalizeCrawlUrl: strips trailing slash ──────────────────────────────
+  {
+    const n = normalizeCrawlUrl("https://example.com/services/");
+    n === "https://example.com/services"
+      ? pass("test48: normalizeCrawlUrl strips trailing slash")
+      : fail("test48: normalizeCrawlUrl trailing slash", `got ${n}`);
+  }
+
+  // ── normalizeCrawlUrl: lowercases ─────────────────────────────────────────
+  {
+    const n = normalizeCrawlUrl("HTTPS://Example.COM/PRICING");
+    n === "https://example.com/pricing"
+      ? pass("test48: normalizeCrawlUrl lowercases")
+      : fail("test48: normalizeCrawlUrl lowercase", `got ${n}`);
+  }
+
+  // ── normalizeCrawlUrl: strips query string ────────────────────────────────
+  {
+    const n = normalizeCrawlUrl("https://example.com/page?ref=google");
+    n === "https://example.com/page"
+      ? pass("test48: normalizeCrawlUrl strips query string")
+      : fail("test48: normalizeCrawlUrl query strip", `got ${n}`);
+  }
+
+  // ── normalizeCrawlUrl: root path preserved ────────────────────────────────
+  {
+    const n = normalizeCrawlUrl("https://example.com/");
+    n === "https://example.com"
+      ? pass("test48: normalizeCrawlUrl root path")
+      : fail("test48: normalizeCrawlUrl root path", `got ${n}`);
+  }
+
+  // ── isJunkPath: wp-admin → true ───────────────────────────────────────────
+  {
+    const j = isJunkPath("https://example.com/wp-admin/edit.php");
+    j === true
+      ? pass("test48: isJunkPath wp-admin → true")
+      : fail("test48: isJunkPath wp-admin");
+  }
+
+  // ── isJunkPath: query string → true ──────────────────────────────────────
+  {
+    const j = isJunkPath("https://example.com/page?sort=asc");
+    j === true
+      ? pass("test48: isJunkPath query string → true")
+      : fail("test48: isJunkPath query string");
+  }
+
+  // ── isJunkPath: fragment → true ───────────────────────────────────────────
+  {
+    const j = isJunkPath("https://example.com/page#section");
+    j === true
+      ? pass("test48: isJunkPath fragment → true")
+      : fail("test48: isJunkPath fragment");
+  }
+
+  // ── isJunkPath: image extension → true ───────────────────────────────────
+  {
+    const j = isJunkPath("https://example.com/photo.jpg");
+    j === true
+      ? pass("test48: isJunkPath .jpg → true")
+      : fail("test48: isJunkPath .jpg");
+  }
+
+  // ── isJunkPath: normal content path → false ───────────────────────────────
+  {
+    const j = isJunkPath("https://example.com/services");
+    j === false
+      ? pass("test48: isJunkPath /services → false")
+      : fail("test48: isJunkPath /services should not be junk");
+  }
+
+  // ── isJunkPath: privacy-policy → false (useful content) ──────────────────
+  {
+    const j = isJunkPath("https://example.com/privacy-policy");
+    j === false
+      ? pass("test48: isJunkPath /privacy-policy → false")
+      : fail("test48: isJunkPath privacy-policy should not be junk");
+  }
+
+  // ── extractPageLinks: returns same-origin links ───────────────────────────
+  {
+    const html = `<html><body>
+      <a href="/about">About</a>
+      <a href="/pricing">Pricing</a>
+      <a href="https://external.com/page">External</a>
+      <a href="mailto:info@example.com">Email</a>
+    </body></html>`;
+    const links = extractPageLinks(html, "https://example.com/");
+    const hasAbout   = links.some((l) => l.includes("/about"));
+    const hasPricing = links.some((l) => l.includes("/pricing"));
+    const noExternal = !links.some((l) => l.includes("external.com"));
+    const noMailto   = !links.some((l) => l.startsWith("mailto"));
+    hasAbout && hasPricing && noExternal && noMailto
+      ? pass("test48: extractPageLinks — same-origin, no external or mailto")
+      : fail("test48: extractPageLinks", `hasAbout=${hasAbout} hasPricing=${hasPricing} noExt=${noExternal} noMailto=${noMailto}`);
+  }
+
+  // ── extractPageLinks: filters junk paths ─────────────────────────────────
+  {
+    const html = `<html><body>
+      <a href="/wp-admin/edit.php">WP Admin</a>
+      <a href="/valid-page">Valid</a>
+      <a href="/image.jpg">JPG</a>
+    </body></html>`;
+    const links = extractPageLinks(html, "https://example.com/");
+    const hasValid  = links.some((l) => l.includes("/valid-page"));
+    const noWpAdmin = !links.some((l) => l.includes("wp-admin"));
+    const noJpg     = !links.some((l) => l.endsWith(".jpg"));
+    hasValid && noWpAdmin && noJpg
+      ? pass("test48: extractPageLinks — junk paths filtered")
+      : fail("test48: extractPageLinks junk filter", `hasValid=${hasValid} noWP=${noWpAdmin} noJpg=${noJpg}`);
+  }
+
+  // ── extractPageTitle: extracts <title> text ───────────────────────────────
+  {
+    const html  = "<html><head><title>  Our Services  </title></head><body></body></html>";
+    const title = extractPageTitle(html);
+    title === "Our Services"
+      ? pass("test48: extractPageTitle returns trimmed title")
+      : fail("test48: extractPageTitle", `got "${title}"`);
+  }
+
+  // ── extractPageTitle: empty string on missing title ───────────────────────
+  {
+    const html  = "<html><body><p>No title here</p></body></html>";
+    const title = extractPageTitle(html);
+    title === ""
+      ? pass("test48: extractPageTitle returns empty when no title")
+      : fail("test48: extractPageTitle missing", `got "${title}"`);
+  }
+
+  // ── buildCrawlerContext: empty when supabase unavailable ──────────────────
+  {
+    const ctx = await buildCrawlerContext("test_client", null);
+    ctx === ""
+      ? pass("test48: buildCrawlerContext returns empty for null supabase")
+      : fail("test48: buildCrawlerContext null supabase", `got "${ctx}"`);
+  }
+
+  // ── buildCrawlerContext: assembles from mock pages in priority order ───────
+  {
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => Promise.resolve({
+              data: [
+                { page_type: "contact",  title: "Contact",  extracted_facts: { summary: "Call 970-555-0001",   key_facts: ["970-555-0001"] },          summary: "Call 970-555-0001" },
+                { page_type: "pricing",  title: "Pricing",  extracted_facts: { summary: "Tours from $189",     key_facts: ["$189/person"] },            summary: "Tours from $189" },
+                { page_type: "homepage", title: "Home",     extracted_facts: { summary: "Sled tours Steamboat", key_facts: ["guided tours", "rentals"] }, summary: "Sled tours Steamboat" },
+              ],
+            }),
+          }),
+        }),
+      }),
+    };
+
+    const ctx = await buildCrawlerContext("test_client", mockSupabase);
+    const hasHeader   = ctx.includes("WEBSITE KNOWLEDGE:");
+    const homepageIdx = ctx.indexOf("Overview:");
+    const pricingIdx  = ctx.indexOf("Pricing:");
+    const contactIdx  = ctx.indexOf("Contact:");
+    // Homepage (Overview) should appear before Pricing, Pricing before Contact
+    const correctOrder = homepageIdx < pricingIdx && pricingIdx < contactIdx;
+
+    hasHeader && correctOrder
+      ? pass("test48: buildCrawlerContext assembles in priority order")
+      : fail("test48: buildCrawlerContext order", `header=${hasHeader} order=${correctOrder} ctx=${ctx.slice(0,120)}`);
+  }
+
+  // ── buildCrawlerContext: empty when no ok pages ────────────────────────────
+  {
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => Promise.resolve({ data: [] }),
+          }),
+        }),
+      }),
+    };
+    const ctx = await buildCrawlerContext("test_client", mockSupabase);
+    ctx === ""
+      ? pass("test48: buildCrawlerContext returns empty when no pages")
+      : fail("test48: buildCrawlerContext empty pages", `got "${ctx}"`);
   }
 }
 
