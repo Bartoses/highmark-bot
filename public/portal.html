@@ -1298,6 +1298,35 @@ async function loadSettings() {
       </div>
     </div>
 
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">Twilio</div>
+      <div class="form-hint" style="margin-bottom:14px;">Phone numbers and credentials used to send SMS on behalf of this client. Leave blank to use the global account defaults.</div>
+      <div class="two-col">
+        <div class="form-group">
+          <label>Outbound phone <span style="color:var(--text2);font-size:11px;">(from number)</span></label>
+          <input type="text" id="set_outbound_phone" value="${d.outboundPhone ?? ''}" placeholder="+18005551234">
+          <div class="form-hint">Twilio number used as "From" for all outgoing SMS (replies, confirmations, follow-ups, campaigns)</div>
+        </div>
+        <div class="form-group">
+          <label>Messaging Service SID <span style="color:var(--text2);font-size:11px;">(optional)</span></label>
+          <input type="text" id="set_messaging_service_sid" value="${d.messagingServiceSid ?? ''}" placeholder="MG…">
+          <div class="form-hint">Use a Twilio Messaging Service instead of a direct number (better deliverability for campaigns)</div>
+        </div>
+      </div>
+      <div class="two-col" style="margin-top:4px;">
+        <div class="form-group">
+          <label>Account SID <span style="color:var(--text2);font-size:11px;">(sub-account)</span></label>
+          <input type="text" id="set_twilio_account_sid" value="${d.twilioAccountSid ?? ''}" placeholder="AC…">
+          <div class="form-hint">Only needed if this client has their own Twilio account</div>
+        </div>
+        <div class="form-group">
+          <label>Auth Token <span style="color:var(--text2);font-size:11px;">(sub-account)</span></label>
+          <input type="password" id="set_twilio_auth_token" value="" placeholder="Leave blank to keep current">
+          <div class="form-hint" style="color:#b45309;">Stored in database. Required only when Account SID is set.</div>
+        </div>
+      </div>
+    </div>
+
     <div style="display:flex;justify-content:flex-end;margin-top:16px;">
       <button class="btn btn-primary" id="settingsSaveBtn">Save changes</button>
     </div>`;
@@ -1322,6 +1351,13 @@ async function loadSettings() {
       followups_enabled:       document.getElementById('set_followups').checked,
       lead_capture_enabled:    document.getElementById('set_lead_capture').checked,
       waitlist_enabled:        document.getElementById('set_waitlist').checked,
+      outbound_phone:          document.getElementById('set_outbound_phone').value.trim() || null,
+      messaging_service_sid:   document.getElementById('set_messaging_service_sid').value.trim() || null,
+      twilio_account_sid:      document.getElementById('set_twilio_account_sid').value.trim() || null,
+      // Auth token: only include if user typed something (blank = keep existing)
+      ...(document.getElementById('set_twilio_auth_token').value.trim()
+        ? { twilio_auth_token: document.getElementById('set_twilio_auth_token').value.trim() }
+        : {}),
     };
     if (me?.isAdmin) body.client_id = me.clientId;
 

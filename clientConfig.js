@@ -102,6 +102,12 @@ function applyDbOverrides(client, dbRow) {
   // Don't override bookingMode for demo clients — it's identity, not configurable setting
   if (dbRow.booking_mode && !client.isDemo)  merged.bookingMode = dbRow.booking_mode;
 
+  // Twilio routing — db1_twilio_config.sql columns
+  if (dbRow.outbound_phone)         merged.outboundPhone       = dbRow.outbound_phone;
+  if (dbRow.messaging_service_sid)  merged.messagingServiceSid = dbRow.messaging_service_sid;
+  if (dbRow.twilio_account_sid)     merged.twilioAccountSid    = dbRow.twilio_account_sid;
+  if (dbRow.twilio_auth_token)      merged.twilioAuthToken     = dbRow.twilio_auth_token;
+
   // Feature toggles — preserve false values (explicit null/undefined check)
   if (dbRow.campaigns_enabled     != null) merged.campaignsEnabled    = dbRow.campaigns_enabled;
   if (dbRow.followups_enabled     != null) merged.followupsEnabled    = dbRow.followups_enabled;

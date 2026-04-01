@@ -268,6 +268,11 @@ function dbRowToClient(row) {
     followupsEnabled:    row.followups_enabled    ?? false,
     humanHandoffEnabled: row.human_handoff_enabled ?? true,
     bookingLink:         row.booking_link          ?? null,
+    // Twilio routing columns added in db1_twilio_config.sql
+    outboundPhone:         row.outbound_phone         ?? null,
+    messagingServiceSid:   row.messaging_service_sid  ?? null,
+    twilioAccountSid:      row.twilio_account_sid      ?? null,
+    twilioAuthToken:       row.twilio_auth_token       ?? null,
     _fromDb:      true,
   };
 }

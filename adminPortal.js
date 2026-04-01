@@ -44,6 +44,11 @@ const EDITABLE_SETTINGS = {
   website_url:             "website_url",
   booking_link:            "booking_link",
   booking_mode:            "booking_mode",
+  // Twilio routing fields (db1_twilio_config.sql)
+  outbound_phone:          "outbound_phone",
+  messaging_service_sid:   "messaging_service_sid",
+  twilio_account_sid:      "twilio_account_sid",
+  twilio_auth_token:       "twilio_auth_token",
 };
 
 // Boolean feature toggles — validated separately to ensure boolean type.
@@ -437,6 +442,11 @@ export async function handlePortalSettings(req, res, supabase) {
     leadCaptureEnabled:      client.leadCaptureEnabled    ?? false,
     waitlistEnabled:         client.waitlistEnabled       ?? false,
     editable:                !!client._fromDb,
+    // Twilio routing (db1_twilio_config.sql — null if migration not yet run)
+    outboundPhone:           client.outboundPhone         ?? null,
+    messagingServiceSid:     client.messagingServiceSid   ?? null,
+    twilioAccountSid:        client.twilioAccountSid      ?? null,
+    // Auth token intentionally omitted from GET — write-only in portal
     // Scrape sources + booking options (from DB; empty if tables not yet migrated)
     scrapeSources,
     bookingLinks,
@@ -497,6 +507,10 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
       followups_enabled:       client.followupsEnabled    ?? false,
       human_handoff_enabled:   client.humanHandoffEnabled ?? true,
       booking_link:            client.bookingLink         ?? null,
+      outbound_phone:          client.outboundPhone       ?? null,
+      messaging_service_sid:   client.messagingServiceSid ?? null,
+      twilio_account_sid:      client.twilioAccountSid    ?? null,
+      twilio_auth_token:       client.twilioAuthToken     ?? null,
       created_at:              new Date().toISOString(),
       updated_at:              new Date().toISOString(),
     };
