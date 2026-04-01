@@ -1144,16 +1144,17 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   const msgUpper = rawBody.toUpperCase().trim();
 
   // 3. OPT-OUT check — MUST be first (TCPA legal requirement)
-  if (OPT_OUT_KEYWORDS.includes(msgUpper) && crmSupabase) {
-    await handleOptOutKeyword(fromNumber, toNumber, twilioClient, crmSupabase, client?.name);
+  //    Uses DB1 (supabase) — works for all clients regardless of CRM config
+  if (OPT_OUT_KEYWORDS.includes(msgUpper)) {
+    await handleOptOutKeyword(fromNumber, toNumber, twilioClient, supabase, crmSupabase, client?.name);
     if (isUiReq(req)) return res.json({ reply: `You've been unsubscribed${client?.name ? ` from ${client.name}` : ""}. Reply START to resubscribe.` });
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
   }
 
   // 4. OPT-IN check
-  if (OPT_IN_KEYWORDS.includes(msgUpper) && crmSupabase) {
-    await handleOptInKeyword(fromNumber, toNumber, twilioClient, crmSupabase, client?.name);
+  if (OPT_IN_KEYWORDS.includes(msgUpper)) {
+    await handleOptInKeyword(fromNumber, toNumber, twilioClient, supabase, crmSupabase, client?.name);
     if (isUiReq(req)) return res.json({ reply: `You're resubscribed${client?.name ? ` to ${client.name} messages` : ""}. Text us anytime.` });
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
@@ -1169,15 +1170,13 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     return res.send("<Response></Response>");
   }
 
-  // 5. Opted-out gate — drop silently if this number has opted out
-  if (crmSupabase) {
-    const isOptedOut = await checkOptOut(fromNumber, crmSupabase);
-    if (isOptedOut) {
-      console.log(`[OPT-OUT] Dropping message from opted-out number ${fromNumber}`);
-      if (isUiReq(req)) return res.json({ reply: "[opted out — message dropped]" });
-      res.set("Content-Type", "text/xml");
-      return res.send("<Response></Response>");
-    }
+  // 5. Opted-out gate — drop silently if this number has opted out (DB1, all clients)
+  const isOptedOut = await checkOptOut(fromNumber, supabase);
+  if (isOptedOut) {
+    console.log(`[OPT-OUT] Dropping message from opted-out number ${fromNumber}`);
+    if (isUiReq(req)) return res.json({ reply: "[opted out — message dropped]" });
+    res.set("Content-Type", "text/xml");
+    return res.send("<Response></Response>");
   }
 
   // 5.5. Mark lead ENGAGED if this is a reply from a lead we've been following up with.

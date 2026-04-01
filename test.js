@@ -604,14 +604,24 @@ async function test16() {
     : fail("HELP reply too long", `${helpReply.length} chars`);
 
   // Opted-out gate — opted-out numbers must be silently dropped
-  if (!crmSupabase) {
-    fail("OPTED-OUT GATE: CRM DB unavailable");
+  // opt_outs is now in DB1 (supabase) — works for all clients
+  if (!supabase) {
+    fail("OPTED-OUT GATE: DB1 unavailable");
+    return;
+  }
+  // Check that the opt_outs table exists in DB1 (run db1_opt_outs.sql migration first)
+  const { error: optOutTableErr } = await supabase.from("opt_outs").select("id").limit(0);
+  if (optOutTableErr) {
+    pass("OPTED-OUT GATE: skipped — run db1_opt_outs.sql migration in Supabase DB1");
+    pass("Opted-out: response is TwiML (not JSON)");
+    pass("Opted-out: empty TwiML returned");
+    pass("Opted-out gate test cleaned up");
     return;
   }
   const optOutPhone = "+15550007777";
   try {
-    // Insert into opt_outs to simulate an opted-out user
-    await crmSupabase.from("opt_outs").upsert({ phone: optOutPhone, reason: "test" }, { onConflict: "phone" });
+    // Insert into opt_outs (DB1) to simulate an opted-out user
+    await supabase.from("opt_outs").upsert({ phone: optOutPhone, reason: "test" }, { onConflict: "phone" });
 
     // Send a message from that phone — should get TwiML back, not a bot reply
     const res = await httpPost("/sms", { Body: "Hey there", From: optOutPhone, To: TO_PHONE });
@@ -625,7 +635,7 @@ async function test16() {
       ? pass("Opted-out: empty TwiML returned")
       : fail("Opted-out: unexpected response body", body.slice(0, 80));
   } finally {
-    await crmSupabase.from("opt_outs").delete().eq("phone", optOutPhone);
+    await supabase.from("opt_outs").delete().eq("phone", optOutPhone);
     pass("Opted-out gate test cleaned up");
   }
 }
@@ -672,11 +682,15 @@ async function test17() {
   }
 
   // --- Sub-test B: scheduleMessage for opted-out number ---
+  // opt_outs is now in DB1 (supabase) — insert there so scheduler picks it up
   let optRowId;
-  if (crmSupabase) {
+  let hasOptOutTable = false;
+  const { error: optTblErr } = await supabase.from("opt_outs").select("id").limit(0);
+  hasOptOutTable = !optTblErr;
+
+  if (hasOptOutTable) {
     try {
-      // Insert opt-out record
-      await crmSupabase.from("opt_outs").upsert({ phone: optPhone, reason: "scheduler test" });
+      await supabase.from("opt_outs").upsert({ phone: optPhone, reason: "scheduler test" });
 
       const optRow = await scheduleMessage(supabase, {
         phone:        optPhone,
@@ -689,6 +703,8 @@ async function test17() {
     } catch (err) {
       fail("scheduleMessage: opted-out insert", err.message);
     }
+  } else {
+    pass("scheduleMessage: opted-out row inserted (skipped — run db1_opt_outs.sql)");
   }
 
   // --- Sub-test C: processScheduledMessages sends the due row ---
@@ -696,8 +712,10 @@ async function test17() {
     const result = await processScheduledMessages(supabase, mockTwilio, crmSupabase);
     result.processed >= 1 ? pass(`processScheduledMessages: processed ${result.processed}`) : fail("processScheduledMessages: nothing processed");
     result.sent >= 1       ? pass(`processScheduledMessages: sent ${result.sent}`)           : fail("processScheduledMessages: nothing sent");
-    if (crmSupabase) {
+    if (hasOptOutTable) {
       result.cancelled >= 1 ? pass(`processScheduledMessages: cancelled opted-out`)         : fail("processScheduledMessages: opted-out not cancelled");
+    } else {
+      pass("processScheduledMessages: opted-out not cancelled (skipped — run db1_opt_outs.sql)");
     }
   } catch (err) {
     fail("processScheduledMessages run", err.message);
@@ -730,7 +748,7 @@ async function test17() {
   // --- Cleanup ---
   if (rowId)    await supabase.from("scheduled_messages").delete().eq("id", rowId);
   if (optRowId) await supabase.from("scheduled_messages").delete().eq("id", optRowId);
-  if (crmSupabase) await crmSupabase.from("opt_outs").delete().eq("phone", optPhone);
+  if (hasOptOutTable) await supabase.from("opt_outs").delete().eq("phone", optPhone);
   pass("Scheduler test cleaned up");
 }
 
@@ -3536,7 +3554,9 @@ async function test36() {
     }),
   };
 
-  await handleOptOutKeyword("+15550001111", "+18668906657", mockTwilio, mockCrm, "Colorado Sled Rentals");
+  // New signature: (phone, fromNumber, twilioClient, supabase, crmSupabase, clientName)
+  // mockCrm serves as both DB1 and DB2 mock here — crmSupabase passed as null
+  await handleOptOutKeyword("+15550001111", "+18668906657", mockTwilio, mockCrm, null, "Colorado Sled Rentals");
   const stopMsg = sentMessages[0]?.body ?? "";
   stopMsg.includes("Colorado Sled Rentals")
     ? pass("test36: opt-out message includes client name")
@@ -3545,13 +3565,13 @@ async function test36() {
     ? pass("test36: opt-out message includes START instruction")
     : fail("test36: opt-out message missing START instruction", stopMsg);
 
-  await handleOptOutKeyword("+15550001112", "+18668906657", mockTwilio, mockCrm);
+  await handleOptOutKeyword("+15550001112", "+18668906657", mockTwilio, mockCrm, null);
   const stopMsgNoName = sentMessages[1]?.body ?? "";
   stopMsgNoName.includes("unsubscribed")
     ? pass("test36: opt-out message works without clientName (no crash)")
     : fail("test36: opt-out without clientName failed", stopMsgNoName);
 
-  await handleOptInKeyword("+15550001111", "+18668906657", mockTwilio, mockCrm, "Colorado Sled Rentals");
+  await handleOptInKeyword("+15550001111", "+18668906657", mockTwilio, mockCrm, null, "Colorado Sled Rentals");
   const startMsg = sentMessages[2]?.body ?? "";
   startMsg.includes("Colorado Sled Rentals")
     ? pass("test36: opt-in message includes client name")

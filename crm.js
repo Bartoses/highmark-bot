@@ -18,9 +18,11 @@ const CAMPAIGN_BATCH_DELAY_MS = 500;
 // OPT-OUT / OPT-IN
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function checkOptOut(phone, crmSupabase) {
+// supabase    = DB1 (authoritative opt-out store — always present, works for all clients)
+// crmSupabase = DB2 (CSR/REA CRM mirror — optional, only passed when client.crmEnabled)
+export async function checkOptOut(phone, supabase) {
   try {
-    const { data } = await crmSupabase
+    const { data } = await supabase
       .from("opt_outs")
       .select("id")
       .eq("phone", phone)
@@ -31,18 +33,20 @@ export async function checkOptOut(phone, crmSupabase) {
   }
 }
 
-export async function handleOptOutKeyword(phone, fromNumber, twilioClient, crmSupabase, clientName) {
+export async function handleOptOutKeyword(phone, fromNumber, twilioClient, supabase, crmSupabase, clientName) {
   try {
-    // Add to opt_outs (ignore conflict if already there)
-    await crmSupabase
+    // Write to DB1 opt_outs — applies to all clients
+    await supabase
       .from("opt_outs")
       .upsert({ phone, reason: "STOP keyword" }, { onConflict: "phone" });
 
-    // Mark contact as opted out
-    await crmSupabase
-      .from("contacts")
-      .update({ opted_in: false, opted_out_at: new Date().toISOString() })
-      .eq("phone", phone);
+    // Mirror to DB2 contacts if this is a CRM-enabled client (CSR/REA)
+    if (crmSupabase) {
+      await crmSupabase
+        .from("contacts")
+        .update({ opted_in: false, opted_out_at: new Date().toISOString() })
+        .eq("phone", phone);
+    }
 
     const businessLine = clientName ? ` from ${clientName}` : "";
     await twilioClient.messages.create({
@@ -55,14 +59,18 @@ export async function handleOptOutKeyword(phone, fromNumber, twilioClient, crmSu
   }
 }
 
-export async function handleOptInKeyword(phone, fromNumber, twilioClient, crmSupabase, clientName) {
+export async function handleOptInKeyword(phone, fromNumber, twilioClient, supabase, crmSupabase, clientName) {
   try {
-    await crmSupabase.from("opt_outs").delete().eq("phone", phone);
+    // Remove from DB1 opt_outs
+    await supabase.from("opt_outs").delete().eq("phone", phone);
 
-    await crmSupabase
-      .from("contacts")
-      .update({ opted_in: true, opted_out_at: null })
-      .eq("phone", phone);
+    // Mirror to DB2 contacts if this is a CRM-enabled client (CSR/REA)
+    if (crmSupabase) {
+      await crmSupabase
+        .from("contacts")
+        .update({ opted_in: true, opted_out_at: null })
+        .eq("phone", phone);
+    }
 
     const businessLine = clientName ? ` ${clientName}` : "";
     await twilioClient.messages.create({

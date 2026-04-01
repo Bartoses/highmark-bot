@@ -155,29 +155,27 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
     }
   }
 
-  // Check opt-out before sending
-  if (crmSupabase) {
-    try {
-      const { data: optOut } = await crmSupabase
-        .from("opt_outs")
-        .select("id")
-        .eq("phone", msg.phone)
-        .maybeSingle();
+  // Check opt-out before sending — uses DB1 (applies to all clients)
+  try {
+    const { data: optOut } = await supabase
+      .from("opt_outs")
+      .select("id")
+      .eq("phone", msg.phone)
+      .maybeSingle();
 
-      if (optOut) {
-        console.log(`[SCHEDULER] ${msg.id} — cancelled: ${msg.phone} opted out`);
-        await supabase.from("scheduled_messages").update({
-          status:     "cancelled",
-          error:      "Phone number is opted out (TCPA)",
-          updated_at: now,
-        }).eq("id", msg.id);
-        counts.cancelled++;
-        return;
-      }
-    } catch (err) {
-      // Non-fatal: log and proceed — don't block sends over a CRM lookup failure
-      console.warn(`[SCHEDULER] Opt-out check failed for ${msg.id} — proceeding:`, err.message);
+    if (optOut) {
+      console.log(`[SCHEDULER] ${msg.id} — cancelled: ${msg.phone} opted out`);
+      await supabase.from("scheduled_messages").update({
+        status:     "cancelled",
+        error:      "Phone number is opted out (TCPA)",
+        updated_at: now,
+      }).eq("id", msg.id);
+      counts.cancelled++;
+      return;
     }
+  } catch (err) {
+    // Non-fatal: log and proceed — don't block sends over a DB lookup failure
+    console.warn(`[SCHEDULER] Opt-out check failed for ${msg.id} — proceeding:`, err.message);
   }
 
   // Send via Twilio
