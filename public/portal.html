@@ -641,6 +641,7 @@ const API  = '/portal/api';
 let token  = localStorage.getItem('hm_portal_token') ?? '';
 let me     = null;
 let sbClient = null;  // initialized in init() for token refresh
+let _lastApiError = null;  // last error message from apiFetch for detailed error display
 let leadsOffset = 0;
 const LEADS_LIMIT = 25;
 let activeLead = null;
@@ -802,9 +803,11 @@ async function apiFetch(path, opts = {}, _retried = false) {
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      console.warn('[API]', path, res.status, body.error);
+      _lastApiError = body.error ?? `HTTP ${res.status}`;
+      console.warn('[API]', path, res.status, _lastApiError);
       return null;
     }
+    _lastApiError = null;
     return res.json();
   } catch (err) {
     console.error('[API] fetch error:', err);
@@ -1325,7 +1328,7 @@ async function loadSettings() {
     const r = await apiPatch('/settings', body);
     btn.disabled = false; btn.textContent = 'Save changes';
     if (!r) {
-      const errText = 'Failed to save settings. Try again — if the error persists, contact Highmark support.';
+      const errText = _lastApiError ? `Save failed: ${_lastApiError}` : 'Failed to save settings. Try again.';
       msgEl.className = 'error-msg'; msgEl.textContent = errText; msgEl.style.display = 'block';
     } else {
       msgEl.className = 'success-msg'; msgEl.textContent = 'Settings saved.'; msgEl.style.display = 'block';
