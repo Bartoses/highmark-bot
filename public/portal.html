@@ -218,6 +218,13 @@ tr:hover td { background: var(--panel2); }
   .topbar-title { font-size: 13px; }
   .client-select { max-width: 140px; font-size: 11px; }
   .client-badge  { display: none; }
+  /* Settings: stack card header (title + action button) on small screens */
+  .card-header-row { flex-direction: column; align-items: flex-start !important; gap: 8px !important; }
+  /* Modals: full-width on mobile */
+  .modal { max-width: 100% !important; margin: 0; border-radius: 12px 12px 0 0; position: fixed; bottom: 0; left: 0; right: 0; max-height: 80vh; }
+  .modal-backdrop { align-items: flex-end !important; }
+  /* Prevent horizontal scroll on settings tables */
+  #settingsContent .tbl-wrap { max-width: calc(100vw - 64px); }
 }
 /* Admin-only nav items — hidden until confirmed in JS */
 .admin-only { display: none; }
@@ -285,6 +292,9 @@ tr:hover td { background: var(--panel2); }
       </a>
       <a class="nav-ext-link" href="https://www.usehighmark.com/home" target="_blank">
         <span class="nav-icon">🌐</span> Highmark website
+      </a>
+      <a class="nav-ext-link" href="/admin/site-editor?key=highmark2026" target="_blank">
+        <span class="nav-icon">✏️</span> Site editor
       </a>
     </div>
 
@@ -425,6 +435,10 @@ tr:hover td { background: var(--panel2); }
             </a>
             <a class="more-link-item" href="https://www.usehighmark.com/home" target="_blank">
               <span>🌐</span> Highmark website
+              <span class="more-link-arrow">↗</span>
+            </a>
+            <a class="more-link-item" href="/admin/site-editor?key=highmark2026" target="_blank">
+              <span>✏️</span> Site editor
               <span class="more-link-arrow">↗</span>
             </a>
           </div>
@@ -708,19 +722,31 @@ async function init() {
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
 }
 
-function redirectToLogin() {
+function clearAllSessions() {
   localStorage.removeItem('hm_portal_token');
+  localStorage.removeItem('hm_portal_refresh');
+  // Also clear Supabase's internal session keys so the login page
+  // doesn't auto-redirect back when a new user signs in after sign-out.
+  Object.keys(localStorage).filter(k => k.startsWith('sb-')).forEach(k => localStorage.removeItem(k));
+}
+
+function redirectToLogin() {
+  clearAllSessions();
   window.location.replace('/portal/login');
 }
 
 async function signOut() {
   try {
-    const cfg = await fetch('/portal/config').then(r => r.json());
-    const sb  = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
-    await sb.auth.signOut();
+    // Use the existing sbClient (has the active session) rather than a fresh instance
+    if (sbClient) {
+      await sbClient.auth.signOut();
+    } else {
+      const cfg = await fetch('/portal/config').then(r => r.json());
+      const sb  = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+      await sb.auth.signOut();
+    }
   } catch {}
-  localStorage.removeItem('hm_portal_token');
-  localStorage.removeItem('hm_portal_refresh');
+  clearAllSessions();
   window.location.replace('/portal/login');
 }
 
@@ -1111,7 +1137,8 @@ async function loadSettings() {
   if (!d) { document.getElementById('settingsContent').innerHTML = '<div class="error-msg">Failed to load settings.</div>'; return; }
   _settingsData = d;
 
-  const canEdit = d.editable && me?.isClientAdmin;
+  // internal_admin always gets edit controls; client_admin only if backend marks client editable
+  const canEdit = me?.isAdmin || (d.editable && me?.isClientAdmin);
 
   function row(label, value) {
     return `<tr><td style="padding:8px 0;color:var(--text2);width:160px;font-size:13px;">${label}</td><td style="padding:8px 0;font-size:13px;">${value ?? '—'}</td></tr>`;
@@ -1215,7 +1242,7 @@ async function loadSettings() {
     </div>
 
     <div class="card" style="margin-top:16px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div class="card-header-row" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
         <div class="card-title" style="margin-bottom:0;">Knowledge Sources</div>
         <button class="btn btn-ghost btn-sm" onclick="openSrcModal()">+ Add source</button>
       </div>
@@ -1240,7 +1267,7 @@ async function loadSettings() {
           <span style="display:block;color:var(--text2);font-size:11px;">Guests can text "speak to a person" to get routed to your team</span></label>
       </div>
       <div id="bkSection" style="margin-top:20px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div class="card-header-row" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
           <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;">Booking Options</div>
           <button class="btn btn-ghost btn-sm" onclick="openBkModal()">+ Add option</button>
         </div>
@@ -1298,7 +1325,10 @@ async function loadSettings() {
     const r = await apiPatch('/settings', body);
     btn.disabled = false; btn.textContent = 'Save changes';
     if (!r) {
-      msgEl.className = 'error-msg'; msgEl.textContent = 'Failed to save settings.'; msgEl.style.display = 'block';
+      const errText = !_settingsData?.editable
+        ? 'This is a static client (defined in clients.js). Settings changes must be made in code or by migrating to a DB-backed client.'
+        : 'Failed to save settings.';
+      msgEl.className = 'error-msg'; msgEl.textContent = errText; msgEl.style.display = 'block';
     } else {
       msgEl.className = 'success-msg'; msgEl.textContent = 'Settings saved.'; msgEl.style.display = 'block';
       setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
