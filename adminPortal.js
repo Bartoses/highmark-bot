@@ -464,7 +464,7 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
   // If client is static (defined in clients.js, no DB row), auto-promote it to DB-backed.
   // This seeds the clients table from the static config so future edits persist.
   if (!client._fromDb) {
-    if (!req.portalUser?.isAdmin) {
+    if (req.portalUser?.role !== "internal_admin") {
       return res.status(400).json({
         error: "Static clients cannot be edited via portal — contact Highmark to update your configuration",
       });
