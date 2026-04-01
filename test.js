@@ -2899,6 +2899,7 @@ async function main() {
   await test37(); // Invite flow: create, info, accept, revoke, resend, deactivate, lifecycle guards
   await test38(); // Portal access management: admin happy-path (list users/invites, create, resend, revoke, toggle)
   await test39(); // Branded opener: business name in first message for every client + override behavior
+  await test40(); // client_admin RBAC: scoped user management, blocked escalation, own-client enforcement
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -4192,7 +4193,7 @@ async function test38() {
     return r;
   }
 
-  const adminReq = { portalUser: { role: "internal_admin", email: "admin@test.com" }, query: {}, body: {} };
+  const adminReq = { portalUser: { role: "internal_admin", email: "admin@test.com", isClientAdmin: true }, query: {}, body: {} };
 
   // ── handlePortalUsers: returns users for admin ───────────────────────────
   {
@@ -4560,6 +4561,156 @@ async function test39() {
     opener.includes("Test Business")
       ? pass("test39: generic fallback includes business name")
       : fail("test39: generic fallback missing business name", opener);
+  }
+}
+
+async function test40() {
+  console.log("\nTEST 40: client_admin RBAC — scoped user management\n");
+
+  const {
+    handlePortalUsers,
+    handlePortalInvites,
+    handlePortalCreateInvite,
+    handlePortalUpdateUser,
+  } = await import("./adminInvites.js");
+
+  function mockRes() {
+    const r = { _status: 200, _body: null };
+    r.status = (c) => { r._status = c; return r; };
+    r.json   = (b) => { r._body = b; return r; };
+    return r;
+  }
+
+  // Mock Supabase that supports chained .select().order().eq()
+  function chainMock(result) {
+    const ch = { ...result };
+    ch.select = () => ch; ch.order = () => ch; ch.eq = () => ch;
+    ch.maybeSingle = async () => result;
+    ch.single      = async () => result;
+    return ch;
+  }
+
+  const clientAdminReq = {
+    portalUser: { role: "client_admin", email: "mgr@csr.com", clientId: "csr_rea", isClientAdmin: true },
+    query: {}, body: {},
+    params: {},
+  };
+
+  const users = [
+    { id: "u1", email: "a@csr.com", role: "client_user", client_id: "csr_rea", active: true, created_at: new Date().toISOString() },
+  ];
+  const invites = [
+    { id: "inv1", email: "b@csr.com", role: "client_user", client_id: "csr_rea", status: "pending", expires_at: new Date().toISOString(), created_at: new Date().toISOString() },
+  ];
+
+  // ── handlePortalUsers: client_admin → 200 scoped to own client ───────────
+  {
+    const res    = mockRes();
+    const mockSb = { from: () => chainMock({ data: users, error: null }) };
+    await handlePortalUsers({ ...clientAdminReq }, res, mockSb);
+    res._status === 200 && Array.isArray(res._body?.users)
+      ? pass("test40: handlePortalUsers 200 for client_admin")
+      : fail("test40: handlePortalUsers wrong response for client_admin", JSON.stringify(res._body));
+  }
+
+  // ── handlePortalUsers: client_user → 403 (unchanged) ─────────────────────
+  {
+    const res = mockRes();
+    await handlePortalUsers({ portalUser: { role: "client_user", isClientAdmin: false }, query: {}, body: {} }, res, {});
+    res._status === 403
+      ? pass("test40: handlePortalUsers still returns 403 for client_user")
+      : fail("test40: handlePortalUsers client_user guard broken", res._status);
+  }
+
+  // ── handlePortalInvites: client_admin → 200 scoped to own client ─────────
+  {
+    const res    = mockRes();
+    const mockSb = { from: () => chainMock({ data: invites, error: null }) };
+    await handlePortalInvites({ ...clientAdminReq }, res, mockSb);
+    res._status === 200 && Array.isArray(res._body?.invites)
+      ? pass("test40: handlePortalInvites 200 for client_admin")
+      : fail("test40: handlePortalInvites wrong response for client_admin", JSON.stringify(res._body));
+  }
+
+  // ── handlePortalCreateInvite: client_admin cannot escalate to internal_admin ─
+  {
+    const res = mockRes();
+    await handlePortalCreateInvite(
+      { ...clientAdminReq, body: { email: "hacker@evil.com", role: "internal_admin" } },
+      res, {}
+    );
+    res._status === 403
+      ? pass("test40: handlePortalCreateInvite blocks client_admin from creating internal_admin invite")
+      : fail("test40: handlePortalCreateInvite escalation not blocked", res._status);
+  }
+
+  // ── handlePortalCreateInvite: client_admin always uses own client_id ──────
+  {
+    const res = mockRes();
+    let capturedClientId;
+    const mockSb = {
+      from: () => ({
+        select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }),
+        insert: (row) => {
+          capturedClientId = row.client_id;
+          return { select: () => ({ single: async () => ({ data: { ...row, id: "new-invite", invite_token: "tok123", expires_at: new Date().toISOString(), created_at: new Date().toISOString() }, error: null }) }) };
+        },
+      }),
+    };
+    await handlePortalCreateInvite(
+      { ...clientAdminReq, body: { email: "new@csr.com", role: "client_user", client_id: "other_client" } },
+      res, mockSb
+    );
+    capturedClientId === "csr_rea"
+      ? pass("test40: handlePortalCreateInvite forces client_admin's own client_id (ignores body.client_id)")
+      : fail("test40: handlePortalCreateInvite used wrong client_id", capturedClientId);
+  }
+
+  // ── handlePortalUpdateUser: client_admin own-client user → 200 ───────────
+  {
+    const res = mockRes();
+    const userRow = { id: "u1", email: "a@csr.com", role: "client_user", client_id: "csr_rea", active: true };
+    // 3 calls to from("portal_users"): 1=ownership check, 2=updatePortalUser fetch, 3=updatePortalUser update
+    let fromCall = 0;
+    const mockSb = {
+      from: () => {
+        fromCall++;
+        if (fromCall === 1) {
+          // ownership check: .select().eq().maybySingle()
+          return { select: () => ({ eq: () => ({ maybySingle: async () => ({ data: { client_id: "csr_rea" } }), maybeSingle: async () => ({ data: { client_id: "csr_rea" } }) }) }) };
+        }
+        if (fromCall === 2) {
+          // updatePortalUser: .select().eq().single()
+          return { select: () => ({ eq: () => ({ single: async () => ({ data: { ...userRow }, error: null }) }) }) };
+        }
+        // updatePortalUser: .update().eq().select().single()
+        return { update: () => ({ eq: () => ({ select: () => ({ single: async () => ({ data: { ...userRow, active: false }, error: null }) }) }) }) };
+      },
+    };
+    await handlePortalUpdateUser(
+      { ...clientAdminReq, params: { id: "u1" }, body: { active: false } },
+      res, mockSb
+    );
+    res._status === 200
+      ? pass("test40: handlePortalUpdateUser 200 for client_admin on own-client user")
+      : fail("test40: handlePortalUpdateUser wrong status for own-client user", res._status);
+  }
+
+  // ── handlePortalUpdateUser: client_admin other-client user → 403 ─────────
+  {
+    const res = mockRes();
+    const mockSb = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { client_id: "other_client" } }) }) }),
+      }),
+    };
+    await handlePortalUpdateUser(
+      { ...clientAdminReq, params: { id: "u2" }, body: { active: false } },
+      res, mockSb
+    );
+    res._status === 403
+      ? pass("test40: handlePortalUpdateUser 403 when client_admin targets other client's user")
+      : fail("test40: handlePortalUpdateUser cross-client access not blocked", res._status);
   }
 }
 

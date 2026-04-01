@@ -31,7 +31,7 @@ import { randomBytes } from "crypto";
 
 const INVITE_EXPIRY_HOURS = 72;
 const INVITE_EXPIRY_MS    = INVITE_EXPIRY_HOURS * 60 * 60 * 1000;
-const VALID_ROLES         = ["internal_admin", "client_user"];
+const VALID_ROLES         = ["internal_admin", "client_admin", "client_user"];
 const VALID_STATUSES      = ["pending", "accepted", "expired", "revoked"];
 
 function generateToken() {
@@ -181,10 +181,10 @@ export async function handleCreateInvite(req, res, supabase) {
 
   if (!email) return res.status(400).json({ error: "email is required" });
   if (!VALID_ROLES.includes(role)) {
-    return res.status(400).json({ error: "role must be internal_admin or client_user" });
+    return res.status(400).json({ error: "role must be internal_admin, client_admin, or client_user" });
   }
-  if (role === "client_user" && !client_id) {
-    return res.status(400).json({ error: "client_id is required for client_user role" });
+  if ((role === "client_user" || role === "client_admin") && !client_id) {
+    return res.status(400).json({ error: "client_id is required for client_user and client_admin roles" });
   }
 
   try {
@@ -375,26 +375,37 @@ export async function handleAcceptInvite(req, res, supabase) {
 // PORTAL ROUTES (requirePortalAuth — internal_admin only)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function assertAdmin(req, res) {
-  if (req.portalUser?.role !== "internal_admin") {
+// Returns true if the user is internal_admin or client_admin, false + 403 otherwise.
+function assertClientAdmin(req, res) {
+  if (!req.portalUser?.isClientAdmin) {
     res.status(403).json({ error: "Admin access required" });
     return false;
   }
   return true;
 }
 
+// For client_admin: returns their own clientId. For internal_admin: uses query/body param.
+function resolveInviteClientId(req) {
+  const { portalUser } = req;
+  if (portalUser.role === "internal_admin") {
+    return req.query.client_id ?? req.body?.client_id ?? null;
+  }
+  return portalUser.clientId; // client_admin always scoped to own client
+}
+
 // GET /portal/api/users
 export async function handlePortalUsers(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
-  if (!assertAdmin(req, res)) return;
+  if (!assertClientAdmin(req, res)) return;
 
-  const { client_id } = req.query;
+  const scopedClientId = resolveInviteClientId(req);
+
   let query = supabase
     .from("portal_users")
     .select("id, email, role, client_id, active, created_at")
     .order("created_at", { ascending: false });
 
-  if (client_id) query = query.eq("client_id", client_id);
+  if (scopedClientId) query = query.eq("client_id", scopedClientId);
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
@@ -404,16 +415,18 @@ export async function handlePortalUsers(req, res, supabase) {
 // GET /portal/api/invites
 export async function handlePortalInvites(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
-  if (!assertAdmin(req, res)) return;
+  if (!assertClientAdmin(req, res)) return;
 
-  const { client_id, status } = req.query;
+  const scopedClientId = resolveInviteClientId(req);
+  const { status } = req.query;
+
   let query = supabase
     .from("portal_invites")
     .select("id, email, role, client_id, invited_by, status, expires_at, accepted_at, created_at")
     .order("created_at", { ascending: false });
 
-  if (client_id) query = query.eq("client_id", client_id);
-  if (status)    query = query.eq("status", status);
+  if (scopedClientId) query = query.eq("client_id", scopedClientId);
+  if (status)         query = query.eq("status", status);
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
@@ -423,17 +436,27 @@ export async function handlePortalInvites(req, res, supabase) {
 // POST /portal/api/invites
 export async function handlePortalCreateInvite(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
-  if (!assertAdmin(req, res)) return;
+  if (!assertClientAdmin(req, res)) return;
 
-  const { email, client_id = null, role = "client_user" } = req.body;
-  const invited_by = req.portalUser?.email ?? "admin";
+  const { portalUser } = req;
+  const { email, role = "client_user" } = req.body;
+  const invited_by = portalUser?.email ?? "admin";
+
+  // client_admin always invites into their own client; internal_admin can specify any client_id
+  const client_id = portalUser.role === "client_admin"
+    ? portalUser.clientId
+    : (req.body.client_id ?? null);
 
   if (!email) return res.status(400).json({ error: "email is required" });
   if (!VALID_ROLES.includes(role)) {
-    return res.status(400).json({ error: "role must be internal_admin or client_user" });
+    return res.status(400).json({ error: "role must be internal_admin, client_admin, or client_user" });
   }
-  if (role === "client_user" && !client_id) {
-    return res.status(400).json({ error: "client_id is required for client_user role" });
+  // client_admin cannot elevate to internal_admin
+  if (portalUser.role === "client_admin" && role === "internal_admin") {
+    return res.status(403).json({ error: "client_admin cannot create internal_admin invites" });
+  }
+  if ((role === "client_user" || role === "client_admin") && !client_id) {
+    return res.status(400).json({ error: "client_id is required for client_user and client_admin roles" });
   }
 
   try {
@@ -449,7 +472,16 @@ export async function handlePortalCreateInvite(req, res, supabase) {
 // POST /portal/api/invites/:id/resend
 export async function handlePortalResendInvite(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
-  if (!assertAdmin(req, res)) return;
+  if (!assertClientAdmin(req, res)) return;
+
+  // client_admin: verify invite belongs to their client before resending
+  if (req.portalUser.role === "client_admin") {
+    const { data: inv } = await supabase.from("portal_invites").select("client_id").eq("id", req.params.id).maybeSingle();
+    if (!inv || inv.client_id !== req.portalUser.clientId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+  }
+
   try {
     return res.json(await resendInvite(supabase, req.params.id));
   } catch (err) {
@@ -460,7 +492,16 @@ export async function handlePortalResendInvite(req, res, supabase) {
 // POST /portal/api/invites/:id/revoke
 export async function handlePortalRevokeInvite(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
-  if (!assertAdmin(req, res)) return;
+  if (!assertClientAdmin(req, res)) return;
+
+  // client_admin: verify invite belongs to their client before revoking
+  if (req.portalUser.role === "client_admin") {
+    const { data: inv } = await supabase.from("portal_invites").select("client_id").eq("id", req.params.id).maybeSingle();
+    if (!inv || inv.client_id !== req.portalUser.clientId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+  }
+
   try {
     return res.json(await revokeInvite(supabase, req.params.id));
   } catch (err) {
@@ -471,7 +512,16 @@ export async function handlePortalRevokeInvite(req, res, supabase) {
 // PATCH /portal/api/users/:id
 export async function handlePortalUpdateUser(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
-  if (!assertAdmin(req, res)) return;
+  if (!assertClientAdmin(req, res)) return;
+
+  // client_admin: verify the target user belongs to their client
+  if (req.portalUser.role === "client_admin") {
+    const { data: u } = await supabase.from("portal_users").select("client_id").eq("id", req.params.id).maybeSingle();
+    if (!u || u.client_id !== req.portalUser.clientId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+  }
+
   try {
     return res.json(await updatePortalUser(supabase, req.params.id, req.body));
   } catch (err) {

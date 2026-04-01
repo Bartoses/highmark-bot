@@ -67,11 +67,12 @@ export async function handlePortalMe(req, res) {
   const clients    = getAllClients();
   const clientName = portalUser.clientId ? (clients[portalUser.clientId]?.name ?? portalUser.clientId) : null;
   return res.json({
-    email:      portalUser.email,
-    role:       portalUser.role,
-    clientId:   portalUser.clientId,
+    email:         portalUser.email,
+    role:          portalUser.role,
+    clientId:      portalUser.clientId,
     clientName,
-    isAdmin:    portalUser.role === "internal_admin",
+    isAdmin:       portalUser.role === "internal_admin",
+    isClientAdmin: portalUser.isClientAdmin ?? false,
   });
 }
 

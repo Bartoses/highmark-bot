@@ -16,6 +16,11 @@
 //   - internal_admin: uses ?client_id= query param (null if not provided)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Roles:
+//   internal_admin — Highmark staff, can access any client
+//   client_admin   — Business admin, scoped to own client, can manage own users
+//   client_user    — Read-only business user, scoped to own client
+
 // ── makePortalAuth ────────────────────────────────────────────────────────────
 // Returns an Express middleware that validates a Bearer JWT and populates
 // req.portalUser. Closes over the supabase service-role client.
@@ -56,7 +61,7 @@ export function makePortalAuth(supabase) {
       if (!data.active) {
         return res.status(403).json({ error: "Portal access has been deactivated" });
       }
-      if (data.role === "client_user" && !data.client_id) {
+      if ((data.role === "client_user" || data.role === "client_admin") && !data.client_id) {
         return res.status(403).json({ error: "Account is not linked to a client — contact support" });
       }
       portalUser = data;
@@ -65,10 +70,11 @@ export function makePortalAuth(supabase) {
     }
 
     req.portalUser = {
-      authUserId: user.id,
-      email:      user.email,
-      role:       portalUser.role,
-      clientId:   portalUser.client_id ?? null,
+      authUserId:    user.id,
+      email:         user.email,
+      role:          portalUser.role,
+      clientId:      portalUser.client_id ?? null,
+      isClientAdmin: portalUser.role === "client_admin" || portalUser.role === "internal_admin",
     };
 
     next();
@@ -85,8 +91,10 @@ export function makePortalAuth(supabase) {
 export function resolvePortalClientId(req) {
   const { portalUser } = req;
   if (!portalUser) return null;
+  // internal_admin: can scope to any client via ?client_id= or body.client_id
   if (portalUser.role === "internal_admin") {
     return req.query.client_id ?? req.body?.client_id ?? null;
   }
+  // client_admin + client_user: always scoped to their own client
   return portalUser.clientId;
 }

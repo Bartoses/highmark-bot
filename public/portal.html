@@ -217,8 +217,9 @@ tr:hover td { background: var(--panel2); }
   .client-select { max-width: 140px; font-size: 11px; }
   .client-badge  { display: none; }
 }
-/* Admin-only nav items — hidden until admin status confirmed in JS */
+/* Admin-only nav items — hidden until confirmed in JS */
 .admin-only { display: none; }
+.client-admin-only { display: none; }
 
 /* More section link list (mobile) */
 .more-link-list { display: flex; flex-direction: column; gap: 2px; }
@@ -263,7 +264,7 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="settings">
         <span class="nav-icon">⚙</span> Settings
       </div>
-      <div class="nav-item admin-only" data-section="users">
+      <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
     </div>
@@ -398,7 +399,7 @@ tr:hover td { background: var(--panel2); }
               <span>⚙</span> Settings
               <span class="more-link-arrow">›</span>
             </div>
-            <div class="more-link-item admin-only" onclick="switchSection('users')">
+            <div class="more-link-item client-admin-only" onclick="switchSection('users')">
               <span>🔑</span> Users &amp; Access
               <span class="more-link-arrow">›</span>
             </div>
@@ -535,8 +536,9 @@ tr:hover td { background: var(--panel2); }
       <div class="form-group">
         <label>Role</label>
         <select id="inviteRole">
-          <option value="client_user">Client user (scoped to one client)</option>
-          <option value="internal_admin">Internal admin (all clients)</option>
+          <option value="client_user">Client user</option>
+          <option value="client_admin">Client admin (can manage own users)</option>
+          <option value="internal_admin" class="admin-only">Internal admin (all clients)</option>
         </select>
       </div>
       <div class="modal-footer">
@@ -631,11 +633,15 @@ async function init() {
   document.getElementById('moreSignOutBtn').addEventListener('click', signOut);
   document.getElementById('analyticsPeriod').addEventListener('change', loadAnalytics);
 
-  // Show admin-only UI elements + wire admin-specific controls
+  // Show admin-only elements (internal_admin — Highmark staff only)
   if (me.isAdmin) {
     document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('admin-only'));
-    setupInviteModal();
     preloadClients();
+  }
+  // Show client-admin elements (client_admin + internal_admin — business self-service)
+  if (me.isClientAdmin) {
+    document.querySelectorAll('.client-admin-only').forEach(el => el.classList.remove('client-admin-only'));
+    setupInviteModal();
   }
 
   // Load initial section based on URL
@@ -666,7 +672,7 @@ const sectionTitles = {
   analytics: 'Analytics', settings: 'Settings', users: 'Users & Access', more: 'More',
 };
 function switchSection(name) {
-  if (name === 'users' && !me?.isAdmin) name = 'dashboard';
+  if (name === 'users' && !me?.isClientAdmin) name = 'dashboard';
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.mob-nav-item').forEach(n => n.classList.remove('active'));
@@ -1132,7 +1138,7 @@ async function loadUsers() {
         <thead><tr><th>Email</th><th>Role</th><th>Client</th><th>Status</th><th>Created</th><th></th></tr></thead>
         <tbody>${users.map(u => `<tr>
           <td style="font-size:12px">${u.email}</td>
-          <td>${pill(u.role === 'internal_admin' ? 'admin' : 'client')}</td>
+          <td>${pill(u.role === 'internal_admin' ? 'admin' : u.role === 'client_admin' ? 'mgr' : 'client')}</td>
           <td class="text-muted text-xs">${u.client_id ?? '—'}</td>
           <td>${pill(u.active ? 'active' : 'inactive')}</td>
           <td class="text-muted text-xs">${fmt(u.created_at)}</td>
@@ -1152,7 +1158,7 @@ async function loadUsers() {
         <thead><tr><th>Email</th><th>Role</th><th>Client</th><th>Status</th><th>Expires</th><th></th></tr></thead>
         <tbody>${invites.map(inv => `<tr>
           <td style="font-size:12px">${inv.email}</td>
-          <td>${pill(inv.role === 'internal_admin' ? 'admin' : 'client')}</td>
+          <td>${pill(inv.role === 'internal_admin' ? 'admin' : inv.role === 'client_admin' ? 'mgr' : 'client')}</td>
           <td class="text-muted text-xs">${inv.client_id ?? '—'}</td>
           <td>${pill(inv.status)}</td>
           <td class="text-muted text-xs">${inv.status === 'pending' ? fmt(inv.expires_at) : '—'}</td>
@@ -1195,18 +1201,27 @@ async function doRevokeInvite(id) {
 }
 
 function openInviteModal() {
-  // Populate client dropdown
-  const sel = document.getElementById('inviteClient');
+  const sel    = document.getElementById('inviteClient');
   const roleEl = document.getElementById('inviteRole');
-  sel.innerHTML = (allClientsCache.length > 0
-    ? allClientsCache.map(c => `<option value="${c.id}">${c.name}</option>`)
-    : ['<option value="">— no clients —</option>']
-  ).join('');
+  const clientGroup = sel.closest('.form-group');
 
-  // Hide client selector when admin role selected
-  roleEl.onchange = () => {
-    sel.closest('.form-group').style.display = roleEl.value === 'internal_admin' ? 'none' : '';
-  };
+  // client_admin: client is always their own — hide the dropdown, keep it populated
+  if (!me.isAdmin) {
+    clientGroup.style.display = 'none';
+    // Ensure their own client is selected
+    sel.innerHTML = `<option value="${me.clientId}">${me.clientName ?? me.clientId}</option>`;
+  } else {
+    clientGroup.style.display = '';
+    sel.innerHTML = (allClientsCache.length > 0
+      ? allClientsCache.map(c => `<option value="${c.id}">${c.name}</option>`)
+      : ['<option value="">— no clients —</option>']
+    ).join('');
+
+    // Hide client selector when internal_admin role is selected
+    roleEl.onchange = () => {
+      clientGroup.style.display = roleEl.value === 'internal_admin' ? 'none' : '';
+    };
+  }
 
   document.getElementById('inviteEmail').value = '';
   document.getElementById('inviteModalError').style.display = 'none';
