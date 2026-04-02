@@ -1166,7 +1166,8 @@ async function loadSettings() {
     const tableEl = document.getElementById('crawlPagesTable');
     const countEl = document.getElementById('crawlPageCount');
     if (!tableEl) return;
-    const r = await apiFetch('/crawl-pages');
+    const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+    const r = await apiFetch(`/crawl-pages${clientParam}`);
     if (!r) {
       tableEl.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px 0;">Could not load pages.</div>';
       return;
@@ -1195,7 +1196,8 @@ async function loadSettings() {
   window.triggerCrawlNow = async () => {
     const btn = document.getElementById('crawlNowBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
-    const r = await apiFetch('/crawl-now', { method: 'POST' });
+    const crawlQp = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+    const r = await apiFetch(`/crawl-now${crawlQp}`, { method: 'POST' });
     if (btn) { btn.disabled = false; btn.textContent = 'Crawl now'; }
     const msgEl = document.getElementById('settingsMsg') ?? document.getElementById('crawlMsg');
     if (r?.ok) {
