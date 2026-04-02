@@ -276,6 +276,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
+      <div class="nav-item admin-only" data-section="clients">
+        <span class="nav-icon">🏢</span> Clients
+      </div>
     </div>
 
     <!-- Internal tools — admin only -->
@@ -396,6 +399,15 @@ tr:hover td { background: var(--panel2); }
         </div>
       </div><!-- /sec-users -->
 
+      <!-- CLIENTS (admin only) -->
+      <div class="section" id="sec-clients">
+        <div class="section-header">
+          <span class="section-title">Clients</span>
+          <button class="btn btn-primary btn-sm" onclick="openNewClientModal()">+ New client</button>
+        </div>
+        <div id="clientsTableWrap"><div class="loading">Loading…</div></div>
+      </div><!-- /sec-clients -->
+
       <!-- MORE (mobile-only) -->
       <div class="section" id="sec-more">
         <div class="card" style="margin-bottom:12px;">
@@ -413,6 +425,10 @@ tr:hover td { background: var(--panel2); }
             </div>
             <div class="more-link-item client-admin-only" onclick="switchSection('users')">
               <span>🔑</span> Users &amp; Access
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item admin-only" onclick="switchSection('clients')">
+              <span>🏢</span> Clients
               <span class="more-link-arrow">›</span>
             </div>
           </div>
@@ -521,6 +537,61 @@ tr:hover td { background: var(--panel2); }
     <div class="modal-footer">
       <button class="btn btn-ghost" id="campaignModalCancel">Cancel</button>
       <button class="btn btn-primary" id="campaignModalSave">Save draft</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── New client modal ──────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="clientModal">
+  <div class="modal">
+    <div class="modal-title" id="clientModalTitle">New Client</div>
+    <div id="clientModalError" class="error-msg" style="display:none"></div>
+    <div id="clientModalForm">
+      <div class="two-col">
+        <div class="form-group">
+          <label>Client ID <span style="color:var(--text2);font-weight:400;">(lowercase, no spaces)</span></label>
+          <input type="text" id="clientId" placeholder="e.g. mountain_lodge">
+        </div>
+        <div class="form-group">
+          <label>Business name</label>
+          <input type="text" id="clientName" placeholder="e.g. Mountain Lodge">
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="form-group">
+          <label>Bot name</label>
+          <input type="text" id="clientBotName" placeholder="Summit" value="Summit">
+        </div>
+        <div class="form-group">
+          <label>Booking mode</label>
+          <select id="clientBookingMode">
+            <option value="informational">Informational (Q&amp;A + phone CTA)</option>
+            <option value="fareharbor">FareHarbor (real-time availability)</option>
+            <option value="lead_capture">Lead capture (3-step form)</option>
+            <option value="static_links">Static links (numbered booking list)</option>
+            <option value="call_only">Call only (phone CTA only)</option>
+            <option value="hybrid">Hybrid (links + phone CTA)</option>
+          </select>
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="form-group">
+          <label>Support phone <span style="color:var(--text2);font-weight:400;">(E.164)</span></label>
+          <input type="text" id="clientSupportPhone" placeholder="+19705550001">
+        </div>
+        <div class="form-group">
+          <label>Website URL</label>
+          <input type="text" id="clientWebsiteUrl" placeholder="https://example.com">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Tone</label>
+        <input type="text" id="clientTone" placeholder="warm, helpful, and knowledgeable" value="warm, helpful, and knowledgeable">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeClientModal()">Cancel</button>
+      <button class="btn btn-primary" id="clientModalSave" onclick="saveNewClient()">Create client</button>
     </div>
   </div>
 </div>
@@ -719,7 +790,7 @@ async function init() {
 
   // Load initial section based on URL
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','users'];
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','users','clients'];
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
 }
 
@@ -754,7 +825,8 @@ async function signOut() {
 // ── Section routing ────────────────────────────────────────────────────────
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
-  analytics: 'Analytics', settings: 'Settings', users: 'Users & Access', more: 'More',
+  analytics: 'Analytics', settings: 'Settings', users: 'Users & Access',
+  clients: 'Clients', more: 'More',
 };
 function switchSection(name) {
   if (name === 'users' && !me?.isClientAdmin) name = 'dashboard';
@@ -773,6 +845,7 @@ function switchSection(name) {
   if (name === 'analytics')  loadAnalytics();
   if (name === 'settings')   loadSettings();
   if (name === 'users')      loadUsers();
+  if (name === 'clients')   loadClients();
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -1900,6 +1973,139 @@ async function preloadClients() {
   const d = await apiFetch('/clients');
   allClientsCache = d?.clients ?? [];
 }
+
+// ── CLIENTS (admin only) ──────────────────────────────────────────────────
+const BOOKING_MODE_LABELS = {
+  fareharbor:       'FareHarbor',
+  api_live_booking: 'FareHarbor',
+  informational:    'Informational',
+  lead_capture:     'Lead Capture',
+  static_links:     'Static Links',
+  call_only:        'Call Only',
+  hybrid:           'Hybrid',
+  demo:             'Demo',
+};
+
+let clientsCache = {};  // id → serialized client (for edit modal)
+
+async function loadClients() {
+  const wrap = document.getElementById('clientsTableWrap');
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  const d = await apiFetch('/clients?detailed=true');
+  if (!d?.clients) { wrap.innerHTML = '<div class="error-msg" style="display:block">Could not load clients.</div>'; return; }
+  clientsCache = {};
+  d.clients.forEach(c => { clientsCache[c.id] = c; });
+  wrap.innerHTML = renderClientsTable(d.clients);
+}
+
+function renderClientsTable(clients) {
+  if (!clients.length) return '<div class="empty-state">No clients found.</div>';
+  const rows = clients.map(c => {
+    const ready     = c.readiness?.score ?? '–';
+    const isReady   = c.readiness?.ready;
+    const modeLabel = BOOKING_MODE_LABELS[c.booking_mode] ?? c.booking_mode ?? '–';
+    const editBtn   = c.is_static
+      ? `<span style="color:var(--text2);font-size:12px;">static</span>`
+      : `<button class="btn btn-ghost btn-sm" onclick="openEditClientModal('${c.id}')">Edit</button>`;
+    return `<tr>
+      <td><strong>${c.name ?? c.id}</strong><br><span style="color:var(--text2);font-size:12px;">${c.id}</span></td>
+      <td>${modeLabel}</td>
+      <td style="font-size:12px;color:var(--text2);">${c.website_url ?? '–'}</td>
+      <td><span class="pill ${isReady ? 'pill-green' : 'pill-failed'}">${ready}</span></td>
+      <td>${editBtn}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="tbl-wrap"><table>
+    <thead><tr><th>Client</th><th>Mode</th><th>Website</th><th>Readiness</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
+function openNewClientModal() {
+  document.getElementById('clientModalTitle').textContent     = 'New Client';
+  document.getElementById('clientModalError').style.display  = 'none';
+  document.getElementById('clientId').value                  = '';
+  document.getElementById('clientId').readOnly               = false;
+  document.getElementById('clientName').value                = '';
+  document.getElementById('clientBotName').value             = 'Summit';
+  document.getElementById('clientTone').value                = 'warm, helpful, and knowledgeable';
+  document.getElementById('clientBookingMode').value         = 'informational';
+  document.getElementById('clientSupportPhone').value        = '';
+  document.getElementById('clientWebsiteUrl').value          = '';
+  document.getElementById('clientModalSave').onclick         = saveNewClient;
+  document.getElementById('clientModalSave').textContent     = 'Create client';
+  document.getElementById('clientModal').classList.add('active');
+}
+
+function closeClientModal() {
+  document.getElementById('clientModal').classList.remove('active');
+}
+
+async function saveNewClient() {
+  const errEl = document.getElementById('clientModalError');
+  errEl.style.display = 'none';
+  const supportPhone = document.getElementById('clientSupportPhone').value.trim();
+  const websiteUrl   = document.getElementById('clientWebsiteUrl').value.trim();
+  const body = {
+    id:           document.getElementById('clientId').value.trim(),
+    name:         document.getElementById('clientName').value.trim(),
+    bot_name:     document.getElementById('clientBotName').value.trim() || 'Summit',
+    tone:         document.getElementById('clientTone').value.trim(),
+    booking_mode: document.getElementById('clientBookingMode').value,
+    ...(supportPhone ? { support_phone: supportPhone } : {}),
+    ...(websiteUrl   ? { website_url:   websiteUrl   } : {}),
+  };
+  const btn = document.getElementById('clientModalSave');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  const d = await apiFetch('/clients', { method: 'POST', body: JSON.stringify(body) });
+  btn.disabled = false; btn.textContent = 'Create client';
+  if (d?.error) { errEl.textContent = d.error; errEl.style.display = 'block'; return; }
+  closeClientModal();
+  loadClients();
+  preloadClients();  // refresh client selector cache
+}
+
+function openEditClientModal(clientId) {
+  const c = clientsCache[clientId];
+  if (!c) return;
+  document.getElementById('clientModalTitle').textContent    = `Edit — ${c.name ?? c.id}`;
+  document.getElementById('clientModalError').style.display = 'none';
+  document.getElementById('clientId').value                 = c.id;
+  document.getElementById('clientId').readOnly              = true;
+  document.getElementById('clientName').value               = c.name ?? '';
+  document.getElementById('clientBotName').value            = c.bot_name ?? 'Summit';
+  document.getElementById('clientTone').value               = c.tone ?? '';
+  document.getElementById('clientBookingMode').value        = c.booking_mode ?? 'informational';
+  document.getElementById('clientSupportPhone').value       = c.support_phone ?? '';
+  document.getElementById('clientWebsiteUrl').value         = c.website_url ?? '';
+  document.getElementById('clientModalSave').onclick        = () => saveEditClient(c.id);
+  document.getElementById('clientModalSave').textContent    = 'Save changes';
+  document.getElementById('clientModal').classList.add('active');
+}
+
+async function saveEditClient(id) {
+  const errEl = document.getElementById('clientModalError');
+  errEl.style.display = 'none';
+  const body = {
+    name:         document.getElementById('clientName').value.trim(),
+    bot_name:     document.getElementById('clientBotName').value.trim() || 'Summit',
+    tone:         document.getElementById('clientTone').value.trim(),
+    booking_mode: document.getElementById('clientBookingMode').value,
+    support_phone: document.getElementById('clientSupportPhone').value.trim() || null,
+    website_url:   document.getElementById('clientWebsiteUrl').value.trim()   || null,
+  };
+  const btn = document.getElementById('clientModalSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const d = await apiFetch(`/clients/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  btn.disabled = false; btn.textContent = 'Save changes';
+  if (d?.error) { errEl.textContent = d.error; errEl.style.display = 'block'; return; }
+  closeClientModal();
+  loadClients();
+}
+
+document.getElementById('clientModal')?.addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeClientModal();
+});
 
 // ── Start ──────────────────────────────────────────────────────────────────
 init().catch(err => { console.error('Portal init error:', err); redirectToLogin(); });

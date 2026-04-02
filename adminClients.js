@@ -43,7 +43,7 @@ export function computeReadiness(client) {
 }
 
 // ── Serialize a client config for API response ────────────────────────────────
-function serializeClient(client) {
+export function serializeClient(client) {
   return {
     id:            client.id,
     slug:          client.slug,

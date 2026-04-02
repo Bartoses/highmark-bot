@@ -26,7 +26,7 @@
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients, loadDbClients } from "./clients.js";
 import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.js";
-import { VALID_BOOKING_MODES } from "./adminClients.js";
+import { VALID_BOOKING_MODES, serializeClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { normalizePhone, isValidPhone } from "./phoneUtils.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
@@ -71,24 +71,43 @@ function requireClientAdmin(req, res) {
 }
 
 // ── GET /portal/api/clients ───────────────────────────────────────────────────
-// internal_admin: returns all active clients (id + name)
-// client_user: returns only their own client
+// internal_admin: returns all active clients
+//   ?detailed=true → full serialized client objects (for Clients section)
+//   default        → slim {id, name, bookingMode} (for client selector dropdown)
+// client_user / client_admin: returns only their own client (always slim)
 export async function handlePortalClients(req, res) {
   const { portalUser } = req;
   const clients = getAllClients();
+  const detailed = req.query.detailed === "true";
 
   if (portalUser.role === "internal_admin") {
-    const list = Object.values(clients)
+    const all = Object.values(clients)
       .filter(c => c.active !== false)
-      .map(c => ({ id: c.id, name: c.name, bookingMode: c.bookingMode }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    return res.json({ clients: list });
+      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+    if (detailed) {
+      return res.json({ clients: all.map(serializeClient) });
+    }
+    return res.json({ clients: all.map(c => ({ id: c.id, name: c.name, bookingMode: c.bookingMode })) });
   }
 
-  // client_user — only their own
+  // client_user / client_admin — only their own
   const c = clients[portalUser.clientId];
   if (!c) return res.status(404).json({ error: "Client not found" });
   return res.json({ clients: [{ id: c.id, name: c.name, bookingMode: c.bookingMode }] });
+}
+
+// ── POST /portal/api/clients ──────────────────────────────────────────────────
+// internal_admin only — delegates to handleCreateClient
+export async function handlePortalCreateClient(req, res, supabase) {
+  if (!req.portalUser?.isAdmin) return res.status(403).json({ error: "Internal admin only" });
+  return handleCreateClient(req, res, supabase);
+}
+
+// ── PATCH /portal/api/clients/:id ─────────────────────────────────────────────
+// internal_admin only — delegates to handleUpdateClient
+export async function handlePortalUpdateClient(req, res, supabase) {
+  if (!req.portalUser?.isAdmin) return res.status(403).json({ error: "Internal admin only" });
+  return handleUpdateClient(req, res, supabase);
 }
 
 // ── GET /portal/api/me ────────────────────────────────────────────────────────

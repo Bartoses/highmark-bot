@@ -3266,6 +3266,8 @@ async function test35() {
     handlePortalUpdateSettings,
     handleCreatePortalUser,
     handleListPortalUsers,
+    handlePortalCreateClient,
+    handlePortalUpdateClient,
   } = await import("./adminPortal.js");
 
   // ── makePortalAuth: missing token → 401 ───────────────────────────────────
@@ -3380,15 +3382,17 @@ async function test35() {
     handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign,
     handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics,
     handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers,
+    handlePortalCreateClient, handlePortalUpdateClient,
   ];
   const handlerNames = [
     "handlePortalMe", "handlePortalDashboard", "handlePortalLeads", "handlePortalUpdateLead",
     "handlePortalCampaigns", "handlePortalCreateCampaign", "handlePortalGetCampaign",
     "handlePortalUpdateCampaign", "handlePortalSendCampaign", "handlePortalAnalytics",
     "handlePortalSettings", "handlePortalUpdateSettings", "handleCreatePortalUser", "handleListPortalUsers",
+    "handlePortalCreateClient", "handlePortalUpdateClient",
   ];
   handlers.every((h, i) => typeof h === "function")
-    ? pass("test35: all 14 portal handler functions are exported from adminPortal.js")
+    ? pass("test35: all 16 portal handler functions are exported from adminPortal.js")
     : fail("test35: missing handler export", handlerNames.filter((n, i) => typeof handlers[i] !== "function"));
 
   // ── handlePortalSettings: 503 when no supabase — actually handlePortalLeads ─
@@ -3472,6 +3476,9 @@ async function test35() {
     ["GET",   "/portal/api/campaigns"],
     ["GET",   "/portal/api/analytics"],
     ["GET",   "/portal/api/settings"],
+    ["GET",   "/portal/api/clients"],
+    ["POST",  "/portal/api/clients"],
+    ["PATCH", "/portal/api/clients/csr_rea"],
   ];
   let allGot401 = true;
   for (const [method, route] of portalApiRoutes) {
@@ -3479,8 +3486,22 @@ async function test35() {
     if (res.status !== 401) { allGot401 = false; console.log(`  Expected 401 on ${route}, got ${res.status}`); }
   }
   allGot401
-    ? pass("test35: all portal API routes return 401 without token (6 routes)")
+    ? pass("test35: all portal API routes return 401 without token (9 routes incl. clients)")
     : fail("test35: some portal API routes did not return 401 without token");
+
+  // ── handlePortalCreateClient / handlePortalUpdateClient: 403 for non-admin ─
+  const mockNonAdmin = { portalUser: { role: "client_user", isAdmin: false, isClientAdmin: false, clientId: "csr_rea" }, body: {}, params: { id: "csr_rea" } };
+  let createStatus = null, updateStatus = null;
+  const createRes = { status: (c) => { createStatus = c; return { json: () => {} }; } };
+  const updateRes = { status: (c) => { updateStatus = c; return { json: () => {} }; } };
+  await handlePortalCreateClient(mockNonAdmin, createRes, null);
+  await handlePortalUpdateClient(mockNonAdmin, updateRes, null);
+  createStatus === 403
+    ? pass("test35: handlePortalCreateClient returns 403 for non-admin")
+    : fail("test35: handlePortalCreateClient should 403 non-admin", createStatus);
+  updateStatus === 403
+    ? pass("test35: handlePortalUpdateClient returns 403 for non-admin")
+    : fail("test35: handlePortalUpdateClient should 403 non-admin", updateStatus);
 
   // ── Integration: /portal/config → 200 with expected shape ────────────────
   const cfgRes = await httpGet("/portal/config");
