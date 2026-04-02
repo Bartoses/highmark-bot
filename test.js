@@ -40,6 +40,8 @@ import { DEFAULTS, SECTION_KEYS, loadSiteContent, updateSiteSection, getSiteSect
 import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction, DEFAULT_MENU_OPTIONS } from "./conversationEngine.js";
 import { normalizePhone, isValidPhone, formatPhoneForDisplay } from "./phoneUtils.js";
 import { isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
+import { getAdapter, FareHarborAdapter, StaticAdapter, HoursAdapter, buildTruth, AVAILABILITY_TRIGGERS } from "./adapters.js";
+import { selectResponseMode, buildResponseModeInstruction, RESPONSE_MODES } from "./responseMode.js";
 import {
   classifyPageType,
   normalizeCrawlUrl,
@@ -2921,6 +2923,8 @@ async function main() {
   await test46(); // Phone utilities (Phase 1): normalizePhone, isValidPhone, formatPhoneForDisplay
   await test47(); // Live truth resolver (Phase 1): isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction
   await test48(); // Crawler (Phase 2): classifyPageType, normalizeCrawlUrl, isJunkPath, extractPageLinks, extractPageTitle, buildCrawlerContext
+  await test49(); // Adapter model (Phase 3): getAdapter, FareHarborAdapter, StaticAdapter, HoursAdapter, buildTruth
+  await test50(); // Response mode selector (Phase 3): selectResponseMode, buildResponseModeInstruction, RESPONSE_MODES
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -6209,6 +6213,382 @@ async function test48() {
     ctx === ""
       ? pass("test48: buildCrawlerContext returns empty when no pages")
       : fail("test48: buildCrawlerContext empty pages", `got "${ctx}"`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 49: Pluggable adapter model (Phase 3)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test49() {
+  console.log("\nTEST 49: Adapter model (Phase 3) — adapters.js");
+
+  // ── getAdapter: FareHarbor client → FareHarborAdapter ──────────────────────
+  {
+    const fhClient = {
+      bookingMode: "fareharbor",
+      fareharborEnabled: true,
+      fareharborCompanies: [{ id: "csr", shortname: "coloradosledrentals" }],
+    };
+    getAdapter(fhClient) === FareHarborAdapter
+      ? pass("test49: getAdapter fareharbor client → FareHarborAdapter")
+      : fail("test49: getAdapter fareharbor", `got ${getAdapter(fhClient)?.name}`);
+  }
+
+  // ── getAdapter: api_live_booking → FareHarborAdapter (alias) ───────────────
+  {
+    const aliasClient = {
+      bookingMode: "api_live_booking",
+      fareharborEnabled: true,
+      fareharborCompanies: [{ id: "csr", shortname: "x" }],
+    };
+    getAdapter(aliasClient) === FareHarborAdapter
+      ? pass("test49: getAdapter api_live_booking alias → FareHarborAdapter")
+      : fail("test49: getAdapter alias", `got ${getAdapter(aliasClient)?.name}`);
+  }
+
+  // ── getAdapter: informational → StaticAdapter ───────────────────────────────
+  {
+    getAdapter({ bookingMode: "informational" }) === StaticAdapter
+      ? pass("test49: getAdapter informational → StaticAdapter")
+      : fail("test49: getAdapter informational", `got ${getAdapter({ bookingMode: "informational" })?.name}`);
+  }
+
+  // ── getAdapter: call_only → StaticAdapter ──────────────────────────────────
+  {
+    getAdapter({ bookingMode: "call_only" }) === StaticAdapter
+      ? pass("test49: getAdapter call_only → StaticAdapter")
+      : fail("test49: getAdapter call_only", `got ${getAdapter({ bookingMode: "call_only" })?.name}`);
+  }
+
+  // ── getAdapter: null client → StaticAdapter (safe fallback) ─────────────────
+  {
+    getAdapter(null) === StaticAdapter
+      ? pass("test49: getAdapter null → StaticAdapter (safe fallback)")
+      : fail("test49: getAdapter null", `got ${getAdapter(null)?.name}`);
+  }
+
+  // ── getAdapter: FH client but fareharborEnabled=false → StaticAdapter ──────
+  {
+    const disabled = { bookingMode: "fareharbor", fareharborEnabled: false, fareharborCompanies: [{ id: "x" }] };
+    getAdapter(disabled) === StaticAdapter
+      ? pass("test49: getAdapter FH disabled → StaticAdapter")
+      : fail("test49: getAdapter FH disabled", `got ${getAdapter(disabled)?.name}`);
+  }
+
+  // ── getAdapter: FH client with no companies → StaticAdapter ─────────────────
+  {
+    const noCompanies = { bookingMode: "fareharbor", fareharborEnabled: true, fareharborCompanies: [] };
+    getAdapter(noCompanies) === StaticAdapter
+      ? pass("test49: getAdapter FH no companies → StaticAdapter")
+      : fail("test49: getAdapter FH no companies", `got ${getAdapter(noCompanies)?.name}`);
+  }
+
+  // ── FareHarborAdapter.isAvailabilitySensitive: triggers on booking language ──
+  {
+    const triggers = [
+      "do you have availability this weekend?",
+      "I want to book a tour",
+      "any open slots in February?",
+      "are you still taking reservations?",
+    ];
+    const allTrigger = triggers.every((m) => FareHarborAdapter.isAvailabilitySensitive(m));
+    allTrigger
+      ? pass("test49: FareHarborAdapter.isAvailabilitySensitive — booking triggers")
+      : fail("test49: FH isAvailabilitySensitive booking", `not all triggered: ${triggers.filter(m => !FareHarborAdapter.isAvailabilitySensitive(m))}`);
+  }
+
+  // ── FareHarborAdapter.isAvailabilitySensitive: no-trigger on general chat ────
+  {
+    const nonTriggers = ["what's the weather like?", "how much does it cost?", "thanks!", "hello"];
+    const noneTrigger = nonTriggers.every((m) => !FareHarborAdapter.isAvailabilitySensitive(m));
+    noneTrigger
+      ? pass("test49: FareHarborAdapter.isAvailabilitySensitive — no trigger on general chat")
+      : fail("test49: FH isAvailabilitySensitive general", `triggered on: ${nonTriggers.filter(m => FareHarborAdapter.isAvailabilitySensitive(m))}`);
+  }
+
+  // ── StaticAdapter.isAvailabilitySensitive: always false ─────────────────────
+  {
+    const alwaysFalse = [
+      "do you have availability?",
+      "I want to book",
+    ].every((m) => !StaticAdapter.isAvailabilitySensitive(m));
+    alwaysFalse
+      ? pass("test49: StaticAdapter.isAvailabilitySensitive always false")
+      : fail("test49: StaticAdapter.isAvailabilitySensitive", "returned true for some messages");
+  }
+
+  // ── StaticAdapter.resolveLiveStatus: always null ─────────────────────────────
+  {
+    const result = await StaticAdapter.resolveLiveStatus({ client: {}, message: "anything", supabase: {} });
+    result === null
+      ? pass("test49: StaticAdapter.resolveLiveStatus always null")
+      : fail("test49: StaticAdapter.resolveLiveStatus", `got ${JSON.stringify(result)}`);
+  }
+
+  // ── HoursAdapter.isAvailabilitySensitive: triggers on hours questions ────────
+  {
+    const hoursTriggers = ["what are your hours?", "are you open now?", "what time do you close?"];
+    const allTrigger = hoursTriggers.every((m) => HoursAdapter.isAvailabilitySensitive(m));
+    allTrigger
+      ? pass("test49: HoursAdapter.isAvailabilitySensitive — hours triggers")
+      : fail("test49: HoursAdapter.isAvailabilitySensitive", `not all triggered`);
+  }
+
+  // ── buildTruth: available status → correct shape ─────────────────────────────
+  {
+    const entities = [{ name: "Tour A", openDays: 5, nextOpen: null }];
+    const t = buildTruth("available", null, "high", entities, new Date().toISOString());
+    const ok = t.status === "available"
+      && t.domain === "booking"
+      && t.confidence === "high"
+      && t.recommendedNextAction === "book"
+      && t.matchingEntities.length === 1;
+    ok
+      ? pass("test49: buildTruth available → correct shape")
+      : fail("test49: buildTruth available", JSON.stringify(t));
+  }
+
+  // ── buildTruth: unavailable status → correct shape ───────────────────────────
+  {
+    const t = buildTruth("unavailable", "no_future_slots", "high", [], new Date().toISOString());
+    t.status === "unavailable" && t.recommendedNextAction === "handoff"
+      ? pass("test49: buildTruth unavailable → handoff action")
+      : fail("test49: buildTruth unavailable", JSON.stringify(t));
+  }
+
+  // ── AVAILABILITY_TRIGGERS: exported array of regexes ─────────────────────────
+  {
+    Array.isArray(AVAILABILITY_TRIGGERS) && AVAILABILITY_TRIGGERS.length > 0
+      ? pass("test49: AVAILABILITY_TRIGGERS exported as non-empty array")
+      : fail("test49: AVAILABILITY_TRIGGERS", `got ${typeof AVAILABILITY_TRIGGERS}`);
+  }
+
+  // ── FareHarborAdapter.resolveLiveStatus: DB error → unknown truth ─────────────
+  {
+    const mockSupabase = {
+      from: () => ({ select: () => ({ in: () => Promise.resolve({ data: null, error: new Error("DB down") }) }) }),
+    };
+    const fhClient = {
+      fareharborCompanies: [{ id: "csr" }],
+    };
+    const truth = await FareHarborAdapter.resolveLiveStatus({ client: fhClient, supabase: mockSupabase });
+    truth?.status === "unknown" && truth?.reason === "integration_error"
+      ? pass("test49: FareHarborAdapter DB error → unknown/integration_error truth")
+      : fail("test49: FareHarborAdapter DB error", JSON.stringify(truth));
+  }
+
+  // ── FareHarborAdapter.resolveLiveStatus: no open slots → unavailable ──────────
+  {
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ key: "csr_fareharbor", fetched_at: new Date().toISOString(), data: { availabilityData: { "Tour A": { open_days: 0, next_open: null } } } }],
+            error: null,
+          }),
+        }),
+      }),
+    };
+    const fhClient = { fareharborCompanies: [{ id: "csr" }] };
+    const truth = await FareHarborAdapter.resolveLiveStatus({ client: fhClient, supabase: mockSupabase });
+    truth?.status === "unavailable" && truth?.reason === "no_future_slots"
+      ? pass("test49: FareHarborAdapter all slots closed → unavailable")
+      : fail("test49: FareHarborAdapter all closed", JSON.stringify(truth));
+  }
+
+  // ── FareHarborAdapter.resolveLiveStatus: some open → limited ─────────────────
+  {
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{
+              key: "csr_fareharbor",
+              fetched_at: new Date().toISOString(),
+              data: { availabilityData: { "Tour A": { open_days: 3 }, "Tour B": { open_days: 0 } } },
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    };
+    const fhClient = { fareharborCompanies: [{ id: "csr" }] };
+    const truth = await FareHarborAdapter.resolveLiveStatus({ client: fhClient, supabase: mockSupabase });
+    truth?.status === "limited"
+      ? pass("test49: FareHarborAdapter partial slots → limited")
+      : fail("test49: FareHarborAdapter partial", JSON.stringify(truth));
+  }
+
+  // ── FareHarborAdapter.resolveLiveStatus: all open → available ────────────────
+  {
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{
+              key: "csr_fareharbor",
+              fetched_at: new Date().toISOString(),
+              data: { availabilityData: { "Tour A": { open_days: 5 }, "Tour B": { open_days: 3 } } },
+            }],
+            error: null,
+          }),
+        }),
+      }),
+    };
+    const fhClient = { fareharborCompanies: [{ id: "csr" }] };
+    const truth = await FareHarborAdapter.resolveLiveStatus({ client: fhClient, supabase: mockSupabase });
+    truth?.status === "available"
+      ? pass("test49: FareHarborAdapter all open → available")
+      : fail("test49: FareHarborAdapter all open", JSON.stringify(truth));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 50: Response mode selector (Phase 3)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test50() {
+  console.log("\nTEST 50: Response mode selector (Phase 3) — responseMode.js");
+
+  const baseConvo  = { consecutiveFrustrated: 0 };
+  const fhClient   = { bookingMode: "fareharbor",     fareharborEnabled: true, fareharborCompanies: [{ id: "x" }] };
+  const infoClient = { bookingMode: "informational",  humanHandoffEnabled: true };
+  const callClient = { bookingMode: "call_only",      humanHandoffEnabled: true };
+
+  // ── handoff intent → ROUTE_TO_HANDOFF (highest priority) ─────────────────
+  {
+    const mode = selectResponseMode({ intent: "handoff", sentiment: "neutral", truth: null, buyingSignals: { strength: "none" }, convo: baseConvo, client: fhClient });
+    mode === RESPONSE_MODES.ROUTE_TO_HANDOFF
+      ? pass("test50: handoff intent → ROUTE_TO_HANDOFF")
+      : fail("test50: handoff intent", `got ${mode}`);
+  }
+
+  // ── 2+ consecutive frustrated → ROUTE_TO_HANDOFF ─────────────────────────
+  {
+    const mode = selectResponseMode({ intent: "info", sentiment: "frustrated", truth: null, buyingSignals: { strength: "none" }, convo: { consecutiveFrustrated: 2 }, client: fhClient });
+    mode === RESPONSE_MODES.ROUTE_TO_HANDOFF
+      ? pass("test50: 2x frustrated → ROUTE_TO_HANDOFF")
+      : fail("test50: 2x frustrated", `got ${mode}`);
+  }
+
+  // ── unavailable truth + no alternatives → EXPLAIN_UNAVAILABLE ────────────
+  {
+    const unavailTruth = { status: "unavailable", reason: "no_future_slots" };
+    const mode = selectResponseMode({ intent: "booking", sentiment: "neutral", truth: unavailTruth, buyingSignals: { strength: "low" }, convo: baseConvo, client: fhClient });
+    mode === RESPONSE_MODES.EXPLAIN_UNAVAILABLE
+      ? pass("test50: unavailable truth, no alternatives → EXPLAIN_UNAVAILABLE")
+      : fail("test50: unavailable no alt", `got ${mode}`);
+  }
+
+  // ── unavailable truth + alternatives configured → OFFER_ALTERNATIVE ───────
+  {
+    const unavailTruth = { status: "unavailable", reason: "no_future_slots" };
+    const clientWithAlt = { ...fhClient, alternativeOfferings: [{ name: "RZR Tours", description: "Summer" }] };
+    const mode = selectResponseMode({ intent: "booking", sentiment: "neutral", truth: unavailTruth, buyingSignals: { strength: "low" }, convo: baseConvo, client: clientWithAlt });
+    mode === RESPONSE_MODES.OFFER_ALTERNATIVE
+      ? pass("test50: unavailable + alternatives → OFFER_ALTERNATIVE")
+      : fail("test50: offer alternative", `got ${mode}`);
+  }
+
+  // ── unknown truth → CLARIFICATION ────────────────────────────────────────
+  {
+    const unknownTruth = { status: "unknown", reason: "integration_error" };
+    const mode = selectResponseMode({ intent: "booking", sentiment: "neutral", truth: unknownTruth, buyingSignals: { strength: "low" }, convo: baseConvo, client: fhClient });
+    mode === RESPONSE_MODES.CLARIFICATION
+      ? pass("test50: unknown truth → CLARIFICATION")
+      : fail("test50: unknown truth", `got ${mode}`);
+  }
+
+  // ── available truth + FH booking intent → ROUTE_TO_BOOKING ───────────────
+  {
+    const availTruth = { status: "available", reason: null };
+    const mode = selectResponseMode({ intent: "booking", sentiment: "neutral", truth: availTruth, buyingSignals: { strength: "high" }, convo: baseConvo, client: fhClient });
+    mode === RESPONSE_MODES.ROUTE_TO_BOOKING
+      ? pass("test50: available + booking intent → ROUTE_TO_BOOKING")
+      : fail("test50: available booking", `got ${mode}`);
+  }
+
+  // ── recommendation intent → RECOMMEND ─────────────────────────────────────
+  {
+    const mode = selectResponseMode({ intent: "recommendation", sentiment: "neutral", truth: null, buyingSignals: { strength: "medium" }, convo: baseConvo, client: fhClient });
+    mode === RESPONSE_MODES.RECOMMEND
+      ? pass("test50: recommendation intent → RECOMMEND")
+      : fail("test50: recommend intent", `got ${mode}`);
+  }
+
+  // ── booking intent + informational client → LEAD_CAPTURE ─────────────────
+  {
+    const mode = selectResponseMode({ intent: "booking", sentiment: "neutral", truth: null, buyingSignals: { strength: "medium" }, convo: baseConvo, client: infoClient });
+    mode === RESPONSE_MODES.LEAD_CAPTURE
+      ? pass("test50: booking + informational → LEAD_CAPTURE")
+      : fail("test50: info lead capture", `got ${mode}`);
+  }
+
+  // ── booking intent + call_only → ROUTE_TO_HANDOFF ─────────────────────────
+  {
+    const mode = selectResponseMode({ intent: "booking", sentiment: "neutral", truth: null, buyingSignals: { strength: "medium" }, convo: baseConvo, client: callClient });
+    mode === RESPONSE_MODES.ROUTE_TO_HANDOFF
+      ? pass("test50: booking + call_only → ROUTE_TO_HANDOFF")
+      : fail("test50: call only", `got ${mode}`);
+  }
+
+  // ── high buying signals (no booking intent) → RECOMMEND ──────────────────
+  {
+    const mode = selectResponseMode({ intent: "info", sentiment: "positive", truth: null, buyingSignals: { strength: "high" }, convo: baseConvo, client: fhClient });
+    mode === RESPONSE_MODES.RECOMMEND
+      ? pass("test50: high buying signal + info intent → RECOMMEND")
+      : fail("test50: high signal", `got ${mode}`);
+  }
+
+  // ── info intent + no signals → ANSWER ────────────────────────────────────
+  {
+    const mode = selectResponseMode({ intent: "info", sentiment: "neutral", truth: null, buyingSignals: { strength: "none" }, convo: baseConvo, client: fhClient });
+    mode === RESPONSE_MODES.ANSWER
+      ? pass("test50: info intent → ANSWER")
+      : fail("test50: info answer", `got ${mode}`);
+  }
+
+  // ── buildResponseModeInstruction: OFFER_ALTERNATIVE includes alt name ──────
+  {
+    const clientWithAlt = { alternativeOfferings: [{ name: "RZR Adventures", description: "Summer off-road" }] };
+    const instr = buildResponseModeInstruction(RESPONSE_MODES.OFFER_ALTERNATIVE, clientWithAlt, null);
+    instr.includes("RZR Adventures")
+      ? pass("test50: OFFER_ALTERNATIVE instruction includes alt name")
+      : fail("test50: OFFER_ALTERNATIVE instr", `got: ${instr.slice(0, 80)}`);
+  }
+
+  // ── buildResponseModeInstruction: OFFER_ALTERNATIVE with no alts → empty ──
+  {
+    const instr = buildResponseModeInstruction(RESPONSE_MODES.OFFER_ALTERNATIVE, { alternativeOfferings: [] }, null);
+    instr === ""
+      ? pass("test50: OFFER_ALTERNATIVE with no alts → empty string")
+      : fail("test50: OFFER_ALTERNATIVE empty", `got: ${instr.slice(0, 80)}`);
+  }
+
+  // ── buildResponseModeInstruction: EXPLAIN_UNAVAILABLE → non-empty string ──
+  {
+    const instr = buildResponseModeInstruction(RESPONSE_MODES.EXPLAIN_UNAVAILABLE, {}, null);
+    instr.length > 0 && instr.includes("unavailable")
+      ? pass("test50: EXPLAIN_UNAVAILABLE instruction is non-empty and relevant")
+      : fail("test50: EXPLAIN_UNAVAILABLE instr", `got: ${instr.slice(0, 80)}`);
+  }
+
+  // ── buildResponseModeInstruction: ANSWER → empty (no special instruction) ──
+  {
+    const instr = buildResponseModeInstruction(RESPONSE_MODES.ANSWER, {}, null);
+    instr === ""
+      ? pass("test50: ANSWER mode → empty instruction (Claude default)")
+      : fail("test50: ANSWER instr", `not empty: ${instr.slice(0, 60)}`);
+  }
+
+  // ── RESPONSE_MODES: all expected keys present ─────────────────────────────
+  {
+    const expected = ["opener", "answer", "recommend", "explain_unavailable", "offer_alternative",
+                      "route_to_booking", "route_to_appointment", "route_to_handoff", "lead_capture", "clarification"];
+    const values = Object.values(RESPONSE_MODES);
+    const allPresent = expected.every((k) => values.includes(k));
+    allPresent
+      ? pass("test50: RESPONSE_MODES has all expected mode keys")
+      : fail("test50: RESPONSE_MODES missing", expected.filter((k) => !values.includes(k)).join(", "));
   }
 }
 

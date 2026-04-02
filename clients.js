@@ -89,6 +89,16 @@ export const CLIENTS = {
       rzr_kremmling:          "https://adventures.polaris.com/w/adventure/off-road-rental-for-pick-up-steamboat-springs-colorado-P-Q98-AZV?ref=highmark",
     },
 
+    // Phase 3: industry classification + alternative offerings for unavailable-season routing
+    industry: "outdoor",
+    alternativeOfferings: [
+      {
+        name:        "RZR Self-Guided Off-Road Adventures",
+        description: "Summer off-road adventures — available May through October when snowmobiling is closed",
+        season:      "summer",
+      },
+    ],
+
     services: [
       "Guided snowmobile tours",
       "Self-guided snowmobile rentals",
@@ -157,6 +167,10 @@ export const CLIENTS = {
 
     bookingUrls: {}, // no online booking — all via phone
 
+    // Phase 3: industry classification
+    industry: "automotive",
+    alternativeOfferings: [], // single-service shop — no seasonal alternatives
+
     services: [
       "Suspension Revalve",
       "Factory Rebuild",
@@ -219,6 +233,10 @@ export const CLIENTS = {
     address:       null,
     timezone:      "America/Denver",
     hours:         null,
+
+    // Phase 3: industry classification
+    industry: "demo",
+    alternativeOfferings: [],
 
     bookingMode:              "demo",
     isDemo:                   true,
@@ -316,6 +334,9 @@ function dbRowToClient(row) {
     conversationSettings:  row.conversation_settings  ?? {},
     // Crawl settings added in db1_crawl_settings.sql — normalize snake_case → camelCase
     crawlSettings:         normalizeCrawlSettings(row.crawl_settings ?? {}),
+    // Phase 3: industry classification + alternative offering routing
+    industry:              row.industry              ?? null,
+    alternativeOfferings:  row.alternative_offerings ?? [],
     _fromDb:      true,
   };
 }

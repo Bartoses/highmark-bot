@@ -1,46 +1,34 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// LIVE TRUTH RESOLVER — Phase 1
+// LIVE TRUTH RESOLVER — Phase 3
 //
-// Detects availability-sensitive requests and resolves a normalized truth object
-// from live or recently-cached data. The bot uses this to ground its response —
-// unavailable offerings are not pitched, unknown availability is not fabricated.
+// Thin routing layer — delegates to the pluggable adapter registry in adapters.js.
+// Each adapter handles its own sensitivity detection and live status resolution.
 //
-// Returns null when no lookup is needed (non-sensitive request or non-FH client).
+// Returns null when no lookup is needed (non-sensitive request or no adapter matched).
 // Never throws — always returns null on unrecoverable error.
 //
-// Truth object shape:
+// Truth object shape (defined and built in adapters.js):
 // {
-//   domain:               'booking' | 'unknown'
+//   domain:               'booking' | 'hours' | 'inventory' | 'unknown'
 //   status:               'available' | 'unavailable' | 'limited' | 'out_of_season' | 'unknown'
-//   reason:               'no_future_slots' | 'sold_out' | 'out_of_season' | 'integration_error' | null
+//   reason:               'no_future_slots' | 'sold_out' | 'out_of_season' | 'closed' | 'integration_error' | null
 //   confidence:           'high' | 'medium' | 'low'
 //   checkedRange:         { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' }
-//   matchingEntities:     [{ name, openDays, nextOpen }]  — items with slots
-//   summary:              string — human-readable grounding note for system prompt
+//   matchingEntities:     [{ name, openDays, nextOpen }]
+//   summary:              string — grounding note for system prompt
 //   recommendedNextAction:'book' | 'view_options' | 'handoff' | 'check_back_later' | 'unknown'
 // }
 //
-// Phase 1 supports: FareHarbor (cached availability data from knowledge_base table)
-// Phase 2+: appointment systems, inventory APIs, custom integrations
+// Phase 3: adapter-driven (FareHarbor, Static, Hours)
+// Future: appointment systems, inventory APIs, custom integrations via adapter registry
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Broad set of phrases that indicate the guest is asking about current availability,
-// bookability, or operational status — not just general questions.
-const AVAILABILITY_TRIGGERS = [
-  /\bavailab\w*/i,                                                   // available, availability
-  /\b(book|reserve|reservations?|booking|appoint\w*|schedule)\b/i,  // booking intent
-  /\b(slot|opening|spot|seat|capacity|space)\b/i,                    // slot language
-  /\b(can i|are you|do you|is there|are there).{0,40}(come|visit|open|ride|tour|sign up|get in)\b/i,
-  /\b(running|operating|offering|taking (reservations?|bookings?))\b/i,
-  /\b(open (for|now|today|this)|still open|still running)\b/i,
-  /\b(when can|how soon|any (open|available|slots|openings|times?))\b/i,
-  /\b(do you have|got (any|room|space|openings?))\b/i,
-  /\binventor\w*/i,                                                  // inventory
-];
+import { getAdapter, AVAILABILITY_TRIGGERS } from "./adapters.js";
 
 /**
  * Returns true if the message contains availability-sensitive language.
- * Exported for testing.
+ * Exported for backward compatibility with tests and calling code.
+ * Uses the shared AVAILABILITY_TRIGGERS from adapters.js.
  */
 export function isAvailabilitySensitive(message) {
   if (!message) return false;
@@ -48,130 +36,19 @@ export function isAvailabilitySensitive(message) {
 }
 
 /**
- * Primary export. Resolves live truth for availability-sensitive messages.
+ * Primary export. Resolves live truth for the current message using the
+ * adapter selected for this client. Returns null when no lookup is needed.
  *
  * @param {string}  message  — raw guest message
  * @param {object}  client   — runtime client config
  * @param {object}  supabase — DB1 client
- * @returns {object|null}    — truth object or null (no lookup needed)
+ * @returns {object|null}    — truth object or null
  */
 export async function resolveLiveTruth(message, client, supabase) {
   if (!client || !supabase) return null;
-  if (!isAvailabilitySensitive(message)) return null;
-
-  // Phase 1: FareHarbor clients with live KB data
-  if (client.fareharborEnabled && client.fareharborCompanies?.length) {
-    return resolveFhTruth(client, supabase);
-  }
-
-  // Other clients: no live truth available in Phase 1
-  return null;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FAREHARBOR TRUTH RESOLVER
-// Reads cached availability data from the knowledge_base table.
-// Availability data is refreshed every 3 hours — no additional API calls here.
-// ─────────────────────────────────────────────────────────────────────────────
-async function resolveFhTruth(client, supabase) {
-  try {
-    const keys = client.fareharborCompanies.map((c) => `${c.id}_fareharbor`);
-    const { data: rows, error } = await supabase
-      .from("knowledge_base")
-      .select("key, data, fetched_at")
-      .in("key", keys);
-
-    if (error || !rows?.length) {
-      return buildTruth("unknown", "integration_error", "low", [], null);
-    }
-
-    // Aggregate availability counts across all companies and items
-    let totalChecked = 0;
-    let openCount    = 0;
-    const entities   = [];
-
-    for (const row of rows) {
-      const avail = row.data?.availabilityData ?? {};
-      for (const [name, info] of Object.entries(avail)) {
-        totalChecked++;
-        if ((info.open_days ?? 0) > 0) {
-          openCount++;
-          entities.push({ name, openDays: info.open_days, nextOpen: info.next_open ?? null });
-        }
-      }
-    }
-
-    if (totalChecked === 0) {
-      // KB row exists but availabilityData is empty — cron hasn't run or items missing
-      return buildTruth("unknown", "integration_error", "low", [], rows[0]?.fetched_at);
-    }
-
-    const status = openCount === 0 ? "unavailable"
-      : openCount < totalChecked ? "limited"
-      : "available";
-    const reason     = status === "unavailable" ? "no_future_slots" : null;
-    const confidence = isDataFresh(rows) ? "high" : "medium";
-
-    return buildTruth(status, reason, confidence, entities, rows[0]?.fetched_at);
-
-  } catch (err) {
-    console.error("[TRUTH] FH resolve error:", err.message);
-    return buildTruth("unknown", "integration_error", "low", [], null);
-  }
-}
-
-// Data is considered fresh if refreshed within the last 4 hours
-function isDataFresh(rows) {
-  const now = Date.now();
-  return rows.every((r) => {
-    if (!r.fetched_at) return false;
-    return (now - new Date(r.fetched_at).getTime()) < 4 * 60 * 60 * 1000;
-  });
-}
-
-function buildTruth(status, reason, confidence, entities, fetchedAt) {
-  const now      = new Date();
-  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const endDate  = new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000);
-
-  // Build grounding summary for system prompt injection
-  const summaryParts = [];
-  if (status === "available") {
-    const count = entities.length;
-    const next  = entities[0]?.nextOpen
-      ? new Date(entities[0].nextOpen).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-      : null;
-    summaryParts.push(`${count} offering(s) have open slots in the next 15 days`);
-    if (next) summaryParts.push(`earliest availability ${next}`);
-  } else if (status === "limited") {
-    const openNames  = entities.map((e) => e.name).slice(0, 2).join(", ");
-    summaryParts.push(`some offerings have availability (${openNames})`);
-    summaryParts.push(`not all options are open — show specific available items only`);
-  } else if (status === "unavailable") {
-    summaryParts.push("LIVE DATA: no open booking slots found in the next 15 days");
-    summaryParts.push("do NOT suggest booking is possible — offer waitlist or handoff instead");
-  } else {
-    // unknown
-    summaryParts.push("live availability data could not be confirmed");
-    summaryParts.push("do NOT invent or assume specific slot availability");
-  }
-
-  return {
-    domain:    "booking",
-    status,
-    reason,
-    confidence: fetchedAt ? confidence : "low",
-    checkedRange: {
-      start: tomorrow.toISOString().slice(0, 10),
-      end:   endDate.toISOString().slice(0, 10),
-    },
-    matchingEntities:     entities,
-    summary:              summaryParts.join("; "),
-    recommendedNextAction: status === "available"   ? "book"
-      : status === "limited"    ? "view_options"
-      : status === "unavailable" ? "handoff"
-      : "unknown",
-  };
+  const adapter = getAdapter(client);
+  if (!adapter.isAvailabilitySensitive(message)) return null;
+  return adapter.resolveLiveStatus({ client, message, supabase });
 }
 
 /**

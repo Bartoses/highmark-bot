@@ -40,6 +40,7 @@ import { loadDbClients } from "./clients.js";
 import { handleDemoFlow } from "./demoFlow.js";
 import { getRuntimeClientConfig } from "./clientConfig.js";
 import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction } from "./conversationEngine.js";
+import { selectResponseMode, buildResponseModeInstruction } from "./responseMode.js";
 import { resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
 
 const app = express();
@@ -1706,22 +1707,28 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
 
       // Live truth — resolve before Claude to prevent pitching unavailable offerings.
-      // Uses cached KB availability data (no extra API calls). Returns null for
-      // non-availability messages or non-FH clients.
+      // Phase 3: delegates to adapter registry (FareHarbor, Static, Hours, etc.)
+      // Returns null for non-availability messages or non-integrated clients.
       const liveTruth        = await resolveLiveTruth(rawBody, client, supabase);
       const truthInstruction = buildTruthInstruction(liveTruth);
+
+      // Phase 3: response mode — deterministic strategy selection before generation
+      const responseMode     = selectResponseMode({ intent, sentiment, truth: liveTruth, buyingSignals, convo, client });
+      const modeInstruction  = buildResponseModeInstruction(responseMode, client, liveTruth);
+      console.log(`[MODE] ${responseMode} — ${fromNumber}`);
 
       // Build deterministic response plan — tells Claude what to do and what is forbidden
       const responsePlan    = buildResponsePlan(intent, sentiment, buyingSignals, convo, client);
       const planInstruction = formatResponsePlanInstruction(responsePlan, client);
 
-      // Combine availability context with plan instruction and conversation guidance
+      // Combine availability context with plan, conversation guidance, and response mode
       const convInstruction = buildConversationInstruction(effectiveIntent, client);
       let extraInstruction = [
         availCtx          ? `Live availability data: ${availCtx}` : null,
         planInstruction   || null,
         convInstruction   || null,
         truthInstruction  || null,
+        modeInstruction   || null,
       ].filter(Boolean).join("\n\n") || null;
 
       // 480 chars (3 texts) — never cut off mid-thought
