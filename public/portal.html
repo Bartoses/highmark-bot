@@ -2004,9 +2004,7 @@ function renderClientsTable(clients) {
     const ready     = c.readiness?.score ?? '–';
     const isReady   = c.readiness?.ready;
     const modeLabel = BOOKING_MODE_LABELS[c.booking_mode] ?? c.booking_mode ?? '–';
-    const editBtn   = c.is_static
-      ? `<span style="color:var(--text2);font-size:12px;">static</span>`
-      : `<button class="btn btn-ghost btn-sm" onclick="openEditClientModal('${c.id}')">Edit</button>`;
+    const editBtn = `<button class="btn btn-ghost btn-sm" onclick="openEditClientModal('${c.id}')">Edit</button>`;
     return `<tr>
       <td><strong>${c.name ?? c.id}</strong><br><span style="color:var(--text2);font-size:12px;">${c.id}</span></td>
       <td>${modeLabel}</td>
@@ -2034,11 +2032,11 @@ function openNewClientModal() {
   document.getElementById('clientWebsiteUrl').value          = '';
   document.getElementById('clientModalSave').onclick         = saveNewClient;
   document.getElementById('clientModalSave').textContent     = 'Create client';
-  document.getElementById('clientModal').classList.add('active');
+  document.getElementById('clientModal').classList.add('open');
 }
 
 function closeClientModal() {
-  document.getElementById('clientModal').classList.remove('active');
+  document.getElementById('clientModal').classList.remove('open');
 }
 
 async function saveNewClient() {
@@ -2080,7 +2078,7 @@ function openEditClientModal(clientId) {
   document.getElementById('clientWebsiteUrl').value         = c.website_url ?? '';
   document.getElementById('clientModalSave').onclick        = () => saveEditClient(c.id);
   document.getElementById('clientModalSave').textContent    = 'Save changes';
-  document.getElementById('clientModal').classList.add('active');
+  document.getElementById('clientModal').classList.add('open');
 }
 
 async function saveEditClient(id) {

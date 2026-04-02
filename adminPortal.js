@@ -104,9 +104,18 @@ export async function handlePortalCreateClient(req, res, supabase) {
 }
 
 // ── PATCH /portal/api/clients/:id ─────────────────────────────────────────────
-// internal_admin only — delegates to handleUpdateClient
+// internal_admin only.
+// DB-backed clients: delegates to handleUpdateClient (full field set).
+// Static clients:    auto-promotes to DB via handlePortalUpdateSettings (seeds from static config first).
 export async function handlePortalUpdateClient(req, res, supabase) {
   if (!req.portalUser?.isAdmin) return res.status(403).json({ error: "Internal admin only" });
+  const client = getAllClients()[req.params.id];
+  if (!client) return res.status(404).json({ error: "Client not found" });
+  if (!client._fromDb) {
+    // Shim client_id into query so resolvePortalClientId picks it up, then auto-seed + update
+    req.query = { ...req.query, client_id: req.params.id };
+    return handlePortalUpdateSettings(req, res, supabase);
+  }
   return handleUpdateClient(req, res, supabase);
 }
 
