@@ -1201,7 +1201,16 @@ async function loadSettings() {
     if (btn) { btn.disabled = false; btn.textContent = 'Crawl now'; }
     const msgEl = document.getElementById('settingsMsg') ?? document.getElementById('crawlMsg');
     if (r?.ok) {
-      if (msgEl) { msgEl.className = 'success-msg'; msgEl.textContent = r.message; msgEl.style.display = 'block'; setTimeout(() => { msgEl.style.display = 'none'; }, 4000); }
+      if (msgEl) { msgEl.className = 'success-msg'; msgEl.textContent = r.message; msgEl.style.display = 'block'; setTimeout(() => { msgEl.style.display = 'none'; }, 8000); }
+      // Poll every 10s until pages appear (max 12 attempts = 2 min)
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        await loadCrawlPages();
+        const tableEl = document.getElementById('crawlPagesTable');
+        const hasPages = tableEl && !tableEl.innerHTML.includes('No pages crawled');
+        if (hasPages || attempts >= 12) clearInterval(poll);
+      }, 10000);
     }
   };
 

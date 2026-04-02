@@ -231,6 +231,11 @@ export const CLIENTS = {
     fareharborCompanies: [],
     // Scraped weekly (Monday 3am) via Haiku — keeps product knowledge current
     scrapeUrls:     ["https://www.usehighmark.com/home"],
+    crawlSettings: {
+      enabled: true,
+      primaryUrl: "https://usehighmark.com/",
+      seedUrls: [], maxDepth: 2, maxPages: 20, denyPatterns: [],
+    },
     snotelStations: [],
     bookingUrls:         {},
     services:            [],
