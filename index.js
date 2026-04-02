@@ -2016,7 +2016,7 @@ app.delete("/portal/api/booking-options/:id",    requirePortalAuth, (req, res) =
 // Crawler pages + manual trigger
 app.get( "/portal/api/crawl-pages", requirePortalAuth, (req, res) => handlePortalCrawlPages(req, res, supabase));
 app.post("/portal/api/crawl-now",   requirePortalAuth, async (req, res) => {
-  if (!req.portalUser?.isAdmin) return res.status(403).json({ error: "Admin only" });
+  if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) return res.status(403).json({ error: "Admin only" });
   const clientId = resolvePortalClientId(req);
   if (!clientId) return res.status(400).json({ error: "client_id required" });
   const client = getAllClients()[clientId];

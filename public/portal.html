@@ -1160,6 +1160,49 @@ async function loadSettings() {
     hybrid: 'Hybrid (links + lead capture)',
   };
 
+  // ── Crawl pages table (shared between read-only + editable paths) ──────────
+  const PAGE_TYPE_BADGES = { homepage:'pill-blue', services:'pill-green', pricing:'pill-yellow', booking:'pill-green', faq:'pill-blue', policies:'pill-gray', hours:'pill-gray', contact:'pill-gray', seasonal:'pill-yellow', other:'pill-gray' };
+  async function loadCrawlPages() {
+    const tableEl = document.getElementById('crawlPagesTable');
+    const countEl = document.getElementById('crawlPageCount');
+    if (!tableEl) return;
+    const r = await apiFetch('/crawl-pages');
+    if (!r) {
+      tableEl.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px 0;">Could not load pages.</div>';
+      return;
+    }
+    const pages = r.pages ?? [];
+    if (countEl) countEl.textContent = pages.length ? `(${pages.length})` : '';
+    if (!pages.length) {
+      tableEl.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px 0;">No pages crawled yet. Enable the crawler and click "Crawl now" or wait for the weekly cron.</div>';
+      return;
+    }
+    const fmt = (ts) => ts ? new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+    tableEl.innerHTML = `<div class="tbl-wrap"><table>
+      <thead><tr><th>Type</th><th>Title / URL</th><th>Status</th><th>Crawled</th></tr></thead>
+      <tbody>${pages.map(p => `<tr>
+        <td><span class="pill ${PAGE_TYPE_BADGES[p.page_type] ?? 'pill-gray'}" style="font-size:10px;">${p.page_type ?? '?'}</span></td>
+        <td>
+          <div style="font-size:12px;font-weight:500;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.title || '(no title)'}</div>
+          <div style="font-size:11px;color:var(--text2);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.url}</div>
+          ${p.summary ? `<div style="font-size:11px;color:var(--text3);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.summary}</div>` : ''}
+        </td>
+        <td><span class="pill ${p.status === 'ok' ? 'pill-green' : 'pill-red'}">${p.status}</span></td>
+        <td class="text-muted text-xs">${fmt(p.fetched_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+  window.triggerCrawlNow = async () => {
+    const btn = document.getElementById('crawlNowBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    const r = await apiFetch('/crawl-now', { method: 'POST' });
+    if (btn) { btn.disabled = false; btn.textContent = 'Crawl now'; }
+    const msgEl = document.getElementById('settingsMsg') ?? document.getElementById('crawlMsg');
+    if (r?.ok) {
+      if (msgEl) { msgEl.className = 'success-msg'; msgEl.textContent = r.message; msgEl.style.display = 'block'; setTimeout(() => { msgEl.style.display = 'none'; }, 4000); }
+    }
+  };
+
   if (!canEdit) {
     const srcRows = (d.scrapeSources ?? []).map(s =>
       `<tr><td>${s.label ?? s.url}</td><td class="text-muted text-xs">${s.source_type}</td><td><span class="pill ${s.active ? 'pill-green' : 'pill-gray'}">${s.active ? 'Active' : 'Off'}</span></td></tr>`
@@ -1215,7 +1258,16 @@ async function loadSettings() {
           ${tog('Enabled', (d.crawlSettings ?? {}).enabled)}
           ${row('Primary URL', (d.crawlSettings ?? {}).primaryUrl)}
         </table>
+        <div style="margin-top:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;">Crawled pages <span id="crawlPageCount" style="font-weight:400;font-size:11px;"></span></div>
+            ${(me?.isAdmin || me?.isClientAdmin) ? `<button class="btn btn-sm" id="crawlNowBtn" style="font-size:12px;padding:4px 12px;" onclick="triggerCrawlNow()">Crawl now</button>` : ''}
+          </div>
+          <div id="crawlMsg" style="display:none;margin-bottom:8px;"></div>
+          <div id="crawlPagesTable"><div style="color:var(--text3);font-size:12px;padding:8px 0;">Loading…</div></div>
+        </div>
       </div>`;
+    loadCrawlPages();
     return;
   }
 
@@ -1458,49 +1510,7 @@ async function loadSettings() {
   convRenderMenu();
 
   // ── Crawl pages table ──────────────────────────────────────────────────────
-  const PAGE_TYPE_BADGES = { homepage:'pill-blue', services:'pill-green', pricing:'pill-yellow', booking:'pill-green', faq:'pill-blue', policies:'pill-gray', hours:'pill-gray', contact:'pill-gray', seasonal:'pill-yellow', other:'pill-gray' };
-  async function loadCrawlPages() {
-    const tableEl = document.getElementById('crawlPagesTable');
-    const countEl = document.getElementById('crawlPageCount');
-    if (!tableEl) return;
-    const r = await apiFetch('/crawl-pages');
-    if (!r) {
-      tableEl.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px 0;">Could not load pages.</div>';
-      return;
-    }
-    const pages = r.pages ?? [];
-    if (countEl) countEl.textContent = pages.length ? `(${pages.length})` : '';
-    if (!pages.length) {
-      tableEl.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px 0;">No pages crawled yet. Enable the crawler and click "Crawl now" or wait for the weekly cron.</div>';
-      return;
-    }
-    const fmt = (ts) => ts ? new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
-    tableEl.innerHTML = `<div class="tbl-wrap"><table>
-      <thead><tr><th>Type</th><th>Title / URL</th><th>Status</th><th>Crawled</th></tr></thead>
-      <tbody>${pages.map(p => `<tr>
-        <td><span class="pill ${PAGE_TYPE_BADGES[p.page_type] ?? 'pill-gray'}" style="font-size:10px;">${p.page_type ?? '?'}</span></td>
-        <td>
-          <div style="font-size:12px;font-weight:500;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.title || '(no title)'}</div>
-          <div style="font-size:11px;color:var(--text2);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.url}</div>
-          ${p.summary ? `<div style="font-size:11px;color:var(--text3);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.summary}</div>` : ''}
-        </td>
-        <td><span class="pill ${p.status === 'ok' ? 'pill-green' : 'pill-red'}">${p.status}</span></td>
-        <td class="text-muted text-xs">${fmt(p.fetched_at)}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>`;
-  }
   loadCrawlPages();
-
-  window.triggerCrawlNow = async () => {
-    const btn = document.getElementById('crawlNowBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
-    const r = await apiFetch('/crawl-now', { method: 'POST' });
-    if (btn) { btn.disabled = false; btn.textContent = 'Crawl now'; }
-    if (r?.ok) {
-      const msgEl = document.getElementById('settingsMsg');
-      if (msgEl) { msgEl.className = 'success-msg'; msgEl.textContent = r.message; msgEl.style.display = 'block'; setTimeout(() => { msgEl.style.display = 'none'; }, 4000); }
-    }
-  };
 
   document.getElementById('settingsSaveBtn').addEventListener('click', async () => {
     const btn   = document.getElementById('settingsSaveBtn');
