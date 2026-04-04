@@ -1,18 +1,30 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // HIGHMARK — Per-Client Configuration Registry
-// Each entry defines all per-client behavior: capabilities, contact info,
-// persona, knowledge sources, and booking mode.
+//
+// DEVELOPMENT FALLBACK ONLY (Phase 1 Chunk 3)
+// The 3 static entries below (csr_rea, lone_pine, highmark_demo) are now seeded
+// in the DB via db1_seed_clients.sql. At runtime, DB rows loaded by loadDbClients()
+// take precedence over these static entries via getAllClients() / resolveClient().
+// Edit client settings in the portal or via DB — not here.
+//
+// This file remains authoritative for:
+//   - Dev/test environments where DB is unavailable (TEST_MODE fallback)
+//   - Fields that DB rows don't carry: isDemo, handoffReply functions,
+//     fareharborCompanies API key env references
+//   - The dbRowToClient() + loadDbClients() + resolveClient() runtime machinery
 //
 // bookingMode values:
-//   "fareharbor"   — real-time availability + booking menu (Tier 2)
+//   "fareharbor"    — real-time availability + booking menu (Tier 2)
 //   "informational" — Q&A + handoff to phone, no booking API
 //   "lead_capture"  — Q&A + collects name/email/need before routing to phone
+//   "call_only"     — phone CTA only, no booking links
+//   "static_links"  — numbered list of booking links
+//   "hybrid"        — booking links + phone CTA
 //   "demo"          — guided sales demo flow (deterministic, no AI/API calls)
 //
-// To add a new client:
-//   1. Add an entry to CLIENTS keyed by client id
-//   2. Set LONE_PINE_TWILIO_NUMBER (or equivalent) env var in Railway
-//   3. No code changes required — resolveClient handles routing automatically
+// To add a NEW client:
+//   1. Use POST /admin/clients (portal or API) — no clients.js edit needed
+//   2. Set inbound Twilio number via patch + assign in Railway env
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const CLIENTS = {
