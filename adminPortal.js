@@ -1060,6 +1060,133 @@ export async function handlePortalUpdateMessaging(req, res, supabase) {
   return res.json(data);
 }
 
+// ── GET /portal/api/bot-config ────────────────────────────────────────────────
+// Returns bot_config row for client, or defaults from the client object.
+export async function handlePortalBotConfig(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const { data, error } = await supabase
+    .from("bot_config")
+    .select("bot_name, tone, opener_text, system_prompt_addon, handoff_message")
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (error) {
+    if (error.message?.includes("does not exist") || error.code === "42P01") {
+      // Table not yet created — return empty defaults
+      return res.json({ client_id: clientId, bot_name: null, tone: null, opener_text: null, system_prompt_addon: null, handoff_message: null });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+
+  return res.json(data ?? { client_id: clientId, bot_name: null, tone: null, opener_text: null, system_prompt_addon: null, handoff_message: null });
+}
+
+// ── PATCH /portal/api/bot-config ──────────────────────────────────────────────
+// Upserts bot_config for the client. client_user → 403.
+export async function handlePortalUpdateBotConfig(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) {
+    return res.status(403).json({ error: "Forbidden — admin role required" });
+  }
+
+  const body = req.body ?? {};
+  const updates = { client_id: clientId, updated_at: new Date().toISOString() };
+
+  const textFields = ["bot_name", "tone", "opener_text", "system_prompt_addon", "handoff_message"];
+  for (const f of textFields) {
+    if (body[f] !== undefined) updates[f] = body[f] === "" ? null : String(body[f]);
+  }
+
+  if (Object.keys(updates).length === 2) {
+    return res.status(400).json({ error: "No updatable fields provided" });
+  }
+
+  const { data, error } = await supabase
+    .from("bot_config")
+    .upsert(updates, { onConflict: "client_id" })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.message?.includes("does not exist") || error.code === "42P01") {
+      return res.status(503).json({ error: "bot_config table not found — run db1_bot_config.sql migration" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+
+  console.log(`[PORTAL] bot config updated for ${clientId}`);
+  return res.json(data);
+}
+
+// ── GET /portal/api/booking-config ────────────────────────────────────────────
+// Returns booking_config row for client, or defaults.
+export async function handlePortalBookingConfig(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const { data, error } = await supabase
+    .from("booking_config")
+    .select("booking_mode, booking_link, call_cta_text")
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (error) {
+    if (error.message?.includes("does not exist") || error.code === "42P01") {
+      return res.json({ client_id: clientId, booking_mode: null, booking_link: null, call_cta_text: null });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+
+  return res.json(data ?? { client_id: clientId, booking_mode: null, booking_link: null, call_cta_text: null });
+}
+
+// ── PATCH /portal/api/booking-config ──────────────────────────────────────────
+// Upserts booking_config for the client. client_user → 403.
+export async function handlePortalUpdateBookingConfig(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) {
+    return res.status(403).json({ error: "Forbidden — admin role required" });
+  }
+
+  const body = req.body ?? {};
+  const updates = { client_id: clientId, updated_at: new Date().toISOString() };
+
+  const textFields = ["booking_mode", "booking_link", "call_cta_text"];
+  for (const f of textFields) {
+    if (body[f] !== undefined) updates[f] = body[f] === "" ? null : String(body[f]);
+  }
+
+  if (Object.keys(updates).length === 2) {
+    return res.status(400).json({ error: "No updatable fields provided" });
+  }
+
+  const { data, error } = await supabase
+    .from("booking_config")
+    .upsert(updates, { onConflict: "client_id" })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.message?.includes("does not exist") || error.code === "42P01") {
+      return res.status(503).json({ error: "booking_config table not found — run db1_booking_config.sql migration" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+
+  console.log(`[PORTAL] booking config updated for ${clientId}`);
+  return res.json(data);
+}
+
 // ── GET /admin/portal-users ───────────────────────────────────────────────────
 export async function handleListPortalUsers(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });

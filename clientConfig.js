@@ -21,6 +21,52 @@
 // to avoid noisy repeated failures on every SMS request.
 let _scrapesTableExists     = true;
 let _bookingOptsTableExists = true;
+let _botConfigTableExists   = true;
+let _bookingConfigTableExists = true;
+
+// Fetch bot_config row for a client (bot identity + system_prompt_addon overrides).
+// Returns null if table doesn't exist or no row found.
+async function fetchBotConfig(clientId, supabase) {
+  if (!_botConfigTableExists) return null;
+  try {
+    const { data, error } = await supabase
+      .from("bot_config")
+      .select("bot_name, tone, opener_text, system_prompt_addon, handoff_message")
+      .eq("client_id", clientId)
+      .maybeSingle();
+    if (error) {
+      if (error.message?.includes("does not exist") || error.code === "42P01") {
+        _botConfigTableExists = false;
+      }
+      return null;
+    }
+    return data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Fetch booking_config row for a client (booking behavior overrides).
+// Returns null if table doesn't exist or no row found.
+async function fetchBookingConfig(clientId, supabase) {
+  if (!_bookingConfigTableExists) return null;
+  try {
+    const { data, error } = await supabase
+      .from("booking_config")
+      .select("booking_mode, booking_link, call_cta_text")
+      .eq("client_id", clientId)
+      .maybeSingle();
+    if (error) {
+      if (error.message?.includes("does not exist") || error.code === "42P01") {
+        _bookingConfigTableExists = false;
+      }
+      return null;
+    }
+    return data ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // Fetch the clients DB row for a given client ID (used for static client overrides)
 async function fetchDbRow(clientId, supabase) {
@@ -184,11 +230,6 @@ export async function getRuntimeClientConfig(client, supabase) {
     merged = applyDbOverrides(merged, dbRow);
   }
 
-  // Normalize api_live_booking → fareharbor (new UI label for existing FH behavior)
-  if (merged.bookingMode === "api_live_booking") {
-    merged.bookingMode = "fareharbor";
-  }
-
   // Scrape sources: DB table → scrapeUrls fallback → empty array
   if (supabase) {
     const dbSources = await fetchScrapeSources(client.id, supabase);
@@ -225,6 +266,33 @@ export async function getRuntimeClientConfig(client, supabase) {
   // humanHandoffEnabled — always a boolean, default true
   if (merged.humanHandoffEnabled == null) {
     merged.humanHandoffEnabled = true;
+  }
+
+  // Bot config overrides — applied last so portal edits take precedence over all other sources
+  if (supabase) {
+    const botCfg = await fetchBotConfig(client.id, supabase);
+    if (botCfg) {
+      if (botCfg.bot_name)            merged.botName           = botCfg.bot_name;
+      if (botCfg.tone)                merged.tone              = botCfg.tone;
+      if (botCfg.opener_text)         merged.openerText        = botCfg.opener_text;
+      if (botCfg.system_prompt_addon) merged.systemPromptAddon = botCfg.system_prompt_addon;
+      if (botCfg.handoff_message)     merged.handoffMessage    = botCfg.handoff_message;
+    }
+  }
+
+  // Booking config overrides — applied last so portal edits take precedence
+  if (supabase) {
+    const bookCfg = await fetchBookingConfig(client.id, supabase);
+    if (bookCfg) {
+      if (bookCfg.booking_mode)  merged.bookingMode  = bookCfg.booking_mode;
+      if (bookCfg.booking_link)  merged.bookingLink  = bookCfg.booking_link;
+      if (bookCfg.call_cta_text) merged.callCtaText  = bookCfg.call_cta_text;
+    }
+  }
+
+  // Re-normalize booking mode after all overrides applied
+  if (merged.bookingMode === "api_live_booking") {
+    merged.bookingMode = "fareharbor";
   }
 
   return merged;

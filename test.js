@@ -38,7 +38,8 @@ import { checkOptOut, upsertContact, addTagsToContact, OPT_OUT_KEYWORDS, OPT_IN_
 import { getKnowledgeContext, getIntegrationStatus } from "./knowledgeBase.js";
 import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
-import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSettings, handlePortalMessaging, handlePortalUpdateMessaging } from "./adminPortal.js";
+import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSettings, handlePortalMessaging, handlePortalUpdateMessaging,
+  handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig } from "./adminPortal.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { metaFromBookingKey } from "./clientConfig.js";
@@ -2942,6 +2943,7 @@ async function main() {
   await test53(); // Integration status: getIntegrationStatus, handlePortalIntegrations, crawler seasonal prompt
   await test54(); // Integrations: FareHarbor + SNOTEL settings PATCH, fhHeaders user_key
   await test55(); // Messaging config: handlePortalMessaging, handlePortalUpdateMessaging, getMessagingConfig fallback
+  await test56(); // Bot config + booking config: GET/PATCH handlers
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -3498,6 +3500,10 @@ async function test35() {
     ["PATCH", "/portal/api/clients/csr_rea"],
     ["GET",   "/portal/api/messaging"],
     ["PATCH", "/portal/api/messaging"],
+    ["GET",   "/portal/api/bot-config"],
+    ["PATCH", "/portal/api/bot-config"],
+    ["GET",   "/portal/api/booking-config"],
+    ["PATCH", "/portal/api/booking-config"],
   ];
   let allGot401 = true;
   for (const [method, route] of portalApiRoutes) {
@@ -3505,7 +3511,7 @@ async function test35() {
     if (res.status !== 401) { allGot401 = false; console.log(`  Expected 401 on ${route}, got ${res.status}`); }
   }
   allGot401
-    ? pass("test35: all portal API routes return 401 without token (11 routes incl. clients + messaging)")
+    ? pass("test35: all portal API routes return 401 without token (15 routes incl. clients + messaging + bot/booking config)")
     : fail("test35: some portal API routes did not return 401 without token");
 
   // ── handlePortalCreateClient / handlePortalUpdateClient: 403 for non-admin ─
@@ -5023,11 +5029,13 @@ async function test42() {
   {
     let dbFetched = false;
     const mockSupa = {
-      from: () => ({
+      from: (table) => ({
         select: () => ({
           eq: () => ({
-            maybeSingle: async () => { dbFetched = true; return { data: null }; },
+            // Only flag fetches from the clients table — bot_config/booking_config fetches are expected
+            maybeSingle: async () => { if (table === "clients") dbFetched = true; return { data: null }; },
           }),
+          order: async () => ({ data: [], error: null }),
         }),
         order: () => ({ data: [], error: null }),
       }),
@@ -7439,6 +7447,181 @@ async function test55() {
     (result?.enable_confirmation_texts === true && result?.enable_cancellations === false)
       ? pass("test55: getMessagingConfig returns DB row when present")
       : fail("test55: getMessagingConfig row return", JSON.stringify(result));
+  }
+}
+
+async function test56() {
+  console.log("\n[test56] Bot config + booking config: portal handlers");
+
+  const adminReq = {
+    portalUser: { role: "internal_admin", clientId: null, isAdmin: true, isClientAdmin: false },
+    query: { client_id: "csr_rea" },
+    body: {},
+  };
+  const clientAdminReq = {
+    portalUser: { role: "client_admin", clientId: "csr_rea", isAdmin: false, isClientAdmin: true },
+    query: {},
+    body: {},
+  };
+  const clientUserReq = {
+    portalUser: { role: "client_user", clientId: "csr_rea", isAdmin: false, isClientAdmin: false },
+    query: {},
+    body: {},
+  };
+
+  // ── handlePortalBotConfig GET ───────────────────────────────────────────
+  // 1. Returns defaults when no DB row
+  {
+    let statusCode = 200, jsonData = null;
+    const res = { status: (c) => { statusCode = c; return { json: (d) => { jsonData = d; } }; }, json: (d) => { jsonData = d; } };
+    const mockSb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) };
+    await handlePortalBotConfig({ ...adminReq }, res, mockSb);
+    (statusCode === 200 && jsonData?.client_id === "csr_rea" && jsonData?.bot_name === null)
+      ? pass("test56: handlePortalBotConfig returns defaults when no row")
+      : fail("test56: handlePortalBotConfig defaults", JSON.stringify(jsonData));
+  }
+
+  // 2. Returns DB values when row exists
+  {
+    let jsonData = null;
+    const res = { json: (d) => { jsonData = d; } };
+    const row = { bot_name: "Summit", tone: "fun", opener_text: "Hey!", system_prompt_addon: "Be brief.", handoff_message: "Connecting you now." };
+    const mockSb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }) };
+    await handlePortalBotConfig({ ...adminReq }, res, mockSb);
+    (jsonData?.bot_name === "Summit" && jsonData?.system_prompt_addon === "Be brief.")
+      ? pass("test56: handlePortalBotConfig returns DB row values")
+      : fail("test56: handlePortalBotConfig DB row", JSON.stringify(jsonData));
+  }
+
+  // 3. Returns defaults when table doesn't exist (42P01)
+  {
+    let statusCode = 200, jsonData = null;
+    const res = { status: (c) => { statusCode = c; return { json: (d) => { jsonData = d; } }; }, json: (d) => { jsonData = d; } };
+    const mockSb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "does not exist", code: "42P01" } }) }) }) }) };
+    await handlePortalBotConfig({ ...adminReq }, res, mockSb);
+    (statusCode === 200 && jsonData?.bot_name === null)
+      ? pass("test56: handlePortalBotConfig table-not-exist returns defaults")
+      : fail("test56: handlePortalBotConfig table-not-exist", `status=${statusCode} data=${JSON.stringify(jsonData)}`);
+  }
+
+  // ── handlePortalUpdateBotConfig PATCH ───────────────────────────────────
+  // 4. client_user → 403
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handlePortalUpdateBotConfig({ ...clientUserReq, body: { bot_name: "X" } }, res, {});
+    statusCode === 403
+      ? pass("test56: handlePortalUpdateBotConfig client_user → 403")
+      : fail("test56: handlePortalUpdateBotConfig client_user role", `status=${statusCode}`);
+  }
+
+  // 5. client_admin → 200, upserts correctly
+  {
+    let statusCode = 200, upsertPayload = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; }, json: () => {} };
+    const mockSb = { from: () => ({ upsert: (p) => { upsertPayload = p; return { select: () => ({ single: async () => ({ data: { ...p, id: "uuid1" }, error: null }) }) }; } }) };
+    await handlePortalUpdateBotConfig({ ...clientAdminReq, body: { bot_name: "Summit", tone: "fun" } }, res, mockSb);
+    (statusCode === 200 && upsertPayload?.bot_name === "Summit" && upsertPayload?.tone === "fun")
+      ? pass("test56: handlePortalUpdateBotConfig client_admin upserts correctly")
+      : fail("test56: handlePortalUpdateBotConfig upsert", `status=${statusCode} payload=${JSON.stringify(upsertPayload)}`);
+  }
+
+  // 6. Empty string fields stored as null
+  {
+    let upsertPayload = null;
+    const res = { status: () => ({ json: () => {} }), json: () => {} };
+    const mockSb = { from: () => ({ upsert: (p) => { upsertPayload = p; return { select: () => ({ single: async () => ({ data: p, error: null }) }) }; } }) };
+    await handlePortalUpdateBotConfig({ ...adminReq, body: { opener_text: "" } }, res, mockSb);
+    upsertPayload?.opener_text === null
+      ? pass("test56: handlePortalUpdateBotConfig empty string → null")
+      : fail("test56: handlePortalUpdateBotConfig empty→null", JSON.stringify(upsertPayload));
+  }
+
+  // 7. No fields → 400
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handlePortalUpdateBotConfig({ ...adminReq, body: {} }, res, {});
+    statusCode === 400
+      ? pass("test56: handlePortalUpdateBotConfig no fields → 400")
+      : fail("test56: handlePortalUpdateBotConfig no fields", `status=${statusCode}`);
+  }
+
+  // ── handlePortalBookingConfig GET ───────────────────────────────────────
+  // 8. Returns defaults when no DB row
+  {
+    let jsonData = null;
+    const res = { json: (d) => { jsonData = d; } };
+    const mockSb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) };
+    await handlePortalBookingConfig({ ...adminReq }, res, mockSb);
+    (jsonData?.client_id === "csr_rea" && jsonData?.booking_mode === null)
+      ? pass("test56: handlePortalBookingConfig returns defaults when no row")
+      : fail("test56: handlePortalBookingConfig defaults", JSON.stringify(jsonData));
+  }
+
+  // 9. Returns DB values when row exists
+  {
+    let jsonData = null;
+    const res = { json: (d) => { jsonData = d; } };
+    const row = { booking_mode: "fareharbor", booking_link: "https://fareharbor.com/csr/", call_cta_text: "Call us!" };
+    const mockSb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }) };
+    await handlePortalBookingConfig({ ...adminReq }, res, mockSb);
+    (jsonData?.booking_mode === "fareharbor" && jsonData?.call_cta_text === "Call us!")
+      ? pass("test56: handlePortalBookingConfig returns DB row values")
+      : fail("test56: handlePortalBookingConfig DB row", JSON.stringify(jsonData));
+  }
+
+  // ── handlePortalUpdateBookingConfig PATCH ───────────────────────────────
+  // 10. client_user → 403
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handlePortalUpdateBookingConfig({ ...clientUserReq, body: { booking_mode: "fareharbor" } }, res, {});
+    statusCode === 403
+      ? pass("test56: handlePortalUpdateBookingConfig client_user → 403")
+      : fail("test56: handlePortalUpdateBookingConfig client_user role", `status=${statusCode}`);
+  }
+
+  // 11. client_admin → 200, upserts correctly
+  {
+    let statusCode = 200, upsertPayload = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; }, json: () => {} };
+    const mockSb = { from: () => ({ upsert: (p) => { upsertPayload = p; return { select: () => ({ single: async () => ({ data: p, error: null }) }) }; } }) };
+    await handlePortalUpdateBookingConfig({ ...clientAdminReq, body: { booking_mode: "call_only", call_cta_text: "Call us" } }, res, mockSb);
+    (statusCode === 200 && upsertPayload?.booking_mode === "call_only" && upsertPayload?.call_cta_text === "Call us")
+      ? pass("test56: handlePortalUpdateBookingConfig client_admin upserts correctly")
+      : fail("test56: handlePortalUpdateBookingConfig upsert", `status=${statusCode} payload=${JSON.stringify(upsertPayload)}`);
+  }
+
+  // 12. Empty string stored as null
+  {
+    let upsertPayload = null;
+    const res = { status: () => ({ json: () => {} }), json: () => {} };
+    const mockSb = { from: () => ({ upsert: (p) => { upsertPayload = p; return { select: () => ({ single: async () => ({ data: p, error: null }) }) }; } }) };
+    await handlePortalUpdateBookingConfig({ ...adminReq, body: { booking_link: "" } }, res, mockSb);
+    upsertPayload?.booking_link === null
+      ? pass("test56: handlePortalUpdateBookingConfig empty string → null")
+      : fail("test56: handlePortalUpdateBookingConfig empty→null", JSON.stringify(upsertPayload));
+  }
+
+  // 13. No fields → 400
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handlePortalUpdateBookingConfig({ ...adminReq, body: {} }, res, {});
+    statusCode === 400
+      ? pass("test56: handlePortalUpdateBookingConfig no fields → 400")
+      : fail("test56: handlePortalUpdateBookingConfig no fields", `status=${statusCode}`);
+  }
+
+  // 14. 503 when no supabase
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handlePortalBotConfig({ ...adminReq }, res, null);
+    statusCode === 503
+      ? pass("test56: handlePortalBotConfig no supabase → 503")
+      : fail("test56: handlePortalBotConfig no supabase", `status=${statusCode}`);
   }
 }
 

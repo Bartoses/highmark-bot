@@ -282,6 +282,12 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="messaging">
         <span class="nav-icon">💬</span> Messaging
       </div>
+      <div class="nav-item" data-section="bot-config">
+        <span class="nav-icon">🤖</span> Bot Config
+      </div>
+      <div class="nav-item" data-section="booking-config">
+        <span class="nav-icon">📅</span> Booking Config
+      </div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
@@ -463,6 +469,24 @@ tr:hover td { background: var(--panel2); }
         </div>
         <div id="messagingContent"><div class="loading">Loading…</div></div>
       </div><!-- /sec-messaging -->
+
+      <!-- BOT CONFIG -->
+      <div class="section" id="sec-bot-config">
+        <div class="section-header">
+          <span class="section-title">Bot Config</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadBotConfig()">↻ Refresh</button>
+        </div>
+        <div id="botConfigContent"><div class="loading">Loading…</div></div>
+      </div><!-- /sec-bot-config -->
+
+      <!-- BOOKING CONFIG -->
+      <div class="section" id="sec-booking-config">
+        <div class="section-header">
+          <span class="section-title">Booking Config</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadBookingConfig()">↻ Refresh</button>
+        </div>
+        <div id="bookingConfigContent"><div class="loading">Loading…</div></div>
+      </div><!-- /sec-booking-config -->
 
       <!-- MORE (mobile-only) -->
       <div class="section" id="sec-more">
@@ -854,7 +878,7 @@ async function init() {
 
   // Load initial section based on URL
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','integrations','messaging','users','clients'];
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','integrations','messaging','bot-config','booking-config','users','clients'];
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
 }
 
@@ -890,7 +914,8 @@ async function signOut() {
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
   analytics: 'Analytics', settings: 'Settings', knowledge: 'Knowledge',
-  integrations: 'Integrations', messaging: 'Messaging', users: 'Users & Access', clients: 'Clients', more: 'More',
+  integrations: 'Integrations', messaging: 'Messaging', 'bot-config': 'Bot Config', 'booking-config': 'Booking Config',
+  users: 'Users & Access', clients: 'Clients', more: 'More',
 };
 function switchSection(name) {
   if (name === 'users' && !me?.isClientAdmin) name = 'dashboard';
@@ -912,7 +937,9 @@ function switchSection(name) {
   if (name === 'clients')      loadClients();
   if (name === 'knowledge')    loadKnowledge();
   if (name === 'integrations') loadIntegrationsSection();
-  if (name === 'messaging')    loadMessaging();
+  if (name === 'messaging')       loadMessaging();
+  if (name === 'bot-config')      loadBotConfig();
+  if (name === 'booking-config')  loadBookingConfig();
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -2668,6 +2695,162 @@ async function saveMessagingConfig() {
   if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
   showToast('Messaging settings saved');
   _msgData = r;
+}
+
+// ── Bot Config section ─────────────────────────────────────────────────────
+async function loadBotConfig() {
+  const wrap = document.getElementById('botConfigContent');
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  const data = await apiFetch('/bot-config');
+  if (!data) {
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Could not load bot config.</div>';
+    return;
+  }
+  const editable = me?.isAdmin || me?.isClientAdmin;
+  try {
+    wrap.innerHTML = renderBotConfigSection(data, editable);
+  } catch (e) {
+    console.error('[BotConfig] render error:', e);
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Error rendering bot config.</div>';
+  }
+}
+
+function renderBotConfigSection(cfg, editable) {
+  function field(id, label, value, hint, multiline) {
+    const v = escHtml(value ?? '');
+    if (!editable) {
+      return `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px;">${label}</div>
+        <div style="font-size:13px;">${v || '<span style="color:var(--text2)">—</span>'}</div>
+        ${hint ? `<div style="font-size:11px;color:var(--text2);margin-top:3px;">${hint}</div>` : ''}
+      </div>`;
+    }
+    const input = multiline
+      ? `<textarea id="${id}" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:13px;resize:vertical;">${v}</textarea>`
+      : `<input type="text" id="${id}" value="${v}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:13px;">`;
+    return `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">${label}${hint ? ` — <span style="font-style:italic;">${hint}</span>` : ''}</div>
+      ${input}
+    </div>`;
+  }
+
+  const saveBtn = editable
+    ? `<div style="margin-top:20px;"><button class="btn btn-primary" onclick="saveBotConfig()">Save Bot Config</button></div>`
+    : `<div style="margin-top:12px;font-size:12px;color:var(--text2);">Contact your admin to change bot config.</div>`;
+
+  return `<div class="card">
+    <div class="card-title" style="margin-bottom:4px;">Bot Identity</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:16px;">Override bot name, tone, and AI behavior for this client.</div>
+    ${field('bc_bot_name', 'Bot Name', cfg.bot_name, 'Name the bot uses to introduce itself')}
+    ${field('bc_tone', 'Tone', cfg.tone, 'Personality style (e.g. "warm, stoked, genuinely local")')}
+    ${field('bc_opener_text', 'Opener Text', cfg.opener_text, 'First message sent to new guests (leave blank for seasonal default)')}
+    ${field('bc_handoff_message', 'Handoff Message', cfg.handoff_message, 'Override the default human handoff text')}
+    ${field('bc_system_prompt_addon', 'Custom AI Instructions', cfg.system_prompt_addon, 'Appended to every system prompt — use for business-specific rules', true)}
+    ${saveBtn}
+  </div>`;
+}
+
+async function saveBotConfig() {
+  const btn = document.querySelector('#sec-bot-config .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  const body = {};
+  const fields = ['bc_bot_name', 'bc_tone', 'bc_opener_text', 'bc_handoff_message', 'bc_system_prompt_addon'];
+  const keys   = ['bot_name',    'tone',    'opener_text',    'handoff_message',    'system_prompt_addon'];
+  fields.forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) body[keys[i]] = el.value;
+  });
+
+  const r = await apiFetch('/bot-config', { method: 'PATCH', body: JSON.stringify(body) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Save Bot Config'; }
+  if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
+  showToast('Bot config saved');
+}
+
+// ── Booking Config section ─────────────────────────────────────────────────
+async function loadBookingConfig() {
+  const wrap = document.getElementById('bookingConfigContent');
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  const data = await apiFetch('/booking-config');
+  if (!data) {
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Could not load booking config.</div>';
+    return;
+  }
+  const editable = me?.isAdmin || me?.isClientAdmin;
+  try {
+    wrap.innerHTML = renderBookingConfigSection(data, editable);
+  } catch (e) {
+    console.error('[BookingConfig] render error:', e);
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Error rendering booking config.</div>';
+  }
+}
+
+function renderBookingConfigSection(cfg, editable) {
+  const MODES = ['fareharbor', 'informational', 'lead_capture', 'call_only', 'static_links', 'hybrid'];
+
+  function field(id, label, value, hint) {
+    const v = escHtml(value ?? '');
+    if (!editable) {
+      return `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px;">${label}</div>
+        <div style="font-size:13px;">${v || '<span style="color:var(--text2)">—</span>'}</div>
+        ${hint ? `<div style="font-size:11px;color:var(--text2);margin-top:3px;">${hint}</div>` : ''}
+      </div>`;
+    }
+    return `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">${label}${hint ? ` — <span style="font-style:italic;">${hint}</span>` : ''}</div>
+      <input type="text" id="${id}" value="${v}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:13px;">
+    </div>`;
+  }
+
+  function modeSelect(current) {
+    if (!editable) {
+      return `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px;">Booking Mode</div>
+        <div style="font-size:13px;">${escHtml(current ?? '—')}</div>
+      </div>`;
+    }
+    const opts = MODES.map(m => `<option value="${m}" ${current === m ? 'selected' : ''}>${m}</option>`).join('');
+    return `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Booking Mode — <span style="font-style:italic;">How guests book</span></div>
+      <select id="bk_booking_mode" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:13px;">
+        <option value="">— inherit from client defaults —</option>
+        ${opts}
+      </select>
+    </div>`;
+  }
+
+  const saveBtn = editable
+    ? `<div style="margin-top:20px;"><button class="btn btn-primary" onclick="saveBookingConfig()">Save Booking Config</button></div>`
+    : `<div style="margin-top:12px;font-size:12px;color:var(--text2);">Contact your admin to change booking config.</div>`;
+
+  return `<div class="card">
+    <div class="card-title" style="margin-bottom:4px;">Booking Behavior</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:16px;">Override how guests book and what call-to-action is shown.</div>
+    ${modeSelect(cfg.booking_mode)}
+    ${field('bk_booking_link', 'Booking Link', cfg.booking_link, 'Primary booking URL shown to guests')}
+    ${field('bk_call_cta_text', 'Call CTA Text', cfg.call_cta_text, 'Custom phone CTA text for call_only or hybrid mode')}
+    ${saveBtn}
+  </div>`;
+}
+
+async function saveBookingConfig() {
+  const btn = document.querySelector('#sec-booking-config .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  const body = {};
+  const modeEl = document.getElementById('bk_booking_mode');
+  const linkEl = document.getElementById('bk_booking_link');
+  const ctaEl  = document.getElementById('bk_call_cta_text');
+  if (modeEl) body.booking_mode  = modeEl.value;
+  if (linkEl) body.booking_link  = linkEl.value;
+  if (ctaEl)  body.call_cta_text = ctaEl.value;
+
+  const r = await apiFetch('/booking-config', { method: 'PATCH', body: JSON.stringify(body) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Save Booking Config'; }
+  if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
+  showToast('Booking config saved');
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────
