@@ -273,6 +273,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="settings">
         <span class="nav-icon">⚙</span> Settings
       </div>
+      <div class="nav-item" data-section="knowledge">
+        <span class="nav-icon">📚</span> Knowledge
+      </div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
@@ -408,6 +411,35 @@ tr:hover td { background: var(--panel2); }
         <div id="clientsTableWrap"><div class="loading">Loading…</div></div>
       </div><!-- /sec-clients -->
 
+      <!-- KNOWLEDGE -->
+      <div class="section" id="sec-knowledge">
+        <div class="section-header">
+          <span class="section-title">Knowledge</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadKnowledge()">↻ Refresh</button>
+        </div>
+
+        <!-- Integration Status Cards -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:14px;">Live Data Integrations</div>
+          <div id="knowledgeIntegrations"><div class="loading">Loading…</div></div>
+        </div>
+
+        <!-- Knowledge Sources — read-only summary, manage in Settings -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+            <span>Knowledge Sources</span>
+            <button class="btn btn-ghost btn-sm client-admin-only" onclick="switchSection('settings');setTimeout(()=>document.getElementById('settingsKnowledgeTab')?.click(),200)">Manage in Settings ›</button>
+          </div>
+          <div id="knowledgeSources"><div class="loading">Loading…</div></div>
+        </div>
+
+        <!-- Crawled Pages -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:14px;">Crawled Pages</div>
+          <div id="knowledgePages"><div class="loading">Loading…</div></div>
+        </div>
+      </div><!-- /sec-knowledge -->
+
       <!-- MORE (mobile-only) -->
       <div class="section" id="sec-more">
         <div class="card" style="margin-bottom:12px;">
@@ -421,6 +453,10 @@ tr:hover td { background: var(--panel2); }
           <div class="more-link-list">
             <div class="more-link-item" onclick="switchSection('settings')">
               <span>⚙</span> Settings
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item" onclick="switchSection('knowledge')">
+              <span>📚</span> Knowledge
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item client-admin-only" onclick="switchSection('users')">
@@ -790,7 +826,7 @@ async function init() {
 
   // Load initial section based on URL
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','users','clients'];
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','users','clients'];
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
 }
 
@@ -825,8 +861,8 @@ async function signOut() {
 // ── Section routing ────────────────────────────────────────────────────────
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
-  analytics: 'Analytics', settings: 'Settings', users: 'Users & Access',
-  clients: 'Clients', more: 'More',
+  analytics: 'Analytics', settings: 'Settings', knowledge: 'Knowledge',
+  users: 'Users & Access', clients: 'Clients', more: 'More',
 };
 function switchSection(name) {
   if (name === 'users' && !me?.isClientAdmin) name = 'dashboard';
@@ -845,7 +881,8 @@ function switchSection(name) {
   if (name === 'analytics')  loadAnalytics();
   if (name === 'settings')   loadSettings();
   if (name === 'users')      loadUsers();
-  if (name === 'clients')   loadClients();
+  if (name === 'clients')    loadClients();
+  if (name === 'knowledge')  loadKnowledge();
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -2104,6 +2141,143 @@ async function saveEditClient(id) {
 document.getElementById('clientModal')?.addEventListener('click', e => {
   if (e.target === e.currentTarget) closeClientModal();
 });
+
+// ── Knowledge section ──────────────────────────────────────────────────────
+async function loadKnowledge() {
+  document.getElementById('knowledgeIntegrations').innerHTML = '<div class="loading">Loading…</div>';
+  document.getElementById('knowledgeSources').innerHTML      = '<div class="loading">Loading…</div>';
+  document.getElementById('knowledgePages').innerHTML        = '<div class="loading">Loading…</div>';
+
+  const [integData, sourcesData, pagesData] = await Promise.all([
+    apiFetch('/integrations'),
+    apiFetch('/scrape-sources'),
+    apiFetch('/crawl-pages'),
+  ]);
+
+  // Integration status cards
+  const intWrap = document.getElementById('knowledgeIntegrations');
+  if (!integData?.integrations) {
+    intWrap.innerHTML = '<div class="error-msg" style="display:block">Could not load integration status.</div>';
+  } else {
+    intWrap.innerHTML = renderIntegrationCards(integData.integrations);
+  }
+
+  // Knowledge sources table
+  const srcWrap = document.getElementById('knowledgeSources');
+  const sources  = sourcesData?.sources ?? [];
+  if (!sources.length) {
+    srcWrap.innerHTML = '<div class="empty-state" style="padding:12px 0;">No scrape sources configured. Add them in Settings → Knowledge Sources.</div>';
+  } else {
+    const rows = sources.map(s => `<tr>
+      <td style="font-size:12px;word-break:break-all;">${s.url}</td>
+      <td>${s.label ?? '<span style="color:var(--text2)">—</span>'}</td>
+      <td>${s.source_type ?? 'website'}</td>
+      <td><span class="pill ${s.active ? 'pill-green' : 'pill-failed'}">${s.active ? 'Active' : 'Inactive'}</span></td>
+    </tr>`).join('');
+    srcWrap.innerHTML = `<div class="tbl-wrap"><table>
+      <thead><tr><th>URL</th><th>Label</th><th>Type</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  }
+
+  // Crawled pages table
+  const pagesWrap = document.getElementById('knowledgePages');
+  const pages = pagesData?.pages ?? [];
+  if (!pages.length) {
+    pagesWrap.innerHTML = '<div class="empty-state" style="padding:12px 0;">No pages crawled yet. Crawler runs weekly when enabled in Settings.</div>';
+  } else {
+    const rows = pages.slice(0, 30).map(p => {
+      const typeLabels = { homepage:'Home', services:'Services', pricing:'Pricing', booking:'Booking', faq:'FAQ', policies:'Policies', hours:'Hours', contact:'Contact', seasonal:'Seasonal', other:'Info' };
+      const typeLabel = typeLabels[p.page_type] ?? p.page_type ?? '–';
+      const statusPill = p.status === 'ok'
+        ? '<span class="pill pill-green">OK</span>'
+        : `<span class="pill pill-failed">${p.status ?? '?'}</span>`;
+      const crawledAt = p.fetched_at ? fmt(p.fetched_at) : '–';
+      const title     = p.title ?? '';
+      const url       = p.url ?? '';
+      const shortUrl  = url.length > 50 ? url.slice(0, 47) + '…' : url;
+      return `<tr>
+        <td style="font-size:12px;">${title ? `<strong>${title}</strong><br>` : ''}<span style="color:var(--text2);font-size:11px;">${shortUrl}</span></td>
+        <td>${typeLabel}</td>
+        <td>${statusPill}</td>
+        <td style="font-size:12px;color:var(--text2);">${crawledAt}</td>
+      </tr>`;
+    }).join('');
+    const moreNote = pages.length > 30 ? `<div style="padding:8px 0;font-size:12px;color:var(--text2);">Showing 30 of ${pages.length} pages.</div>` : '';
+    pagesWrap.innerHTML = `<div class="tbl-wrap"><table>
+      <thead><tr><th>Page</th><th>Type</th><th>Status</th><th>Last crawled</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>${moreNote}`;
+  }
+}
+
+function renderIntegrationCards(integrations) {
+  function syncAge(ts) {
+    if (!ts) return 'Never';
+    const mins = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+    if (mins < 2)    return 'Just now';
+    if (mins < 60)   return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24)    return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  }
+
+  function nextIn(ts) {
+    if (!ts) return null;
+    const mins = Math.round((new Date(ts).getTime() - Date.now()) / 60000);
+    if (mins <= 0)  return 'Due now';
+    if (mins < 60)  return `in ${mins}m`;
+    const hrs = Math.floor(mins / 60);
+    return `in ${hrs}h`;
+  }
+
+  function intCard(icon, label, enabled, lastSync, nextSync, extra) {
+    if (!enabled) {
+      return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+        <span style="font-size:18px;">${icon}</span>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;">${label}</div>
+          ${extra ? `<div style="font-size:12px;color:var(--text2);">${extra}</div>` : ''}
+        </div>
+        <span class="pill" style="background:var(--panel2);color:var(--text2);">Disabled</span>
+      </div>`;
+    }
+    const age   = syncAge(lastSync);
+    const stale = !lastSync || (Date.now() - new Date(lastSync).getTime()) > 3 * 60 * 60 * 1000;
+    const pillClass = lastSync ? (stale ? 'pill-pending' : 'pill-green') : 'pill-failed';
+    const pillText  = lastSync ? (stale ? 'Stale' : 'Live') : 'No data';
+    const next      = nextSync ? nextIn(nextSync) : null;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+      <span style="font-size:18px;">${icon}</span>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600;">${label}</div>
+        <div style="font-size:12px;color:var(--text2);">Last sync: ${age}${next ? ' · Next: ' + next : ''}${extra ? ' · ' + extra : ''}</div>
+      </div>
+      <span class="pill ${pillClass}">${pillText}</span>
+    </div>`;
+  }
+
+  const i = integrations;
+  const cards = [];
+
+  cards.push(intCard('🌤', 'Weather', i.weather?.enabled ?? true, i.weather?.last_sync, i.weather?.next_sync, null));
+  cards.push(intCard('❄️', 'Snow Conditions (SNOTEL)', i.snow_conditions?.enabled ?? false, i.snow_conditions?.last_sync, i.snow_conditions?.next_sync, null));
+
+  // FareHarbor — one card per company
+  if (i.fareharbor?.enabled && i.fareharbor?.companies?.length) {
+    for (const co of i.fareharbor.companies) {
+      const extra = co.item_count > 0 ? `${co.item_count} items` : null;
+      cards.push(intCard('🎫', `FareHarbor — ${co.name}`, true, co.last_sync, co.next_sync, extra));
+    }
+  } else {
+    cards.push(intCard('🎫', 'FareHarbor', false, null, null, 'Not configured'));
+  }
+
+  cards.push(intCard('🌐', 'Website Scrape', i.website_scrape?.enabled ?? false, i.website_scrape?.last_sync, i.website_scrape?.next_sync, i.website_scrape?.url_count ? `${i.website_scrape.url_count} URL${i.website_scrape.url_count !== 1 ? 's' : ''}` : null));
+  cards.push(intCard('🔍', 'Site Crawler', i.crawler?.enabled ?? false, i.crawler?.last_crawled, null, i.crawler?.page_count > 0 ? `${i.crawler.page_count} pages` : null));
+
+  return `<div style="overflow:hidden;">${cards.join('')}</div>`;
+}
 
 // ── Start ──────────────────────────────────────────────────────────────────
 init().catch(err => { console.error('Portal init error:', err); redirectToLogin(); });

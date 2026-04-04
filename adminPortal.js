@@ -25,6 +25,7 @@
 
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients, loadDbClients } from "./clients.js";
+import { getIntegrationStatus } from "./knowledgeBase.js";
 import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.js";
 import { VALID_BOOKING_MODES, serializeClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { normalizePhone, isValidPhone } from "./phoneUtils.js";
@@ -880,6 +881,27 @@ export async function handleCreatePortalUser(req, res, supabase) {
 
   console.log(`[PORTAL ADMIN] Created portal user: ${email} (role=${role}, client=${client_id ?? "admin"})`);
   return res.status(201).json({ portalUser: data });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTEGRATIONS STATUS — /portal/api/integrations
+// Returns live data-sync status for all integrations (weather, SNOTEL, FH,
+// website scrape, crawler) for the scoped client.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── GET /portal/api/integrations ─────────────────────────────────────────────
+export async function handlePortalIntegrations(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  try {
+    const integrations = await getIntegrationStatus(clientId, supabase);
+    return res.json({ clientId, integrations });
+  } catch (err) {
+    console.error("[PORTAL] integrations status error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

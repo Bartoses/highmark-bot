@@ -834,6 +834,75 @@ export async function getFareHarborKbRow(companyId, supabase) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// INTEGRATION STATUS — returns live status of all data integrations for a client.
+// Used by the portal Integrations panel.
+// Returns: { weather, snow_conditions, fareharbor, website_scrape, crawler }
+// ─────────────────────────────────────────────────────────────────────────────
+export async function getIntegrationStatus(clientId, supabase) {
+  const client = getAllClients()[clientId] ?? null;
+  const result = {};
+
+  // Weather — shared across all clients, always "enabled"
+  try {
+    const { data } = await supabase
+      .from("knowledge_base").select("fetched_at, next_refresh_at").eq("key", "weather_steamboat").maybeSingle();
+    result.weather = { enabled: true, last_sync: data?.fetched_at ?? null, next_sync: data?.next_refresh_at ?? null };
+  } catch { result.weather = { enabled: true, last_sync: null, next_sync: null }; }
+
+  // Snow conditions (SNOTEL) — only clients with snotelStations
+  const hasSnow = (client?.snotelStations?.length ?? 0) > 0;
+  if (hasSnow) {
+    try {
+      const { data } = await supabase
+        .from("knowledge_base").select("fetched_at, next_refresh_at").eq("key", "snow_conditions").maybeSingle();
+      result.snow_conditions = { enabled: true, last_sync: data?.fetched_at ?? null, next_sync: data?.next_refresh_at ?? null };
+    } catch { result.snow_conditions = { enabled: true, last_sync: null, next_sync: null }; }
+  } else {
+    result.snow_conditions = { enabled: false };
+  }
+
+  // FareHarbor — per configured company
+  const fhEnabled   = client?.fareharborEnabled ?? false;
+  const fhCompanies = client?.fareharborCompanies ?? [];
+  const companyStatuses = [];
+  for (const company of fhCompanies) {
+    try {
+      const { data } = await supabase
+        .from("knowledge_base").select("fetched_at, next_refresh_at, data").eq("key", `${company.id}_fareharbor`).maybeSingle();
+      companyStatuses.push({
+        name:       company.name,
+        shortname:  company.shortname,
+        last_sync:  data?.fetched_at     ?? null,
+        next_sync:  data?.next_refresh_at ?? null,
+        item_count: data?.data?.items?.length ?? 0,
+      });
+    } catch {
+      companyStatuses.push({ name: company.name, shortname: company.shortname, last_sync: null, next_sync: null, item_count: 0 });
+    }
+  }
+  result.fareharbor = { enabled: fhEnabled, companies: companyStatuses };
+
+  // Website scrape
+  const scrapeCount = client?.scrapeUrls?.length ?? 0;
+  try {
+    const { data } = await supabase
+      .from("settings").select("value").eq("key", `last_website_scrape_${clientId}`).maybeSingle();
+    result.website_scrape = { enabled: scrapeCount > 0, last_sync: data?.value ?? null, url_count: scrapeCount };
+  } catch { result.website_scrape = { enabled: scrapeCount > 0, last_sync: null, url_count: scrapeCount }; }
+
+  // Crawler (Phase 2 whole-site)
+  const crawlerEnabled = client?.crawlSettings?.enabled ?? false;
+  try {
+    const { data, count } = await supabase
+      .from("client_pages").select("fetched_at", { count: "exact" })
+      .eq("client_id", clientId).order("fetched_at", { ascending: false }).limit(1);
+    result.crawler = { enabled: crawlerEnabled, last_crawled: data?.[0]?.fetched_at ?? null, page_count: count ?? 0 };
+  } catch { result.crawler = { enabled: crawlerEnabled, last_crawled: null, page_count: 0 }; }
+
+  return result;
+}
+
 // Direct FH API call for specific item + date. Returns availability array or null.
 // date format: YYYY-MM-DD
 export async function getFareHarborAvailability(companyId, itemPk, date) {

@@ -244,14 +244,14 @@ export function classifyPageType(url, title, text) {
 function buildFactExtractionPrompt(page, clientName) {
   const typeHints = {
     homepage:  "main offerings, business overview, unique value proposition",
-    services:  "specific services, tours, rentals; what is included; group sizes; capacity",
+    services:  "specific services, tours, rentals; what is included; group sizes; capacity; which season or location each offering runs in",
     pricing:   "exact prices, rates, what is included, deposits, payment terms",
     booking:   "how to book, minimum notice, requirements, lead time needed",
     faq:       "the 2-3 most important guest questions and their answers",
     policies:  "cancellation policy, age/weight/fitness requirements, what to bring, restrictions",
     hours:     "days and hours of operation, seasonal closures, contact info",
     contact:   "phone number, email, physical address, how to reach the team",
-    seasonal:  "which activities run in which season, opening and closing dates",
+    seasonal:  "which activities run in which season; opening dates, closing dates, season start/end months or specific dates; location-specific launch windows",
     other:     "any relevant business facts guests would ask about",
   };
   const hint = typeHints[page.pageType] ?? typeHints.other;
