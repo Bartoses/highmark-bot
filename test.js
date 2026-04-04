@@ -30,6 +30,7 @@ import {
   getClientBookingLinks,
   isDirectLinkRequest,
   findRelevantBookingLink,
+  ensureUrlInResponse,
 } from "./index.js";
 
 import { buildConfirmationText, buildFollowUpText } from "./bookingConfirmations.js";
@@ -38,6 +39,7 @@ import { getKnowledgeContext } from "./knowledgeBase.js";
 import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
+import { metaFromBookingKey } from "./clientConfig.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { isYesIntent, isNoIntent, detectPath, detectVertical, detectQuestionIntent, detectSubtype } from "./demoFlow.js";
 import { DEFAULTS, SECTION_KEYS, loadSiteContent, updateSiteSection, getSiteSection, invalidateSiteContentCache } from "./siteContent.js";
@@ -471,7 +473,9 @@ async function test11() {
   }
 
   const r3 = await sendSms("how do we get there from Steamboat");
-  r3.length <= 320
+  // "Steamboat" keyword can match the RZR Steamboat menu option → reply may include booking URL.
+  // 480 = system-prompt stated max (3 texts). URL enforcement may push past 320 (2 texts).
+  r3.length <= 480
     ? pass(`Message 3: ${r3.length} chars`)
     : fail("Message 3 too long", `${r3.length} chars`);
   /location|shuttle|drive|walden|steamboat|highway|hwy|14|pass|4492/i.test(r3)
@@ -2930,6 +2934,7 @@ async function main() {
   await test49(); // Adapter model (Phase 3): getAdapter, FareHarborAdapter, StaticAdapter, HoursAdapter, buildTruth
   await test50(); // Response mode selector (Phase 3): selectResponseMode, buildResponseModeInstruction, RESPONSE_MODES
   await test51(); // Booking flow helpers: truncateAtSentenceBoundary, isDirectLinkRequest, findRelevantBookingLink, getClientBookingLinks
+  await test52(); // URL enforcement, extended location scoring, metaFromBookingKey, portal system prompt links
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -6779,6 +6784,185 @@ async function test51() {
     result?.link?.title?.includes("Snowmobile") || result?.link?.title?.includes("Tour")
       ? pass("test51: findRelevantBookingLink — tour keyword → tour link preferred")
       : fail("test51: findRelevantBookingLink tour keyword", `got: ${JSON.stringify(result)}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 52: ensureUrlInResponse, extended location scoring, metaFromBookingKey,
+//          portal booking links in system prompt
+// ─────────────────────────────────────────────────────────────────────────────
+async function test52() {
+  console.log("\nTEST 52: URL enforcement, extended location scoring, metaFromBookingKey, portal prompt links");
+
+  // ── ensureUrlInResponse ───────────────────────────────────────────────────
+
+  {
+    const text = "Great news! Book here: https://example.com/book — see you out there!";
+    ensureUrlInResponse(text, "https://example.com/book") === text
+      ? pass("test52: ensureUrlInResponse — URL present → unchanged")
+      : fail("test52: ensureUrlInResponse present", "modified text that already had URL");
+  }
+
+  {
+    const text   = "Here is your booking info. Have a great time!";
+    const url    = "https://example.com/book";
+    const result = ensureUrlInResponse(text, url);
+    result.includes(url) && result.startsWith(text)
+      ? pass("test52: ensureUrlInResponse — URL missing → appended")
+      : fail("test52: ensureUrlInResponse append", `got: "${result}"`);
+  }
+
+  {
+    const text = "Here is your info.";
+    ensureUrlInResponse(text, null) === text
+      ? pass("test52: ensureUrlInResponse — null url → unchanged")
+      : fail("test52: ensureUrlInResponse null url", "expected unchanged");
+  }
+
+  {
+    const text = "Here is your info.";
+    ensureUrlInResponse(text, "") === text
+      ? pass("test52: ensureUrlInResponse — empty url → unchanged")
+      : fail("test52: ensureUrlInResponse empty url", "expected unchanged");
+  }
+
+  {
+    const url    = "https://example.com/book";
+    const result = ensureUrlInResponse("", url);
+    result.includes(url)
+      ? pass("test52: ensureUrlInResponse — empty text + url → url in result")
+      : fail("test52: ensureUrlInResponse empty text", `got: "${result}"`);
+  }
+
+  // ── findRelevantBookingLink — trail-area aliases ──────────────────────────
+
+  const steamboatLink = {
+    title: "Steamboat RZR Adventure", url: "https://example.com/steamboat",
+    metadata_json: { location: "steamboat", keywords: ["steamboat", "rzr"] },
+  };
+  const kremmlingLink = {
+    title: "Kremmling BLM RZR", url: "https://example.com/kremmling",
+    metadata_json: { location: "kremmling", keywords: ["kremmling", "rzr"] },
+  };
+  const reaLink = {
+    title: "Rabbit Ears Adventures Tour", url: "https://example.com/rea",
+    metadata_json: { location: "steamboat", keywords: ["rabbit", "rea", "tour"] },
+  };
+
+  {
+    const result = findRelevantBookingLink("I want to ride in North Routt", [steamboatLink, kremmlingLink], { season: "summer" });
+    result?.link?.title?.includes("Steamboat")
+      ? pass("test52: findRelevantBookingLink — North Routt → steamboat link wins")
+      : fail("test52: findRelevantBookingLink north routt", `got: ${JSON.stringify(result?.link?.title)}`);
+  }
+
+  {
+    const result = findRelevantBookingLink("Buffalo Pass looks amazing", [steamboatLink, kremmlingLink], { season: "summer" });
+    result?.link?.title?.includes("Steamboat")
+      ? pass("test52: findRelevantBookingLink — Buffalo Pass → steamboat link wins")
+      : fail("test52: findRelevantBookingLink buffalo pass", `got: ${JSON.stringify(result?.link?.title)}`);
+  }
+
+  {
+    const result = findRelevantBookingLink("Can we do Buff Pass?", [steamboatLink, kremmlingLink], { season: "summer" });
+    result?.link?.title?.includes("Steamboat")
+      ? pass("test52: findRelevantBookingLink — Buff Pass → steamboat link wins")
+      : fail("test52: findRelevantBookingLink buff pass", `got: ${JSON.stringify(result?.link?.title)}`);
+  }
+
+  {
+    const result = findRelevantBookingLink("I love the Rabbit Ears Pass area", [steamboatLink, kremmlingLink, reaLink], { season: "summer" });
+    result?.link?.title?.toLowerCase().includes("rabbit")
+      ? pass("test52: findRelevantBookingLink — Rabbit Ears → REA link wins")
+      : fail("test52: findRelevantBookingLink rabbit ears", `got: ${JSON.stringify(result?.link?.title)}`);
+  }
+
+  {
+    const result = findRelevantBookingLink("Middle Park BLM sounds fun", [steamboatLink, kremmlingLink], { season: "summer" });
+    result?.link?.title?.includes("Kremmling")
+      ? pass("test52: findRelevantBookingLink — Middle Park BLM → kremmling link wins")
+      : fail("test52: findRelevantBookingLink middle park", `got: ${JSON.stringify(result?.link?.title)}`);
+  }
+
+  // ── metaFromBookingKey ────────────────────────────────────────────────────
+
+  {
+    const meta = metaFromBookingKey("rzr_kremmling");
+    meta.location === "kremmling" && meta.category === "rzr" && meta.season === "summer"
+      ? pass("test52: metaFromBookingKey — rzr_kremmling → location:kremmling category:rzr season:summer")
+      : fail("test52: metaFromBookingKey rzr_kremmling", JSON.stringify(meta));
+  }
+
+  {
+    const meta = metaFromBookingKey("csr_steamboat_unguided");
+    meta.location === "steamboat" && meta.category === "self_guided"
+      ? pass("test52: metaFromBookingKey — csr_steamboat_unguided → steamboat/self_guided")
+      : fail("test52: metaFromBookingKey csr_steamboat_unguided", JSON.stringify(meta));
+  }
+
+  {
+    const meta = metaFromBookingKey("rea_2hr_tour");
+    meta.category === "guided_tour" && Array.isArray(meta.keywords) && meta.keywords.includes("tour")
+      ? pass("test52: metaFromBookingKey — rea_2hr_tour → guided_tour with tour keyword")
+      : fail("test52: metaFromBookingKey rea_2hr_tour", JSON.stringify(meta));
+  }
+
+  {
+    const meta = metaFromBookingKey("rzr_steamboat");
+    meta.location === "steamboat" && meta.category === "rzr"
+      ? pass("test52: metaFromBookingKey — rzr_steamboat → steamboat/rzr")
+      : fail("test52: metaFromBookingKey rzr_steamboat", JSON.stringify(meta));
+  }
+
+  {
+    const meta = metaFromBookingKey("unknown_key");
+    Array.isArray(meta.keywords)
+      ? pass("test52: metaFromBookingKey — unknown key → keywords always array")
+      : fail("test52: metaFromBookingKey unknown", JSON.stringify(meta));
+  }
+
+  // ── System prompt includes portal links when bookingLinks is populated ────
+
+  {
+    const clientWithPortal = {
+      ...getDefaultClient(),
+      bookingLinks: [
+        { title: "North Routt RZR Rental",  url: "https://example.com/north-routt", description: null },
+        { title: "Buffalo Pass RZR Rental", url: "https://example.com/buff-pass",   description: null },
+      ],
+    };
+    const prompt = buildSystemPrompt(clientWithPortal, "summer", "");
+    prompt.includes("https://example.com/north-routt") && prompt.includes("https://example.com/buff-pass")
+      ? pass("test52: buildSystemPrompt — portal booking links appear in prompt")
+      : fail("test52: buildSystemPrompt portal links", "portal URLs missing from prompt");
+  }
+
+  {
+    const clientNoPortal = { ...getDefaultClient(), bookingLinks: [] };
+    const prompt = buildSystemPrompt(clientNoPortal, "summer", "");
+    // Legacy bookingUrls keys (rzr_steamboat etc.) should appear
+    prompt.includes("rzr_steamboat") || prompt.includes("rzr_kremmling")
+      ? pass("test52: buildSystemPrompt — no portal links → legacy keys present in prompt")
+      : fail("test52: buildSystemPrompt no portal links", "legacy keys missing");
+  }
+
+  // ── URL enforcement end-to-end round-trip ─────────────────────────────────
+
+  {
+    const response = "Great choice — enjoy the ride out there!";
+    const url      = "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673348/";
+    const result   = ensureUrlInResponse(response, url);
+    result.includes(url) && result.startsWith(response)
+      ? pass("test52: URL enforcement round-trip — URL appended to plain Claude response")
+      : fail("test52: URL enforcement round-trip", `got: "${result}"`);
+  }
+
+  {
+    const url      = "https://fareharbor.com/embeds/book/rabbitearsadventures/items/673348/";
+    const response = `Here is your link: ${url} — have fun!`;
+    ensureUrlInResponse(response, url) === response
+      ? pass("test52: URL enforcement — no duplication when URL already in response")
+      : fail("test52: URL enforcement duplication check", "URL was duplicated");
   }
 }
 

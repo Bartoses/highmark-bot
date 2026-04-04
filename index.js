@@ -247,9 +247,16 @@ ${knowledgeContext ? `━━━ LIVE DATA ━━━\n${knowledgeContext}` : ""}`
 function buildSystemPromptCsrRea(client, season, knowledgeContext) {
   const isWinter   = season === "winter" || season === "shoulder";
   const isSummer   = season === "summer" || season === "shoulder";
-  const urls       = client.bookingUrls ?? {};
-  const bookingRef = Object.entries(urls).map(([k, v]) => `${k}: ${v}`).join("\n");
-  const handoff    = client.handoffPhone;
+  const urls        = client.bookingUrls ?? {};
+  const legacyRef   = Object.entries(urls).map(([k, v]) => `${k}: ${v}`).join("\n");
+  const portalLinks = (client.bookingLinks ?? []).filter((l) => l.url);
+  // When portal booking links are available (including bookingUrls fallback), use them.
+  // Fallback titles = raw key names (e.g. "rea_2hr_tour") so routing instructions stay valid.
+  // When a client has added portal rows with human-readable titles, those appear here instead.
+  const bookingRef  = portalLinks.length
+    ? `Available booking links:\n${portalLinks.map((l) => `${l.title}: ${l.url}`).join("\n")}`
+    : `Available booking links:\n${legacyRef}`;
+  const handoff     = client.handoffPhone;
 
   return `You are Summit — AI SMS concierge for Colorado Sled Rentals and Rabbit Ears Adventures, Steamboat Springs CO.
 Warm, stoked, genuinely local. Like a guide who loves their job. Never robotic. Never a FAQ page.
@@ -517,6 +524,14 @@ export function enforceLength(text, max = 320) {
   return truncateAtSentenceBoundary(text, max);
 }
 
+// Ensures `url` appears in `text`. If already present or url is falsy, returns text unchanged.
+// If missing, appends url on a new line. Used to guarantee Claude's response contains the link.
+export function ensureUrlInResponse(text, url) {
+  if (!url) return text;
+  if ((text ?? "").includes(url)) return text;
+  return `${text ?? ""}\n${url}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BOOKING LINK HELPERS
 // Client-agnostic booking link retrieval and context-aware matching.
@@ -571,6 +586,10 @@ export function findRelevantBookingLink(message, bookingLinks, context = {}) {
     // High-value geographic matches
     if (/steamboat|steam\s*boat/i.test(text) && /steamboat/i.test(haystack)) score += 15;
     if (/kremmling|kremm/i.test(text)        && /kremmling/i.test(haystack)) score += 15;
+    // Trail-area aliases — North Routt and Buffalo Pass are Steamboat-area trail systems
+    if (/north\s*routt|buffalo\s*pass|buff\s*pass/i.test(text) && /steamboat/i.test(haystack))   score += 12;
+    if (/rabbit\s*ears/i.test(text)                            && /rabbit|rea/i.test(haystack))   score += 12;
+    if (/middle\s*park|\bblm\b/i.test(text)                    && /kremmling/i.test(haystack))    score += 12;
 
     // Product type matches
     if (/\brzr\b|side.?by.?side|utv|off.road/i.test(text) && /rzr|off.road|rental/i.test(haystack))  score += 10;
@@ -1664,6 +1683,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
               convo, client, season, knowledgeCtx,
               `Guest asked for a booking link directly. Send them this link: ${result.link.url}. Include the full URL. Keep it brief and warm.`
             );
+            replyText = ensureUrlInResponse(replyText, result.link.url);
           } else if (result.links?.length) {
             // 2-3 close options — short disambiguation instead of full menu
             const numbered = result.links.map((l, i) => `${i + 1}. ${l.title}`).join("\n");
@@ -1774,12 +1794,14 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           convo, client, season, knowledgeCtx,
           `Guest has a group of ${groupSize}. Send them this booking link: ${chosen.url}. Include the full URL. Mention they can start the booking online and suggest calling ${client.handoffPhone} to discuss group pricing or special arrangements. Keep it warm.`
         );
+        replyText = ensureUrlInResponse(replyText, chosen.url);
       } else {
         // Normal: send booking link
         replyText = await getClaudeReply(
           convo, client, season, knowledgeCtx,
           `Guest chose: "${chosen.label}". Send them this booking link: ${chosen.url}. Include the full URL. Keep it warm and brief.`
         );
+        replyText = ensureUrlInResponse(replyText, chosen.url);
       }
     }
 

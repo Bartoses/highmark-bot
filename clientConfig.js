@@ -123,6 +123,45 @@ function applyDbOverrides(client, dbRow) {
   return merged;
 }
 
+// Extracts structured metadata from a bookingUrls key name.
+// Allows findRelevantBookingLink to score fallback bookingUrls correctly
+// when no portal-managed client_booking_options rows exist.
+// Examples:
+//   "rzr_kremmling"           → { location: "kremmling", category: "rzr", season: "summer", keywords: [...] }
+//   "csr_steamboat_unguided"  → { location: "steamboat", category: "self_guided", keywords: [...] }
+//   "rea_2hr_tour"            → { category: "guided_tour", keywords: ["guided", "tour"] }
+export function metaFromBookingKey(key) {
+  const parts  = (key ?? "").toLowerCase().split("_");
+  const meta   = { keywords: [] };
+
+  // Location
+  if (parts.includes("kremmling") || parts.includes("kremm")) {
+    meta.location = "kremmling";
+  } else if (parts.includes("steamboat") || parts.includes("steam")) {
+    meta.location = "steamboat";
+  }
+
+  // Category + season
+  if (parts.includes("rzr") || parts.includes("offroad") || parts.includes("off")) {
+    meta.category = "rzr";
+    meta.season   = "summer";
+  } else if (parts.includes("unguided") || parts.includes("rental") || parts.includes("self")) {
+    meta.category = "self_guided";
+  } else if (parts.includes("proride") || parts.includes("guided") || parts.includes("tour") || parts.includes("private")) {
+    meta.category = "guided_tour";
+  } else if (parts.includes("browse")) {
+    meta.category = "browse_all";
+  }
+
+  // Keywords: meaningful terms (skip short prefixes + numbers)
+  const skip = new Set(["csr", "rea", "all", "1", "2", "3", "4", "5", "6", "7", "8", "9", "hr", "min"]);
+  for (const p of parts) {
+    if (!skip.has(p) && p.length > 2) meta.keywords.push(p);
+  }
+
+  return meta;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // getRuntimeClientConfig — primary export
 //
@@ -174,7 +213,7 @@ export async function getRuntimeClientConfig(client, supabase) {
       merged.bookingLinks = dbOptions;
     } else {
       merged.bookingLinks = Object.entries(merged.bookingUrls ?? {}).map(([title, url], i) => ({
-        type: "link", title, description: null, url, metadata_json: null, sort_order: i,
+        type: "link", title, description: null, url, metadata_json: metaFromBookingKey(title), sort_order: i,
       }));
     }
   } else {
