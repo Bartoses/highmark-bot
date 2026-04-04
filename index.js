@@ -2156,12 +2156,10 @@ app.get("/portal/config", (_req, res) => {
 // Portal static pages (no auth — frontend handles JWT redirect)
 app.get("/portal",           (_req, res) => res.redirect("/portal/login"));
 app.get("/portal/login",     (_req, res) => res.sendFile(path.join(__uiDir, "portal-login.html")));
-app.get("/portal/dashboard", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
-app.get("/portal/leads",     (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
-app.get("/portal/campaigns", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
-app.get("/portal/analytics", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
-app.get("/portal/settings",  (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
-app.get("/portal/users",     (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
+// Catch-all for portal SPA sub-paths (dashboard, leads, campaigns, analytics,
+// settings, knowledge, integrations, messaging, users, clients, etc.)
+// login and invite have their own routes above and match first.
+app.get("/portal/:section", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
 
 // Portal invite acceptance — public, no auth (serves portal-accept.html)
 app.get("/portal/invite",             (_req, res) => res.sendFile(path.join(__uiDir, "portal-accept.html")));

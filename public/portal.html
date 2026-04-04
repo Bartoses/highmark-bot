@@ -918,7 +918,12 @@ function switchSection(name) {
 // ── API helpers ────────────────────────────────────────────────────────────
 async function apiFetch(path, opts = {}, _retried = false) {
   try {
-    const res = await fetch(`${API}${path}`, {
+    // Auto-append ?client_id= for internal_admin when not already present
+    let fullPath = path;
+    if (me?.isAdmin && me?.clientId && !path.includes('client_id=')) {
+      fullPath = `${path}${path.includes('?') ? '&' : '?'}client_id=${encodeURIComponent(me.clientId)}`;
+    }
+    const res = await fetch(`${API}${fullPath}`, {
       ...opts,
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts.headers ?? {}) },
     });
@@ -1275,8 +1280,7 @@ let _settingsData = null; // cached settings for modal callbacks
 
 async function loadSettings() {
   document.getElementById('settingsContent').innerHTML = '<div class="loading">Loading…</div>';
-  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
-  const d = await apiFetch(`/settings${clientParam}`);
+  const d = await apiFetch('/settings');
   if (!d) { document.getElementById('settingsContent').innerHTML = '<div class="error-msg">Failed to load settings.</div>'; return; }
   _settingsData = d;
 
