@@ -25,6 +25,26 @@ const CONFIRMATIONS_ENABLED   = process.env.CONFIRMATIONS_ENABLED !== "false"; /
 const CONFIRMATIONS_TEST_PHONE = process.env.CONFIRMATIONS_TEST_PHONE || "";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PER-CLIENT MESSAGING CONFIG
+// Reads messaging_config table for per-client SMS toggles.
+// Falls back to CONFIRMATIONS_ENABLED env var if no row exists (backward compat).
+// ─────────────────────────────────────────────────────────────────────────────
+export async function getMessagingConfig(clientId, supabase) {
+  if (!supabase || !clientId) return null;
+  try {
+    const { data, error } = await supabase
+      .from("messaging_config")
+      .select("enable_confirmation_texts, enable_reminders, reminder_hours_before, enable_cancellations, enable_rebooking")
+      .eq("client_id", clientId)
+      .maybeSingle();
+    if (error) return null; // table missing or query error — fall back to env var
+    return data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TEXT BUILDERS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -183,6 +203,9 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
     return;
   }
 
+  // Per-client messaging config — overrides global env var when row exists
+  const msgConfig = await getMessagingConfig(fhClient?.id, supabase);
+
   // Determine send target — test mode redirects to your phone, never guests
   const testMode  = !CONFIRMATIONS_ENABLED || process.env.TEST_MODE === "true";
   const sendTo    = testMode && CONFIRMATIONS_TEST_PHONE ? CONFIRMATIONS_TEST_PHONE : guestPhone;
@@ -202,6 +225,13 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
 
     if (cancelExisting?.cancellation_sent) {
       console.log(`[CONFIRM] Cancellation already sent for booking ${bookingPk} — skipping.`);
+      return;
+    }
+
+    // Per-client gate: if msgConfig row exists, respect enable_cancellations (default true)
+    const cancelEnabled = msgConfig ? msgConfig.enable_cancellations : true;
+    if (!cancelEnabled) {
+      console.log(`[CONFIRM] Cancellations disabled for ${fhClient?.id ?? "unknown"} — skipping booking ${bookingPk}`);
       return;
     }
 
@@ -243,6 +273,13 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
 
   if (existing) {
     console.log(`[CONFIRM] Booking ${bookingPk} already confirmed — skipping.`);
+    return;
+  }
+
+  // Per-client gate: if msgConfig row exists, respect enable_confirmation_texts (default true)
+  const confirmEnabled = msgConfig ? msgConfig.enable_confirmation_texts : true;
+  if (!confirmEnabled) {
+    console.log(`[CONFIRM] Confirmation texts disabled for ${fhClient?.id ?? "unknown"} — skipping booking ${bookingPk}`);
     return;
   }
 

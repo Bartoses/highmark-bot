@@ -38,7 +38,8 @@ import { checkOptOut, upsertContact, addTagsToContact, OPT_OUT_KEYWORDS, OPT_IN_
 import { getKnowledgeContext, getIntegrationStatus } from "./knowledgeBase.js";
 import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
-import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSettings } from "./adminPortal.js";
+import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSettings, handlePortalMessaging, handlePortalUpdateMessaging } from "./adminPortal.js";
+import { getMessagingConfig } from "./bookingConfirmations.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { metaFromBookingKey } from "./clientConfig.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
@@ -2940,6 +2941,7 @@ async function main() {
   await test52(); // URL enforcement, extended location scoring, metaFromBookingKey, portal system prompt links
   await test53(); // Integration status: getIntegrationStatus, handlePortalIntegrations, crawler seasonal prompt
   await test54(); // Integrations: FareHarbor + SNOTEL settings PATCH, fhHeaders user_key
+  await test55(); // Messaging config: handlePortalMessaging, handlePortalUpdateMessaging, getMessagingConfig fallback
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -3494,6 +3496,8 @@ async function test35() {
     ["GET",   "/portal/api/clients"],
     ["POST",  "/portal/api/clients"],
     ["PATCH", "/portal/api/clients/csr_rea"],
+    ["GET",   "/portal/api/messaging"],
+    ["PATCH", "/portal/api/messaging"],
   ];
   let allGot401 = true;
   for (const [method, route] of portalApiRoutes) {
@@ -3501,7 +3505,7 @@ async function test35() {
     if (res.status !== 401) { allGot401 = false; console.log(`  Expected 401 on ${route}, got ${res.status}`); }
   }
   allGot401
-    ? pass("test35: all portal API routes return 401 without token (9 routes incl. clients)")
+    ? pass("test35: all portal API routes return 401 without token (11 routes incl. clients + messaging)")
     : fail("test35: some portal API routes did not return 401 without token");
 
   // ── handlePortalCreateClient / handlePortalUpdateClient: 403 for non-admin ─
@@ -7176,7 +7180,7 @@ async function test54() {
       query: { client_id: "csr_rea" },
     };
     let body = null;
-    const res = { status: (c) => ({ json: (b) => { body = b; } }), json: (b) => { body = b; } };
+    const res = { status: (_c) => ({ json: (b) => { body = b; } }), json: (b) => { body = b; } };
     await handlePortalSettings(req, res, mockSb);
     (body?.fareharbor !== undefined && body?.snotelStations !== undefined && body?.weather !== undefined)
       ? pass("test54: handlePortalSettings includes fareharbor + snotelStations + weather keys")
@@ -7262,6 +7266,179 @@ async function test54() {
     statusCode === 400
       ? pass("test54: handlePortalUpdateSettings → 400 when snotel_stations is not array")
       : fail("test54: snotel_stations type validation", `got ${statusCode}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test55 — Messaging config: handlePortalMessaging, handlePortalUpdateMessaging,
+//          getMessagingConfig fallback behavior (Phase 1 Chunk 1)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test55() {
+  console.log("\n[test55] Messaging config: portal handlers + bookingConfirmations fallback");
+
+  const adminReq = {
+    portalUser: { role: "internal_admin", clientId: null, isAdmin: true, isClientAdmin: false },
+    query: { client_id: "csr_rea" },
+    body: {},
+  };
+  const clientAdminReq = {
+    portalUser: { role: "client_admin", clientId: "csr_rea", isAdmin: false, isClientAdmin: true },
+    query: {},
+    body: {},
+  };
+  const clientUserReq = {
+    portalUser: { role: "client_user", clientId: "csr_rea", isAdmin: false, isClientAdmin: false },
+    query: {},
+    body: {},
+  };
+
+  // ── GET returns defaults when no DB row ───────────────────────────────────
+  {
+    let body = null;
+    const res = { json: (b) => { body = b; }, status: (_c) => ({ json: (b) => { body = b; } }) };
+    const mockSb = {
+      from: (_t) => ({
+        select: (..._) => ({ eq: (..._) => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+      }),
+    };
+    await handlePortalMessaging(adminReq, res, mockSb);
+    (body?.enable_confirmation_texts === false && body?.enable_cancellations === true && body?.reminder_hours_before === 24)
+      ? pass("test55: handlePortalMessaging returns defaults when no DB row")
+      : fail("test55: handlePortalMessaging defaults", JSON.stringify(body));
+  }
+
+  // ── GET returns DB values when row exists ─────────────────────────────────
+  {
+    let body = null;
+    const res = { json: (b) => { body = b; }, status: (_c) => ({ json: (b) => { body = b; } }) };
+    const dbRow = { client_id: "csr_rea", enable_confirmation_texts: true, enable_reminders: true, reminder_hours_before: 48, enable_cancellations: false, enable_rebooking: false };
+    const mockSb = {
+      from: (_t) => ({
+        select: (..._) => ({ eq: (..._) => ({ maybeSingle: async () => ({ data: dbRow, error: null }) }) }),
+      }),
+    };
+    await handlePortalMessaging(adminReq, res, mockSb);
+    (body?.enable_confirmation_texts === true && body?.reminder_hours_before === 48 && body?.enable_cancellations === false)
+      ? pass("test55: handlePortalMessaging returns DB row values")
+      : fail("test55: handlePortalMessaging DB row", JSON.stringify(body));
+  }
+
+  // ── GET returns 503 when no supabase ──────────────────────────────────────
+  {
+    let statusCode = 200;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; }, json: () => {} };
+    await handlePortalMessaging(adminReq, res, null);
+    (statusCode === 503)
+      ? pass("test55: handlePortalMessaging → 503 when supabase unavailable")
+      : fail("test55: handlePortalMessaging 503", `got ${statusCode}`);
+  }
+
+  // ── PATCH blocked for client_user → 403 ──────────────────────────────────
+  {
+    let statusCode = 200;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; }, json: () => {} };
+    const req = { ...clientUserReq, body: { enable_confirmation_texts: true } };
+    const mockSb = { from: (_t) => ({ upsert: (..._) => Promise.resolve({ data: {}, error: null }), select: (..._) => ({ eq: (..._) => ({ maybeSingle: async () => ({ data: null }) }) }) }) };
+    await handlePortalUpdateMessaging(req, res, mockSb);
+    (statusCode === 403)
+      ? pass("test55: handlePortalUpdateMessaging → 403 for client_user")
+      : fail("test55: handlePortalUpdateMessaging 403", `got ${statusCode}`);
+  }
+
+  // ── PATCH succeeds for client_admin ──────────────────────────────────────
+  {
+    let body = null;
+    const res = { json: (b) => { body = b; }, status: (_c) => ({ json: (b) => { body = b; } }) };
+    const req = { ...clientAdminReq, body: { enable_confirmation_texts: true, enable_cancellations: false } };
+    const savedRow = { client_id: "csr_rea", enable_confirmation_texts: true, enable_cancellations: false, enable_reminders: false, reminder_hours_before: 24, enable_rebooking: false };
+    const mockSb = {
+      from: (_t) => ({
+        upsert: (..._) => ({ select: (..._) => ({ single: async () => ({ data: savedRow, error: null }) }) }),
+      }),
+    };
+    await handlePortalUpdateMessaging(req, res, mockSb);
+    (body?.enable_confirmation_texts === true && body?.enable_cancellations === false)
+      ? pass("test55: handlePortalUpdateMessaging → 200 for client_admin")
+      : fail("test55: handlePortalUpdateMessaging client_admin", JSON.stringify(body));
+  }
+
+  // ── PATCH rejects invalid reminder_hours_before ───────────────────────────
+  {
+    let statusCode = 200;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; }, json: () => {} };
+    const req = { ...clientAdminReq, body: { reminder_hours_before: 999 } };
+    const mockSb = { from: (_t) => ({ upsert: (..._) => ({ select: (..._) => ({ single: async () => ({ data: {}, error: null }) }) }) }) };
+    await handlePortalUpdateMessaging(req, res, mockSb);
+    (statusCode === 400)
+      ? pass("test55: handlePortalUpdateMessaging → 400 for reminder_hours_before=999")
+      : fail("test55: reminder_hours_before validation", `got ${statusCode}`);
+  }
+
+  // ── PATCH rejects zero reminder_hours_before ──────────────────────────────
+  {
+    let statusCode = 200;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; }, json: () => {} };
+    const req = { ...clientAdminReq, body: { reminder_hours_before: 0 } };
+    const mockSb = { from: (_t) => ({ upsert: (..._) => ({ select: (..._) => ({ single: async () => ({ data: {}, error: null }) }) }) }) };
+    await handlePortalUpdateMessaging(req, res, mockSb);
+    (statusCode === 400)
+      ? pass("test55: handlePortalUpdateMessaging → 400 for reminder_hours_before=0")
+      : fail("test55: reminder_hours_before=0 validation", `got ${statusCode}`);
+  }
+
+  // ── PATCH with no updatable fields → 400 ─────────────────────────────────
+  {
+    let statusCode = 200;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; }, json: () => {} };
+    const req = { ...clientAdminReq, body: {} };
+    const mockSb = { from: (_t) => ({ upsert: (..._) => Promise.resolve({ data: {}, error: null }) }) };
+    await handlePortalUpdateMessaging(req, res, mockSb);
+    (statusCode === 400)
+      ? pass("test55: handlePortalUpdateMessaging → 400 when no fields provided")
+      : fail("test55: empty PATCH validation", `got ${statusCode}`);
+  }
+
+  // ── getMessagingConfig returns null when supabase is null ─────────────────
+  {
+    const result = await getMessagingConfig("csr_rea", null);
+    (result === null)
+      ? pass("test55: getMessagingConfig returns null when supabase is null")
+      : fail("test55: getMessagingConfig null supabase", String(result));
+  }
+
+  // ── getMessagingConfig returns null when clientId is null ─────────────────
+  {
+    const result = await getMessagingConfig(null, {});
+    (result === null)
+      ? pass("test55: getMessagingConfig returns null when clientId is null")
+      : fail("test55: getMessagingConfig null clientId", String(result));
+  }
+
+  // ── getMessagingConfig returns null on DB error (graceful fallback) ───────
+  {
+    const mockSb = {
+      from: (_t) => ({
+        select: (..._) => ({ eq: (..._) => ({ maybeSingle: async () => ({ data: null, error: { message: "table does not exist" } }) }) }),
+      }),
+    };
+    const result = await getMessagingConfig("csr_rea", mockSb);
+    (result === null)
+      ? pass("test55: getMessagingConfig returns null on DB error (falls back to env var)")
+      : fail("test55: getMessagingConfig DB error fallback", String(result));
+  }
+
+  // ── getMessagingConfig returns row when data exists ───────────────────────
+  {
+    const row = { enable_confirmation_texts: true, enable_cancellations: false, enable_reminders: false, reminder_hours_before: 24, enable_rebooking: false };
+    const mockSb = {
+      from: (_t) => ({
+        select: (..._) => ({ eq: (..._) => ({ maybeSingle: async () => ({ data: row, error: null }) }) }),
+      }),
+    };
+    const result = await getMessagingConfig("csr_rea", mockSb);
+    (result?.enable_confirmation_texts === true && result?.enable_cancellations === false)
+      ? pass("test55: getMessagingConfig returns DB row when present")
+      : fail("test55: getMessagingConfig row return", JSON.stringify(result));
   }
 }
 

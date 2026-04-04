@@ -975,6 +975,91 @@ export async function handlePortalCrawlPages(req, res, supabase) {
   return res.json({ pages: data ?? [], total: (data ?? []).length });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MESSAGING CONFIG — /portal/api/messaging
+// Per-client SMS automation toggles (confirmation texts, reminders, etc.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MESSAGING_DEFAULTS = {
+  enable_confirmation_texts: false,
+  enable_reminders:          false,
+  reminder_hours_before:     24,
+  enable_cancellations:      true,
+  enable_rebooking:          false,
+};
+
+// ── GET /portal/api/messaging ────────────────────────────────────────────────
+// Returns messaging_config row for the client, or defaults if no row exists yet.
+export async function handlePortalMessaging(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const { data, error } = await supabase
+    .from("messaging_config")
+    .select("client_id, enable_confirmation_texts, enable_reminders, reminder_hours_before, enable_cancellations, enable_rebooking")
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (error) {
+    if (error.message?.includes("does not exist") || error.code === "42P01") {
+      return res.json({ client_id: clientId, ...MESSAGING_DEFAULTS });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+
+  return res.json(data ?? { client_id: clientId, ...MESSAGING_DEFAULTS });
+}
+
+// ── PATCH /portal/api/messaging ───────────────────────────────────────────────
+// Upserts messaging_config for the client. client_user → 403.
+export async function handlePortalUpdateMessaging(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  // Only client_admin / internal_admin may write
+  if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) {
+    return res.status(403).json({ error: "Forbidden — admin role required" });
+  }
+
+  const body = req.body ?? {};
+  const updates = { client_id: clientId, updated_at: new Date().toISOString() };
+
+  const boolFields = ["enable_confirmation_texts", "enable_reminders", "enable_cancellations", "enable_rebooking"];
+  for (const f of boolFields) {
+    if (body[f] !== undefined) updates[f] = !!body[f];
+  }
+
+  if (body.reminder_hours_before !== undefined) {
+    const hrs = Number(body.reminder_hours_before);
+    if (!Number.isInteger(hrs) || hrs < 1 || hrs > 168) {
+      return res.status(400).json({ error: "reminder_hours_before must be an integer between 1 and 168" });
+    }
+    updates.reminder_hours_before = hrs;
+  }
+
+  if (Object.keys(updates).length === 2) {
+    return res.status(400).json({ error: "No updatable fields provided" });
+  }
+
+  const { data, error } = await supabase
+    .from("messaging_config")
+    .upsert(updates, { onConflict: "client_id" })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.message?.includes("does not exist") || error.code === "42P01") {
+      return res.status(503).json({ error: "messaging_config table not found — run db1_messaging_config.sql migration" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+
+  console.log(`[PORTAL] messaging config updated for ${clientId}`);
+  return res.json(data);
+}
+
 // ── GET /admin/portal-users ───────────────────────────────────────────────────
 export async function handleListPortalUsers(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });

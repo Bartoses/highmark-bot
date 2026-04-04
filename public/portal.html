@@ -279,6 +279,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="integrations">
         <span class="nav-icon">🔌</span> Integrations
       </div>
+      <div class="nav-item" data-section="messaging">
+        <span class="nav-icon">💬</span> Messaging
+      </div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
@@ -451,6 +454,15 @@ tr:hover td { background: var(--panel2); }
         </div>
         <div id="integrationsContent"><div class="loading">Loading…</div></div>
       </div><!-- /sec-integrations -->
+
+      <!-- MESSAGING -->
+      <div class="section" id="sec-messaging">
+        <div class="section-header">
+          <span class="section-title">Messaging</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadMessaging()">↻ Refresh</button>
+        </div>
+        <div id="messagingContent"><div class="loading">Loading…</div></div>
+      </div><!-- /sec-messaging -->
 
       <!-- MORE (mobile-only) -->
       <div class="section" id="sec-more">
@@ -842,7 +854,7 @@ async function init() {
 
   // Load initial section based on URL
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','integrations','users','clients'];
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','integrations','messaging','users','clients'];
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
 }
 
@@ -878,7 +890,7 @@ async function signOut() {
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
   analytics: 'Analytics', settings: 'Settings', knowledge: 'Knowledge',
-  integrations: 'Integrations', users: 'Users & Access', clients: 'Clients', more: 'More',
+  integrations: 'Integrations', messaging: 'Messaging', users: 'Users & Access', clients: 'Clients', more: 'More',
 };
 function switchSection(name) {
   if (name === 'users' && !me?.isClientAdmin) name = 'dashboard';
@@ -900,6 +912,7 @@ function switchSection(name) {
   if (name === 'clients')      loadClients();
   if (name === 'knowledge')    loadKnowledge();
   if (name === 'integrations') loadIntegrationsSection();
+  if (name === 'messaging')    loadMessaging();
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -2176,7 +2189,12 @@ async function loadKnowledge() {
   if (!integData?.integrations) {
     intWrap.innerHTML = '<div class="error-msg" style="display:block">Could not load integration status.</div>';
   } else {
-    intWrap.innerHTML = renderIntegrationCards(integData.integrations);
+    try {
+      intWrap.innerHTML = renderIntegrationCards(integData.integrations);
+    } catch (e) {
+      console.error('[Knowledge] render error:', e);
+      intWrap.innerHTML = '<div class="error-msg" style="display:block">Error rendering integration status.</div>';
+    }
   }
 
   // Knowledge sources table
@@ -2312,8 +2330,14 @@ async function loadIntegrationsSection() {
     return;
   }
   _intData = settings;
-  wrap.innerHTML = renderIntegrationSection(settings, statusData?.integrations ?? {});
-  setupIntegrationEvents();
+  if (!statusData) console.warn('[Integrations] status fetch failed — rendering with empty status');
+  try {
+    wrap.innerHTML = renderIntegrationSection(settings, statusData?.integrations ?? {});
+    setupIntegrationEvents();
+  } catch (e) {
+    console.error('[Integrations] render error:', e);
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Error rendering integrations config.</div>';
+  }
 }
 
 function renderIntegrationSection(s, status) {
@@ -2548,6 +2572,98 @@ function showToast(msg) {
   toast.style.opacity = '1';
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+}
+
+// ── Messaging section ──────────────────────────────────────────────────────
+let _msgData = null;
+
+async function loadMessaging() {
+  const wrap = document.getElementById('messagingContent');
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  const data = await apiFetch('/messaging');
+  if (!data) {
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Could not load messaging config.</div>';
+    return;
+  }
+  _msgData = data;
+  const editable = me?.isAdmin || me?.isClientAdmin;
+  try {
+    wrap.innerHTML = renderMessagingSection(data, editable);
+  } catch (e) {
+    console.error('[Messaging] render error:', e);
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Error rendering messaging config.</div>';
+  }
+}
+
+function renderMessagingSection(cfg, editable) {
+  function toggle(id, label, value, hint) {
+    const checked = value ? 'checked' : '';
+    if (!editable) {
+      const pill = value
+        ? '<span class="pill pill-green">On</span>'
+        : '<span class="pill" style="background:var(--panel2);color:var(--text2);">Off</span>';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border);">
+        <div><div style="font-size:13px;font-weight:600;">${label}</div>${hint ? `<div style="font-size:12px;color:var(--text2);margin-top:2px;">${hint}</div>` : ''}</div>
+        ${pill}
+      </div>`;
+    }
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border);">
+      <div><div style="font-size:13px;font-weight:600;">${label}</div>${hint ? `<div style="font-size:12px;color:var(--text2);margin-top:2px;">${hint}</div>` : ''}</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="${id}" ${checked} style="width:16px;height:16px;accent-color:var(--accent);">
+      </label>
+    </div>`;
+  }
+
+  const saveBtn = editable
+    ? `<div style="margin-top:20px;"><button class="btn btn-primary" onclick="saveMessagingConfig()">Save Messaging Settings</button></div>`
+    : `<div style="margin-top:12px;font-size:12px;color:var(--text2);">Contact your admin to change messaging settings.</div>`;
+
+  const reminderHrs = editable
+    ? `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div><div style="font-size:13px;font-weight:600;">Reminder timing</div><div style="font-size:12px;color:var(--text2);margin-top:2px;">Hours before the booking to send the reminder</div></div>
+          <input type="number" id="msg_reminder_hours" min="1" max="168" value="${escHtml(String(cfg.reminder_hours_before ?? 24))}" style="width:64px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:13px;text-align:center;">
+        </div>
+      </div>`
+    : `<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border);">
+        <div><div style="font-size:13px;font-weight:600;">Reminder timing</div><div style="font-size:12px;color:var(--text2);margin-top:2px;">Hours before the booking</div></div>
+        <span style="font-size:13px;font-weight:600;">${cfg.reminder_hours_before ?? 24}h</span>
+      </div>`;
+
+  return `<div class="card">
+    <div class="card-title" style="margin-bottom:4px;">SMS Automation</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:16px;">Control which automated messages are sent to guests.</div>
+    ${toggle('msg_confirmations', 'Booking Confirmations', cfg.enable_confirmation_texts, 'Send a confirmation text immediately after a booking is made')}
+    ${toggle('msg_cancellations', 'Cancellation Texts', cfg.enable_cancellations, 'Notify guests when their booking is cancelled')}
+    ${toggle('msg_reminders', 'Reminders', cfg.enable_reminders, 'Send a reminder before the booking date')}
+    ${cfg.enable_reminders || !editable ? reminderHrs : ''}
+    ${toggle('msg_rebooking', 'Rebooking Suggestions', cfg.enable_rebooking, 'Offer alternative dates when a booking is cancelled')}
+    ${saveBtn}
+  </div>`;
+}
+
+async function saveMessagingConfig() {
+  const btn = document.querySelector('#sec-messaging .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  const body = {};
+  const conf = document.getElementById('msg_confirmations');
+  const canc = document.getElementById('msg_cancellations');
+  const remi = document.getElementById('msg_reminders');
+  const rebo = document.getElementById('msg_rebooking');
+  const hrs  = document.getElementById('msg_reminder_hours');
+  if (conf) body.enable_confirmation_texts = conf.checked;
+  if (canc) body.enable_cancellations      = canc.checked;
+  if (remi) body.enable_reminders          = remi.checked;
+  if (rebo) body.enable_rebooking          = rebo.checked;
+  if (hrs)  body.reminder_hours_before     = parseInt(hrs.value, 10);
+
+  const r = await apiFetch('/messaging', { method: 'PATCH', body: JSON.stringify(body) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Save Messaging Settings'; }
+  if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
+  showToast('Messaging settings saved');
+  _msgData = r;
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────
