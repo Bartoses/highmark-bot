@@ -1304,29 +1304,23 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
   // 4.6. RESETNOW — universal reset keyword (owner / demo use).
   //      Clears the conversation and sends the appropriate opener for this client.
+  //      For demo clients: fall through to handleDemoFlow (isNew=true) so they get
+  //      the full demo opener with the numbered menu — same as the test console.
   if (msgUpper === "RESETNOW") {
     await supabase.from("conversations").delete()
       .eq("from_number", fromNumber).eq("to_number", toNumber);
-    let opener;
-    if (client.isDemo) {
-      const season = getCurrentSeason();
-      if (season === "winter") {
-        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about snowmobiling, conditions, or booking in Steamboat. Go ahead!";
-      } else if (season === "summer") {
-        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about RZR adventures, trails, or booking in Steamboat. Go ahead!";
-      } else {
-        opener = "Hey! This is Highmark — AI guest texting for outdoor businesses. I'm Summit 🏔 Ask me about adventures, conditions, or booking in Steamboat. Go ahead!";
-      }
-    } else {
-      opener = client.openerText ?? getSeasonalOpener(client);
-    }
-    opener = enforceLength(opener);
     console.log(`[RESET] RESETNOW from ${fromNumber} on ${toNumber} — conversation cleared`);
-    if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply: opener });
-    await twilioClient.messages.create({ body: opener, from: toNumber, to: fromNumber })
-      .catch((err) => console.error("[RESET] Twilio send error:", err.message));
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+
+    if (client.isDemo) {
+      // Fall through to demo flow — handleDemoFlow with isNew=true sends the proper demo opener
+    } else {
+      const opener = enforceLength(client.openerText ?? getSeasonalOpener(client));
+      if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply: opener });
+      await twilioClient.messages.create({ body: opener, from: toNumber, to: fromNumber })
+        .catch((err) => console.error("[RESET] Twilio send error:", err.message));
+      res.set("Content-Type", "text/xml");
+      return res.send("<Response></Response>");
+    }
   }
 
   // 5. Opted-out gate — drop silently if this number has opted out (DB1, all clients)
