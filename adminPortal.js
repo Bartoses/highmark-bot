@@ -57,6 +57,7 @@ const EDITABLE_SETTINGS = {
 const EDITABLE_TOGGLES = [
   "campaigns_enabled",
   "followups_enabled",
+  "fareharbor_enabled",
   "human_handoff_enabled",
   "lead_capture_enabled",
   "waitlist_enabled",
@@ -488,18 +489,34 @@ export async function handlePortalSettings(req, res, supabase) {
     leadCaptureEnabled:      client.leadCaptureEnabled    ?? false,
     waitlistEnabled:         client.waitlistEnabled       ?? false,
     editable:                !!client._fromDb,
-    // Twilio routing (db1_twilio_config.sql — null if migration not yet run)
+    // Twilio routing
     outboundPhone:           client.outboundPhone         ?? null,
     messagingServiceSid:     client.messagingServiceSid   ?? null,
     twilioAccountSid:        client.twilioAccountSid      ?? null,
     // Auth token intentionally omitted from GET — write-only in portal
-    // Conversation settings (db1_conversation_settings.sql)
+    // Conversation settings
     conversationSettings:    client.conversationSettings  ?? {},
-    // Crawl settings (db1_crawl_settings.sql)
+    // Crawl settings
     crawlSettings:           client.crawlSettings         ?? {},
-    // Scrape sources + booking options (from DB; empty if tables not yet migrated)
+    // Scrape sources + booking options
     scrapeSources,
     bookingLinks,
+    // FareHarbor integration config
+    fareharbor: {
+      enabled:   client.fareharborEnabled ?? false,
+      companies: (client.fareharborCompanies ?? []).map((co) => ({
+        id:        co.id        ?? null,
+        name:      co.name      ?? null,
+        shortname: co.shortname ?? null,
+        has_key:   !!(co.user_key || co.userKeyEnv), // never expose actual key
+      })),
+    },
+    // SNOTEL stations
+    snotelStations: client.snotelStations ?? [],
+    // Weather API key status (global, not per-client)
+    weather: {
+      enabled: !!(process.env.OPENWEATHER_API_KEY),
+    },
   });
 }
 
@@ -614,6 +631,36 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
       return res.status(400).json({ error: "crawl_settings must be a JSON object" });
     }
     updates.crawl_settings = req.body.crawl_settings;
+  }
+
+  // fareharbor_companies — array of { id, name, shortname, user_key? }
+  // user_key is write-only: empty string means "keep existing" (don't clear)
+  if (req.body.fareharbor_companies !== undefined) {
+    if (!Array.isArray(req.body.fareharbor_companies)) {
+      return res.status(400).json({ error: "fareharbor_companies must be an array" });
+    }
+    // Read existing companies so we can preserve stored keys if not provided
+    const existing = getAllClients()[clientId];
+    const existingCos = existing?.fareharborCompanies ?? [];
+    updates.fareharbor_companies = req.body.fareharbor_companies.map((co) => {
+      const prev = existingCos.find((e) => e.id === co.id) ?? {};
+      const userKey = (co.user_key ?? "").trim();
+      return {
+        id:         co.id        ?? prev.id        ?? null,
+        name:       co.name      ?? prev.name      ?? null,
+        shortname:  co.shortname ?? prev.shortname ?? null,
+        userKeyEnv: prev.userKeyEnv ?? null,              // preserve env var reference
+        user_key:   userKey || prev.user_key || null,     // empty string = keep existing
+      };
+    });
+  }
+
+  // snotel_stations — array of station ID strings
+  if (req.body.snotel_stations !== undefined) {
+    if (!Array.isArray(req.body.snotel_stations)) {
+      return res.status(400).json({ error: "snotel_stations must be an array" });
+    }
+    updates.snotel_stations = req.body.snotel_stations.filter(Boolean);
   }
 
   if (Object.keys(updates).length === 1) {

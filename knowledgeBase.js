@@ -42,8 +42,8 @@ function getAllFhCompanies() {
 
 function fhHeaders(company) {
   return {
-    "X-FareHarbor-API-App":  process.env.FAREHARBOR_APP_KEY,
-    "X-FareHarbor-API-User": process.env[company.userKeyEnv],
+    "X-FareHarbor-API-App":  company.app_key ?? process.env.FAREHARBOR_APP_KEY,
+    "X-FareHarbor-API-User": company.user_key ?? process.env[company.userKeyEnv],
   };
 }
 

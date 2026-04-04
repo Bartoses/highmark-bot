@@ -276,6 +276,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="knowledge">
         <span class="nav-icon">📚</span> Knowledge
       </div>
+      <div class="nav-item" data-section="integrations">
+        <span class="nav-icon">🔌</span> Integrations
+      </div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
@@ -440,6 +443,15 @@ tr:hover td { background: var(--panel2); }
         </div>
       </div><!-- /sec-knowledge -->
 
+      <!-- INTEGRATIONS -->
+      <div class="section" id="sec-integrations">
+        <div class="section-header">
+          <span class="section-title">Integrations</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadIntegrationsSection()">↻ Refresh</button>
+        </div>
+        <div id="integrationsContent"><div class="loading">Loading…</div></div>
+      </div><!-- /sec-integrations -->
+
       <!-- MORE (mobile-only) -->
       <div class="section" id="sec-more">
         <div class="card" style="margin-bottom:12px;">
@@ -457,6 +469,10 @@ tr:hover td { background: var(--panel2); }
             </div>
             <div class="more-link-item" onclick="switchSection('knowledge')">
               <span>📚</span> Knowledge
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item" onclick="switchSection('integrations')">
+              <span>🔌</span> Integrations
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item client-admin-only" onclick="switchSection('users')">
@@ -826,7 +842,7 @@ async function init() {
 
   // Load initial section based on URL
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','users','clients'];
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','integrations','users','clients'];
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
 }
 
@@ -862,7 +878,7 @@ async function signOut() {
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
   analytics: 'Analytics', settings: 'Settings', knowledge: 'Knowledge',
-  users: 'Users & Access', clients: 'Clients', more: 'More',
+  integrations: 'Integrations', users: 'Users & Access', clients: 'Clients', more: 'More',
 };
 function switchSection(name) {
   if (name === 'users' && !me?.isClientAdmin) name = 'dashboard';
@@ -881,8 +897,9 @@ function switchSection(name) {
   if (name === 'analytics')  loadAnalytics();
   if (name === 'settings')   loadSettings();
   if (name === 'users')      loadUsers();
-  if (name === 'clients')    loadClients();
-  if (name === 'knowledge')  loadKnowledge();
+  if (name === 'clients')      loadClients();
+  if (name === 'knowledge')    loadKnowledge();
+  if (name === 'integrations') loadIntegrationsSection();
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -2277,6 +2294,260 @@ function renderIntegrationCards(integrations) {
   cards.push(intCard('🔍', 'Site Crawler', i.crawler?.enabled ?? false, i.crawler?.last_crawled, null, i.crawler?.page_count > 0 ? `${i.crawler.page_count} pages` : null));
 
   return `<div style="overflow:hidden;">${cards.join('')}</div>`;
+}
+
+// ── Integrations section ───────────────────────────────────────────────────
+let _intData = null;  // cached settings for the integrations section
+
+async function loadIntegrationsSection() {
+  const wrap = document.getElementById('integrationsContent');
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+
+  const [settings, statusData] = await Promise.all([
+    apiFetch('/settings'),
+    apiFetch('/integrations'),
+  ]);
+  if (!settings) {
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Could not load integration config.</div>';
+    return;
+  }
+  _intData = settings;
+  wrap.innerHTML = renderIntegrationSection(settings, statusData?.integrations ?? {});
+  setupIntegrationEvents();
+}
+
+function renderIntegrationSection(s, status) {
+  const editable = s.editable && me?.isClientAdmin;
+  const isAdmin  = me?.isAdmin;
+
+  function syncBadge(intKey) {
+    const i = status[intKey];
+    if (!i?.enabled) return '<span class="pill" style="background:var(--panel2);color:var(--text2);">Disabled</span>';
+    if (!i.last_sync) return '<span class="pill pill-failed">No data</span>';
+    const stale = (Date.now() - new Date(i.last_sync).getTime()) > 4 * 60 * 60 * 1000;
+    return stale
+      ? '<span class="pill pill-pending">Stale</span>'
+      : '<span class="pill pill-green">Live</span>';
+  }
+
+  function connBadge(connected) {
+    return connected
+      ? '<span class="pill pill-green">Connected</span>'
+      : '<span class="pill pill-failed">Not configured</span>';
+  }
+
+  function roField(label, value, hint) {
+    const display = value || '<span style="color:var(--text2);">—</span>';
+    return `<div class="form-group">
+      <label class="form-label">${label}</label>
+      <div style="font-size:13px;padding:8px 0;">${display}</div>
+      ${hint ? `<div class="form-hint">${hint}</div>` : ''}
+    </div>`;
+  }
+
+  function rwField(id, label, value, hint, type = 'text', placeholder = '') {
+    if (!editable) return roField(label, value);
+    return `<div class="form-group">
+      <label class="form-label" for="${id}">${label}</label>
+      <input class="form-input" type="${type}" id="${id}" value="${escHtml(value ?? '')}" placeholder="${escHtml(placeholder)}" autocomplete="off">
+      ${hint ? `<div class="form-hint">${hint}</div>` : ''}
+    </div>`;
+  }
+
+  function secretField(id, label, hasValue, hint) {
+    if (!editable) return roField(label, hasValue ? '••••••••' : null);
+    return `<div class="form-group">
+      <label class="form-label" for="${id}">${label}</label>
+      <input class="form-input" type="password" id="${id}" value="" placeholder="${hasValue ? 'Leave blank to keep current' : 'Enter key…'}" autocomplete="new-password">
+      ${hint ? `<div class="form-hint">${hint}</div>` : ''}
+    </div>`;
+  }
+
+  function cardHeader(icon, title, badge) {
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <span style="font-size:20px;">${icon}</span>
+      <div style="flex:1;font-weight:700;font-size:15px;">${title}</div>
+      ${badge}
+    </div>`;
+  }
+
+  function saveBtn(id, onclick) {
+    if (!editable) return '';
+    return `<div style="display:flex;justify-content:flex-end;margin-top:12px;">
+      <button class="btn btn-primary btn-sm" id="${id}" onclick="${onclick}">Save</button>
+    </div>`;
+  }
+
+  // ── Twilio card ────────────────────────────────────────────────────────────
+  const twilioConnected = !!(s.outboundPhone || s.messagingServiceSid);
+  const twilioCard = `<div class="card" style="margin-bottom:16px;">
+    ${cardHeader('📱', 'Twilio — SMS', connBadge(twilioConnected))}
+    <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">Phone number and credentials used to send SMS on behalf of this client.</p>
+    ${rwField('intTwilioPhone', 'Outbound Phone (From Number)', s.outboundPhone, 'Twilio number used as "From" for all outgoing SMS. Leave blank to use global default.', 'tel', '+1…')}
+    ${rwField('intTwilioMsgSid', 'Messaging Service SID (optional)', s.messagingServiceSid, 'Use a Messaging Service instead of a direct number — better deliverability for campaigns.', 'text', 'MGe…')}
+    ${isAdmin ? rwField('intTwilioAcctSid', 'Account SID (sub-account)', s.twilioAccountSid, 'Only needed if this client has their own Twilio account.') : ''}
+    ${isAdmin ? secretField('intTwilioAuthToken', 'Auth Token (sub-account)', false, 'Required only when Account SID is set. Stored encrypted.') : ''}
+    ${saveBtn('intTwilioSaveBtn', 'saveTwilioConfig()')}
+  </div>`;
+
+  // ── FareHarbor card ────────────────────────────────────────────────────────
+  const fhEnabled   = s.fareharbor?.enabled ?? false;
+  const fhCompanies = s.fareharbor?.companies ?? [];
+  const fhConnected = fhEnabled && fhCompanies.some(c => c.has_key);
+
+  const companiesRows = fhCompanies.map((co, i) => `
+    <div style="border:1px solid var(--border2);border-radius:8px;padding:12px;margin-bottom:10px;" id="fhCo_${i}">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;">Company ${i + 1}</div>
+      <input type="hidden" id="fhCoId_${i}" value="${escHtml(co.id ?? '')}">
+      ${rwField(`fhCoName_${i}`, 'Company Name', co.name, null)}
+      ${rwField(`fhCoShortname_${i}`, 'Shortname (FH URL slug)', co.shortname, 'Used in booking links: fareharbor.com/embeds/book/{shortname}/…')}
+      ${secretField(`fhCoKey_${i}`, 'User API Key', co.has_key, 'Your FareHarbor user API key. Leave blank to keep current.')}
+    </div>
+  `).join('');
+
+  const fhToggle = editable
+    ? `<div class="form-group"><label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <input type="checkbox" id="fhEnabled" ${fhEnabled ? 'checked' : ''} style="width:16px;height:16px;">
+        <span class="form-label" style="margin:0;">FareHarbor enabled</span>
+      </label>
+      <div class="form-hint">Enables real-time availability lookups and live booking menus.</div>
+      </div>`
+    : roField('FareHarbor', fhEnabled ? 'Enabled' : 'Disabled');
+
+  const fareharborCard = `<div class="card" style="margin-bottom:16px;">
+    ${cardHeader('🎫', 'FareHarbor — Live Booking', connBadge(fhConnected))}
+    <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">Real-time availability and live booking integration. Requires a FareHarbor API key.</p>
+    ${fhToggle}
+    ${companiesRows || (editable ? '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">No companies configured. Add one below.</div>' : '')}
+    ${editable ? `<button class="btn btn-ghost btn-sm" style="margin-bottom:12px;" onclick="addFhCompany()">+ Add company</button>` : ''}
+    ${saveBtn('intFhSaveBtn', 'saveFareharborConfig()')}
+  </div>`;
+
+  // ── SNOTEL card ────────────────────────────────────────────────────────────
+  const snotelStations = s.snotelStations ?? [];
+  const snotelCard = `<div class="card" style="margin-bottom:16px;">
+    ${cardHeader('❄️', 'SNOTEL — Snow Conditions', syncBadge('snow_conditions'))}
+    <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">USDA snow telemetry stations for real-time snow depth, SWE, and temperature data. No API key needed.</p>
+    ${editable
+      ? `<div class="form-group">
+           <label class="form-label" for="snotelStations">Station IDs</label>
+           <textarea class="form-input" id="snotelStations" rows="4" placeholder="One station ID per line, e.g. 680:CO:SNTL">${escHtml(snotelStations.join('\n'))}</textarea>
+           <div class="form-hint">Station IDs in format NNNNN:ST:SNTL. Find IDs at wcc.sc.egov.usda.gov.</div>
+         </div>`
+      : roField('Stations', snotelStations.length ? snotelStations.join(', ') : null, 'No stations configured')
+    }
+    ${saveBtn('intSnotelSaveBtn', 'saveSnotelConfig()')}
+  </div>`;
+
+  // ── Weather card (read-only for clients) ───────────────────────────────────
+  const weatherCard = `<div class="card" style="margin-bottom:16px;">
+    ${cardHeader('🌤', 'OpenWeather — Weather Data', syncBadge('weather'))}
+    <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">Current conditions and 3-day forecast for Steamboat Springs and Rabbit Ears Pass.</p>
+    ${roField('API Key', s.weather?.enabled ? 'Configured (global)' : null, s.weather?.enabled ? 'Global API key is set.' : 'Contact Highmark to configure the OpenWeather API key.')}
+  </div>`;
+
+  return `${twilioCard}${fareharborCard}${snotelCard}${weatherCard}`;
+}
+
+function setupIntegrationEvents() {
+  // nothing to bind — all actions are inline onclick handlers
+}
+
+function escHtml(str) {
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function addFhCompany() {
+  // Count current company blocks and add one more
+  const wrap = document.getElementById('integrationsContent');
+  const existing = wrap.querySelectorAll('[id^="fhCo_"]');
+  const i = existing.length;
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <div style="border:1px solid var(--border2);border-radius:8px;padding:12px;margin-bottom:10px;" id="fhCo_${i}">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;">Company ${i + 1}</div>
+      <input type="hidden" id="fhCoId_${i}" value="">
+      <div class="form-group"><label class="form-label" for="fhCoName_${i}">Company Name</label>
+        <input class="form-input" type="text" id="fhCoName_${i}" value="" placeholder="e.g. Colorado Sled Rentals"></div>
+      <div class="form-group"><label class="form-label" for="fhCoShortname_${i}">Shortname (FH URL slug)</label>
+        <input class="form-input" type="text" id="fhCoShortname_${i}" value="" placeholder="e.g. coloradosledrentals"></div>
+      <div class="form-group"><label class="form-label" for="fhCoKey_${i}">User API Key</label>
+        <input class="form-input" type="password" id="fhCoKey_${i}" value="" placeholder="Enter key…" autocomplete="new-password"></div>
+    </div>`;
+  // Insert before the + Add company button
+  const addBtn = wrap.querySelector('[onclick="addFhCompany()"]');
+  if (addBtn) { wrap.querySelector('#integrationsContent').insertBefore(div.firstElementChild, addBtn); }
+  else { wrap.appendChild(div.firstElementChild); }
+}
+
+async function saveTwilioConfig() {
+  const btn = document.getElementById('intTwilioSaveBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const body = {};
+  const phone  = document.getElementById('intTwilioPhone')?.value.trim();
+  const msgSid = document.getElementById('intTwilioMsgSid')?.value.trim();
+  const acctSid = document.getElementById('intTwilioAcctSid')?.value.trim();
+  const authTok = document.getElementById('intTwilioAuthToken')?.value.trim();
+  if (phone   !== undefined) body.outbound_phone          = phone   || null;
+  if (msgSid  !== undefined) body.messaging_service_sid   = msgSid  || null;
+  if (acctSid !== undefined) body.twilio_account_sid      = acctSid || null;
+  if (authTok)               body.twilio_auth_token       = authTok;
+  const r = await apiFetch('/settings', { method: 'PATCH', body: JSON.stringify(body) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
+  showToast('Twilio config saved');
+  loadIntegrationsSection();
+}
+
+async function saveFareharborConfig() {
+  const btn = document.getElementById('intFhSaveBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  const enabled = document.getElementById('fhEnabled')?.checked ?? false;
+
+  const wrap = document.getElementById('integrationsContent');
+  const coEls = wrap.querySelectorAll('[id^="fhCo_"]');
+  const companies = [];
+  coEls.forEach((_, i) => {
+    const id       = document.getElementById(`fhCoId_${i}`)?.value.trim() || `co_${i}`;
+    const name     = document.getElementById(`fhCoName_${i}`)?.value.trim() || null;
+    const shortname = document.getElementById(`fhCoShortname_${i}`)?.value.trim() || null;
+    const user_key  = document.getElementById(`fhCoKey_${i}`)?.value.trim() || '';
+    if (name || shortname) companies.push({ id, name, shortname, user_key });
+  });
+
+  const body = { fareharbor_enabled: enabled, fareharbor_companies: companies };
+  const r = await apiFetch('/settings', { method: 'PATCH', body: JSON.stringify(body) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
+  showToast('FareHarbor config saved');
+  loadIntegrationsSection();
+}
+
+async function saveSnotelConfig() {
+  const btn = document.getElementById('intSnotelSaveBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const raw = document.getElementById('snotelStations')?.value ?? '';
+  const stations = raw.split('\n').map(s => s.trim()).filter(Boolean);
+  const r = await apiFetch('/settings', { method: 'PATCH', body: JSON.stringify({ snotel_stations: stations }) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
+  showToast('SNOTEL stations saved');
+  loadIntegrationsSection();
+}
+
+function showToast(msg) {
+  let toast = document.getElementById('_toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = '_toast';
+    toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.4);transition:opacity .3s;';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = '1';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────
