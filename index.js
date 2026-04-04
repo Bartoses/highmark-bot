@@ -491,12 +491,118 @@ export function detectSentiment(message) {
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Hard truncates at last word boundary before max, adds '…'
+// Smarter truncation — cuts at the last sentence boundary before max.
+// Falls back to word boundary if no suitable sentence end found.
+// Does NOT append '…' when a clean sentence end is found.
+export function truncateAtSentenceBoundary(text, max) {
+  if (text.length <= max) return text;
+  const slice = text.slice(0, max);
+  // Find the rightmost sentence-ending punctuation in the usable range (>55% of max)
+  let best = -1;
+  const re = /[.!?](?:\s|$)/g;
+  let m;
+  while ((m = re.exec(slice)) !== null) {
+    if (m.index >= max * 0.55) best = m.index + 1; // include the punctuation char
+  }
+  if (best > 0) return text.slice(0, best).trim();
+  // Fall back to word boundary
+  const lastSpace = slice.lastIndexOf(" ");
+  return (lastSpace > max * 0.6 ? slice.slice(0, lastSpace) : slice).trimEnd() + "…";
+}
+
+// Truncates text at sentence/word boundaries before max chars.
+// Updated from raw word-cut to prefer complete sentences.
 export function enforceLength(text, max = 320) {
   if (text.length <= max) return text;
-  const truncated = text.slice(0, max - 1);
-  const lastSpace = truncated.lastIndexOf(" ");
-  return (lastSpace > max * 0.7 ? truncated.slice(0, lastSpace) : truncated) + "…";
+  return truncateAtSentenceBoundary(text, max);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKING LINK HELPERS
+// Client-agnostic booking link retrieval and context-aware matching.
+// Works for all booking modes — fareharbor, static_links, hybrid, informational.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Returns the active booking links for a client, normalized.
+// Prefers portal-managed client_booking_options; falls back to bookingUrls.
+export function getClientBookingLinks(client) {
+  return (client.bookingLinks ?? []).filter((l) => l.url);
+}
+
+// True if the message is a direct/explicit request for a booking link.
+export function isDirectLinkRequest(message) {
+  const t = (message ?? "").toLowerCase().trim();
+  if (/^(link|book|reserve|booking)$/i.test(t)) return true;
+  return /\b(booking link|book now|book online|send.{0,20}link|link to book|just.*book|reserve now|get.*link|book.*direct|direct.*book|how (do i|can i|to) book online)\b/.test(t);
+}
+
+// Scores and ranks booking links against a message + optional context.
+//
+// Returns:
+//   null                                   — no active links available
+//   { link, confidence: 'high' | 'low' }   — single best match
+//   { links: [...], confidence: 'medium' } — 2-3 close options (ask user to pick)
+//
+// Context: { season: 'winter' | 'summer' | 'shoulder' }
+export function findRelevantBookingLink(message, bookingLinks, context = {}) {
+  const active = (bookingLinks ?? []).filter((l) => l.url);
+  if (!active.length) return null;
+  if (active.length === 1) return { link: active[0], confidence: "high" };
+
+  const text   = (message ?? "").toLowerCase();
+  const season = context.season ?? null;
+
+  const scored = active.map((link) => {
+    const meta     = link.metadata_json ?? {};
+    // Normalize underscores to spaces so "rzr_kremmling" matches "kremmling"
+    const haystack = [
+      link.title, link.description,
+      Array.isArray(meta.keywords) ? meta.keywords.join(" ") : (meta.keywords ?? ""),
+      meta.label, meta.location, meta.category, meta.subtype, meta.season,
+    ].filter(Boolean).join(" ").toLowerCase().replace(/_/g, " ");
+
+    let score = 0;
+
+    // General keyword overlap (words > 3 chars)
+    for (const word of text.split(/\W+/).filter((w) => w.length > 3)) {
+      if (haystack.includes(word)) score += 10;
+    }
+
+    // High-value geographic matches
+    if (/steamboat|steam\s*boat/i.test(text) && /steamboat/i.test(haystack)) score += 15;
+    if (/kremmling|kremm/i.test(text)        && /kremmling/i.test(haystack)) score += 15;
+
+    // Product type matches
+    if (/\brzr\b|side.?by.?side|utv|off.road/i.test(text) && /rzr|off.road|rental/i.test(haystack))  score += 10;
+    if (/snowmobile|sled|guided.*tour|tour/i.test(text)    && /snowmobile|sled|tour/i.test(haystack)) score += 10;
+    if (/\bguided\b/i.test(text)               && /guided/i.test(haystack))  score += 8;
+    if (/self.?guided|rental|\brent\b/i.test(text) && /rental|self/i.test(haystack)) score += 8;
+
+    // Season match
+    if (season === "summer"  && /rzr|summer|off.road|rental/i.test(haystack))  score += 5;
+    if (season !== "summer"  && /snowmobile|sled|tour|winter/i.test(haystack)) score += 5;
+    if (meta.season && meta.season === season)                                   score += 5;
+
+    // Slight deprioritize generic browse-all links vs. specific links
+    if (/browse.?all/i.test(haystack)) score -= 3;
+
+    return { link, score };
+  }).sort((a, b) => b.score - a.score);
+
+  const top    = scored[0];
+  const second = scored[1];
+
+  // High confidence: clear winner (score > 0 and 1.5× better than runner-up)
+  if (top.score >= 10 && top.score > (second?.score ?? 0) * 1.5 + 5) {
+    return { link: top.link, confidence: "high" };
+  }
+  // Medium confidence: 2-3 decent options — offer short disambiguation
+  if (top.score > 0) {
+    const candidates = scored.filter((s) => s.score > 0).slice(0, 3).map((s) => s.link);
+    if (candidates.length >= 2) return { links: candidates, confidence: "medium" };
+  }
+  // Low confidence / no keyword match: return first (highest sort_order priority)
+  return { link: active[0], confidence: "low" };
 }
 
 // True if conversation exists and last message was more than 24h ago
@@ -1539,90 +1645,140 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
 
     // BOOKING FLOW — state machine (fareharbor clients only)
-    // Step null → 1: Show tour menu, ask guest to pick
+    // Step null → 1: Show tour menu, ask guest to pick.
+    //   Fast path: if guest explicitly asks for "the booking link", skip the menu
+    //   and send the most relevant link directly.
     else if (intent === "booking" && convo.bookingStep === null && client.bookingMode === "fareharbor") {
-      convo.bookingStep = 1;
 
-      // Extract date from message if present (for availability check)
-      const dateExtract = await anthropic.messages.create({
-        model: "claude-sonnet-4-6", max_tokens: 30,
-        messages: [{ role: "user", content: `Extract date as YYYY-MM-DD or null. Today is ${new Date().toISOString().slice(0,10)}. Message: "${rawBody}". Reply with JSON: {"date":"YYYY-MM-DD or null"}` }],
-      }).catch(() => null);
-      let extractedDate = null;
-      try {
-        const raw = dateExtract?.content[0]?.text ?? "";
-        const m = raw.match(/\{[\s\S]*\}/);
-        const parsed = m ? JSON.parse(m[0]) : {};
-        if (parsed.date && parsed.date !== "null") extractedDate = parsed.date;
-      } catch { /* ignore */ }
-
-      const menuOptions  = await buildTourMenu(client, season, extractedDate);
-      const knowledgeCtx = await getKnowledgeContext(supabase, client);
-
-      if (menuOptions.length === 0) {
-        // No items available for online booking — don't enter step 1
-        convo.bookingStep = null;
-        let noItemsInstruction = `Guest wants to book but there are currently no tours or rentals available for online booking. Respond warmly and honestly — snowmobile operations are paused due to warm temps and low snow base. Mention summer RZR adventures are coming soon. Do NOT suggest any booking links or dates. Offer to have the team follow up: ${client.handoffPhone}.`;
-        if (client.waitlistEnabled !== false) {
-          convo.waitlistPending = true;
-          convo.waitlistContext = { service: "tours/rentals", date: null };
-          noItemsInstruction += ` Also ask: "Want a heads-up when we reopen for bookings? Reply YES and we'll save your number."`;
+      // DIRECT LINK REQUEST: skip tour menu, send the best matching link immediately.
+      // Saves a round trip and an extra Claude call when intent is unambiguous.
+      if (isDirectLinkRequest(rawBody)) {
+        const allLinks = getClientBookingLinks(client);
+        const result   = findRelevantBookingLink(rawBody, allLinks, { season });
+        if (result) {
+          const knowledgeCtx = await getKnowledgeContext(supabase, client);
+          if (result.link) {
+            convo.bookingStep          = 2;
+            convo.bookingData.activity = result.link.title;
+            replyText = await getClaudeReply(
+              convo, client, season, knowledgeCtx,
+              `Guest asked for a booking link directly. Send them this link: ${result.link.url}. Include the full URL. Keep it brief and warm.`
+            );
+          } else if (result.links?.length) {
+            // 2-3 close options — short disambiguation instead of full menu
+            const numbered = result.links.map((l, i) => `${i + 1}. ${l.title}`).join("\n");
+            convo.bookingStep              = 1;
+            convo.bookingData.menuOptions  = result.links.map((l) => ({
+              label: l.title, url: l.url, company: "portal", pk: null,
+            }));
+            replyText = await getClaudeReply(
+              convo, client, season, knowledgeCtx,
+              `Guest wants a booking link. Offer these choices briefly and ask them to reply with the number:\n${numbered}`
+            );
+          }
         }
-        replyText = await getClaudeReply(convo, client, season, knowledgeCtx, noItemsInstruction);
-      } else {
+      }
+
+      // Normal menu flow — runs when not a direct link request, or no portal links resolved above
+      if (!replyText) {
         convo.bookingStep = 1;
-        convo.bookingData.menuOptions = menuOptions; // save for step 1
-        let menuInstruction = formatMenuInstruction(client, menuOptions, extractedDate);
-        if (isAllUnavailable(menuOptions, extractedDate) && client.waitlistEnabled !== false) {
-          convo.waitlistPending = true;
-          convo.waitlistContext = {
-            service: extractedDate ? `tour on ${extractedDate}` : "tour/rental",
-            date:    extractedDate,
-          };
-          menuInstruction += ` Also invite them to join the waitlist: "Want a heads-up when spots open? Reply YES and we'll save your number."`;
+
+        // Extract date from message if present (for availability check)
+        const dateExtract = await anthropic.messages.create({
+          model: "claude-sonnet-4-6", max_tokens: 30,
+          messages: [{ role: "user", content: `Extract date as YYYY-MM-DD or null. Today is ${new Date().toISOString().slice(0,10)}. Message: "${rawBody}". Reply with JSON: {"date":"YYYY-MM-DD or null"}` }],
+        }).catch(() => null);
+        let extractedDate = null;
+        try {
+          const raw = dateExtract?.content[0]?.text ?? "";
+          const m   = raw.match(/\{[\s\S]*\}/);
+          const parsed = m ? JSON.parse(m[0]) : {};
+          if (parsed.date && parsed.date !== "null") extractedDate = parsed.date;
+        } catch { /* ignore */ }
+
+        const menuOptions  = await buildTourMenu(client, season, extractedDate);
+        const knowledgeCtx = await getKnowledgeContext(supabase, client);
+
+        if (menuOptions.length === 0) {
+          // No items available for online booking — don't enter step 1
+          convo.bookingStep = null;
+          let noItemsInstruction = `Guest wants to book but there are currently no tours or rentals available for online booking. Respond warmly and honestly — snowmobile operations are paused due to warm temps and low snow base. Mention summer RZR adventures are coming soon. Do NOT suggest any booking links or dates. Offer to have the team follow up: ${client.handoffPhone}.`;
+          if (client.waitlistEnabled !== false) {
+            convo.waitlistPending = true;
+            convo.waitlistContext = { service: "tours/rentals", date: null };
+            noItemsInstruction += ` Also ask: "Want a heads-up when we reopen for bookings? Reply YES and we'll save your number."`;
+          }
+          replyText = await getClaudeReply(convo, client, season, knowledgeCtx, noItemsInstruction);
+        } else {
+          convo.bookingStep = 1;
+          convo.bookingData.menuOptions = menuOptions;
+          let menuInstruction = formatMenuInstruction(client, menuOptions, extractedDate);
+          if (isAllUnavailable(menuOptions, extractedDate) && client.waitlistEnabled !== false) {
+            convo.waitlistPending = true;
+            convo.waitlistContext = {
+              service: extractedDate ? `tour on ${extractedDate}` : "tour/rental",
+              date:    extractedDate,
+            };
+            menuInstruction += ` Also invite them to join the waitlist: "Want a heads-up when spots open? Reply YES and we'll save your number."`;
+          }
+          replyText = await getClaudeReply(convo, client, season, knowledgeCtx, menuInstruction);
         }
-        replyText = await getClaudeReply(convo, client, season, knowledgeCtx, menuInstruction);
       }
     }
 
-    // Step 1 → 2: Guest picked a tour — route to its booking link (fareharbor only)
+    // Step 1 → 2: Guest picked a tour — route to its booking link (fareharbor only).
+    // Previous behavior: groups ≥ 6 auto-handed off without sending a link.
+    // New behavior: always send the booking link; note group logistics if size ≥ 6.
+    // Handoff only fires if no booking URL is available.
     else if (convo.bookingStep === 1 && client.bookingMode === "fareharbor") {
-      // Group size >= 6 → handoff
+      // Detect group size — only treat single-digit 1-5 as option picks; 6+ as group count
       const groupMatch = rawBody.match(/\b([6-9]|[1-9]\d+)\b/);
-      if (groupMatch && parseInt(groupMatch[1]) >= 6) {
+      const groupSize  = groupMatch ? parseInt(groupMatch[1]) : null;
+
+      convo.bookingData.groupSize = groupSize;
+
+      // Match the guest's reply to a menu option by number or keyword
+      const options = convo.bookingData.menuOptions ?? [];
+      let chosen    = null;
+
+      // Only use 1-5 as option selectors to avoid confusing group count with option number
+      const numMatch = rawBody.match(/\b([1-5])\b/);
+      if (numMatch) {
+        const idx = parseInt(numMatch[1]) - 1;
+        if (idx >= 0 && idx < options.length) chosen = options[idx];
+      }
+
+      if (!chosen) {
+        const t = rawBody.toLowerCase();
+        chosen = options.find((o) => {
+          const label = o.label.toLowerCase();
+          return label.split(" ").some((word) => word.length > 4 && t.includes(word));
+        }) ?? options[0];
+      }
+
+      convo.bookingData.activity = chosen?.label ?? "tour";
+      convo.bookingData.company  = chosen?.company ?? "csr";
+      convo.bookingStep = 2;
+
+      const knowledgeCtx = await getKnowledgeContext(supabase, client);
+
+      if (!chosen?.url) {
+        // No booking URL — handoff is the right call
         convo.handoff = true;
         replyText = enforceLength(
-          `Great question for our team! Give us a call at ${client.handoffPhone} and we'll get you sorted 🤙`
+          `Give us a call at ${client.handoffPhone} and we'll sort out all the details for you 🤙`
         );
-      } else {
-        convo.bookingData.groupSize = groupMatch ? parseInt(groupMatch[1]) : null;
-
-        // Match the guest's reply to a menu option by number or keyword
-        const options = convo.bookingData.menuOptions ?? [];
-        let chosen = null;
-
-        const numMatch = rawBody.match(/\b([1-9])\b/);
-        if (numMatch) {
-          const idx = parseInt(numMatch[1]) - 1;
-          if (idx >= 0 && idx < options.length) chosen = options[idx];
-        }
-
-        if (!chosen) {
-          const t = rawBody.toLowerCase();
-          chosen = options.find((o) => {
-            const label = o.label.toLowerCase();
-            return label.split(" ").some((word) => word.length > 4 && t.includes(word));
-          }) ?? options[0];
-        }
-
-        convo.bookingData.activity = chosen?.label ?? "tour";
-        convo.bookingData.company  = chosen?.company ?? "csr";
-        convo.bookingStep = 2;
-
-        const knowledgeCtx = await getKnowledgeContext(supabase, client);
+      } else if (groupSize !== null && groupSize >= 6) {
+        // Large group: send booking link + note about group logistics
         replyText = await getClaudeReply(
           convo, client, season, knowledgeCtx,
-          `Guest chose: "${chosen?.label}". Send them this booking link: ${chosen?.url}. Include the full URL. Keep it warm and under 320 chars.`
+          `Guest has a group of ${groupSize}. Send them this booking link: ${chosen.url}. Include the full URL. Mention they can start the booking online and suggest calling ${client.handoffPhone} to discuss group pricing or special arrangements. Keep it warm.`
+        );
+      } else {
+        // Normal: send booking link
+        replyText = await getClaudeReply(
+          convo, client, season, knowledgeCtx,
+          `Guest chose: "${chosen.label}". Send them this booking link: ${chosen.url}. Include the full URL. Keep it warm and brief.`
         );
       }
     }

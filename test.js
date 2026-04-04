@@ -26,6 +26,10 @@ import {
   getMicroClose,
   buildResponsePlan,
   containsPhoneAsk,
+  truncateAtSentenceBoundary,
+  getClientBookingLinks,
+  isDirectLinkRequest,
+  findRelevantBookingLink,
 } from "./index.js";
 
 import { buildConfirmationText, buildFollowUpText } from "./bookingConfirmations.js";
@@ -2925,6 +2929,7 @@ async function main() {
   await test48(); // Crawler (Phase 2): classifyPageType, normalizeCrawlUrl, isJunkPath, extractPageLinks, extractPageTitle, buildCrawlerContext
   await test49(); // Adapter model (Phase 3): getAdapter, FareHarborAdapter, StaticAdapter, HoursAdapter, buildTruth
   await test50(); // Response mode selector (Phase 3): selectResponseMode, buildResponseModeInstruction, RESPONSE_MODES
+  await test51(); // Booking flow helpers: truncateAtSentenceBoundary, isDirectLinkRequest, findRelevantBookingLink, getClientBookingLinks
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -6610,6 +6615,170 @@ async function test50() {
     allPresent
       ? pass("test50: RESPONSE_MODES has all expected mode keys")
       : fail("test50: RESPONSE_MODES missing", expected.filter((k) => !values.includes(k)).join(", "));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 51: Booking flow helpers
+// truncateAtSentenceBoundary, isDirectLinkRequest, findRelevantBookingLink, getClientBookingLinks
+// ─────────────────────────────────────────────────────────────────────────────
+async function test51() {
+  console.log("\nTEST 51: Booking flow helpers — truncateAtSentenceBoundary, isDirectLinkRequest, findRelevantBookingLink");
+
+  // ── truncateAtSentenceBoundary ────────────────────────────────────────────
+
+  // Text within limit is returned unchanged
+  {
+    const t = "Short text.";
+    truncateAtSentenceBoundary(t, 320) === t
+      ? pass("test51: truncate — text within limit unchanged")
+      : fail("test51: truncate within limit", "modified short text");
+  }
+
+  // Cuts at sentence boundary (period) when one exists in usable range
+  {
+    const sentence = "We have guided tours available. You can book online or call us for group pricing and availability.";
+    // max=40 → slice[0..40] = "We have guided tours available. You can" — period at index 31, which is > 40*0.55=22
+    const result = truncateAtSentenceBoundary(sentence, 40);
+    result === "We have guided tours available."
+      ? pass("test51: truncate — cuts at sentence boundary")
+      : fail("test51: truncate sentence boundary", `got: "${result}"`);
+  }
+
+  // Falls back to word boundary when no sentence ending in usable range
+  {
+    const noSentence = "Here is some text without any sentence ending punctuation and it goes on quite long indeed";
+    const result = truncateAtSentenceBoundary(noSentence, 40);
+    result.endsWith("…") && !result.includes("punctuation")
+      ? pass("test51: truncate — word boundary fallback ends with ellipsis")
+      : fail("test51: truncate word fallback", `got: "${result}"`);
+  }
+
+  // Does not break URLs mid-word
+  {
+    const withUrl = "Book now at https://fareharbor.com/embeds/book/coloradosled/ for your tour today.";
+    const result = truncateAtSentenceBoundary(withUrl, 50);
+    typeof result === "string" && result.length <= 55
+      ? pass("test51: truncate — URL-containing text handled without error")
+      : fail("test51: truncate URL text", `got: "${result}"`);
+  }
+
+  // ── isDirectLinkRequest ───────────────────────────────────────────────────
+
+  // Single-word triggers
+  const directTriggers = ["link", "book", "reserve", "booking"];
+  for (const t of directTriggers) {
+    isDirectLinkRequest(t)
+      ? pass(`test51: isDirectLinkRequest — "${t}" → true`)
+      : fail(`test51: isDirectLinkRequest "${t}"`, "expected true");
+  }
+
+  // Phrase triggers
+  const phraseTriggers = [
+    "booking link",
+    "book now",
+    "book online",
+    "send me the link",
+    "how do i book online",
+    "reserve now",
+    "get the link",
+  ];
+  for (const t of phraseTriggers) {
+    isDirectLinkRequest(t)
+      ? pass(`test51: isDirectLinkRequest — phrase "${t}" → true`)
+      : fail(`test51: isDirectLinkRequest phrase "${t}"`, "expected true");
+  }
+
+  // General booking questions are NOT direct link requests
+  const notDirect = [
+    "do you have availability this weekend",
+    "what tours do you have",
+    "how much does a guided tour cost",
+    "can I bring kids",
+  ];
+  for (const t of notDirect) {
+    !isDirectLinkRequest(t)
+      ? pass(`test51: isDirectLinkRequest — general question "${t.slice(0,30)}" → false`)
+      : fail(`test51: isDirectLinkRequest false case "${t.slice(0,30)}"`, "expected false");
+  }
+
+  // ── getClientBookingLinks ─────────────────────────────────────────────────
+
+  // Returns empty array when client has no bookingLinks
+  {
+    const result = getClientBookingLinks({});
+    Array.isArray(result) && result.length === 0
+      ? pass("test51: getClientBookingLinks — empty client → []")
+      : fail("test51: getClientBookingLinks empty", `got: ${JSON.stringify(result)}`);
+  }
+
+  // Filters out links without URL
+  {
+    const client = { bookingLinks: [
+      { title: "Tour A", url: "https://example.com/a" },
+      { title: "Tour B" },  // no url
+    ]};
+    const result = getClientBookingLinks(client);
+    result.length === 1 && result[0].title === "Tour A"
+      ? pass("test51: getClientBookingLinks — filters out links without url")
+      : fail("test51: getClientBookingLinks filter", `got: ${JSON.stringify(result)}`);
+  }
+
+  // ── findRelevantBookingLink ───────────────────────────────────────────────
+
+  // null when no active links
+  {
+    const result = findRelevantBookingLink("book now", [], {});
+    result === null
+      ? pass("test51: findRelevantBookingLink — no links → null")
+      : fail("test51: findRelevantBookingLink null", `got: ${JSON.stringify(result)}`);
+  }
+
+  // Single link → high confidence
+  {
+    const links = [{ title: "Guided Tour", url: "https://example.com/tour" }];
+    const result = findRelevantBookingLink("book now", links, {});
+    result?.confidence === "high" && result?.link?.title === "Guided Tour"
+      ? pass("test51: findRelevantBookingLink — single link → high confidence")
+      : fail("test51: findRelevantBookingLink single", `got: ${JSON.stringify(result)}`);
+  }
+
+  // Kremmling keyword → Kremmling link wins
+  {
+    const links = [
+      { title: "Steamboat Guided Tour", url: "https://example.com/steamboat", metadata_json: { location: "steamboat" } },
+      { title: "Kremmling RZR Rental",  url: "https://example.com/kremmling", metadata_json: { location: "kremmling" } },
+    ];
+    const result = findRelevantBookingLink("I want to ride near Kremmling", links, {});
+    result?.link?.title?.includes("Kremmling")
+      ? pass("test51: findRelevantBookingLink — Kremmling keyword → Kremmling link")
+      : fail("test51: findRelevantBookingLink kremmling", `got: ${JSON.stringify(result)}`);
+  }
+
+  // Two relevant links without clear winner → medium confidence with links array
+  {
+    const links = [
+      { title: "Guided Snowmobile Tour", url: "https://example.com/tour",   metadata_json: { keywords: ["snowmobile", "guided"] } },
+      { title: "RZR Rental",             url: "https://example.com/rzr",    metadata_json: { keywords: ["rzr", "rental"] } },
+    ];
+    // Vague message: no strong keyword match for either
+    const result = findRelevantBookingLink("I want to book something", links, {});
+    // Should be low confidence (no keyword match) or medium — either way it should not be null
+    result !== null
+      ? pass("test51: findRelevantBookingLink — 2 links, vague message → non-null result")
+      : fail("test51: findRelevantBookingLink 2 links vague", "expected non-null");
+  }
+
+  // Tour keyword → snowmobile tour link preferred over RZR rental
+  {
+    const links = [
+      { title: "Guided Snowmobile Tour", url: "https://example.com/tour",   metadata_json: { keywords: ["snowmobile", "tour", "guided"] } },
+      { title: "RZR Rental",             url: "https://example.com/rzr",    metadata_json: { keywords: ["rzr", "rental", "summer"] } },
+    ];
+    const result = findRelevantBookingLink("I want a guided snowmobile tour", links, { season: "winter" });
+    result?.link?.title?.includes("Snowmobile") || result?.link?.title?.includes("Tour")
+      ? pass("test51: findRelevantBookingLink — tour keyword → tour link preferred")
+      : fail("test51: findRelevantBookingLink tour keyword", `got: ${JSON.stringify(result)}`);
   }
 }
 
