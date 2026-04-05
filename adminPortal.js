@@ -29,6 +29,7 @@ import { getIntegrationStatus } from "./knowledgeBase.js";
 import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.js";
 import { VALID_BOOKING_MODES, serializeClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { normalizePhone, isValidPhone } from "./phoneUtils.js";
+import { startAutoConfig, getDraft, updateDraft, commitDraftToDb } from "./onboardingConfig.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
@@ -1185,6 +1186,97 @@ export async function handlePortalUpdateBookingConfig(req, res, supabase) {
 
   console.log(`[PORTAL] booking config updated for ${clientId}`);
   return res.json(data);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONBOARDING — Phase 3 (AI Auto-Config)
+// internal_admin only for all three routes
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── POST /portal/api/onboarding/analyze ───────────────────────────────────────
+// Triggers the AI auto-config pipeline for a given URL.
+// Body: { url: "https://..." }
+// Returns: { draftId, draft, confidence, warnings, pagesCrawled }
+export async function handleOnboardingAnalyze(req, res, supabase, anthropic) {
+  if (!req.portalUser?.isAdmin) {
+    return res.status(403).json({ error: "Internal admin only" });
+  }
+
+  const { url } = req.body ?? {};
+  if (!url) return res.status(400).json({ error: "url is required" });
+
+  try {
+    new URL(url); // validate
+  } catch {
+    return res.status(400).json({ error: "Invalid URL — must include https://" });
+  }
+
+  try {
+    const result = await startAutoConfig(
+      url,
+      anthropic,
+      supabase,
+      req.portalUser?.email ?? null
+    );
+    return res.json(result);
+  } catch (err) {
+    console.error("[ONBOARDING] analyze error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── GET /portal/api/onboarding/drafts/:id ─────────────────────────────────────
+// Returns a draft by ID. internal_admin only.
+export async function handleOnboardingGetDraft(req, res, supabase) {
+  if (!req.portalUser?.isAdmin) {
+    return res.status(403).json({ error: "Internal admin only" });
+  }
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const { id } = req.params;
+  const draft = await getDraft(id, supabase);
+  if (!draft) return res.status(404).json({ error: "Draft not found" });
+  return res.json({ draft });
+}
+
+// ── PATCH /portal/api/onboarding/drafts/:id ───────────────────────────────────
+// Updates editable draft fields before committing.
+// Body: { draft_client: {...}, draft_bot: {...}, draft_booking: {...} }
+export async function handleOnboardingUpdateDraft(req, res, supabase) {
+  if (!req.portalUser?.isAdmin) {
+    return res.status(403).json({ error: "Internal admin only" });
+  }
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const { id } = req.params;
+  const updated = await updateDraft(id, req.body ?? {}, supabase);
+  if (!updated) return res.status(404).json({ error: "Draft not found or no valid fields provided" });
+  return res.json({ draft: updated });
+}
+
+// ── POST /portal/api/onboarding/drafts/:id/save ───────────────────────────────
+// Commits the draft to a real client record.
+// Returns: { clientId }
+export async function handleOnboardingSave(req, res, supabase) {
+  if (!req.portalUser?.isAdmin) {
+    return res.status(403).json({ error: "Internal admin only" });
+  }
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const { id } = req.params;
+  try {
+    const result = await commitDraftToDb(id, supabase);
+    // Reload the client registry so the new client is available immediately
+    await loadDbClients(supabase).catch(() => {});
+    console.log(`[ONBOARDING] Client ${result.clientId} now live`);
+    return res.json(result);
+  } catch (err) {
+    console.error("[ONBOARDING] save error:", err.message);
+    const status = err.message.includes("not found") ? 404
+                 : err.message.includes("already") ? 409
+                 : 500;
+    return res.status(status).json({ error: err.message });
+  }
 }
 
 // ── GET /admin/portal-users ───────────────────────────────────────────────────

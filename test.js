@@ -39,7 +39,9 @@ import { getKnowledgeContext, getIntegrationStatus } from "./knowledgeBase.js";
 import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSettings, handlePortalMessaging, handlePortalUpdateMessaging,
-  handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig } from "./adminPortal.js";
+  handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
+  handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave } from "./adminPortal.js";
+import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb } from "./onboardingConfig.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { metaFromBookingKey } from "./clientConfig.js";
@@ -2966,6 +2968,7 @@ async function main() {
   await test54(); // Integrations: FareHarbor + SNOTEL settings PATCH, fhHeaders user_key
   await test55(); // Messaging config: handlePortalMessaging, handlePortalUpdateMessaging, getMessagingConfig fallback
   await test56(); // Bot config + booking config: GET/PATCH handlers
+  await test57(); // Onboarding Auto-Config (Phase 3): slugifyName, detectBookingSignals, buildConfidenceScore, handler guards
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -2985,6 +2988,7 @@ async function main() {
     await test30(); // Site content management (Chunk 7C)
     await test35(); // Portal auth, scoping, route guards (Chunk 10)
     await test37Integration(); // Invite flow integration: routes, auth guards (Chunk 11)
+    await test58(); // Onboarding routes: auth guards (Phase 3)
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -7644,6 +7648,263 @@ async function test56() {
     statusCode === 503
       ? pass("test56: handlePortalBotConfig no supabase → 503")
       : fail("test56: handlePortalBotConfig no supabase", `status=${statusCode}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test57 — Onboarding Auto-Config (Phase 3): unit tests
+//   slugifyName, detectBookingSignals, buildConfidenceScore,
+//   handler auth guards (no supabase / non-admin)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test57() {
+  console.log("\n[test57] Onboarding Auto-Config: unit tests");
+
+  const adminReq = {
+    portalUser: { role: "internal_admin", clientId: null, isAdmin: true, isClientAdmin: false },
+    query: {}, body: {}, params: {},
+  };
+  const clientAdminReq = {
+    portalUser: { role: "client_admin", clientId: "csr_rea", isAdmin: false, isClientAdmin: true },
+    query: { client_id: "csr_rea" }, body: {}, params: {},
+  };
+
+  // 1. slugifyName — basic
+  {
+    const slug = slugifyName("Colorado Sled Rentals");
+    slug === "colorado_sled_rentals"
+      ? pass("test57: slugifyName basic")
+      : fail("test57: slugifyName basic", slug);
+  }
+
+  // 2. slugifyName — special chars stripped
+  {
+    const slug = slugifyName("Joe's Gym & Spa!");
+    /^[a-z0-9_]+$/.test(slug) && slug.length > 0
+      ? pass("test57: slugifyName strips special chars")
+      : fail("test57: slugifyName special chars", slug);
+  }
+
+  // 3. slugifyName — null/empty fallback
+  {
+    const slug = slugifyName(null);
+    slug === "new_client"
+      ? pass("test57: slugifyName null → new_client")
+      : fail("test57: slugifyName null", slug);
+  }
+
+  // 4. slugifyName — length cap at 40
+  {
+    const long = "a very very very very very very very long business name here";
+    const slug = slugifyName(long);
+    slug.length <= 40
+      ? pass("test57: slugifyName length cap")
+      : fail("test57: slugifyName length cap", `length=${slug.length}`);
+  }
+
+  // 5. detectBookingSignals — FareHarbor detected
+  {
+    const text = "Book now at https://fareharbor.com/embeds/book/myco/";
+    const sig = detectBookingSignals(text);
+    sig.platform === "fareharbor" && sig.hasBooking === true
+      ? pass("test57: detectBookingSignals fareharbor detected")
+      : fail("test57: detectBookingSignals fareharbor", JSON.stringify(sig));
+  }
+
+  // 6. detectBookingSignals — no booking signals
+  {
+    const text = "Welcome to our website. We offer great services.";
+    const sig = detectBookingSignals(text);
+    sig.platform === null && sig.hasBooking === false
+      ? pass("test57: detectBookingSignals none")
+      : fail("test57: detectBookingSignals none", JSON.stringify(sig));
+  }
+
+  // 7. detectBookingSignals — generic booking intent
+  {
+    const text = "Click here to book online and reserve your spot today.";
+    const sig = detectBookingSignals(text);
+    sig.hasBooking === true
+      ? pass("test57: detectBookingSignals generic booking intent")
+      : fail("test57: detectBookingSignals generic", JSON.stringify(sig));
+  }
+
+  // 8. detectBookingSignals — Checkfront detected
+  {
+    const text = "Reserve via our system at https://mybiz.checkfront.com/reserve/";
+    const sig = detectBookingSignals(text);
+    sig.platform === "checkfront"
+      ? pass("test57: detectBookingSignals checkfront")
+      : fail("test57: detectBookingSignals checkfront", JSON.stringify(sig));
+  }
+
+  // 9. detectBookingSignals — booking links extracted
+  {
+    const text = "Book at https://fareharbor.com/embeds/book/testco/items/?flow=123&full-items=yes extra text";
+    const sig = detectBookingSignals(text);
+    sig.links.length >= 1 && sig.links[0].includes("fareharbor")
+      ? pass("test57: detectBookingSignals extracts booking links")
+      : fail("test57: detectBookingSignals links", JSON.stringify(sig.links));
+  }
+
+  // 10. buildConfidenceScore — all high
+  {
+    const facts = {
+      business_name: "Test Biz",
+      booking_platform: "fareharbor",
+      booking_mode_suggestion: "fareharbor",
+      services: ["A", "B", "C"],
+      phone: "(970) 555-0001",
+      email: "test@test.com",
+    };
+    const conf = buildConfidenceScore(facts);
+    conf.name === "high" && conf.booking_mode === "high" &&
+    conf.services === "high" && conf.contact === "high"
+      ? pass("test57: buildConfidenceScore all high")
+      : fail("test57: buildConfidenceScore all high", JSON.stringify(conf));
+  }
+
+  // 11. buildConfidenceScore — all low
+  {
+    const facts = {
+      business_name: null,
+      booking_platform: "none",
+      booking_mode_suggestion: "informational",
+      services: [],
+      phone: null,
+      email: null,
+    };
+    const conf = buildConfidenceScore(facts);
+    conf.name === "low" && conf.booking_mode === "low" &&
+    conf.services === "low" && conf.contact === "low"
+      ? pass("test57: buildConfidenceScore all low")
+      : fail("test57: buildConfidenceScore all low", JSON.stringify(conf));
+  }
+
+  // 12. buildConfidenceScore — mixed
+  {
+    const facts = {
+      business_name: "Test",
+      booking_platform: "none",
+      booking_mode_suggestion: "informational",
+      services: ["A"],
+      phone: "(970) 555-0001",
+      email: null,
+    };
+    const conf = buildConfidenceScore(facts);
+    conf.name === "high" && conf.booking_mode === "low" &&
+    conf.services === "medium" && conf.contact === "medium"
+      ? pass("test57: buildConfidenceScore mixed")
+      : fail("test57: buildConfidenceScore mixed", JSON.stringify(conf));
+  }
+
+  // 13. handleOnboardingAnalyze — non-admin → 403
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingAnalyze({ ...clientAdminReq, body: { url: "https://example.com" } }, res, null, null);
+    statusCode === 403
+      ? pass("test57: handleOnboardingAnalyze client_admin → 403")
+      : fail("test57: handleOnboardingAnalyze client_admin", `status=${statusCode}`);
+  }
+
+  // 14. handleOnboardingAnalyze — missing url → 400
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingAnalyze({ ...adminReq, body: {} }, res, null, null);
+    statusCode === 400
+      ? pass("test57: handleOnboardingAnalyze missing url → 400")
+      : fail("test57: handleOnboardingAnalyze missing url", `status=${statusCode}`);
+  }
+
+  // 15. handleOnboardingAnalyze — invalid url → 400
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingAnalyze({ ...adminReq, body: { url: "not-a-url" } }, res, null, null);
+    statusCode === 400
+      ? pass("test57: handleOnboardingAnalyze invalid url → 400")
+      : fail("test57: handleOnboardingAnalyze invalid url", `status=${statusCode}`);
+  }
+
+  // 16. handleOnboardingGetDraft — non-admin → 403
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingGetDraft({ ...clientAdminReq, params: { id: "abc" } }, res, null);
+    statusCode === 403
+      ? pass("test57: handleOnboardingGetDraft client_admin → 403")
+      : fail("test57: handleOnboardingGetDraft client_admin", `status=${statusCode}`);
+  }
+
+  // 17. handleOnboardingGetDraft — no supabase → 503
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingGetDraft({ ...adminReq, params: { id: "abc" } }, res, null);
+    statusCode === 503
+      ? pass("test57: handleOnboardingGetDraft no supabase → 503")
+      : fail("test57: handleOnboardingGetDraft no supabase", `status=${statusCode}`);
+  }
+
+  // 18. handleOnboardingGetDraft — not found → 404
+  {
+    let statusCode = null;
+    const res = {
+      status: (c) => { statusCode = c; return { json: () => {} }; },
+      json: () => {},
+    };
+    const mockSb = {
+      from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+    };
+    await handleOnboardingGetDraft({ ...adminReq, params: { id: "nonexistent-id" } }, res, mockSb);
+    statusCode === 404
+      ? pass("test57: handleOnboardingGetDraft not found → 404")
+      : fail("test57: handleOnboardingGetDraft not found", `status=${statusCode}`);
+  }
+
+  // 19. handleOnboardingSave — non-admin → 403
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingSave({ ...clientAdminReq, params: { id: "abc" } }, res, null);
+    statusCode === 403
+      ? pass("test57: handleOnboardingSave client_admin → 403")
+      : fail("test57: handleOnboardingSave client_admin", `status=${statusCode}`);
+  }
+
+  // 20. handleOnboardingSave — no supabase → 503
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingSave({ ...adminReq, params: { id: "abc" } }, res, null);
+    statusCode === 503
+      ? pass("test57: handleOnboardingSave no supabase → 503")
+      : fail("test57: handleOnboardingSave no supabase", `status=${statusCode}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test58 — Onboarding integration: auth guards (routes require Bearer JWT)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test58() {
+  console.log("\n[test58] Onboarding routes: auth guards");
+
+  // All onboarding routes require JWT — 401 without token
+  const routes = [
+    { method: "POST",  path: "/portal/api/onboarding/analyze",         body: { url: "https://example.com" } },
+    { method: "GET",   path: "/portal/api/onboarding/drafts/test-id",  body: null },
+    { method: "PATCH", path: "/portal/api/onboarding/drafts/test-id",  body: {} },
+    { method: "POST",  path: "/portal/api/onboarding/drafts/test-id/save", body: null },
+  ];
+
+  for (const { method, path, body } of routes) {
+    const opts = { method, headers: { "Content-Type": "application/json" } };
+    if (body) opts.body = JSON.stringify(body);
+    const r = await fetch(`${BASE_URL}${path}`, opts);
+    r.status === 401
+      ? pass(`test58: ${method} ${path} → 401 without token`)
+      : fail(`test58: ${method} ${path} auth guard`, `status=${r.status}`);
   }
 }
 

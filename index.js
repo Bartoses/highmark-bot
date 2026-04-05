@@ -33,7 +33,8 @@ import { handleListClients, handleGetClient, handleCreateClient, handleUpdateCli
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
 import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
 import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalCreateClient, handlePortalUpdateClient, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption, handlePortalCrawlPages, handlePortalIntegrations, handlePortalMessaging, handlePortalUpdateMessaging,
-  handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig } from "./adminPortal.js";
+  handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
+  handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave } from "./adminPortal.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
@@ -2211,6 +2212,11 @@ app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePor
 app.patch("/portal/api/bot-config",   requirePortalAuth, (req, res) => handlePortalUpdateBotConfig(req, res, supabase));
 app.get( "/portal/api/booking-config",  requirePortalAuth, (req, res) => handlePortalBookingConfig(req, res, supabase));
 app.patch("/portal/api/booking-config", requirePortalAuth, (req, res) => handlePortalUpdateBookingConfig(req, res, supabase));
+// Onboarding (Phase 3 — AI Auto-Config) — internal_admin only
+app.post("/portal/api/onboarding/analyze",         requirePortalAuth, (req, res) => handleOnboardingAnalyze(req, res, supabase, anthropic));
+app.get( "/portal/api/onboarding/drafts/:id",      requirePortalAuth, (req, res) => handleOnboardingGetDraft(req, res, supabase));
+app.patch("/portal/api/onboarding/drafts/:id",     requirePortalAuth, (req, res) => handleOnboardingUpdateDraft(req, res, supabase));
+app.post("/portal/api/onboarding/drafts/:id/save", requirePortalAuth, (req, res) => handleOnboardingSave(req, res, supabase));
 app.post("/portal/api/crawl-now",   requirePortalAuth, async (req, res) => {
   if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) return res.status(403).json({ error: "Admin only" });
   const clientId = resolvePortalClientId(req);

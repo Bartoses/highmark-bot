@@ -69,6 +69,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 .nav-ext-link:hover { color: var(--text); background: var(--panel2); text-decoration: none; }
 
+/* Onboarding confidence badges */
+.ob-conf-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 600;
+}
+.ob-conf-high   { background: #d1fae5; color: #065f46; }
+.ob-conf-medium { background: #fef3c7; color: #92400e; }
+.ob-conf-low    { background: #fee2e2; color: #991b1b; }
+
 .sidebar-footer {
   padding: 12px 16px; border-top: 1px solid var(--border);
   color: var(--text3); font-size: 11px;
@@ -294,6 +303,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item admin-only" data-section="clients">
         <span class="nav-icon">🏢</span> Clients
       </div>
+      <div class="nav-item admin-only" data-section="onboarding">
+        <span class="nav-icon">✨</span> New Client
+      </div>
     </div>
 
     <!-- Internal tools — admin only -->
@@ -487,6 +499,169 @@ tr:hover td { background: var(--panel2); }
         </div>
         <div id="bookingConfigContent"><div class="loading">Loading…</div></div>
       </div><!-- /sec-booking-config -->
+
+      <!-- ONBOARDING — New Client (internal_admin only) -->
+      <div class="section admin-only" id="sec-onboarding">
+        <div class="section-header">
+          <span class="section-title">New Client — Auto-Config</span>
+        </div>
+
+        <!-- Step 1: URL entry -->
+        <div id="ob-step-url" class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:8px;">Enter website URL</div>
+          <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">
+            Paste the business homepage. Highmark will crawl up to 6 pages and draft a full configuration for your review.
+          </p>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input id="ob-url-input" type="url" placeholder="https://example.com"
+              class="form-input" style="flex:1;"
+              onkeydown="if(event.key==='Enter')runAutoConfig()"/>
+            <button class="btn btn-primary" onclick="runAutoConfig()" id="ob-analyze-btn">Auto-config</button>
+          </div>
+          <div id="ob-url-error" style="display:none;color:var(--danger,#e53);font-size:13px;margin-top:8px;"></div>
+        </div>
+
+        <!-- Step 2: Loading state -->
+        <div id="ob-step-loading" style="display:none;" class="card" style="margin-bottom:16px;">
+          <div style="display:flex;align-items:center;gap:12px;padding:8px 0;">
+            <div class="spinner" style="width:20px;height:20px;border-width:2px;flex-shrink:0;"></div>
+            <div>
+              <div style="font-size:14px;font-weight:600;">Analyzing website…</div>
+              <div id="ob-progress-msg" style="font-size:12px;color:var(--text2);">Crawling pages and extracting facts</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: Review & Edit -->
+        <div id="ob-step-review" style="display:none;">
+          <!-- Warnings banner -->
+          <div id="ob-warnings-wrap" style="display:none;background:var(--warning-bg,#fffbe6);border:1px solid var(--warning-border,#ffe58f);border-radius:8px;padding:12px 14px;margin-bottom:16px;">
+            <div style="font-size:12px;font-weight:700;color:#856404;margin-bottom:6px;">⚠ Review before saving</div>
+            <ul id="ob-warnings-list" style="margin:0;padding-left:18px;font-size:12px;color:#6b5100;"></ul>
+          </div>
+
+          <!-- Pages crawled + confidence badges -->
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+            <span id="ob-pages-badge" style="background:var(--surface2);border-radius:20px;padding:3px 10px;font-size:12px;color:var(--text2);"></span>
+            <span id="ob-conf-name"   class="ob-conf-badge"></span>
+            <span id="ob-conf-booking" class="ob-conf-badge"></span>
+            <span id="ob-conf-services" class="ob-conf-badge"></span>
+            <span id="ob-conf-contact" class="ob-conf-badge"></span>
+          </div>
+
+          <!-- Business Details card -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-title" style="margin-bottom:14px;">Business Details</div>
+            <div class="settings-grid">
+              <div class="field-group">
+                <label class="field-label">Business Name *</label>
+                <input id="ob-name" type="text" class="form-input" placeholder="e.g. Colorado Sled Rentals"/>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Industry</label>
+                <select id="ob-industry" class="form-input">
+                  <option value="outdoor_adventures">Outdoor Adventures</option>
+                  <option value="fitness_gym">Fitness / Gym</option>
+                  <option value="yoga_studio">Yoga Studio</option>
+                  <option value="climbing_gym">Climbing Gym</option>
+                  <option value="lodging_hotel">Lodging / Hotel</option>
+                  <option value="restaurant_cafe">Restaurant / Café</option>
+                  <option value="spa_wellness">Spa / Wellness</option>
+                  <option value="retail_shop">Retail Shop</option>
+                  <option value="bike_shop">Bike Shop</option>
+                  <option value="auto_repair">Auto / Repair</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Phone</label>
+                <input id="ob-phone" type="text" class="form-input" placeholder="(970) 555-0001"/>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Email</label>
+                <input id="ob-email" type="email" class="form-input" placeholder="hello@business.com"/>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Address / City</label>
+                <input id="ob-address" type="text" class="form-input" placeholder="Steamboat Springs, CO"/>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Timezone</label>
+                <select id="ob-timezone" class="form-input">
+                  <option value="America/Denver">Mountain (Denver)</option>
+                  <option value="America/New_York">Eastern (New York)</option>
+                  <option value="America/Chicago">Central (Chicago)</option>
+                  <option value="America/Los_Angeles">Pacific (Los Angeles)</option>
+                  <option value="America/Anchorage">Alaska (Anchorage)</option>
+                  <option value="Pacific/Honolulu">Hawaii (Honolulu)</option>
+                </select>
+              </div>
+              <div class="field-group" style="grid-column:1/-1;">
+                <label class="field-label">Services (one per line)</label>
+                <textarea id="ob-services" class="form-input" rows="3" placeholder="Guided snowmobile tours&#10;Self-guided rentals&#10;RZR adventures"></textarea>
+              </div>
+              <div class="field-group" style="grid-column:1/-1;">
+                <label class="field-label">Hours</label>
+                <input id="ob-hours" type="text" class="form-input" placeholder="Mon–Fri 9am–5pm, closed weekends"/>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bot Identity card -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-title" style="margin-bottom:14px;">Bot Identity</div>
+            <div class="settings-grid">
+              <div class="field-group">
+                <label class="field-label">Bot Name</label>
+                <input id="ob-bot-name" type="text" class="form-input" placeholder="Summit"/>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Tone</label>
+                <input id="ob-tone" type="text" class="form-input" placeholder="warm, enthusiastic, genuinely local"/>
+              </div>
+              <div class="field-group" style="grid-column:1/-1;">
+                <label class="field-label">Opening Message <span style="color:var(--text3);font-weight:400;">(optional — leave blank for auto)</span></label>
+                <textarea id="ob-opener" class="form-input" rows="2" placeholder="Hey! Welcome to…"></textarea>
+              </div>
+            </div>
+          </div>
+
+          <!-- Booking Config card -->
+          <div class="card" style="margin-bottom:20px;">
+            <div class="card-title" style="margin-bottom:14px;">Booking</div>
+            <div class="settings-grid">
+              <div class="field-group">
+                <label class="field-label">Booking Mode</label>
+                <select id="ob-booking-mode" class="form-input">
+                  <option value="informational">Informational (Q&amp;A + phone CTA)</option>
+                  <option value="fareharbor">FareHarbor (real-time availability)</option>
+                  <option value="lead_capture">Lead Capture (3-step intake)</option>
+                  <option value="static_links">Static Links</option>
+                  <option value="call_only">Call Only</option>
+                  <option value="hybrid">Hybrid (links + phone)</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Booking Link <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+                <input id="ob-booking-link" type="url" class="form-input" placeholder="https://fareharbor.com/..."/>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Detected Platform</label>
+                <div id="ob-platform-pill" style="margin-top:6px;font-size:13px;color:var(--text2);">—</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action buttons -->
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="saveOnboardingDraft()" id="ob-save-btn">
+              Save &amp; Create Client
+            </button>
+            <button class="btn btn-ghost" onclick="resetOnboarding()">Start over</button>
+          </div>
+          <div id="ob-save-status" style="display:none;margin-top:12px;font-size:13px;"></div>
+        </div>
+      </div><!-- /sec-onboarding -->
 
       <!-- MORE (mobile-only) -->
       <div class="section" id="sec-more">
@@ -878,7 +1053,7 @@ async function init() {
 
   // Load initial section based on URL
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','integrations','messaging','bot-config','booking-config','users','clients'];
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','integrations','messaging','bot-config','booking-config','users','clients','onboarding'];
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
 }
 
@@ -915,7 +1090,7 @@ const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
   analytics: 'Analytics', settings: 'Settings', knowledge: 'Knowledge',
   integrations: 'Integrations', messaging: 'Messaging', 'bot-config': 'Bot Config', 'booking-config': 'Booking Config',
-  users: 'Users & Access', clients: 'Clients', more: 'More',
+  users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
 };
 function switchSection(name) {
   if (name === 'users' && !me?.isClientAdmin) name = 'dashboard';
@@ -940,6 +1115,7 @@ function switchSection(name) {
   if (name === 'messaging')       loadMessaging();
   if (name === 'bot-config')      loadBotConfig();
   if (name === 'booking-config')  loadBookingConfig();
+  if (name === 'onboarding')      resetOnboarding();
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -2851,6 +3027,237 @@ async function saveBookingConfig() {
   if (btn) { btn.disabled = false; btn.textContent = 'Save Booking Config'; }
   if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
   showToast('Booking config saved');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONBOARDING — New Client Auto-Config (Phase 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let obCurrentDraftId = null;
+
+function resetOnboarding() {
+  obCurrentDraftId = null;
+  document.getElementById('ob-url-input').value = '';
+  document.getElementById('ob-url-error').style.display = 'none';
+  document.getElementById('ob-step-loading').style.display = 'none';
+  document.getElementById('ob-step-review').style.display  = 'none';
+  document.getElementById('ob-step-url').style.display     = 'block';
+  const btn = document.getElementById('ob-analyze-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'Auto-config'; }
+}
+
+async function runAutoConfig() {
+  const url = (document.getElementById('ob-url-input').value ?? '').trim();
+  const errEl = document.getElementById('ob-url-error');
+  errEl.style.display = 'none';
+
+  if (!url) { errEl.textContent = 'Please enter a URL.'; errEl.style.display = 'block'; return; }
+  try { new URL(url); } catch {
+    errEl.textContent = 'Invalid URL — include https://'; errEl.style.display = 'block'; return;
+  }
+
+  const btn = document.getElementById('ob-analyze-btn');
+  btn.disabled = true; btn.textContent = 'Analyzing…';
+  document.getElementById('ob-step-url').style.display     = 'none';
+  document.getElementById('ob-step-loading').style.display = 'block';
+  document.getElementById('ob-step-review').style.display  = 'none';
+
+  const messages = [
+    'Crawling pages…',
+    'Reading services and pricing…',
+    'Detecting booking platform…',
+    'Running AI extraction…',
+    'Building draft configuration…',
+  ];
+  let msgIdx = 0;
+  const msgEl = document.getElementById('ob-progress-msg');
+  const msgTimer = setInterval(() => {
+    msgIdx = (msgIdx + 1) % messages.length;
+    if (msgEl) msgEl.textContent = messages[msgIdx];
+  }, 3000);
+
+  try {
+    const token = localStorage.getItem('portal_token');
+    const resp  = await fetch('/portal/api/onboarding/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ url }),
+    });
+    clearInterval(msgTimer);
+    const data = await resp.json();
+
+    if (!resp.ok || data.error) {
+      document.getElementById('ob-step-loading').style.display = 'none';
+      document.getElementById('ob-step-url').style.display     = 'block';
+      btn.disabled = false; btn.textContent = 'Auto-config';
+      errEl.textContent = data.error ?? 'Analysis failed — try again.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    obCurrentDraftId = data.draftId;
+    populateOnboardingForm(data);
+    document.getElementById('ob-step-loading').style.display = 'none';
+    document.getElementById('ob-step-review').style.display  = 'block';
+    btn.disabled = false; btn.textContent = 'Auto-config';
+  } catch (err) {
+    clearInterval(msgTimer);
+    document.getElementById('ob-step-loading').style.display = 'none';
+    document.getElementById('ob-step-url').style.display     = 'block';
+    btn.disabled = false; btn.textContent = 'Auto-config';
+    errEl.textContent = 'Network error — check your connection.';
+    errEl.style.display = 'block';
+  }
+}
+
+function populateOnboardingForm(data) {
+  const dc   = data.draft?.draftClient   ?? {};
+  const db   = data.draft?.draftBot      ?? {};
+  const dbook= data.draft?.draftBooking  ?? {};
+  const conf = data.confidence           ?? {};
+  const warn = data.warnings             ?? [];
+
+  // Business details
+  setVal('ob-name',      dc.name ?? '');
+  setVal('ob-industry',  dc.industry ?? 'other');
+  setVal('ob-phone',     dc.support_phone ?? '');
+  setVal('ob-email',     dc.support_email ?? '');
+  setVal('ob-address',   dc.address ?? '');
+  setVal('ob-timezone',  dc.timezone ?? 'America/Denver');
+  setVal('ob-services',  (dc.services ?? []).join('\n'));
+  setVal('ob-hours',     dc.hours ?? '');
+
+  // Bot
+  setVal('ob-bot-name',  db.bot_name ?? '');
+  setVal('ob-tone',      db.tone ?? '');
+  setVal('ob-opener',    db.opener_text ?? '');
+
+  // Booking
+  setVal('ob-booking-mode', dbook.booking_mode ?? 'informational');
+  setVal('ob-booking-link', dbook.booking_link ?? '');
+  const platEl = document.getElementById('ob-platform-pill');
+  if (platEl) platEl.textContent = dbook.booking_platform && dbook.booking_platform !== 'none'
+    ? `Detected: ${dbook.booking_platform}` : 'None detected';
+
+  // Pages crawled badge
+  const pagesBadge = document.getElementById('ob-pages-badge');
+  if (pagesBadge) pagesBadge.textContent = `${data.pagesCrawled ?? 0} pages analyzed`;
+
+  // Confidence badges
+  setConfBadge('ob-conf-name',     conf.name,         'Business name');
+  setConfBadge('ob-conf-booking',  conf.booking_mode, 'Booking mode');
+  setConfBadge('ob-conf-services', conf.services,     'Services');
+  setConfBadge('ob-conf-contact',  conf.contact,      'Contact info');
+
+  // Warnings
+  const warnWrap = document.getElementById('ob-warnings-wrap');
+  const warnList = document.getElementById('ob-warnings-list');
+  if (warn.length > 0) {
+    warnList.innerHTML = warn.map((w) => `<li>${w}</li>`).join('');
+    warnWrap.style.display = 'block';
+  } else {
+    warnWrap.style.display = 'none';
+  }
+
+  // Reset save status
+  const saveStatus = document.getElementById('ob-save-status');
+  if (saveStatus) saveStatus.style.display = 'none';
+  const saveBtn = document.getElementById('ob-save-btn');
+  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save & Create Client'; }
+}
+
+function setVal(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = value ?? '';
+}
+
+function setConfBadge(id, level, label) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const cls = level === 'high' ? 'ob-conf-high' : level === 'medium' ? 'ob-conf-medium' : 'ob-conf-low';
+  const icon = level === 'high' ? '✓' : level === 'medium' ? '~' : '!';
+  el.className = `ob-conf-badge ${cls}`;
+  el.textContent = `${icon} ${label}`;
+}
+
+async function saveOnboardingDraft() {
+  const btn = document.getElementById('ob-save-btn');
+  const statusEl = document.getElementById('ob-save-status');
+
+  // Collect current form values
+  const services = (document.getElementById('ob-services')?.value ?? '')
+    .split('\n').map((s) => s.trim()).filter(Boolean);
+
+  const draft_client = {
+    name:          document.getElementById('ob-name')?.value.trim() ?? '',
+    industry:      document.getElementById('ob-industry')?.value ?? 'other',
+    support_phone: document.getElementById('ob-phone')?.value.trim() || null,
+    support_email: document.getElementById('ob-email')?.value.trim() || null,
+    address:       document.getElementById('ob-address')?.value.trim() || null,
+    timezone:      document.getElementById('ob-timezone')?.value ?? 'America/Denver',
+    services,
+    hours:         document.getElementById('ob-hours')?.value.trim() || null,
+  };
+  const draft_bot = {
+    bot_name:    document.getElementById('ob-bot-name')?.value.trim() || null,
+    tone:        document.getElementById('ob-tone')?.value.trim() || null,
+    opener_text: document.getElementById('ob-opener')?.value.trim() || null,
+  };
+  const draft_booking = {
+    booking_mode:  document.getElementById('ob-booking-mode')?.value ?? 'informational',
+    booking_link:  document.getElementById('ob-booking-link')?.value.trim() || null,
+  };
+
+  if (!draft_client.name) {
+    statusEl.style.display = 'block';
+    statusEl.style.color   = 'var(--danger, #e53)';
+    statusEl.textContent   = 'Business name is required.';
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = 'Saving…';
+  statusEl.style.display = 'none';
+
+  const token = localStorage.getItem('portal_token');
+
+  // If we have a draftId, update + save; otherwise just save in-memory state
+  if (obCurrentDraftId) {
+    // Update the draft first
+    await fetch(`/portal/api/onboarding/drafts/${obCurrentDraftId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ draft_client, draft_bot, draft_booking }),
+    });
+
+    // Then commit
+    const saveResp = await fetch(`/portal/api/onboarding/drafts/${obCurrentDraftId}/save`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const saveData = await saveResp.json();
+
+    btn.disabled = false; btn.textContent = 'Save & Create Client';
+
+    if (!saveResp.ok || saveData.error) {
+      statusEl.style.display = 'block';
+      statusEl.style.color   = 'var(--danger, #e53)';
+      statusEl.textContent   = saveData.error ?? 'Save failed — try again.';
+      return;
+    }
+
+    statusEl.style.display = 'block';
+    statusEl.style.color   = 'var(--success, #0a8)';
+    statusEl.textContent   = `✓ Client "${draft_client.name}" created (ID: ${saveData.clientId}). Now inactive — activate in Clients section.`;
+    btn.disabled = true; btn.textContent = 'Saved';
+    showToast(`Client "${draft_client.name}" created`);
+  } else {
+    // No DB (supabase unavailable) — show error
+    btn.disabled = false; btn.textContent = 'Save & Create Client';
+    statusEl.style.display = 'block';
+    statusEl.style.color   = 'var(--danger, #e53)';
+    statusEl.textContent   = 'Could not save draft — DB unavailable.';
+  }
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────
