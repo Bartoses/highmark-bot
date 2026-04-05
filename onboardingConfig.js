@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ONBOARDING CONFIG — Phase 3 (AI Auto-Config)
+// ONBOARDING CONFIG — Phase 3 + 4 (AI Auto-Config + One-Click Creation)
 //
 // Pipeline: Website URL → Crawl → Extract → Draft → Review → Save (commit)
 //
@@ -9,22 +9,21 @@
 //   Booking signal detection    — zero Claude, regex only
 //   Draft assembly              — JS logic
 //
-// Exports:
+// Exports (Phase 3):
 //   startAutoConfig(url, anthropic, supabase, createdBy?)
 //     → { draftId, draft, confidence, warnings, pagesCrawled }
+//   getDraft(draftId, supabase)           → draft row or null
+//   updateDraft(draftId, updates, supabase) → updated draft row
+//   commitDraftToDb(draftId, supabase)    → { clientId, clientName }
+//   slugifyName(name)                     — utility, exported for testing
+//   detectBookingSignals(text)            — exported for testing
+//   buildConfidenceScore(facts)           — exported for testing
 //
-//   getDraft(draftId, supabase)
-//     → draft row or null
-//
-//   updateDraft(draftId, updates, supabase)
-//     → updated draft row
-//
-//   commitDraftToDb(draftId, supabase)
-//     → { clientId } — creates clients row, marks draft saved
-//
-//   slugifyName(name) — utility, exported for testing
-//   detectBookingSignals(text) — exported for testing
-//   buildConfidenceScore(facts) — exported for testing
+// Exports (Phase 4):
+//   createClientFromWebsite(url, anthropic, supabase, options?)
+//     → { clientId, clientName, draftId, demoLink, nextSteps, ... }
+//   buildNextSteps(facts, warnings)       — exported for testing
+//   findRecentDraftForUrl(url, supabase)  — exported for testing
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { crawlSite, classifyPageType } from "./crawler.js";
@@ -537,7 +536,9 @@ export async function commitDraftToDb(draftId, supabase) {
     booking_link: dbook.booking_link ?? null,
     services:     Array.isArray(dc.services) ? dc.services : [],
     inbound_phones: [],        // no Twilio number until provisioned
-    active:       false,       // draft clients start inactive until verified
+    active:            false,   // draft clients start inactive until verified
+    onboarding_status: "created",  // Phase 4: lifecycle tracking
+    bot_mode:          "test",     // Phase 4: test mode until manually activated
     // Feature flags off by default — admin enables after setup
     campaigns_enabled:  false,
     followups_enabled:  false,
@@ -595,7 +596,188 @@ export async function commitDraftToDb(draftId, supabase) {
 
   console.log(`[ONBOARDING] Draft ${draftId} committed → client ${clientId}`);
 
-  return { clientId };
+  return { clientId, clientName: clientRow.name };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4 — ONE-CLICK CLIENT CREATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Looks for the most recent draft (draft or saved status) for a given URL.
+ * Used for deduplication — avoids re-crawling the same site.
+ * Returns the draft row or null.
+ */
+export async function findRecentDraftForUrl(sourceUrl, supabase) {
+  if (!supabase || !sourceUrl) return null;
+  let normalized;
+  try { normalized = new URL(sourceUrl).href.replace(/\/$/, ""); } catch { return null; }
+
+  const { data } = await supabase
+    .from("onboarding_drafts")
+    .select("id, status, committed_client_id, draft_client, draft_bot, draft_booking, extracted_facts, confidence, warnings, pages_crawled")
+    .ilike("source_url", normalized)
+    .in("status", ["draft", "saved"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return data ?? null;
+}
+
+/**
+ * Generates a prioritized list of suggested next actions based on
+ * extracted facts from auto-config.
+ *
+ * Returns array of: { id, priority, title, desc, section }
+ * priority: "required" | "high" | "medium" | "when_ready"
+ * section: portal section name to navigate to
+ */
+export function buildNextSteps(facts = {}, warnings = []) {
+  const steps = [];
+
+  // Always required: assign a Twilio number
+  steps.push({
+    id:       "phone_number",
+    priority: "required",
+    title:    "Assign a phone number",
+    desc:     "Assign a Twilio SMS number so guests can reach the bot.",
+    section:  "settings",
+  });
+
+  const platform = facts.booking_platform;
+  const mode     = facts.booking_mode_suggestion;
+
+  if (platform === "fareharbor") {
+    steps.push({
+      id:       "fareharbor",
+      priority: "high",
+      title:    "Connect FareHarbor",
+      desc:     "FareHarbor was detected. Connect your account for real-time availability and booking links.",
+      section:  "integrations",
+    });
+  } else if (!platform || platform === "none" || platform === "generic") {
+    if (mode !== "informational") {
+      steps.push({
+        id:       "booking_links",
+        priority: "high",
+        title:    "Add booking links",
+        desc:     "No booking platform detected. Add manual booking links so guests can book.",
+        section:  "booking-config",
+      });
+    }
+  }
+
+  if (!facts.phone && !facts.email) {
+    steps.push({
+      id:       "contact_info",
+      priority: "high",
+      title:    "Add contact info",
+      desc:     "No phone or email detected. Add support contact for guest handoffs.",
+      section:  "settings",
+    });
+  }
+
+  if (!facts.services?.length) {
+    steps.push({
+      id:       "services",
+      priority: "medium",
+      title:    "Add services to knowledge base",
+      desc:     "No services detected. Add your offerings so the bot can answer questions.",
+      section:  "knowledge",
+    });
+  }
+
+  // Always last: go live reminder
+  steps.push({
+    id:       "go_live",
+    priority: "when_ready",
+    title:    "Activate for live SMS",
+    desc:     "Once tested and configured, activate the client in Settings to go live.",
+    section:  "settings",
+  });
+
+  return steps;
+}
+
+/**
+ * Full one-click client creation pipeline.
+ *
+ *   1. Dedup check — reuse recent draft for same URL, surface existing client if already created
+ *   2. Run auto-config if no draft found
+ *   3. Commit draft → real client record (onboarding_status=created, bot_mode=test)
+ *   4. Build next steps + demo link
+ *
+ * Options:
+ *   createdBy      — portal user email for audit trail
+ *   existingDraftId — skip auto-config and commit this specific draft
+ *
+ * Returns: { clientId, clientName, draftId, demoLink, nextSteps, onboardingStatus, botMode,
+ *            pagesAnalyzed, confidence, warnings }
+ *
+ * Throws with err.status = 409 if a client was already created from this URL.
+ */
+export async function createClientFromWebsite(sourceUrl, anthropic, supabase, options = {}) {
+  const { createdBy = null, existingDraftId = null } = options;
+
+  let draftId      = existingDraftId;
+  let facts        = {};
+  let warnings     = [];
+  let confidence   = {};
+  let pagesAnalyzed = 0;
+
+  // Step 1: Dedup — look for an existing draft/client for this URL
+  if (!draftId && supabase) {
+    const existing = await findRecentDraftForUrl(sourceUrl, supabase);
+    if (existing) {
+      if (existing.status === "saved" && existing.committed_client_id) {
+        const err = new Error(
+          `A client was already created from this URL (id: ${existing.committed_client_id})`
+        );
+        err.status           = 409;
+        err.existingClientId = existing.committed_client_id;
+        throw err;
+      }
+      // Reuse draft — skip re-crawling
+      draftId      = existing.id;
+      facts        = existing.extracted_facts ?? {};
+      warnings     = existing.warnings        ?? [];
+      confidence   = existing.confidence      ?? {};
+      pagesAnalyzed = existing.pages_crawled  ?? 0;
+    }
+  }
+
+  // Step 2: Run auto-config if no draft found
+  if (!draftId) {
+    const result = await startAutoConfig(sourceUrl, anthropic, supabase, createdBy);
+    draftId       = result.draftId;
+    facts         = result.extractedFacts ?? {};
+    warnings      = result.warnings       ?? [];
+    confidence    = result.confidence     ?? {};
+    pagesAnalyzed = result.pagesCrawled   ?? 0;
+  }
+
+  // Step 3: Commit draft → real client record
+  const { clientId, clientName } = await commitDraftToDb(draftId, supabase);
+
+  // Step 4: Build next steps + demo link
+  const nextSteps = buildNextSteps(facts, warnings);
+  const appUrl    = process.env.APP_URL ?? "https://highmark-bot-production.up.railway.app";
+  const uiKey     = process.env.UI_SECRET ?? "highmark2026";
+  const demoLink  = `${appUrl}/ui?key=${uiKey}&client=${clientId}`;
+
+  return {
+    clientId,
+    clientName,
+    draftId,
+    demoLink,
+    nextSteps,
+    onboardingStatus: "created",
+    botMode:          "test",
+    pagesAnalyzed,
+    confidence,
+    warnings,
+  };
 }
 
 /**

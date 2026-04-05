@@ -29,7 +29,7 @@ import { getIntegrationStatus } from "./knowledgeBase.js";
 import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.js";
 import { VALID_BOOKING_MODES, serializeClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { normalizePhone, isValidPhone } from "./phoneUtils.js";
-import { startAutoConfig, getDraft, updateDraft, commitDraftToDb } from "./onboardingConfig.js";
+import { startAutoConfig, getDraft, updateDraft, commitDraftToDb, createClientFromWebsite, buildNextSteps } from "./onboardingConfig.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
@@ -1265,17 +1265,62 @@ export async function handleOnboardingSave(req, res, supabase) {
 
   const { id } = req.params;
   try {
-    const result = await commitDraftToDb(id, supabase);
-    // Reload the client registry so the new client is available immediately
+    const committed = await commitDraftToDb(id, supabase);
     await loadDbClients(supabase).catch(() => {});
-    console.log(`[ONBOARDING] Client ${result.clientId} now live`);
-    return res.json(result);
+    console.log(`[ONBOARDING] Client ${committed.clientId} now live`);
+
+    // Enrich response with demo link + next steps so success UI works for review-then-save flow too
+    const draft = await getDraft(id, supabase).catch(() => null);
+    const facts  = draft?.extracted_facts ?? {};
+    const appUrl = process.env.APP_URL ?? "https://highmark-bot-production.up.railway.app";
+    const uiKey  = process.env.UI_SECRET ?? "highmark2026";
+    return res.json({
+      ...committed,
+      demoLink:      `${appUrl}/ui?key=${uiKey}&client=${committed.clientId}`,
+      nextSteps:     buildNextSteps(facts),
+      pagesAnalyzed: draft?.pages_crawled ?? 0,
+      onboardingStatus: "created",
+      botMode:          "test",
+    });
   } catch (err) {
     console.error("[ONBOARDING] save error:", err.message);
     const status = err.message.includes("not found") ? 404
                  : err.message.includes("already") ? 409
                  : 500;
     return res.status(status).json({ error: err.message });
+  }
+}
+
+// ── POST /portal/api/onboarding/create-client ─────────────────────────────────
+// Phase 4: One-click client creation from website URL.
+// Runs auto-config (or reuses existing draft), creates client record, returns demo link.
+// Body: { url, existingDraftId? }
+// Returns: { clientId, clientName, draftId, demoLink, nextSteps, onboardingStatus, botMode,
+//            pagesAnalyzed, confidence, warnings }
+export async function handleOnboardingCreateClient(req, res, supabase, anthropic) {
+  if (!req.portalUser?.isAdmin) {
+    return res.status(403).json({ error: "Internal admin only" });
+  }
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const { url, existingDraftId } = req.body ?? {};
+  if (!url) return res.status(400).json({ error: "url is required" });
+  try { new URL(url); } catch {
+    return res.status(400).json({ error: "Invalid URL — must include https://" });
+  }
+
+  try {
+    const result = await createClientFromWebsite(url, anthropic, supabase, {
+      createdBy:      req.portalUser.email,
+      existingDraftId: existingDraftId ?? null,
+    });
+    await loadDbClients(supabase).catch(() => {});
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error("[ONBOARDING] create-client error:", err.message);
+    const body = { error: err.message };
+    if (err.existingClientId) body.existingClientId = err.existingClientId;
+    return res.status(err.status ?? 500).json(body);
   }
 }
 

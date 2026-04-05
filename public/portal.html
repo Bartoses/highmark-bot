@@ -541,15 +541,36 @@ tr:hover td { background: var(--panel2); }
         <div id="ob-step-url" class="card" style="margin-bottom:16px;">
           <div class="card-title" style="margin-bottom:8px;">Enter website URL</div>
           <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">
-            Paste the business homepage. Highmark will crawl up to 6 pages and draft a full configuration for your review.
+            Paste the business homepage. Highmark crawls up to 6 pages, extracts the config, and creates the client — ready to demo in seconds.
           </p>
           <div class="ob-url-row">
             <input id="ob-url-input" type="url" placeholder="https://example.com"
               class="form-input"
-              onkeydown="if(event.key==='Enter')runAutoConfig()"/>
-            <button class="btn btn-primary" onclick="runAutoConfig()" id="ob-analyze-btn">Auto-config</button>
+              onkeydown="if(event.key==='Enter')runCreateClient()"/>
+            <button class="btn btn-primary" onclick="runCreateClient()" id="ob-create-btn">⚡ Create Client</button>
+          </div>
+          <div style="margin-top:10px;">
+            <button class="btn btn-ghost btn-sm" onclick="runAutoConfig()" id="ob-analyze-btn"
+              style="font-size:12px;color:var(--text2);">Review config first →</button>
           </div>
           <div id="ob-url-error" style="display:none;color:var(--danger,#e53);font-size:13px;margin-top:8px;"></div>
+        </div>
+
+        <!-- Step 4: Success -->
+        <div id="ob-step-success" style="display:none;">
+          <div class="card" style="margin-bottom:16px;border:1px solid var(--accent);">
+            <div id="ob-success-checks" style="font-size:14px;line-height:2.4;margin-bottom:16px;"></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-primary" id="ob-demo-btn">Open Demo</button>
+              <button class="btn btn-ghost" id="ob-edit-btn">Edit Config</button>
+              <button class="btn btn-ghost" onclick="switchSection('clients')">View Clients</button>
+              <button class="btn btn-ghost" onclick="resetOnboarding()">Create Another</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title" style="margin-bottom:12px;">Suggested Next Steps</div>
+            <div id="ob-next-steps"></div>
+          </div>
         </div>
 
         <!-- Step 2: Loading state -->
@@ -3125,15 +3146,159 @@ async function saveBookingConfig() {
 
 let obCurrentDraftId = null;
 
+let obCreatedClientId = null;
+let obCreatedDemoLink = null;
+
 function resetOnboarding() {
-  obCurrentDraftId = null;
+  obCurrentDraftId  = null;
+  obCreatedClientId = null;
+  obCreatedDemoLink = null;
   document.getElementById('ob-url-input').value = '';
-  document.getElementById('ob-url-error').style.display = 'none';
+  document.getElementById('ob-url-error').style.display   = 'none';
   document.getElementById('ob-step-loading').style.display = 'none';
   document.getElementById('ob-step-review').style.display  = 'none';
+  document.getElementById('ob-step-success').style.display = 'none';
   document.getElementById('ob-step-url').style.display     = 'block';
-  const btn = document.getElementById('ob-analyze-btn');
-  if (btn) { btn.disabled = false; btn.textContent = 'Auto-config'; }
+  const createBtn = document.getElementById('ob-create-btn');
+  if (createBtn) { createBtn.disabled = false; createBtn.textContent = '⚡ Create Client'; }
+  const analyzeBtn = document.getElementById('ob-analyze-btn');
+  if (analyzeBtn) { analyzeBtn.disabled = false; analyzeBtn.textContent = 'Review config first →'; }
+}
+
+function showOnboardingSuccess(result) {
+  obCreatedClientId = result.clientId;
+  obCreatedDemoLink = result.demoLink;
+
+  // Status checks
+  const checksEl = document.getElementById('ob-success-checks');
+  if (checksEl) checksEl.innerHTML = `
+    <div>✅ <strong>Client created</strong> — ${result.clientName ?? result.clientId}
+      <span style="font-size:11px;color:var(--text2);"> (${result.clientId})</span></div>
+    <div>✅ <strong>Bot ready</strong> — Test mode enabled, not yet live</div>
+    <div>✅ <strong>Demo configured</strong> — ${result.pagesAnalyzed ?? 0} pages analyzed</div>
+  `;
+
+  // Wire action buttons
+  const demoBtn = document.getElementById('ob-demo-btn');
+  if (demoBtn) demoBtn.onclick = () => { if (obCreatedDemoLink) window.open(obCreatedDemoLink, '_blank'); };
+  const editBtn = document.getElementById('ob-edit-btn');
+  if (editBtn) editBtn.onclick = () => switchToCreatedClient('settings');
+
+  // Next steps
+  const stepsEl = document.getElementById('ob-next-steps');
+  if (stepsEl) {
+    const steps = result.nextSteps ?? [];
+    if (!steps.length) {
+      stepsEl.innerHTML = '<div class="empty-state">No specific actions needed.</div>';
+    } else {
+      const icon = { required: '🔴', high: '🟠', medium: '🟡', when_ready: '🟢' };
+      stepsEl.innerHTML = steps.map((s) => `
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+          <span style="font-size:15px;flex-shrink:0;margin-top:1px;">${icon[s.priority] ?? '⚪'}</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;">${s.title}</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:2px;">${s.desc}</div>
+          </div>
+          ${s.section ? `<button class="btn btn-ghost btn-sm" style="font-size:11px;flex-shrink:0;"
+            onclick="switchToCreatedClient('${s.section}')">Go →</button>` : ''}
+        </div>
+      `).join('');
+    }
+  }
+
+  document.getElementById('ob-step-url').style.display     = 'none';
+  document.getElementById('ob-step-loading').style.display = 'none';
+  document.getElementById('ob-step-review').style.display  = 'none';
+  document.getElementById('ob-step-success').style.display = 'block';
+  showToast(`"${result.clientName ?? result.clientId}" created!`);
+
+  // Refresh client selector so the new client appears in the dropdown
+  refreshClientSelect(result.clientId).catch(() => {});
+}
+
+async function refreshClientSelect(newClientId) {
+  if (!me?.isAdmin) return;
+  const clientsData = await apiFetch('/clients');
+  const clients = clientsData?.clients ?? [];
+  if (!clients.length) return;
+  const sel = document.getElementById('clientSelect');
+  if (!sel) return;
+  const shortLabel = (n) => n.length > 26 ? n.slice(0, 24) + '…' : n;
+  sel.innerHTML = clients.map((c) => `<option value="${c.id}">${shortLabel(c.name)}</option>`).join('');
+  if (newClientId && clients.some((c) => c.id === newClientId)) {
+    sel.value = newClientId;
+    const chosen = clients.find((c) => c.id === newClientId);
+    me.clientId   = chosen?.id   ?? me.clientId;
+    me.clientName = chosen?.name ?? me.clientName;
+    const badgeEl = document.getElementById('clientBadge');
+    if (badgeEl) badgeEl.textContent = me.clientName ?? me.clientId ?? 'Highmark Admin';
+    document.title = `${me.clientName ?? 'Portal'} — Highmark`;
+  }
+}
+
+function switchToCreatedClient(section) {
+  if (obCreatedClientId) refreshClientSelect(obCreatedClientId).catch(() => {});
+  switchSection(section || 'settings');
+}
+
+async function runCreateClient() {
+  const url = (document.getElementById('ob-url-input').value ?? '').trim();
+  const errEl = document.getElementById('ob-url-error');
+  errEl.style.display = 'none';
+
+  if (!url) { errEl.textContent = 'Please enter a URL.'; errEl.style.display = 'block'; return; }
+  try { new URL(url); } catch {
+    errEl.textContent = 'Invalid URL — include https://'; errEl.style.display = 'block'; return;
+  }
+
+  const btn = document.getElementById('ob-create-btn');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  document.getElementById('ob-step-url').style.display     = 'none';
+  document.getElementById('ob-step-loading').style.display = 'block';
+  document.getElementById('ob-step-success').style.display = 'none';
+
+  const messages = [
+    'Crawling pages…', 'Detecting booking platform…', 'Running AI extraction…',
+    'Creating client record…', 'Configuring bot…',
+  ];
+  let msgIdx = 0;
+  const msgEl = document.getElementById('ob-progress-msg');
+  const msgTimer = setInterval(() => { msgIdx = (msgIdx + 1) % messages.length; if (msgEl) msgEl.textContent = messages[msgIdx]; }, 3000);
+
+  try {
+    const data = await apiFetch('/onboarding/create-client', { method: 'POST', body: JSON.stringify({ url }) });
+    clearInterval(msgTimer);
+
+    if (!data) {
+      document.getElementById('ob-step-loading').style.display = 'none';
+      document.getElementById('ob-step-url').style.display     = 'block';
+      btn.disabled = false; btn.textContent = '⚡ Create Client';
+
+      if (_lastApiData?.existingClientId) {
+        errEl.innerHTML = `${_lastApiError} — `;
+        const link = document.createElement('button');
+        link.className = 'btn btn-ghost btn-sm';
+        link.style.cssText = 'font-size:11px;display:inline;padding:0 6px;';
+        link.textContent = 'View existing client';
+        link.onclick = () => { switchToCreatedClient('settings'); obCreatedClientId = _lastApiData.existingClientId; };
+        errEl.appendChild(link);
+      } else {
+        errEl.textContent = _lastApiError ?? 'Creation failed — try again.';
+      }
+      errEl.style.display = 'block';
+      return;
+    }
+
+    showOnboardingSuccess(data);
+    btn.disabled = false; btn.textContent = '⚡ Create Client';
+  } catch (err) {
+    clearInterval(msgTimer);
+    document.getElementById('ob-step-loading').style.display = 'none';
+    document.getElementById('ob-step-url').style.display     = 'block';
+    btn.disabled = false; btn.textContent = '⚡ Create Client';
+    errEl.textContent = 'Network error — check your connection.';
+    errEl.style.display = 'block';
+  }
 }
 
 async function runAutoConfig() {
@@ -3323,11 +3488,15 @@ async function saveOnboardingDraft() {
       return;
     }
 
-    statusEl.style.display = 'block';
-    statusEl.style.color   = 'var(--success, #0a8)';
-    statusEl.textContent   = `✓ Client "${draft_client.name}" created (ID: ${saveData.clientId}). Now inactive — activate in Clients section.`;
-    btn.disabled = true; btn.textContent = 'Saved';
-    showToast(`Client "${draft_client.name}" created`);
+    btn.disabled = false; btn.textContent = 'Save & Create Client';
+    showOnboardingSuccess({
+      clientId:      saveData.clientId,
+      clientName:    saveData.clientName ?? draft_client.name,
+      draftId:       obCurrentDraftId,
+      demoLink:      saveData.demoLink   ?? null,
+      nextSteps:     saveData.nextSteps  ?? [],
+      pagesAnalyzed: saveData.pagesAnalyzed ?? 0,
+    });
   } else {
     // No DB (supabase unavailable) — show error
     btn.disabled = false; btn.textContent = 'Save & Create Client';

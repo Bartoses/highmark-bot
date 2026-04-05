@@ -40,8 +40,10 @@ import { scheduleMessage, processScheduledMessages } from "./scheduler.js";
 import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
 import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSettings, handlePortalMessaging, handlePortalUpdateMessaging,
   handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
-  handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave } from "./adminPortal.js";
-import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb } from "./onboardingConfig.js";
+  handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
+  handleOnboardingCreateClient } from "./adminPortal.js";
+import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb,
+  buildNextSteps, findRecentDraftForUrl } from "./onboardingConfig.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
 import { metaFromBookingKey } from "./clientConfig.js";
@@ -2969,6 +2971,7 @@ async function main() {
   await test55(); // Messaging config: handlePortalMessaging, handlePortalUpdateMessaging, getMessagingConfig fallback
   await test56(); // Bot config + booking config: GET/PATCH handlers
   await test57(); // Onboarding Auto-Config (Phase 3): slugifyName, detectBookingSignals, buildConfidenceScore, handler guards
+  await test59(); // One-Click Client Creation (Phase 4): buildNextSteps, findRecentDraftForUrl, handler guards
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -2989,6 +2992,7 @@ async function main() {
     await test35(); // Portal auth, scoping, route guards (Chunk 10)
     await test37Integration(); // Invite flow integration: routes, auth guards (Chunk 11)
     await test58(); // Onboarding routes: auth guards (Phase 3)
+    await test60(); // Phase 4: create-client route auth guard
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -7906,6 +7910,178 @@ async function test58() {
       ? pass(`test58: ${method} ${path} → 401 without token`)
       : fail(`test58: ${method} ${path} auth guard`, `status=${r.status}`);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test59 — Phase 4: buildNextSteps, findRecentDraftForUrl, handleOnboardingCreateClient
+// ─────────────────────────────────────────────────────────────────────────────
+async function test59() {
+  console.log("\n[test59] Phase 4: One-Click Client Creation — unit tests");
+
+  const adminReq = {
+    portalUser: { role: "internal_admin", clientId: null, isAdmin: true, email: "admin@test.com" },
+    query: {}, body: {}, params: {},
+  };
+  const clientAdminReq = {
+    portalUser: { role: "client_admin", clientId: "csr_rea", isAdmin: false, isClientAdmin: true },
+    query: { client_id: "csr_rea" }, body: {}, params: {},
+  };
+
+  // 1. buildNextSteps — FareHarbor platform → fareharbor step, phone step; no booking_links
+  {
+    const steps = buildNextSteps({ booking_platform: "fareharbor" }, []);
+    const hasFH    = steps.some((s) => s.id === "fareharbor");
+    const hasPhone = steps.some((s) => s.id === "phone_number");
+    const noLinks  = !steps.some((s) => s.id === "booking_links");
+    hasFH && hasPhone && noLinks
+      ? pass("test59: buildNextSteps fareharbor → FH step, phone step, no booking_links")
+      : fail("test59: buildNextSteps fareharbor", JSON.stringify(steps.map((s) => s.id)));
+  }
+
+  // 2. buildNextSteps — no platform + lead_capture mode → booking_links step
+  {
+    const steps = buildNextSteps({ booking_platform: "none", booking_mode_suggestion: "lead_capture" }, []);
+    steps.some((s) => s.id === "booking_links")
+      ? pass("test59: buildNextSteps no platform + lead_capture → booking_links step")
+      : fail("test59: buildNextSteps lead_capture no links", JSON.stringify(steps.map((s) => s.id)));
+  }
+
+  // 3. buildNextSteps — informational mode → no booking_links step
+  {
+    const steps = buildNextSteps({ booking_platform: "none", booking_mode_suggestion: "informational" }, []);
+    !steps.some((s) => s.id === "booking_links")
+      ? pass("test59: buildNextSteps informational → no booking_links step")
+      : fail("test59: buildNextSteps informational has booking_links unexpectedly", "");
+  }
+
+  // 4. buildNextSteps — missing contact → contact_info step
+  {
+    const steps = buildNextSteps({ phone: null, email: null }, []);
+    steps.some((s) => s.id === "contact_info")
+      ? pass("test59: buildNextSteps no contact → contact_info step")
+      : fail("test59: buildNextSteps no contact_info", JSON.stringify(steps.map((s) => s.id)));
+  }
+
+  // 5. buildNextSteps — has contact → no contact_info step
+  {
+    const steps = buildNextSteps({ phone: "555-0001", email: "a@b.com" }, []);
+    !steps.some((s) => s.id === "contact_info")
+      ? pass("test59: buildNextSteps with contact → no contact_info step")
+      : fail("test59: buildNextSteps with contact has contact_info unexpectedly", "");
+  }
+
+  // 6. buildNextSteps — no services → services step
+  {
+    const steps = buildNextSteps({ services: [] }, []);
+    steps.some((s) => s.id === "services")
+      ? pass("test59: buildNextSteps no services → services step")
+      : fail("test59: buildNextSteps no services step", JSON.stringify(steps.map((s) => s.id)));
+  }
+
+  // 7. buildNextSteps — has services → no services step
+  {
+    const steps = buildNextSteps({ services: ["Tour A", "Tour B", "Tour C"] }, []);
+    !steps.some((s) => s.id === "services")
+      ? pass("test59: buildNextSteps with services → no services step")
+      : fail("test59: buildNextSteps with services has services step unexpectedly", "");
+  }
+
+  // 8. buildNextSteps — go_live is always last step
+  {
+    const steps = buildNextSteps({ booking_platform: "fareharbor", services: ["A"] }, []);
+    steps[steps.length - 1]?.id === "go_live"
+      ? pass("test59: buildNextSteps go_live is last step")
+      : fail("test59: buildNextSteps go_live not last", steps[steps.length - 1]?.id);
+  }
+
+  // 9. buildNextSteps — phone_number step always first
+  {
+    const steps = buildNextSteps({}, []);
+    steps[0]?.id === "phone_number"
+      ? pass("test59: buildNextSteps phone_number always first step")
+      : fail("test59: buildNextSteps phone_number not first", steps[0]?.id);
+  }
+
+  // 10. buildNextSteps — all steps have id, title, desc
+  {
+    const steps = buildNextSteps({ booking_platform: "fareharbor", phone: null, services: [] }, []);
+    const allValid = steps.every((s) => s.id && s.title && s.desc);
+    allValid
+      ? pass("test59: buildNextSteps all steps have id + title + desc")
+      : fail("test59: buildNextSteps some steps missing fields", JSON.stringify(steps));
+  }
+
+  // 11. findRecentDraftForUrl — null supabase → null
+  {
+    const result = await findRecentDraftForUrl("https://example.com", null);
+    result === null
+      ? pass("test59: findRecentDraftForUrl null supabase → null")
+      : fail("test59: findRecentDraftForUrl null supabase", result);
+  }
+
+  // 12. findRecentDraftForUrl — invalid URL → null
+  {
+    const result = await findRecentDraftForUrl("not-a-url", {});
+    result === null
+      ? pass("test59: findRecentDraftForUrl invalid URL → null")
+      : fail("test59: findRecentDraftForUrl invalid URL", result);
+  }
+
+  // 13. handleOnboardingCreateClient — client_admin → 403
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingCreateClient({ ...clientAdminReq, body: { url: "https://example.com" } }, res, {}, null);
+    statusCode === 403
+      ? pass("test59: handleOnboardingCreateClient client_admin → 403")
+      : fail("test59: handleOnboardingCreateClient client_admin", `status=${statusCode}`);
+  }
+
+  // 14. handleOnboardingCreateClient — missing url → 400
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingCreateClient({ ...adminReq, body: {} }, res, {}, null);
+    statusCode === 400
+      ? pass("test59: handleOnboardingCreateClient missing url → 400")
+      : fail("test59: handleOnboardingCreateClient missing url", `status=${statusCode}`);
+  }
+
+  // 15. handleOnboardingCreateClient — invalid url → 400
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingCreateClient({ ...adminReq, body: { url: "not-a-url" } }, res, {}, null);
+    statusCode === 400
+      ? pass("test59: handleOnboardingCreateClient invalid url → 400")
+      : fail("test59: handleOnboardingCreateClient invalid url", `status=${statusCode}`);
+  }
+
+  // 16. handleOnboardingCreateClient — no supabase → 503
+  {
+    let statusCode = null;
+    const res = { status: (c) => { statusCode = c; return { json: () => {} }; } };
+    await handleOnboardingCreateClient({ ...adminReq, body: { url: "https://example.com" } }, res, null, null);
+    statusCode === 503
+      ? pass("test59: handleOnboardingCreateClient no supabase → 503")
+      : fail("test59: handleOnboardingCreateClient no supabase", `status=${statusCode}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test60 — Phase 4: create-client route auth guard (integration)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test60() {
+  console.log("\n[test60] Phase 4: create-client route auth guard");
+
+  const r = await fetch(`${BASE_URL}/portal/api/onboarding/create-client`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: "https://example.com" }),
+  });
+  r.status === 401
+    ? pass("test60: POST /portal/api/onboarding/create-client → 401 without token")
+    : fail("test60: create-client auth guard", `status=${r.status}`);
 }
 
 main().catch((e) => {
