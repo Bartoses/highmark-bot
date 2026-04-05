@@ -3077,20 +3077,14 @@ async function runAutoConfig() {
   }, 3000);
 
   try {
-    const token = localStorage.getItem('portal_token');
-    const resp  = await fetch('/portal/api/onboarding/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ url }),
-    });
+    const data = await apiFetch('/onboarding/analyze', { method: 'POST', body: JSON.stringify({ url }) });
     clearInterval(msgTimer);
-    const data = await resp.json();
 
-    if (!resp.ok || data.error) {
+    if (!data) {
       document.getElementById('ob-step-loading').style.display = 'none';
       document.getElementById('ob-step-url').style.display     = 'block';
       btn.disabled = false; btn.textContent = 'Auto-config';
-      errEl.textContent = data.error ?? 'Analysis failed — try again.';
+      errEl.textContent = _lastApiError ?? 'Analysis failed — try again.';
       errEl.style.display = 'block';
       return;
     }
@@ -3219,30 +3213,23 @@ async function saveOnboardingDraft() {
   btn.disabled = true; btn.textContent = 'Saving…';
   statusEl.style.display = 'none';
 
-  const token = localStorage.getItem('portal_token');
-
-  // If we have a draftId, update + save; otherwise just save in-memory state
+  // If we have a draftId, update + save; otherwise show error
   if (obCurrentDraftId) {
     // Update the draft first
-    await fetch(`/portal/api/onboarding/drafts/${obCurrentDraftId}`, {
+    await apiFetch(`/onboarding/drafts/${obCurrentDraftId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ draft_client, draft_bot, draft_booking }),
     });
 
     // Then commit
-    const saveResp = await fetch(`/portal/api/onboarding/drafts/${obCurrentDraftId}/save`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    const saveData = await saveResp.json();
+    const saveData = await apiFetch(`/onboarding/drafts/${obCurrentDraftId}/save`, { method: 'POST' });
 
     btn.disabled = false; btn.textContent = 'Save & Create Client';
 
-    if (!saveResp.ok || saveData.error) {
+    if (!saveData) {
       statusEl.style.display = 'block';
       statusEl.style.color   = 'var(--danger, #e53)';
-      statusEl.textContent   = saveData.error ?? 'Save failed — try again.';
+      statusEl.textContent   = _lastApiError ?? 'Save failed — try again.';
       return;
     }
 
