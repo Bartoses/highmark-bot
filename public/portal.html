@@ -1023,6 +1023,7 @@ let token  = localStorage.getItem('hm_portal_token') ?? '';
 let me     = null;
 let sbClient = null;  // initialized in init() for token refresh
 let _lastApiError = null;  // last error message from apiFetch for detailed error display
+let _lastApiData  = null;  // last parsed error body from apiFetch (for extra fields like existing_id)
 let leadsOffset = 0;
 const LEADS_LIMIT = 25;
 let activeLead = null;
@@ -1201,10 +1202,12 @@ async function apiFetch(path, opts = {}, _retried = false) {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       _lastApiError = body.error ?? `HTTP ${res.status}`;
+      _lastApiData  = body;
       console.warn('[API]', path, res.status, _lastApiError);
       return null;
     }
     _lastApiError = null;
+    _lastApiData  = null;
     return res.json();
   } catch (err) {
     console.error('[API] fetch error:', err);
@@ -2251,8 +2254,31 @@ async function sendInvite() {
   btn.disabled = false; btn.textContent = 'Create invite link';
 
   if (!r) {
-    errEl.textContent = _lastApiError || 'Failed to create invite. Try again.';
-    errEl.style.display = 'block';
+    const existingId = _lastApiData?.existing_id;
+    if (existingId) {
+      // 409 — pending invite blocking creation; offer inline revoke
+      errEl.innerHTML = `${_lastApiError} &nbsp;
+        <button class="btn btn-ghost btn-sm" style="margin-left:4px;font-size:11px;color:var(--danger)"
+          id="revokeExistingBtn">Revoke old invite</button>`;
+      errEl.style.display = 'block';
+      document.getElementById('revokeExistingBtn').onclick = async () => {
+        errEl.innerHTML = 'Revoking old invite…';
+        const rv = await apiFetch(`/invites/${existingId}/revoke`, { method: 'POST', body: '{}' });
+        if (!rv) { errEl.textContent = _lastApiError || 'Revoke failed.'; return; }
+        errEl.style.display = 'none';
+        // Re-submit automatically
+        btn.disabled = true; btn.textContent = 'Creating…';
+        const r2 = await apiFetch('/invites', { method: 'POST', body: JSON.stringify({ email, role, client_id: clientId }) });
+        btn.disabled = false; btn.textContent = 'Create invite link';
+        if (!r2) { errEl.textContent = _lastApiError || 'Failed to create invite.'; errEl.style.display = 'block'; return; }
+        document.getElementById('inviteModalForm').style.display = 'none';
+        showInviteResult(r2.invite_url, email, 'Invite created');
+        loadUsers();
+      };
+    } else {
+      errEl.textContent = _lastApiError || 'Failed to create invite. Try again.';
+      errEl.style.display = 'block';
+    }
     return;
   }
 
