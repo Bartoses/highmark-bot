@@ -74,6 +74,7 @@ export function makePortalAuth(supabase) {
       email:         user.email,
       role:          portalUser.role,
       clientId:      portalUser.client_id ?? null,
+      isAdmin:       portalUser.role === "internal_admin",
       isClientAdmin: portalUser.role === "client_admin" || portalUser.role === "internal_admin",
     };
 
