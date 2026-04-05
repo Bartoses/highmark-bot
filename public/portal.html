@@ -69,6 +69,26 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 .nav-ext-link:hover { color: var(--text); background: var(--panel2); text-decoration: none; }
 
+/* Onboarding URL row */
+.ob-url-row { display: flex; gap: 8px; align-items: center; }
+.ob-url-row .form-input { flex: 1; min-width: 0; }
+
+/* ── Settings / onboarding grid ──────────────────────────────────────────── */
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.field-group { display: flex; flex-direction: column; gap: 5px; }
+.field-label { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; }
+.form-input {
+  width: 100%; background: var(--bg); border: 1px solid var(--border2); color: var(--text);
+  border-radius: 6px; padding: 9px 12px; font-size: 13px; outline: none; font-family: var(--font);
+  box-sizing: border-box;
+}
+.form-input:focus { border-color: var(--accent); }
+.form-input[rows] { resize: vertical; min-height: 80px; }
+
 /* Onboarding confidence badges */
 .ob-conf-badge {
   display: inline-flex; align-items: center; gap: 4px;
@@ -234,6 +254,16 @@ tr:hover td { background: var(--panel2); }
   .modal-backdrop { align-items: flex-end !important; }
   /* Prevent horizontal scroll on settings tables */
   #settingsContent .tbl-wrap { max-width: calc(100vw - 64px); }
+  /* Settings/onboarding grid: single column on mobile */
+  .settings-grid { grid-template-columns: 1fr; }
+  .settings-grid .field-group[style*="grid-column"] { grid-column: auto !important; }
+  /* Onboarding URL row: stack button below input */
+  .ob-url-row { flex-direction: column; align-items: stretch; }
+  .ob-url-row .btn { width: 100%; justify-content: center; }
+  /* Confidence badges: wrap and shrink */
+  #ob-pages-badge, .ob-conf-badge { margin-bottom: 4px; }
+  /* Action buttons in onboarding: full width */
+  #sec-onboarding .btn { width: 100%; justify-content: center; margin-bottom: 6px; }
 }
 /* Admin-only nav items — hidden until confirmed in JS */
 .admin-only { display: none; }
@@ -512,9 +542,9 @@ tr:hover td { background: var(--panel2); }
           <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">
             Paste the business homepage. Highmark will crawl up to 6 pages and draft a full configuration for your review.
           </p>
-          <div style="display:flex;gap:8px;align-items:center;">
+          <div class="ob-url-row">
             <input id="ob-url-input" type="url" placeholder="https://example.com"
-              class="form-input" style="flex:1;"
+              class="form-input"
               onkeydown="if(event.key==='Enter')runAutoConfig()"/>
             <button class="btn btn-primary" onclick="runAutoConfig()" id="ob-analyze-btn">Auto-config</button>
           </div>
@@ -686,12 +716,28 @@ tr:hover td { background: var(--panel2); }
               <span>🔌</span> Integrations
               <span class="more-link-arrow">›</span>
             </div>
+            <div class="more-link-item" onclick="switchSection('messaging')">
+              <span>💬</span> Messaging
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item" onclick="switchSection('bot-config')">
+              <span>🤖</span> Bot Config
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item" onclick="switchSection('booking-config')">
+              <span>📅</span> Booking Config
+              <span class="more-link-arrow">›</span>
+            </div>
             <div class="more-link-item client-admin-only" onclick="switchSection('users')">
               <span>🔑</span> Users &amp; Access
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item admin-only" onclick="switchSection('clients')">
               <span>🏢</span> Clients
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item admin-only" onclick="switchSection('onboarding')">
+              <span>✨</span> New Client
               <span class="more-link-arrow">›</span>
             </div>
           </div>
