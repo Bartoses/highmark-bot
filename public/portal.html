@@ -2194,7 +2194,7 @@ async function toggleUser(id, currentlyActive) {
 
 async function doResendInvite(id) {
   const r = await apiFetch(`/invites/${id}/resend`, { method: 'POST', body: '{}' });
-  if (!r) { alert('Failed to resend invite.'); return; }
+  if (!r) { showToast(_lastApiError || 'Failed to resend invite.'); return; }
   showInviteResult(r.invite_url, r.invite.email, 'Invite link refreshed');
   loadUsers();
 }
@@ -2251,7 +2251,7 @@ async function sendInvite() {
   btn.disabled = false; btn.textContent = 'Create invite link';
 
   if (!r) {
-    errEl.textContent = 'Failed to create invite. Try again.';
+    errEl.textContent = _lastApiError || 'Failed to create invite. Try again.';
     errEl.style.display = 'block';
     return;
   }
@@ -2268,20 +2268,35 @@ function showInviteResult(url, email, heading) {
     <p style="color:var(--text2);font-size:12px;margin-bottom:8px;">
       Send this link to <strong>${email}</strong>. It expires in 72 hours and can only be used once.
     </p>
-    <div class="invite-url-box" id="inviteUrlBox">${url}</div>
-    <p style="color:var(--text2);font-size:11px;margin-top:6px;">Click the link above to copy it.</p>
+    <input type="text" readonly id="inviteUrlBox" value="${url}"
+      style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--text1);cursor:pointer;word-break:break-all;"
+      onclick="this.select()" />
     <div class="modal-footer" style="margin-top:16px">
-      <button class="btn btn-primary" onclick="copyInviteUrl('${url}')">Copy link</button>
+      <button class="btn btn-primary" id="inviteCopyBtn">Copy link</button>
       <button class="btn btn-ghost" id="inviteModalDone">Done</button>
     </div>`;
   resEl.style.display = '';
   document.getElementById('inviteModalDone').onclick = () => {
     document.getElementById('inviteModal').classList.remove('open');
   };
+  document.getElementById('inviteCopyBtn').onclick = () => copyInviteUrl(url);
 }
 
-async function copyInviteUrl(url) {
-  try { await navigator.clipboard.writeText(url); alert('Invite link copied!'); } catch { alert(url); }
+function copyInviteUrl(url) {
+  // Select the input so execCommand 'copy' works across all browsers/iOS
+  const inp = document.getElementById('inviteUrlBox');
+  if (inp) { inp.focus(); inp.select(); inp.setSelectionRange(0, 99999); }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url)
+      .then(() => showToast('Copied!'))
+      .catch(() => {
+        try { document.execCommand('copy'); showToast('Copied!'); }
+        catch { showToast('Select the link above and copy manually'); }
+      });
+    return;
+  }
+  try { document.execCommand('copy'); showToast('Copied!'); }
+  catch { showToast('Select the link above and copy manually'); }
 }
 
 function setupInviteModal() {
