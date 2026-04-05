@@ -38,7 +38,7 @@ import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevoke
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { loadDbClients } from "./clients.js";
-import { handleDemoFlow } from "./demoFlow.js";
+import { handleDemoFlow, handleDemoFlowWithMeta } from "./demoFlow.js";
 import { getRuntimeClientConfig } from "./clientConfig.js";
 import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction } from "./conversationEngine.js";
 import { selectResponseMode, buildResponseModeInstruction } from "./responseMode.js";
@@ -54,11 +54,13 @@ app.use(express.json());
 // ─────────────────────────────────────────────────────────────────────────────
 
 // IP limiter: 30 requests / minute per IP (catches bots hitting the endpoint)
+// Skipped in TEST_MODE so integration tests can send many requests freely.
 const ipLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => process.env.TEST_MODE === "true",
   handler: (req, res) => {
     console.warn(`[RATE] IP blocked: ${req.ip}`);
     res.set("Content-Type", "text/xml");
@@ -1354,13 +1356,13 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   if (client.bookingMode === "demo" || client.isDemo) {
     const { isNew, convo } = await getConversation(fromNumber, toNumber);
     if (isNew && isUiReq(req)) convo.sessionType = "test";
-    const { reply } = await handleDemoFlow({
+    const { reply, meta } = await handleDemoFlowWithMeta({
       supabase, twilioClient, fromNumber, toNumber, rawBody,
       testMode: process.env.TEST_MODE === "true", isNew, convo, client,
       source: isUiReq(req) ? "ui" : "sms",
     });
     await saveConversation(fromNumber, toNumber, convo, client?.id);
-    if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply, meta: { mode: "demo" } });
+    if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply, meta });
     await twilioClient.messages.create({ body: reply, from: toNumber, to: fromNumber })
       .catch((err) => console.error("[DEMO] Twilio send error:", err.message));
     res.set("Content-Type", "text/xml");

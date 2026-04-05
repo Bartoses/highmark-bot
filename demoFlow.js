@@ -24,16 +24,17 @@
 // }
 //
 // ── Steps ────────────────────────────────────────────────────────────────────
-//   browsing          → main interactive state: Q&A, menu, demos, CTA
+//   browsing           → main interactive state: Q&A, menu, demos, CTA
 //   awaiting_demo_type → asked for business type; waiting for reply
-//   demo_menu         → showing demo feature menu for detected vertical
-//   demo_path         → showing tailored path intro
-//   demo_followup     → showing followup + revenue sim
-//   demo_cta          → direct "want to get started?" CTA
-//   lead_name         → asking for name
-//   lead_business     → asking for business name
-//   lead_website      → asking for website (skippable)
-//   complete          → lead saved; not a dead end
+//   demo_type_menu     → personalized menu after vertical detected (hook + 5 options)
+//   demo_menu          → showing demo feature menu for detected vertical
+//   demo_path          → showing tailored path intro
+//   demo_followup      → showing followup + revenue sim
+//   demo_cta           → direct "want to get started?" CTA (fires after 2 paths)
+//   lead_name          → asking for name
+//   lead_business      → asking for business name
+//   lead_website       → asking for website (skippable)
+//   complete           → lead saved; not a dead end
 //
 // ── Global commands (any state) ──────────────────────────────────────────────
 //   MENU / OPTIONS → main menu
@@ -148,6 +149,7 @@ const VERTICALS = {
   outdoor: {
     label: "tour or rental company",
     menuContext: "Built for tour operators and rental companies.",
+    hook: "Most tour operators miss 40–60% of their after-hours inquiries. Highmark answers in 4 seconds, 24/7 — and moves guests toward booking automatically.",
     qa: {
       customerQ: `"What do you have available this weekend?"`,
       botA:      `"We have morning and afternoon tours Saturday — guides included. Want me to check availability for your group size?"`,
@@ -160,11 +162,12 @@ const VERTICALS = {
       scenario: `"I want to book a guided tour for Saturday, 4 people."`,
       outcome:  `Highmark shows open slots, answers questions, sends a direct booking link — confirmed in 3 texts.`,
     },
-    inquiries: 14, bookings: 6, leads: 5,
+    inquiries: 14, bookings: 6, leads: 5, avg_booking_value: 220,
   },
   appointments: {
     label: "appointments-based business",
     menuContext: "Perfect for salons, spas, and service businesses.",
+    hook: "Most appointment-based businesses lose 30–40% of leads to voicemail and slow follow-up. Highmark captures every inquiry and keeps the conversation moving.",
     qa: {
       customerQ: `"Do you have any openings this Saturday?"`,
       botA:      `"Yes — 11am and 2:30pm are both open. Which works better for you?"`,
@@ -177,11 +180,12 @@ const VERTICALS = {
       scenario: `"I want to schedule a cut and color next week."`,
       outcome:  `Highmark checks the calendar, confirms the time, sends a reminder 24 hrs before.`,
     },
-    inquiries: 22, bookings: 11, leads: 7,
+    inquiries: 22, bookings: 11, leads: 7, avg_booking_value: 130,
   },
   home_services: {
     label: "home services business",
     menuContext: "Great for contractors, HVAC, landscaping, and home services.",
+    hook: "Home services businesses miss revenue constantly — customers text after hours, get no reply, and call the next contractor. Highmark responds immediately and qualifies the job.",
     qa: {
       customerQ: `"Are you available for a quote this week?"`,
       botA:      `"Yes — Thursday afternoon and Friday morning are open. What's the job?"`,
@@ -194,11 +198,12 @@ const VERTICALS = {
       scenario: `"I need my gutters cleaned before the storm."`,
       outcome:  `Highmark qualifies the job, checks the schedule, confirms the appointment over text.`,
     },
-    inquiries: 18, bookings: 9, leads: 6,
+    inquiries: 18, bookings: 9, leads: 6, avg_booking_value: 280,
   },
   restaurant: {
     label: "restaurant or cafe",
     menuContext: "Works great for restaurants, cafes, and food businesses.",
+    hook: "Restaurants lose reservations constantly to unanswered texts and voicemails. Highmark captures every inquiry — hours, availability, private events — and moves guests toward a booking.",
     qa: {
       customerQ: `"What are your hours on Sunday?"`,
       botA:      `"Open 9am–3pm Sunday. Kitchen closes at 2:30. Want a table?"`,
@@ -211,11 +216,12 @@ const VERTICALS = {
       scenario: `"Can I get a reservation for 6 on Friday at 7pm?"`,
       outcome:  `Highmark checks availability, confirms the reservation, sends a reminder the day before.`,
     },
-    inquiries: 31, bookings: 16, leads: 9,
+    inquiries: 31, bookings: 16, leads: 9, avg_booking_value: 85,
   },
   fitness: {
     label: "fitness or wellness studio",
     menuContext: "Built for gyms, yoga studios, and wellness businesses.",
+    hook: "Most fitness studios see 30–40% of inquiries go unanswered after hours. Highmark captures class questions, membership interest, and intro offers — and funnels them toward booking.",
     qa: {
       customerQ: `"Do you offer drop-in classes?"`,
       botA:      `"Yes — drop-in is $20. 6pm yoga and 7pm HIIT both have spots tonight. Want me to hold one?"`,
@@ -228,11 +234,12 @@ const VERTICALS = {
       scenario: `"I want to start personal training next week."`,
       outcome:  `Highmark collects goals, checks trainer availability, books an intro session — all over text.`,
     },
-    inquiries: 19, bookings: 8, leads: 7,
+    inquiries: 19, bookings: 8, leads: 7, avg_booking_value: 75,
   },
   default: {
     label: "business",
     menuContext: "Highmark works for any customer-facing business.",
+    hook: "Most businesses lose leads when customers text after hours or get a slow reply. Highmark answers instantly, captures their info, and keeps them moving toward a booking or call.",
     qa: {
       customerQ: `"What are your hours and do you take walk-ins?"`,
       botA:      `"Open Mon–Fri 9am–6pm, walk-ins welcome. Saturdays by appointment. Want to check availability?"`,
@@ -245,7 +252,7 @@ const VERTICALS = {
       scenario: `"I want to schedule something this week."`,
       outcome:  `Highmark handles availability, confirmation, and reminders — no staff required.`,
     },
-    inquiries: 16, bookings: 7, leads: 5,
+    inquiries: 16, bookings: 7, leads: 5, avg_booking_value: 150,
   },
 };
 
@@ -260,6 +267,7 @@ const SUBTYPE_EXAMPLES = {
     match: /\bbike\b|\bcycl|\bMTB\b|mountain.?bike|bike.?tour|bike.?rental/i,
     category: "outdoor",
     label: "bike tour or rental company",
+    hook: "Bike tour and rental businesses lose bookings every day to unanswered texts — especially same-day requests and group rides. Highmark captures every one.",
     qa: {
       customerQ: `"What's the easiest trail for a first-timer?"`,
       botA:      `"Our beginner loop is 8 miles, mostly flat — helmet and bike included. Tours run daily at 9am and 1pm. Want me to check Saturday availability?"`,
@@ -272,12 +280,13 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book a guided mountain bike tour, 2 people this Saturday."`,
       outcome:  `Highmark checks guide availability, answers gear questions, confirms the booking, sends a reminder — done in 3 texts.`,
     },
-    inquiries: 15, bookings: 7, leads: 5,
+    inquiries: 15, bookings: 7, leads: 5, avg_booking_value: 180,
   },
   snowmobile: {
     match: /snowmobile|sled\b|sledding|snowcoach/i,
     category: "outdoor",
     label: "snowmobile tour and rental company",
+    hook: "Snowmobile businesses get a flood of texts on powder days — availability, pricing, group sizes. Most go unanswered for hours. Highmark responds in 4 seconds.",
     qa: {
       customerQ: `"What trails are open and how's the snow?"`,
       botA:      `"Trails are fully open — 8\" fresh snow last night. Guided tours from $249, self-guided rentals from $199. Want to check Saturday availability?"`,
@@ -290,12 +299,13 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book the guided snowmobile tour for Saturday, 4 people."`,
       outcome:  `Highmark shows open slots, answers questions, sends a direct booking link — confirmed in 3 texts.`,
     },
-    inquiries: 14, bookings: 6, leads: 5,
+    inquiries: 14, bookings: 6, leads: 5, avg_booking_value: 280,
   },
   raft: {
     match: /\braft\b|rafting|\bkayak\b|kayaking|\bcanoe\b|canoeing|paddle.?board|river.?trip|whitewater/i,
     category: "outdoor",
     label: "rafting or river guide company",
+    hook: "River guide companies miss group bookings constantly — bachelorette trips, family floats, corporate outings. All of that starts with a text. Highmark captures every one.",
     qa: {
       customerQ: `"How intense is the Class 3 section? We have a 12-year-old."`,
       botA:      `"Class 3 is a great family run — splashy but manageable for kids 10+. Wetsuit and guide included. Want to book the 10am launch?"`,
@@ -308,12 +318,13 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book a half-day rafting trip for 4 adults this Saturday."`,
       outcome:  `Highmark confirms availability, collects waiver info, sends a booking link — all over text.`,
     },
-    inquiries: 18, bookings: 8, leads: 6,
+    inquiries: 18, bookings: 8, leads: 6, avg_booking_value: 190,
   },
   fishing: {
     match: /\bfish\b|fishing|angling|fly.?fish|fishing.?guide|fishing.?charter/i,
     category: "outdoor",
     label: "fishing guide service",
+    hook: "Fishing guides lose trip bookings to slow follow-up. Customers researching dates and availability often book whoever responds first. Highmark makes sure that's you.",
     qa: {
       customerQ: `"What's the best time of year for trout on this river?"`,
       botA:      `"Late May through early July is prime — hatches are incredible and water clarity is ideal. Full-day float trips from $450. Want to check available dates?"`,
@@ -326,12 +337,13 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book a full-day fly fishing float trip for 2."`,
       outcome:  `Highmark checks guide availability, confirms the gear list, sends a booking link — confirmed over text.`,
     },
-    inquiries: 11, bookings: 5, leads: 4,
+    inquiries: 11, bookings: 5, leads: 4, avg_booking_value: 380,
   },
   ski: {
     match: /\bski\b|\bskiing\b|snowboard|ski.?lesson|ski.?rental|ski.?school/i,
     category: "outdoor",
     label: "ski rental or lesson company",
+    hook: "Ski rental and lesson shops see huge demand spikes on snow days. Most miss half those inquiries. Highmark answers every text instantly and locks in the rental or lesson.",
     qa: {
       customerQ: `"Do you have rentals for a total beginner? I've never skied."`,
       botA:      `"Yes — beginner package includes boots, skis, poles, and a 2-hour group lesson. All ages. Want to lock in a morning slot?"`,
@@ -344,12 +356,13 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book ski rentals and a lesson for 3 adults next Friday."`,
       outcome:  `Highmark confirms equipment sizes, books the lesson time, sends a confirmation — no phone call needed.`,
     },
-    inquiries: 20, bookings: 9, leads: 6,
+    inquiries: 20, bookings: 9, leads: 6, avg_booking_value: 160,
   },
   atv: {
     match: /\batv\b|\brzr\b|off.?road|\butv\b|side.?by.?side|jeep.?tour|dune.?buggy/i,
     category: "outdoor",
     label: "ATV/UTV rental or tour company",
+    hook: "ATV and UTV operators deal with a lot of first-timer questions before a booking — experience required, insurance, trail maps. Highmark handles all of that automatically.",
     qa: {
       customerQ: `"Do I need experience to rent a RZR? We've never driven one."`,
       botA:      `"Nope — a quick orientation is included with every rental. Side-by-sides are intuitive, just follow the trail map. Helmets and insurance included. Want to check availability?"`,
@@ -362,12 +375,13 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book a RZR rental for Saturday, 2 vehicles."`,
       outcome:  `Highmark confirms vehicle availability, walks through the insurance and fuel policy, sends a booking link — done over text.`,
     },
-    inquiries: 16, bookings: 7, leads: 5,
+    inquiries: 16, bookings: 7, leads: 5, avg_booking_value: 240,
   },
   hiking: {
     match: /\bhike\b|hiking|trail.?tour|guided.?hike|backpack/i,
     category: "outdoor",
     label: "hiking or trail tour company",
+    hook: "Guided hiking companies miss bookings from guests who ask about difficulty, fitness requirements, and group sizes — all standard questions Highmark handles instantly.",
     qa: {
       customerQ: `"Is the summit trail doable for someone who doesn't hike much?"`,
       botA:      `"It's 6 miles with 1,200ft elevation — moderate, doable with trekking poles. Our guide sets a comfortable pace. Want to book the 8am departure?"`,
@@ -380,12 +394,13 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book a guided summit hike for 3 people this Saturday."`,
       outcome:  `Highmark checks guide availability, confirms what to bring, sends a booking link — confirmed in a few texts.`,
     },
-    inquiries: 13, bookings: 6, leads: 4,
+    inquiries: 13, bookings: 6, leads: 4, avg_booking_value: 140,
   },
   zipline: {
     match: /zipline|zip.?line|canopy.?tour|zip.?tour/i,
     category: "outdoor",
     label: "zipline or canopy tour company",
+    hook: "Zipline operators deal with a ton of safety questions before a booking — weight limits, age minimums, group sizes. Highmark handles all of it and moves guests to the booking link.",
     qa: {
       customerQ: `"Is there a weight limit? My dad wants to come but he's a bigger guy."`,
       botA:      `"Weight limit is 250 lbs — our harnesses are rated for it and guides check fit for everyone. Safety briefing included. Want to book a time?"`,
@@ -398,13 +413,14 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book a zipline tour for 4 adults Saturday afternoon."`,
       outcome:  `Highmark checks availability, confirms the safety requirements, sends a booking link — done in a few texts.`,
     },
-    inquiries: 14, bookings: 7, leads: 4,
+    inquiries: 14, bookings: 7, leads: 4, avg_booking_value: 120,
   },
   // ── Appointment subtypes ──────────────────────────────────────────────────
   med_spa: {
     match: /med.?spa|botox|filler|laser|aesthetic|injection|medspa/i,
     category: "appointments",
     label: "medical spa or aesthetics clinic",
+    hook: "Med spa clients research treatments before booking. They text questions about procedures, pricing, and downtime. Highmark answers all of it and books the consultation.",
     qa: {
       customerQ: `"How long does a Botox appointment usually take?"`,
       botA:      `"About 30 minutes from check-in to checkout — no downtime. We're open Tuesday through Saturday. Want to book a consultation?"`,
@@ -417,12 +433,13 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to schedule a Botox appointment for next week."`,
       outcome:  `Highmark checks the injector's schedule, confirms the time, sends a reminder the day before.`,
     },
-    inquiries: 24, bookings: 12, leads: 8,
+    inquiries: 24, bookings: 12, leads: 8, avg_booking_value: 250,
   },
   tattoo: {
     match: /tattoo|piercing|ink\b|body.?art/i,
     category: "appointments",
     label: "tattoo or piercing studio",
+    hook: "Tattoo studios handle a constant stream of pricing questions, availability checks, and artist inquiries. Highmark answers instantly and routes leads to the right artist.",
     qa: {
       customerQ: `"How far out are you booked? I want to get something done next month."`,
       botA:      `"We have openings in 3 weeks — walk-ins available for small pieces most weekdays. Want to consult on your idea first?"`,
@@ -435,7 +452,7 @@ const SUBTYPE_EXAMPLES = {
       scenario: `"I want to book a consultation for a sleeve design."`,
       outcome:  `Highmark matches you with an artist, books the consult, sends a confirmation — all over text.`,
     },
-    inquiries: 18, bookings: 9, leads: 6,
+    inquiries: 18, bookings: 9, leads: 6, avg_booking_value: 175,
   },
 };
 
@@ -456,20 +473,50 @@ function getVerticalContext(vertical, subtypeKey = null) {
   const sub = subtypeKey ? SUBTYPE_EXAMPLES[subtypeKey] : null;
   if (!sub) return cat;
   return {
-    label:      sub.label,
-    menuContext: cat.menuContext,
-    qa:         sub.qa,
-    lead:       sub.lead,
-    booking:    sub.booking,
-    inquiries:  sub.inquiries ?? cat.inquiries,
-    bookings:   sub.bookings  ?? cat.bookings,
-    leads:      sub.leads     ?? cat.leads,
+    label:             sub.label,
+    menuContext:       cat.menuContext,
+    hook:              sub.hook              ?? cat.hook,
+    qa:                sub.qa,
+    lead:              sub.lead,
+    booking:           sub.booking,
+    inquiries:         sub.inquiries         ?? cat.inquiries,
+    bookings:          sub.bookings          ?? cat.bookings,
+    leads:             sub.leads             ?? cat.leads,
+    avg_booking_value: sub.avg_booking_value ?? cat.avg_booking_value,
   };
 }
 
 // ── Demo feature paths ────────────────────────────────────────────────────────
 
 const PATHS = {
+  4: {
+    label:    "Revenue Impact",
+    menuLine: "See the revenue impact",
+    getIntro(vertical, exploredPaths = [], subtypeKey = null) {
+      const v = getVerticalContext(vertical, subtypeKey);
+      const avgVal = v.avg_booking_value ?? 150;
+      const monthly = v.bookings * avgVal * 4;
+      return (
+        `Here's the real cost of slow response times for a ${v.label}:\n\n` +
+        `~${v.inquiries} customer texts/week go unanswered after hours.\n` +
+        `~${v.bookings} missed bookings/week × $${avgVal}/booking = ~$${monthly.toLocaleString()}/mo left on the table.\n\n` +
+        `Highmark captures those. Every text answered in 4 seconds, 24/7.\n\n` +
+        `*(Numbers are illustrative — based on similar businesses)*\n\n` +
+        getNextPathOptions(4, exploredPaths)
+      );
+    },
+    getFollowup(vertical, subtypeKey = null) {
+      const v = getVerticalContext(vertical, subtypeKey);
+      const avgVal = v.avg_booking_value ?? 150;
+      const monthly = v.bookings * avgVal * 4;
+      return (
+        `The math is simple: answer faster than your competitors, capture the booking.\n\n` +
+        `~$${monthly.toLocaleString()}/mo potential for a ${v.label}. ` +
+        `Highmark Growth is $249/mo.\n` +
+        `*(Illustrative — your results will vary)*`
+      );
+    },
+  },
   1: {
     label:    "Q&A",
     menuLine: "See Q&A in action",
@@ -537,10 +584,27 @@ const PATHS = {
 // Returns the explicit next-step options for the end of a path intro.
 // Only shows paths not yet explored and not the current one.
 function getNextPathOptions(currentPath, exploredPaths = []) {
-  const remaining = [1, 2, 3].filter(n => n !== currentPath && !exploredPaths.includes(n));
+  const remaining = [1, 2, 3, 4].filter(n => n !== currentPath && !exploredPaths.includes(n));
   if (remaining.length === 0) return "Reply YES to get this for your business.";
   const opts = remaining.map(n => `${n}️⃣ ${PATHS[n].menuLine}`).join("  ");
   return `${opts}\n\nOr reply YES to get started.`;
+}
+
+// Shows the personalized menu after vertical detection: hook + 4 demo options + CTA.
+function buildPersonalizedMenu(vc, exploredPaths = []) {
+  const lines = [
+    `Got it — a ${vc.label}.`,
+    ``,
+    vc.hook,
+    ``,
+    `What do you want to see?`,
+  ];
+  for (const n of [1, 2, 3, 4]) {
+    const mark = exploredPaths.includes(n) ? "✅" : `${n}️⃣`;
+    lines.push(`${mark} ${PATHS[n].menuLine}`);
+  }
+  lines.push(`5️⃣ Get this for my business`);
+  return lines.join("\n");
 }
 
 // ── Openers and menus ─────────────────────────────────────────────────────────
@@ -606,12 +670,11 @@ function buildDemoMenu(exploredPaths = [], vertical = "default", convConfig = nu
   // Default hardcoded demo menu
   const v = VERTICALS[vertical] || VERTICALS.default;
   const lines = [`${v.menuContext}\n\nWhat do you want to see?\n`];
-  for (const [k, p] of Object.entries(PATHS)) {
-    const n    = Number(k);
-    const mark = exploredPaths.includes(n) ? "✅" : `${k}️⃣`;
-    lines.push(`${mark} ${p.menuLine}`);
+  for (const n of [1, 2, 3, 4]) {
+    const mark = exploredPaths.includes(n) ? "✅" : `${n}️⃣`;
+    lines.push(`${mark} ${PATHS[n].menuLine}`);
   }
-  lines.push("\n4️⃣ Get this for my business");
+  lines.push("\n5️⃣ Get this for my business");
   return lines.join("\n");
 }
 
@@ -619,23 +682,29 @@ function buildDemoMenu(exploredPaths = [], vertical = "default", convConfig = nu
 
 function buildRevenueSimulation(vertical, subtypeKey = null) {
   const v = getVerticalContext(vertical, subtypeKey);
+  const avgVal = v.avg_booking_value ?? 150;
+  const monthly = v.bookings * avgVal * 4;
   return (
     `📊 Similar ${v.label}: ~${v.inquiries} inquiries/wk → ` +
     `${v.bookings} bookings + ${v.leads} leads\n` +
-    `*(illustrative — results vary)*`
+    `~$${monthly.toLocaleString()}/mo in potential revenue *(illustrative)*`
   );
 }
 
 // ── Post-path CTA builder ─────────────────────────────────────────────────────
 
 function buildFollowupCta(path, exploredPaths, vertical = "default", subtypeKey = null) {
-  const unexplored = [1, 2, 3].filter((n) => !exploredPaths.includes(n) && n !== path);
+  const unexplored = [1, 2, 3, 4].filter((n) => !exploredPaths.includes(n) && n !== path);
   const lines      = [PATHS[path].getFollowup(vertical, subtypeKey), ""];
 
   if (exploredPaths.length === 1) lines.push(buildRevenueSimulation(vertical, subtypeKey), "");
 
-  if (unexplored.length > 0) {
-    const opts = unexplored.map((n) => `${n}️⃣ ${PATHS[n].label}`).join("  ");
+  // After 2 paths seen, shift to strong CTA — stop offering "explore more"
+  if (exploredPaths.length >= 2) {
+    const v = getVerticalContext(vertical, subtypeKey);
+    lines.push(`You've seen what Highmark can do for your ${v.label}.\n\nReady to get this live? Reply YES — I'll set it up for your business.`);
+  } else if (unexplored.length > 0) {
+    const opts = unexplored.map((n) => `${n}️⃣ ${PATHS[n].menuLine}`).join("  ");
     lines.push(`Reply YES to get started, or explore more:\n${opts}`);
   } else {
     lines.push(`You've seen everything. Ready to get this live?\n\nReply YES — I'll set it up for your business.`);
@@ -658,6 +727,7 @@ export function detectPath(body) {
   if (/^1/.test(t)) return 1;
   if (/^2/.test(t)) return 2;
   if (/^3/.test(t)) return 3;
+  if (/^4/.test(t)) return 4;
   return null;
 }
 
@@ -692,7 +762,7 @@ function getDemoNotifyPhone() {
 // ─────────────────────────────────────────────────────────────────────────────
 // handleDemoFlow — main entry point
 // Called from index.js when client.bookingMode === "demo"
-// Returns { reply: string }
+// Returns { reply: string, meta?: { mode: "demo", vertical, subtypeKey, step } }
 // ─────────────────────────────────────────────────────────────────────────────
 export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNumber, rawBody, testMode, isNew, convo, client = null, source = "sms" }) {
   const body      = rawBody.trim();
@@ -831,22 +901,47 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       trackDemoEvent(supabase, { eventName: "demo_path_selected", fromNumber, demoPath: directPath, vertical: "default", source });
       return { reply: PATHS[directPath].getIntro("default", ep) };
     }
-    // Free-form business description → detect vertical + subtype → show tailored Q&A
+    // Free-form business description → detect vertical + subtype → personalized menu
     const vertical   = detectVertical(body);
     const subtypeKey = detectSubtype(body);
     const vc         = getVerticalContext(vertical, subtypeKey);
-    const exploredPaths = [1]; // Q&A shown immediately as the first example
-    transition(convo, "demo_path", { vertical, subtypeKey, path: 1, exploredPaths });
+    transition(convo, "demo_type_menu", { vertical, subtypeKey, exploredPaths: [] });
     console.log(`[DEMO] Vertical: ${vertical}${subtypeKey ? ` / ${subtypeKey}` : ""} (${vc.label}) — ${fromNumber}`);
-    trackDemoEvent(supabase, { eventName: "demo_path_selected", fromNumber, demoPath: 1, vertical, subtypeKey, source });
-    return { reply: PATHS[1].getIntro(vertical, exploredPaths, subtypeKey) };
+    return { reply: buildPersonalizedMenu(vc, []) };
+  }
+
+  // ── demo_type_menu — personalized menu shown after vertical detection ─────
+  if (state.step === "demo_type_menu") {
+    const vertical   = state.vertical   ?? "default";
+    const subtypeKey = state.subtypeKey ?? null;
+    const vc         = getVerticalContext(vertical, subtypeKey);
+
+    // "5" or YES → lead capture
+    if (/^5/.test(body.trim()) || isYesIntent(body)) {
+      trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, vertical, subtypeKey, source });
+      trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, vertical, subtypeKey, source });
+      transition(convo, "lead_name");
+      return { reply: "Let's get started! What's your name?" };
+    }
+
+    // 1–4 → demo path
+    const path = detectPath(body);
+    if (path && PATHS[path]) {
+      const ep = addExplored(state.exploredPaths ?? [], path);
+      transition(convo, "demo_path", { path, exploredPaths: ep });
+      trackDemoEvent(supabase, { eventName: "demo_path_selected", fromNumber, demoPath: path, vertical, subtypeKey, source });
+      return { reply: PATHS[path].getIntro(vertical, ep, subtypeKey) };
+    }
+
+    return { reply: buildPersonalizedMenu(vc, state.exploredPaths ?? []) };
   }
 
   // ── demo_menu ─────────────────────────────────────────────────────────────
   if (state.step === "demo_menu") {
     const vertical   = state.vertical   ?? "default";
     const subtypeKey = state.subtypeKey ?? null;
-    if (isYesIntent(body) && (convConfig.enable_lead_prompts || !convConfig.enable_guided_flow)) {
+    // "5" or YES → lead capture
+    if (/^5/.test(body.trim()) || (isYesIntent(body) && (convConfig.enable_lead_prompts || !convConfig.enable_guided_flow))) {
       trackDemoEvent(supabase, { eventName: "demo_interest_expressed",   fromNumber, vertical, subtypeKey, source });
       trackDemoEvent(supabase, { eventName: "demo_lead_capture_started", fromNumber, vertical, subtypeKey, source });
       transition(convo, "lead_name");
@@ -854,7 +949,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     }
     const menuKey = convConfig.enable_guided_flow ? routeMenuSelection(body, client) : null;
     const path = detectPath(body) || (menuKey === "demo" ? 2 : menuKey === "pricing" ? 3 : null);
-    if (path) {
+    if (path && PATHS[path]) {
       const ep = addExplored(state.exploredPaths, path);
       transition(convo, "demo_path", { path, exploredPaths: ep });
       trackDemoEvent(supabase, { eventName: "demo_path_selected", fromNumber, demoPath: path, vertical, subtypeKey, source });
@@ -889,7 +984,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       return { reply: "Awesome! What's your name?" };
     }
     const path = detectPath(body);
-    if (path && path !== state.path) {
+    if (path && path !== state.path && PATHS[path]) {
       const ep = addExplored(state.exploredPaths, path);
       transition(convo, "demo_path", { path, exploredPaths: ep });
       return { reply: PATHS[path].getIntro(vertical, ep, subtypeKey) };
@@ -897,6 +992,13 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
     if (isNoIntent(body)) {
       transition(convo, "browsing");
       return { reply: convConfig.enable_guided_flow ? buildDemoMenu([], vertical, convConfig) : MAIN_MENU };
+    }
+    // After 2+ paths: strong CTA directly
+    if ((state.exploredPaths?.length ?? 0) >= 2) {
+      const v = getVerticalContext(vertical, subtypeKey);
+      trackDemoEvent(supabase, { eventName: "demo_cta_shown", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
+      transition(convo, "demo_cta");
+      return { reply: `You've seen enough to know if this is for you.\n\nWant to get Highmark live for your ${v.label}? Reply YES — I'll set it up.` };
     }
     trackDemoEvent(supabase, { eventName: "demo_cta_shown", fromNumber, demoPath: state.path, vertical, subtypeKey, source });
     transition(convo, "demo_cta");
@@ -918,7 +1020,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       return { reply: convConfig.enable_guided_flow ? buildDemoMenu([], vertical, convConfig) : MAIN_MENU };
     }
     const path = detectPath(body);
-    if (path) {
+    if (path && PATHS[path]) {
       const ep = addExplored(state.exploredPaths, path);
       transition(convo, "demo_path", { path, exploredPaths: ep });
       return { reply: PATHS[path].getIntro(vertical, ep, subtypeKey) };
@@ -1010,7 +1112,7 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
       return { reply: "We'll be in touch very soon! Reply MENU to keep exploring the platform." };
     }
     const path = detectPath(body);
-    if (path) {
+    if (path && PATHS[path]) {
       const ep = addExplored(state.exploredPaths, path);
       transition(convo, "demo_path", { path, exploredPaths: ep });
       return { reply: PATHS[path].getIntro(vertical, ep, subtypeKey) };
@@ -1021,4 +1123,23 @@ export async function handleDemoFlow({ supabase, twilioClient, fromNumber, toNum
   // Fallback
   transition(convo, "browsing", { qaCount: 0, vertical: "default", subtypeKey: null, exploredPaths: [] });
   return { reply: OPENER };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// handleDemoFlowWithMeta — wraps handleDemoFlow and attaches UI meta
+// Returns { reply, meta: { mode, vertical, subtypeKey, step } }
+// Used by index.js when TEST_MODE is on (for the value panel in ui.html).
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleDemoFlowWithMeta(args) {
+  const result = await handleDemoFlow(args);
+  const state  = args.convo?.bookingData?._demo ?? {};
+  return {
+    ...result,
+    meta: {
+      mode:       "demo",
+      vertical:   state.vertical   ?? "default",
+      subtypeKey: state.subtypeKey ?? null,
+      step:       state.step       ?? "browsing",
+    },
+  };
 }

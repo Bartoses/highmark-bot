@@ -300,6 +300,32 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 /* ── Right panel ─────────────────────────────────────────────────────────── */
 #right { }
 
+/* ── Demo value panel ────────────────────────────────────────────────────── */
+#demo-value-panel { display: none; }
+.demo-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px;
+  background: #0f2e1a; color: var(--accent); border: 1px solid var(--accent); margin-bottom: 8px;
+}
+.demo-counter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.demo-counter {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px;
+}
+.demo-counter .dc-label { font-size: 10px; color: var(--text3); margin-bottom: 2px; }
+.demo-counter .dc-val   { font-size: 16px; font-family: var(--mono); color: var(--accent); font-weight: 600; }
+.demo-counter .dc-sub   { font-size: 10px; color: var(--text3); margin-top: 2px; }
+.demo-vertical-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px;
+  background: #0e1e30; color: #60a5fa; border: 1px solid #1e3a5f; margin-top: 6px;
+}
+
+/* ── Copy link button ────────────────────────────────────────────────────── */
+.copy-link-btn {
+  margin-top: 6px; width: 100%; background: var(--panel2); color: var(--text2);
+  border: 1px solid var(--border); border-radius: 5px; padding: 5px 10px;
+  font-size: 11px; cursor: pointer; text-align: left;
+}
+.copy-link-btn:hover { color: var(--text); border-color: var(--accent); }
+
 .state-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .state-cell {
   background: var(--panel2); border: 1px solid var(--border); border-radius: 5px;
@@ -406,6 +432,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         <select id="client-select" class="form-select" onchange="switchClient(this.value)">
           <option value="">Loading...</option>
         </select>
+        <button class="copy-link-btn" onclick="copyDemoLink()" title="Copy a shareable link for this client">⎘ Copy demo link</button>
       </div>
 
       <!-- Guest identity -->
@@ -501,6 +528,27 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         </div>
       </div>
 
+      <!-- Demo value panel (shown when active client is demo mode) -->
+      <div class="panel-section" id="demo-value-panel">
+        <div class="section-label">Demo metrics</div>
+        <div class="demo-badge">DEMO MODE</div>
+        <div class="demo-counter-grid">
+          <div class="demo-counter">
+            <div class="dc-label">Leads captured</div>
+            <div class="dc-val" id="demo-leads">0</div>
+            <div class="dc-sub">this session</div>
+          </div>
+          <div class="demo-counter">
+            <div class="dc-label">Paths explored</div>
+            <div class="dc-val" id="demo-paths">0</div>
+            <div class="dc-sub">of 4 available</div>
+          </div>
+        </div>
+        <div id="demo-vertical-wrap" style="display:none">
+          <span class="demo-vertical-pill" id="demo-vertical-pill">—</span>
+        </div>
+      </div>
+
       <!-- Transcript -->
       <div class="panel-section">
         <div class="section-label">Transcript</div>
@@ -566,6 +614,7 @@ const State = {
   running:       false,
   transcript:    [],
   lastMeta:      null,
+  demoLeadsThisSession: 0,
   currentPayloads: { sms: {}, fh: {}, session: {} },
   booking: {
     company:     "coloradosledrentals",
@@ -710,6 +759,7 @@ async function sendAndRender(body) {
 
   appendBotMsg(data.reply ?? "(no reply)", meta);
   updateInspector(meta);
+  updateDemoPanel(meta);
   addToTranscript("user", body, {});
   addToTranscript("bot", data.reply ?? "", meta);
 
@@ -718,6 +768,7 @@ async function sendAndRender(body) {
   if (session) {
     updateInspectorFromSession(session, meta);
     State.currentPayloads.session = session;
+    updateDemoPanel(meta); // re-run after session loaded for exploredPaths
   }
 
   State.running = false; setSendEnabled(true);
@@ -727,12 +778,16 @@ async function sendAndRender(body) {
 async function resetChat() {
   if (State.running) return;
   await resetSession();
-  State.transcript = [];
-  State.lastMeta   = null;
+  State.transcript          = [];
+  State.lastMeta            = null;
+  State.demoLeadsThisSession = 0;
+  State.lastDemoStep        = null;
   clearChat();
   clearInspector();
   clearTranscript();
   updatePayload("sms");
+  // Refresh demo panel visibility for current client
+  updateDemoPanel({});
 }
 
 // ─── Client selector ──────────────────────────────────────────────────────────
@@ -776,6 +831,61 @@ async function switchClient(toPhone, doReset = true) {
   }
 
   if (doReset) await resetChat();
+  else updateDemoPanel({});
+}
+
+// ─── Demo value panel ─────────────────────────────────────────────────────────
+function isCurrentClientDemo() {
+  const c = State.clients.find(cl => cl.toPhone === State.toPhone);
+  return !!(c?.isDemo || c?.bookingMode === "demo");
+}
+
+function updateDemoPanel(meta) {
+  const panel = document.getElementById("demo-value-panel");
+  if (!panel) return;
+  if (!isCurrentClientDemo()) { panel.style.display = "none"; return; }
+  panel.style.display = "";
+
+  // Leads counter — increment on step=complete transition
+  if (meta?.mode === "demo" && meta.step === "complete" && State.lastDemoStep !== "complete") {
+    State.demoLeadsThisSession++;
+    document.getElementById("demo-leads").textContent = State.demoLeadsThisSession;
+  }
+  State.lastDemoStep = meta?.step ?? State.lastDemoStep;
+
+  // Paths explored — read from meta (not counted locally — comes from state)
+  // We compute from the session's exploredPaths in updateInspectorFromSession
+  // For now show lastMeta-derived estimate from turn count
+  const session = State.currentPayloads?.session;
+  const exploredPaths = session?.booking_data?._demo?.exploredPaths ?? [];
+  document.getElementById("demo-paths").textContent = exploredPaths.length;
+
+  // Vertical pill
+  const vertical   = meta?.vertical   ?? session?.booking_data?._demo?.vertical;
+  const subtypeKey = meta?.subtypeKey ?? session?.booking_data?._demo?.subtypeKey;
+  const pillWrap = document.getElementById("demo-vertical-wrap");
+  const pill     = document.getElementById("demo-vertical-pill");
+  if (vertical && vertical !== "default") {
+    pillWrap.style.display = "";
+    pill.textContent = subtypeKey ? `${vertical} / ${subtypeKey}` : vertical;
+  } else {
+    pillWrap.style.display = "none";
+  }
+}
+
+function copyDemoLink() {
+  const client = State.clients.find(c => c.toPhone === State.toPhone);
+  if (!client) return;
+  const url = new URL(location.href);
+  url.searchParams.set("client", client.id);
+  // Remove key from shareable link
+  url.searchParams.delete("key");
+  navigator.clipboard.writeText(url.toString())
+    .then(() => {
+      const btn = document.querySelector(".copy-link-btn");
+      if (btn) { btn.textContent = "✓ Copied!"; setTimeout(() => { btn.textContent = "⎘ Copy demo link"; }, 2000); }
+    })
+    .catch(() => prompt("Copy this link:", url.toString()));
 }
 
 // ─── Scenarios ────────────────────────────────────────────────────────────────

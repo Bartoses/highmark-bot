@@ -1897,7 +1897,7 @@ async function test29() {
   detectPath("1") === 1          ? pass("detectPath: '1' → 1")         : fail("detectPath: 1");
   detectPath("2 Lead capture")   === 2     ? pass("detectPath: '2 ...' → 2") : fail("detectPath: 2");
   detectPath("3")                === 3     ? pass("detectPath: '3' → 3")     : fail("detectPath: 3");
-  detectPath("4")                === null  ? pass("detectPath: '4' → null (YES intent, not path)") : fail("detectPath: 4 should be null");
+  detectPath("4")                === 4     ? pass("detectPath: '4' → 4 (Revenue Impact path)") : fail("detectPath: 4 should be 4");
   detectPath("hello")            === null  ? pass("detectPath: 'hello' → null") : fail("detectPath: hello not null");
 
   // ── Unit: question intent detection ───────────────────────────────────────
@@ -1951,7 +1951,8 @@ async function test29() {
   // ── Integration: demo flow (requires server) ───────────────────────────────
   // Dedicated phones per scenario — stays under 10 msg/min per phone, 30/min IP total.
   const DEMO_PHONE_A = "+15550011111"; // Q&A: pricing answered, no premature lead capture (2 msgs)
-  const DEMO_PHONE_B = "+15550022222"; // full demo: 2 → biz type → immediate Q&A → followup → path 2 → lead capture (9 msgs)
+  const DEMO_PHONE_B = "+15550022222"; // demo path: 2 → biz type → personalized menu → path 1 pick → followup (6 msgs)
+  const DEMO_PHONE_B2= "+15550022223"; // continued B: path 2 → strong CTA → lead capture (5 msgs)
   const DEMO_PHONE_C = "+15550033333"; // path shortcuts + multi-path + revenue sim (5 msgs)
   const DEMO_PHONE_D = "+15550044444"; // MENU + START OVER (3 msgs)
   const DEMO_PHONE_E = "+15550055555"; // "4" shortcut → immediate lead capture (2 msgs)
@@ -1985,24 +1986,30 @@ async function test29() {
     ? pass("Demo: '2' (See a demo) → asks business type")
     : fail("Demo: '2' should trigger business type question", demoChoice.slice(0, 100));
 
-  // Step 3: business type → immediate tailored Q&A (no generic menu first)
+  // Step 3: business type → personalized menu (hook + 4 options, no immediate Q&A)
   const demoFirstReply = await sendSms("outdoor tours and snowmobile rentals", DEMO_PHONE_B, DEMO_PHONE);
-  /Customer:|Highmark:/i.test(demoFirstReply) && /tour|outdoor|rental/i.test(demoFirstReply)
-    ? pass("Demo: business type → immediate tailored Q&A example (not a generic menu)")
-    : fail("Demo: should show immediate Q&A example after business type", demoFirstReply.slice(0, 100));
-  /2️⃣|3️⃣/.test(demoFirstReply)
-    ? pass("Demo: immediate Q&A has explicit numbered next-step options")
-    : fail("Demo: explicit next steps missing from Q&A example", demoFirstReply.slice(0, 100));
+  /Got it|hook|1️⃣|2️⃣|3️⃣|4️⃣/.test(demoFirstReply)
+    ? pass("Demo: business type → personalized menu with vertical hook + numbered options")
+    : fail("Demo: should show personalized menu after business type", demoFirstReply.slice(0, 100));
+  /5️⃣/.test(demoFirstReply)
+    ? pass("Demo: personalized menu includes 5️⃣ Get this for my business")
+    : fail("Demo: personalized menu missing 5️⃣ CTA option", demoFirstReply.slice(0, 100));
   !/Reply anything/i.test(demoFirstReply)
     ? pass("Demo: 'Reply anything' removed — explicit choices shown instead")
     : fail("Demo: 'Reply anything' still present in path intro");
 
-  // Step 4: any reply from demo_path → path 1 followup with revenue sim
+  // Step 4: pick path 1 from demo_type_menu → Q&A intro
+  const path1intro = await sendSms("1", DEMO_PHONE_B, DEMO_PHONE);
+  /Customer:|Highmark:/i.test(path1intro)
+    ? pass("Demo: '1' from personalized menu → Q&A simulated exchange shown")
+    : fail("Demo: path 1 intro missing Q&A exchange", path1intro.slice(0, 100));
+
+  // Step 4b: any reply from demo_path → path 1 followup with revenue sim
   const p1followup = await sendSms("Cool", DEMO_PHONE_B, DEMO_PHONE);
-  /📊|inquir|week/i.test(p1followup)
+  /📊|inquir|week|\$/.test(p1followup)
     ? pass("Demo: path 1 followup shows revenue simulation after first path explored")
     : fail("Demo: revenue simulation missing from path 1 followup", p1followup.slice(0, 100));
-  /YES|get started|2️⃣|3️⃣/.test(p1followup)
+  /YES|get started|2️⃣|3️⃣|4️⃣/.test(p1followup)
     ? pass("Demo: path 1 followup has CTA or unexplored path options")
     : fail("Demo: CTA/options missing from path 1 followup", p1followup.slice(0, 100));
 
@@ -2012,31 +2019,34 @@ async function test29() {
     ? pass("Demo: '2' from followup → path 2 lead capture intro with simulated exchange")
     : fail("Demo: path 2 intro wrong", path2intro.slice(0, 100));
 
-  // Step 6: any reply from path 2 demo_path → followup
+  // Step 6: any reply from path 2 demo_path → strong CTA (2 paths explored)
   const followup = await sendSms("Cool", DEMO_PHONE_B, DEMO_PHONE);
-  /YES|get started/i.test(followup)
-    ? pass("Demo: path 2 followup → CTA with YES option")
+  /YES|get started|live|ready/i.test(followup)
+    ? pass("Demo: path 2 followup → strong CTA (2 paths explored)")
     : fail("Demo: CTA missing from path 2 followup", followup.slice(0, 100));
 
-  const nameAsk = await sendSms("yes", DEMO_PHONE_B, DEMO_PHONE);
+  // ── B2: Lead capture flow (separate phone to stay under rate limit) ─────────
+  await resetConvo(DEMO_PHONE_B2);
+  await sendSms("Hi", DEMO_PHONE_B2, DEMO_PHONE);     // opener
+  const nameAsk = await sendSms("yes", DEMO_PHONE_B2, DEMO_PHONE);
   /name/i.test(nameAsk)
     ? pass("Demo: YES → asks for name (lead capture begins after intent)")
     : fail("Demo: YES should ask for name", nameAsk.slice(0, 100));
 
-  const bizAsk  = await sendSms("Alex", DEMO_PHONE_B, DEMO_PHONE);
+  const bizAsk  = await sendSms("Alex", DEMO_PHONE_B2, DEMO_PHONE);
   /business/i.test(bizAsk) ? pass("Demo: name → asks for business") : fail("Demo: should ask for business", bizAsk.slice(0, 100));
 
-  const webAsk  = await sendSms("Acme Outdoors", DEMO_PHONE_B, DEMO_PHONE);
+  const webAsk  = await sendSms("Acme Outdoors", DEMO_PHONE_B2, DEMO_PHONE);
   /website/i.test(webAsk) ? pass("Demo: business → asks for website") : fail("Demo: should ask for website", webAsk.slice(0, 100));
 
-  const confirm = await sendSms("skip", DEMO_PHONE_B, DEMO_PHONE);
+  const confirm = await sendSms("skip", DEMO_PHONE_B2, DEMO_PHONE);
   /reach out|all set/i.test(confirm) ? pass("Demo: SKIP website → confirmation") : fail("Demo: confirmation missing", confirm.slice(0, 100));
   /menu|explore/i.test(confirm) ? pass("Demo: complete state not a dead end") : fail("Demo: confirmation should offer next steps", confirm.slice(0, 100));
 
   if (supabase) {
     const { data: leads } = await supabase
       .from("leads").select("*")
-      .eq("client_id", "highmark_demo").eq("from_number", DEMO_PHONE_B)
+      .eq("client_id", "highmark_demo").eq("from_number", DEMO_PHONE_B2)
       .order("created_at", { ascending: false }).limit(1);
     const lead = leads?.[0];
     lead                          ? pass("Demo: lead written to DB")           : fail("Demo: lead not found");
@@ -2358,19 +2368,27 @@ async function test31() {
   const convo1 = makeDemoConvo();
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo1 });
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo1 });
-  const bikeReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "bike tours", testMode: true, isNew: false, convo: convo1 })).reply;
+  // Phase 2: business type → personalized menu (hook + 4 paths + CTA option)
+  const bikeMenu = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "bike tours", testMode: true, isNew: false, convo: convo1 })).reply;
 
-  !/snow|sled|rabbit ears|snowmobile/i.test(bikeReply)
-    ? pass("test31: bike tours → NO snow/snowmobile in example")
-    : fail("test31: bike tours showing snowmobile content!", bikeReply.slice(0, 160));
+  !/snow|sled|rabbit ears|snowmobile/i.test(bikeMenu)
+    ? pass("test31: bike tours → NO snow/snowmobile in personalized menu")
+    : fail("test31: bike tours showing snowmobile content!", bikeMenu.slice(0, 160));
 
-  /bike|trail|mountain|helmet/i.test(bikeReply)
-    ? pass("test31: bike tours → bike-specific example shown")
-    : fail("test31: bike example missing bike context", bikeReply.slice(0, 160));
+  /bike|trail|mountain|helmet|Got it/i.test(bikeMenu)
+    ? pass("test31: bike tours → bike-specific hook shown in personalized menu")
+    : fail("test31: bike example missing bike context", bikeMenu.slice(0, 160));
+
+  /1️⃣|2️⃣|3️⃣|4️⃣/.test(bikeMenu)
+    ? pass("test31: personalized menu has numbered path options (1-4)")
+    : fail("test31: personalized menu missing numbered options", bikeMenu.slice(0, 160));
+
+  // Pick path 1 → Q&A exchange shown
+  const bikeReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "1", testMode: true, isNew: false, convo: convo1 })).reply;
 
   /Customer:|Highmark:/i.test(bikeReply)
-    ? pass("test31: bike tours → simulated exchange present")
-    : fail("test31: bike example missing Customer/Highmark exchange", bikeReply.slice(0, 160));
+    ? pass("test31: path 1 from personalized menu → simulated exchange present")
+    : fail("test31: bike path 1 missing Customer/Highmark exchange", bikeReply.slice(0, 160));
 
   ds("bike tours") === "bike"
     ? pass("test31: detectSubtype('bike tours') === 'bike'")
@@ -2380,15 +2398,17 @@ async function test31() {
   const convo1b = makeDemoConvo();
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "Hi", testMode: true, isNew: true, convo: convo1b });
   await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "2", testMode: true, isNew: false, convo: convo1b });
-  const raftReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "whitewater rafting", testMode: true, isNew: false, convo: convo1b })).reply;
+  // Phase 2: business type → personalized menu; then pick path 1 for Q&A
+  const raftMenu = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "whitewater rafting", testMode: true, isNew: false, convo: convo1b })).reply;
+  const raftReply = (await handleDemoFlow({ supabase: null, twilioClient: null, fromNumber: "+15550099901", toNumber: "+18668906657", rawBody: "1", testMode: true, isNew: false, convo: convo1b })).reply;
 
-  !/snow|sled|snowmobile|bike/i.test(raftReply)
-    ? pass("test31: rafting → NO snow or bike content")
-    : fail("test31: rafting showing wrong vertical content", raftReply.slice(0, 160));
+  !/snow|sled|snowmobile|bike/i.test(raftMenu)
+    ? pass("test31: rafting → NO snow or bike content in personalized menu")
+    : fail("test31: rafting showing wrong vertical content", raftMenu.slice(0, 160));
 
   /raft|river|class|water|launch/i.test(raftReply)
-    ? pass("test31: rafting → river-specific example shown")
-    : fail("test31: rafting example missing river context", raftReply.slice(0, 160));
+    ? pass("test31: rafting path 1 → river-specific example shown")
+    : fail("test31: rafting path 1 example missing river context", raftReply.slice(0, 160));
 
   // ── Subtype: fishing produces fishing-specific examples ───────────────────
   ds("fly fishing guide service") === "fishing"
@@ -2589,10 +2609,12 @@ async function test32() {
   };
   const convoC = makeDemoConvo32();
   convoC.bookingData._demo = { step: "awaiting_demo_type", qaCount: 0, vertical: "default", subtypeKey: null, exploredPaths: [] };
+  // Phase 2: business type → demo_type_menu (personalized menu); then pick path 1 → demo_path_selected fires
   await handleDemoFlow({ supabase: mockSupa32c, twilioClient: null, fromNumber: "+15550000012", toNumber: "+18668906657", rawBody: "bike tour company", testMode: true, isNew: false, convo: convoC, source: "sms" });
+  await handleDemoFlow({ supabase: mockSupa32c, twilioClient: null, fromNumber: "+15550000012", toNumber: "+18668906657", rawBody: "1", testMode: true, isNew: false, convo: convoC, source: "sms" });
   const pathSelected = events32c.find(e => e.event_name === "demo_path_selected");
   pathSelected
-    ? pass("test32: demo_path_selected fired on business type input")
+    ? pass("test32: demo_path_selected fired after path pick from personalized menu")
     : fail("test32: demo_path_selected not fired on business type", JSON.stringify(events32c));
   pathSelected?.subtype_key === "bike"
     ? pass("test32: demo_path_selected carries subtype_key=bike")
