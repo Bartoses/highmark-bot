@@ -265,9 +265,10 @@ tr:hover td { background: var(--panel2); }
   /* Action buttons in onboarding: full width */
   #sec-onboarding .btn { width: 100%; justify-content: center; margin-bottom: 6px; }
 }
-/* Admin-only nav items — hidden until confirmed in JS */
-.admin-only { display: none; }
-.client-admin-only { display: none; }
+/* Admin-only nav items — hidden until confirmed in JS.
+   Use !important to beat .section.active { display: block } (specificity 0,2,0) */
+.admin-only { display: none !important; }
+.client-admin-only { display: none !important; }
 
 /* More section link list (mobile) */
 .more-link-list { display: flex; flex-direction: column; gap: 2px; }
@@ -1139,7 +1140,9 @@ const sectionTitles = {
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
 };
 function switchSection(name) {
-  if (name === 'users' && !me?.isClientAdmin) name = 'dashboard';
+  if (name === 'users'       && !me?.isClientAdmin) name = 'dashboard';
+  if (name === 'clients'     && !me?.isAdmin)       name = 'dashboard';
+  if (name === 'onboarding'  && !me?.isAdmin)       name = 'dashboard';
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.mob-nav-item').forEach(n => n.classList.remove('active'));
