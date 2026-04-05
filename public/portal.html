@@ -2736,16 +2736,27 @@ function renderIntegrationSection(s, status) {
   const fhEnabled   = s.fareharbor?.enabled ?? false;
   const fhCompanies = s.fareharbor?.companies ?? [];
   const fhConnected = fhEnabled && fhCompanies.some(c => c.has_key);
+  const fhStatusCos = status.fareharbor?.companies ?? [];
 
-  const companiesRows = fhCompanies.map((co, i) => `
-    <div style="border:1px solid var(--border2);border-radius:8px;padding:12px;margin-bottom:10px;" id="fhCo_${i}">
-      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;">Company ${i + 1}</div>
+  const companiesRows = fhCompanies.map((co, i) => {
+    const st       = fhStatusCos.find(x => x.shortname === co.shortname) ?? {};
+    const lastSync = st.last_sync ? new Date(st.last_sync).toLocaleString() : null;
+    const itemCnt  = st.item_count ?? 0;
+    const syncNote = co.has_key && lastSync
+      ? `<span style="font-size:11px;color:var(--text2);">${itemCnt} items · Last sync ${lastSync}</span>` : '';
+    return `<div style="border:1px solid var(--border2);border-radius:8px;padding:12px;margin-bottom:10px;" id="fhCo_${i}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <span style="font-size:12px;font-weight:600;color:var(--text2);">Company ${i + 1}</span>
+        ${syncNote}
+      </div>
       <input type="hidden" id="fhCoId_${i}" value="${escHtml(co.id ?? '')}">
       ${rwField(`fhCoName_${i}`, 'Company Name', co.name, null)}
       ${rwField(`fhCoShortname_${i}`, 'Shortname (FH URL slug)', co.shortname, 'Used in booking links: fareharbor.com/embeds/book/{shortname}/…')}
       ${secretField(`fhCoKey_${i}`, 'User API Key', co.has_key, 'Your FareHarbor user API key. Leave blank to keep current.')}
-    </div>
-  `).join('');
+      ${editable ? `<div id="fhTestResult_${i}" style="display:none;font-size:12px;margin-top:4px;"></div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="testFhConnection(${i})">Test connection</button>` : ''}
+    </div>`;
+  }).join('');
 
   const fhToggle = editable
     ? `<div class="form-group"><label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
@@ -2756,9 +2767,28 @@ function renderIntegrationSection(s, status) {
       </div>`
     : roField('FareHarbor', fhEnabled ? 'Enabled' : 'Disabled');
 
+  // Auto-detect nudge: FH mode set but no API key yet
+  const fhDetectedBanner = (s.bookingMode === 'fareharbor' && !fhConnected) ? `
+    <div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:flex-start;gap:10px;">
+      <span style="font-size:16px;margin-top:1px;">🔗</span>
+      <div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:2px;">FareHarbor detected — connect to go live</div>
+        <div style="font-size:12px;color:var(--text2);">Add your company shortname and API key below, then click <strong>Test connection</strong> to verify before saving.</div>
+      </div>
+    </div>` : '';
+
+  const fhSyncBtn = isAdmin
+    ? `<button class="btn btn-ghost btn-sm" style="margin-left:8px;" onclick="syncFhNow()">↻ Sync now</button>` : '';
+
   const fareharborCard = `<div class="card" style="margin-bottom:16px;">
-    ${cardHeader('🎫', 'FareHarbor — Live Booking', connBadge(fhConnected))}
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <span style="font-size:20px;">🎫</span>
+      <div style="flex:1;font-weight:700;font-size:15px;">FareHarbor — Live Booking</div>
+      ${connBadge(fhConnected)}
+      ${fhSyncBtn}
+    </div>
     <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">Real-time availability and live booking integration. Requires a FareHarbor API key.</p>
+    ${fhDetectedBanner}
     ${fhToggle}
     ${companiesRows || (editable ? '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">No companies configured. Add one below.</div>' : '')}
     ${editable ? `<button class="btn btn-ghost btn-sm" style="margin-bottom:12px;" onclick="addFhCompany()">+ Add company</button>` : ''}
@@ -2863,6 +2893,48 @@ async function saveFareharborConfig() {
   if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
   if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
   showToast('FareHarbor config saved');
+  loadIntegrationsSection();
+}
+
+async function testFhConnection(idx) {
+  const btn      = document.querySelector(`#fhCo_${idx} [onclick="testFhConnection(${idx})"]`);
+  const resultEl = document.getElementById(`fhTestResult_${idx}`);
+  const shortname = document.getElementById(`fhCoShortname_${idx}`)?.value.trim();
+  const user_key  = document.getElementById(`fhCoKey_${idx}`)?.value.trim();
+  if (!shortname) {
+    resultEl.textContent = 'Enter a shortname first.';
+    resultEl.style.color = '#f59e0b';
+    resultEl.style.display = 'block';
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+  resultEl.style.display = 'none';
+  const body = { shortname };
+  if (user_key) body.user_key = user_key;
+  const r = await apiFetch('/integrations/fareharbor/test', { method: 'POST', body: JSON.stringify(body) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Test connection'; }
+  if (!r) {
+    resultEl.textContent = _lastApiError || 'Test failed.';
+    resultEl.style.color = '#fca5a5';
+    resultEl.style.display = 'block';
+    return;
+  }
+  if (r.ok) {
+    resultEl.textContent = `✓ Connected — ${r.item_count} tour${r.item_count === 1 ? '' : 's'} found`;
+    resultEl.style.color = '#6ee7b7';
+  } else {
+    resultEl.textContent = `✗ ${r.error}`;
+    resultEl.style.color = '#fca5a5';
+  }
+  resultEl.style.display = 'block';
+}
+
+async function syncFhNow() {
+  showToast('Syncing FareHarbor…');
+  const r = await apiFetch('/integrations/fareharbor/sync', { method: 'POST', body: '{}' });
+  if (!r || r.error) { showToast('Sync failed: ' + (r?.error ?? _lastApiError ?? 'unknown')); return; }
+  const n = r.companies_synced;
+  showToast(`Synced ${n} FareHarbor ${n === 1 ? 'company' : 'companies'}`);
   loadIntegrationsSection();
 }
 

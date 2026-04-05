@@ -214,6 +214,15 @@ async function refreshFareHarborAvailability(supabase, client) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SYNC FH FOR CLIENT — exported for on-demand portal sync
+// Runs items refresh then availability refresh for a single client.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function syncFhForClient(supabase, client) {
+  await refreshFareHarborItems(supabase, client);
+  await refreshFareHarborAvailability(supabase, client);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // REFRESH WEATHER KNOWLEDGE
 // Fetches current conditions + 3-day forecast for Steamboat Springs.
 // Also fetches Rabbit Ears Pass (higher elevation) for more accurate snow data.

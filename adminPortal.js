@@ -25,7 +25,7 @@
 
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients, loadDbClients } from "./clients.js";
-import { getIntegrationStatus } from "./knowledgeBase.js";
+import { getIntegrationStatus, syncFhForClient } from "./knowledgeBase.js";
 import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.js";
 import { VALID_BOOKING_MODES, serializeClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { normalizePhone, isValidPhone } from "./phoneUtils.js";
@@ -948,6 +948,75 @@ export async function handlePortalIntegrations(req, res, supabase) {
     return res.json({ clientId, integrations });
   } catch (err) {
     console.error("[PORTAL] integrations status error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── POST /portal/api/integrations/fareharbor/test ────────────────────────────
+// Validates FH credentials by making a live API call. Never stores keys.
+// Body: { shortname, user_key? }
+// Returns: { ok: true, shortname, item_count, items } | { ok: false, error }
+export async function handlePortalFhTest(req, res) {
+  if (!requireClientAdmin(req, res)) return;
+
+  const { shortname, user_key } = req.body ?? {};
+  if (!shortname?.trim()) return res.status(400).json({ error: "shortname is required" });
+
+  // Resolve user key: use provided key, then fall back to stored key for this company
+  const clientId = resolvePortalClientId(req);
+  const client   = getAllClients()[clientId];
+  const existing = (client?.fareharborCompanies ?? []).find((c) => c.shortname === shortname.trim()) ?? {};
+  const resolvedKey = (user_key ?? "").trim()
+    || existing.user_key
+    || (existing.userKeyEnv ? process.env[existing.userKeyEnv] : null)
+    || "";
+
+  const headers = {
+    "X-FareHarbor-API-App":  process.env.FAREHARBOR_APP_KEY ?? "",
+    "X-FareHarbor-API-User": resolvedKey,
+  };
+
+  try {
+    const resp = await fetch(
+      `https://fareharbor.com/api/external/v1/companies/${shortname.trim()}/items/`,
+      { headers }
+    );
+    if (!resp.ok) {
+      const msg = resp.status === 401 ? "Invalid API key"
+                : resp.status === 403 ? "Access denied — check app key"
+                : resp.status === 404 ? "Company shortname not found"
+                : `FareHarbor error ${resp.status}`;
+      return res.json({ ok: false, error: msg });
+    }
+    const data  = await resp.json();
+    const items = (data.items ?? []).slice(0, 20).map((i) => ({ name: i.name, pk: i.pk }));
+    return res.json({ ok: true, shortname: shortname.trim(), item_count: data.items?.length ?? 0, items });
+  } catch (err) {
+    return res.json({ ok: false, error: err.message });
+  }
+}
+
+// ── POST /portal/api/integrations/fareharbor/sync ────────────────────────────
+// Triggers an immediate FH items + availability refresh for the scoped client.
+// client_admin+ only.
+export async function handlePortalFhSync(req, res, supabase) {
+  if (!requireClientAdmin(req, res)) return;
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const client = getAllClients()[clientId];
+  if (!client)   return res.status(404).json({ error: "Client not found" });
+
+  const companies = client.fareharborCompanies ?? [];
+  if (!companies.length) return res.json({ ok: true, companies_synced: 0 });
+
+  try {
+    await syncFhForClient(supabase, client);
+    return res.json({ ok: true, companies_synced: companies.length });
+  } catch (err) {
+    console.error("[PORTAL] FH sync error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }

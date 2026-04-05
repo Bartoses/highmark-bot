@@ -41,7 +41,7 @@ import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clien
 import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSettings, handlePortalMessaging, handlePortalUpdateMessaging,
   handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
   handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
-  handleOnboardingCreateClient } from "./adminPortal.js";
+  handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync } from "./adminPortal.js";
 import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb,
   buildNextSteps, findRecentDraftForUrl } from "./onboardingConfig.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
@@ -2972,6 +2972,7 @@ async function main() {
   await test56(); // Bot config + booking config: GET/PATCH handlers
   await test57(); // Onboarding Auto-Config (Phase 3): slugifyName, detectBookingSignals, buildConfidenceScore, handler guards
   await test59(); // One-Click Client Creation (Phase 4): buildNextSteps, findRecentDraftForUrl, handler guards
+  await test61(); // FareHarbor Auto-Detect + Connect (Phase 5): handlePortalFhTest, handlePortalFhSync auth guards
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -2993,6 +2994,7 @@ async function main() {
     await test37Integration(); // Invite flow integration: routes, auth guards (Chunk 11)
     await test58(); // Onboarding routes: auth guards (Phase 3)
     await test60(); // Phase 4: create-client route auth guard
+    await test62(); // Phase 5: FH route auth guards
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -8082,6 +8084,158 @@ async function test60() {
   r.status === 401
     ? pass("test60: POST /portal/api/onboarding/create-client → 401 without token")
     : fail("test60: create-client auth guard", `status=${r.status}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test61 — Phase 5: FareHarbor Auto-Detect + Connect
+//   handlePortalFhTest  — auth guards, missing shortname, success/fail path
+//   handlePortalFhSync  — auth guards, no-supabase, no companies, success
+// ─────────────────────────────────────────────────────────────────────────────
+async function test61() {
+  console.log("\n[test61] Phase 5: FareHarbor Auto-Detect + Connect — unit tests");
+
+  function mockRes() {
+    let statusCode = 200;
+    let responseBody = null;
+    return {
+      status(code) { statusCode = code; return this; },
+      json(body)   { responseBody = body; return this; },
+      get statusCode() { return statusCode; },
+      get responseBody() { return responseBody; },
+    };
+  }
+
+  // ── handlePortalFhTest — auth guards ──────────────────────────────────────
+
+  // client_user → 403
+  {
+    const req = { portalUser: { isClientAdmin: false, role: "client_user", clientId: "csr_rea" }, body: { shortname: "test" }, query: {} };
+    const res = mockRes();
+    await handlePortalFhTest(req, res);
+    res.statusCode === 403
+      ? pass("test61: handlePortalFhTest — client_user → 403")
+      : fail("test61: handlePortalFhTest client_user auth", `status=${res.statusCode}`);
+  }
+
+  // missing shortname → 400
+  {
+    const req = { portalUser: { isClientAdmin: true, role: "client_admin", clientId: "csr_rea" }, body: {}, query: {} };
+    const res = mockRes();
+    await handlePortalFhTest(req, res);
+    res.statusCode === 400
+      ? pass("test61: handlePortalFhTest — missing shortname → 400")
+      : fail("test61: handlePortalFhTest missing shortname", `status=${res.statusCode}, body=${JSON.stringify(res.responseBody)}`);
+  }
+
+  // blank shortname → 400
+  {
+    const req = { portalUser: { isClientAdmin: true, role: "client_admin", clientId: "csr_rea" }, body: { shortname: "   " }, query: {} };
+    const res = mockRes();
+    await handlePortalFhTest(req, res);
+    res.statusCode === 400
+      ? pass("test61: handlePortalFhTest — blank shortname → 400")
+      : fail("test61: handlePortalFhTest blank shortname", `status=${res.statusCode}`);
+  }
+
+  // valid shortname but no FAREHARBOR_APP_KEY → returns ok: false (network failure or bad key, never throws)
+  {
+    const req = { portalUser: { isClientAdmin: true, role: "client_admin", clientId: "lone_pine" }, body: { shortname: "nonexistent_test_co" }, query: {} };
+    const res = mockRes();
+    await handlePortalFhTest(req, res);
+    const body = res.responseBody;
+    // Should always return 200 with ok:true|false — never a 5xx
+    res.statusCode === 200 && typeof body?.ok === "boolean"
+      ? pass("test61: handlePortalFhTest — always returns 200 with ok boolean")
+      : fail("test61: handlePortalFhTest always-200", `status=${res.statusCode}, body=${JSON.stringify(body)}`);
+  }
+
+  // ok:false on invalid credentials
+  {
+    const req = { portalUser: { isClientAdmin: true, role: "client_admin", clientId: "lone_pine" }, body: { shortname: "fakecompany999", user_key: "badkey" }, query: {} };
+    const res = mockRes();
+    await handlePortalFhTest(req, res);
+    const body = res.responseBody;
+    res.statusCode === 200 && (body?.ok === false || body?.ok === true)
+      ? pass("test61: handlePortalFhTest — returns ok boolean for bad creds (never throws)")
+      : fail("test61: handlePortalFhTest bad creds", `status=${res.statusCode}, body=${JSON.stringify(body)}`);
+  }
+
+  // ── handlePortalFhSync — auth guards ──────────────────────────────────────
+
+  // client_user → 403
+  {
+    const req = { portalUser: { isClientAdmin: false, role: "client_user", clientId: "csr_rea" }, body: {}, query: {} };
+    const res = mockRes();
+    await handlePortalFhSync(req, res, null);
+    res.statusCode === 403
+      ? pass("test61: handlePortalFhSync — client_user → 403")
+      : fail("test61: handlePortalFhSync client_user auth", `status=${res.statusCode}`);
+  }
+
+  // no supabase → 503
+  {
+    const req = { portalUser: { isClientAdmin: true, role: "client_admin", clientId: "csr_rea" }, body: {}, query: {} };
+    const res = mockRes();
+    await handlePortalFhSync(req, res, null);
+    res.statusCode === 503
+      ? pass("test61: handlePortalFhSync — no supabase → 503")
+      : fail("test61: handlePortalFhSync no-supabase", `status=${res.statusCode}`);
+  }
+
+  // client with no fareharborCompanies → ok: true, companies_synced: 0
+  {
+    const mockSb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }) };
+    const req = { portalUser: { isClientAdmin: true, role: "client_admin", clientId: "lone_pine" }, body: {}, query: {} };
+    const res = mockRes();
+    await handlePortalFhSync(req, res, mockSb);
+    const body = res.responseBody;
+    res.statusCode === 200 && body?.ok === true && body?.companies_synced === 0
+      ? pass("test61: handlePortalFhSync — no FH companies → ok:true, companies_synced:0")
+      : fail("test61: handlePortalFhSync no companies", `status=${res.statusCode}, body=${JSON.stringify(body)}`);
+  }
+
+  // unknown client → 404
+  {
+    const mockSb = {};
+    const req = { portalUser: { isClientAdmin: true, role: "client_admin", clientId: "does_not_exist" }, body: {}, query: {} };
+    const res = mockRes();
+    await handlePortalFhSync(req, res, mockSb);
+    res.statusCode === 404
+      ? pass("test61: handlePortalFhSync — unknown client → 404")
+      : fail("test61: handlePortalFhSync unknown client", `status=${res.statusCode}`);
+  }
+
+  // internal_admin → resolvePortalClientId returns null without client_id query → 400
+  {
+    const mockSb = {};
+    const req = { portalUser: { isClientAdmin: true, isAdmin: true, role: "internal_admin", clientId: null }, body: {}, query: {} };
+    const res = mockRes();
+    await handlePortalFhSync(req, res, mockSb);
+    res.statusCode === 400
+      ? pass("test61: handlePortalFhSync — internal_admin no client_id → 400")
+      : fail("test61: handlePortalFhSync admin no clientId", `status=${res.statusCode}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test62 — Phase 5: FH route auth guards (integration)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test62() {
+  console.log("\n[test62] Phase 5: FareHarbor route auth guards");
+
+  const testReq = await fetch(`${BASE_URL}/portal/api/integrations/fareharbor/test`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shortname: "x" }),
+  });
+  testReq.status === 401
+    ? pass("test62: POST /portal/api/integrations/fareharbor/test → 401 without token")
+    : fail("test62: FH test auth guard", `status=${testReq.status}`);
+
+  const syncReq = await fetch(`${BASE_URL}/portal/api/integrations/fareharbor/sync`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  syncReq.status === 401
+    ? pass("test62: POST /portal/api/integrations/fareharbor/sync → 401 without token")
+    : fail("test62: FH sync auth guard", `status=${syncReq.status}`);
 }
 
 main().catch((e) => {
