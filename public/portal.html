@@ -2848,7 +2848,7 @@ function addFhCompany() {
     </div>`;
   // Insert before the + Add company button
   const addBtn = wrap.querySelector('[onclick="addFhCompany()"]');
-  if (addBtn) { wrap.querySelector('#integrationsContent').insertBefore(div.firstElementChild, addBtn); }
+  if (addBtn) { wrap.insertBefore(div.firstElementChild, addBtn); }
   else { wrap.appendChild(div.firstElementChild); }
 }
 
