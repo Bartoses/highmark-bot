@@ -41,7 +41,12 @@ import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clien
 import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSettings, handlePortalMessaging, handlePortalUpdateMessaging,
   handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
   handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
-  handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync } from "./adminPortal.js";
+  handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync,
+  handleGetCustomIntegrations, handleCreateCustomIntegration,
+  handleUpdateCustomIntegration, handleDeleteCustomIntegration } from "./adminPortal.js";
+import {
+  createIntegration, inferSchema, sanitizeForPortal, getCustomApiContext,
+} from "./apiIntegrations.js";
 import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb,
   buildNextSteps, findRecentDraftForUrl } from "./onboardingConfig.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
@@ -2973,6 +2978,7 @@ async function main() {
   await test57(); // Onboarding Auto-Config (Phase 3): slugifyName, detectBookingSignals, buildConfidenceScore, handler guards
   await test59(); // One-Click Client Creation (Phase 4): buildNextSteps, findRecentDraftForUrl, handler guards
   await test61(); // FareHarbor Auto-Detect + Connect (Phase 5): handlePortalFhTest, handlePortalFhSync auth guards
+  await test63(); // Custom API Integration Builder (Phase 6): inferSchema, sanitizeForPortal, validation, route guards
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -2995,6 +3001,7 @@ async function main() {
     await test58(); // Onboarding routes: auth guards (Phase 3)
     await test60(); // Phase 4: create-client route auth guard
     await test62(); // Phase 5: FH route auth guards
+    await test63integration(); // Phase 6: custom API route auth guards
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -8236,6 +8243,187 @@ async function test62() {
   syncReq.status === 401
     ? pass("test62: POST /portal/api/integrations/fareharbor/sync → 401 without token")
     : fail("test62: FH sync auth guard", `status=${syncReq.status}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test63 — Phase 6: Custom API Integration Builder (unit)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test63() {
+  console.log("\n[test63] Phase 6: Custom API Integration Builder");
+
+  // ── inferSchema ──────────────────────────────────────────────────────────────
+  {
+    const schema = inferSchema({ name: "Tour A", price: 199.99, available: true, slots: [{ date: "2025-01-01", count: 4 }] });
+    schema.name === "string" && schema.price === "number" && schema.available === "boolean"
+      ? pass("test63: inferSchema — primitive types")
+      : fail("test63: inferSchema primitives", JSON.stringify(schema));
+
+    Array.isArray(schema.slots) && schema.slots[0]?.date === "string"
+      ? pass("test63: inferSchema — nested array")
+      : fail("test63: inferSchema nested array", JSON.stringify(schema.slots));
+  }
+
+  {
+    const schema = inferSchema(null);
+    schema === "null"
+      ? pass("test63: inferSchema — null")
+      : fail("test63: inferSchema null", JSON.stringify(schema));
+  }
+
+  {
+    const schema = inferSchema([]);
+    Array.isArray(schema) && schema.length === 0
+      ? pass("test63: inferSchema — empty array")
+      : fail("test63: inferSchema empty array", JSON.stringify(schema));
+  }
+
+  // ── sanitizeForPortal ────────────────────────────────────────────────────────
+  {
+    const raw = {
+      id: "abc", client_id: "csr_rea", name: "My API", base_url: "https://example.com",
+      auth_type: "bearer", auth_config: { token: "secret123" },
+      endpoints: [], headers: {}, enabled: true, last_test_status: null,
+    };
+    const safe = sanitizeForPortal(raw);
+    (safe.auth_config?.has_token === true && !("token" in safe.auth_config))
+      ? pass("test63: sanitizeForPortal — bearer token not exposed")
+      : fail("test63: sanitizeForPortal bearer", JSON.stringify(safe.auth_config));
+  }
+
+  {
+    const raw = {
+      id: "abc", client_id: "csr_rea", name: "My API", base_url: "https://example.com",
+      auth_type: "api_key_header", auth_config: { key_name: "X-API-Key", key_value: "supersecret" },
+      endpoints: [], headers: {}, enabled: true, last_test_status: null,
+    };
+    const safe = sanitizeForPortal(raw);
+    (safe.auth_config?.key_name === "X-API-Key" && safe.auth_config?.has_value === true && !("key_value" in safe.auth_config))
+      ? pass("test63: sanitizeForPortal — api_key_header: name exposed, value masked")
+      : fail("test63: sanitizeForPortal api_key_header", JSON.stringify(safe.auth_config));
+  }
+
+  // ── createIntegration validation ─────────────────────────────────────────────
+  {
+    const mockSb = {};
+    const r = await createIntegration(mockSb, "csr_rea", {});
+    r.error && r.data === null
+      ? pass("test63: createIntegration — missing required fields → error")
+      : fail("test63: createIntegration missing fields", JSON.stringify(r));
+  }
+
+  {
+    const mockSb = {};
+    const r = await createIntegration(mockSb, "csr_rea", { name: "Test", base_url: "not-a-url" });
+    r.error?.includes("valid URL")
+      ? pass("test63: createIntegration — invalid base_url → error")
+      : fail("test63: createIntegration invalid url", JSON.stringify(r));
+  }
+
+  {
+    const mockSb = {};
+    const r = await createIntegration(mockSb, "csr_rea", { name: "Test", base_url: "https://x.com", auth_type: "oAuth99" });
+    r.error?.includes("auth_type")
+      ? pass("test63: createIntegration — invalid auth_type → error")
+      : fail("test63: createIntegration invalid auth_type", JSON.stringify(r));
+  }
+
+  {
+    const mockSb = {};
+    const r = await createIntegration(mockSb, "csr_rea", {
+      name: "Test", base_url: "https://x.com",
+      endpoints: [{ name: "Get Items", path: "/items", method: "BADVERB" }],
+    });
+    r.error?.includes("method")
+      ? pass("test63: createIntegration — invalid endpoint method → error")
+      : fail("test63: createIntegration invalid method", JSON.stringify(r));
+  }
+
+  // ── getCustomApiContext — no integrations → empty string ─────────────────────
+  {
+    const ctx = await getCustomApiContext(null, "csr_rea", "what tours do you have?");
+    ctx === ""
+      ? pass("test63: getCustomApiContext — null supabase → empty string")
+      : fail("test63: getCustomApiContext null supabase", JSON.stringify(ctx));
+  }
+
+  {
+    const mockSb = {
+      from: () => ({ select: () => ({ eq: () => ({ order: () => ({ data: [], error: null }) }) }) }),
+    };
+    const ctx = await getCustomApiContext(mockSb, "csr_rea", "hello");
+    ctx === ""
+      ? pass("test63: getCustomApiContext — no integrations → empty string")
+      : fail("test63: getCustomApiContext no integrations", JSON.stringify(ctx));
+  }
+
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test63integration — Phase 6: custom API route auth guards (requires server)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test63integration() {
+  console.log("\n[test63] Phase 6: custom API route auth guards + handler guards");
+
+  function mockRes() {
+    const r = { statusCode: 200, body: null };
+    r.status  = (c)    => { r.statusCode = c; return r; };
+    r.json    = (data) => { r.body = data; return r; };
+    r.send    = (data) => { r.body = data; return r; };
+    return r;
+  }
+
+  // ── Handler unit guards ───────────────────────────────────────────────────────
+  {
+    const req = { portalUser: { isClientAdmin: false, role: "client_user", clientId: "csr_rea" }, query: {} };
+    const res = mockRes();
+    await handleGetCustomIntegrations(req, res, null);
+    res.statusCode === 503
+      ? pass("test63: handleGetCustomIntegrations — no supabase → 503")
+      : fail("test63: handleGetCustomIntegrations no supabase", `status=${res.statusCode}`);
+  }
+
+  {
+    const req = { portalUser: { isClientAdmin: false, role: "client_user", clientId: "csr_rea" }, body: {}, query: {} };
+    const res = mockRes();
+    await handleCreateCustomIntegration(req, res, {});
+    res.statusCode === 403
+      ? pass("test63: handleCreateCustomIntegration — client_user → 403")
+      : fail("test63: handleCreateCustomIntegration client_user", `status=${res.statusCode}`);
+  }
+
+  {
+    const req = { portalUser: { isClientAdmin: false, role: "client_user", clientId: "csr_rea" }, body: {}, query: {}, params: { id: "x" } };
+    const res = mockRes();
+    await handleUpdateCustomIntegration(req, res, {});
+    res.statusCode === 403
+      ? pass("test63: handleUpdateCustomIntegration — client_user → 403")
+      : fail("test63: handleUpdateCustomIntegration client_user", `status=${res.statusCode}`);
+  }
+
+  {
+    const req = { portalUser: { isClientAdmin: false, role: "client_user", clientId: "csr_rea" }, body: {}, query: {}, params: { id: "x" } };
+    const res = mockRes();
+    await handleDeleteCustomIntegration(req, res, {});
+    res.statusCode === 403
+      ? pass("test63: handleDeleteCustomIntegration — client_user → 403")
+      : fail("test63: handleDeleteCustomIntegration client_user", `status=${res.statusCode}`);
+  }
+
+  // ── Route auth guards ─────────────────────────────────────────────────────────
+  for (const [method, path, body] of [
+    ["GET",    "/portal/api/custom-integrations",          null],
+    ["POST",   "/portal/api/custom-integrations",          "{}"],
+    ["PATCH",  "/portal/api/custom-integrations/fake-id",  "{}"],
+    ["DELETE", "/portal/api/custom-integrations/fake-id",  null],
+    ["POST",   "/portal/api/custom-integrations/fake-id/test", "{}"],
+  ]) {
+    const opts = { method, headers: { "Content-Type": "application/json" } };
+    if (body) opts.body = body;
+    const r = await fetch(`${BASE_URL}${path}`, opts);
+    r.status === 401
+      ? pass(`test63: ${method} ${path} → 401 without token`)
+      : fail(`test63: ${method} ${path} auth guard`, `status=${r.status}`);
+  }
 }
 
 main().catch((e) => {

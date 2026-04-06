@@ -35,7 +35,10 @@ import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
 import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalCreateClient, handlePortalUpdateClient, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption, handlePortalCrawlPages, handlePortalIntegrations, handlePortalMessaging, handlePortalUpdateMessaging,
   handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
   handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
-  handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync } from "./adminPortal.js";
+  handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync,
+  handleGetCustomIntegrations, handleCreateCustomIntegration, handleUpdateCustomIntegration,
+  handleDeleteCustomIntegration, handleTestCustomIntegration } from "./adminPortal.js";
+import { getCustomApiContext } from "./apiIntegrations.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
@@ -1890,6 +1893,10 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const availCtx     = await checkAvailabilityIfNeeded(rawBody, convo, client);
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
 
+      // Phase 6: custom API integrations — inject inject_always endpoint data
+      const customApiCtx = await getCustomApiContext(supabase, client.id, rawBody).catch(() => "");
+      const fullKnowledgeCtx = [knowledgeCtx, customApiCtx].filter(Boolean).join("\n\n") || knowledgeCtx;
+
       // Live truth — resolve before Claude to prevent pitching unavailable offerings.
       // Phase 3: delegates to adapter registry (FareHarbor, Static, Hours, etc.)
       // Returns null for non-availability messages or non-integrated clients.
@@ -1917,7 +1924,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
       // 480 chars (3 texts) — never cut off mid-thought
       const replyMax = 480;
-      replyText = await getClaudeReply(convo, client, season, knowledgeCtx, extraInstruction, replyMax);
+      replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, extraInstruction, replyMax);
 
       // Post-generation validator: catch phone ask and regenerate once with stricter instruction
       if (containsPhoneAsk(replyText) && responsePlan.forbiddenMoves.includes("ask_for_phone_when_sms")) {
@@ -1927,7 +1934,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           planInstruction || null,
           "CORRECTION: Your previous draft asked for a phone number. The customer is already texting you — remove any phone-ask and replace with a soft offer like \"Want me to have the team reach out?\"",
         ].filter(Boolean).join("\n\n");
-        replyText = await getClaudeReply(convo, client, season, knowledgeCtx, correction, replyMax);
+        replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, correction, replyMax);
       }
 
       // Track that a recommendation was given — unlocks lead capture on the next turn
@@ -2209,6 +2216,12 @@ app.get( "/portal/api/crawl-pages",   requirePortalAuth, (req, res) => handlePor
 app.get( "/portal/api/integrations",  requirePortalAuth, (req, res) => handlePortalIntegrations(req, res, supabase));
 app.post("/portal/api/integrations/fareharbor/test", requirePortalAuth, (req, res) => handlePortalFhTest(req, res));
 app.post("/portal/api/integrations/fareharbor/sync", requirePortalAuth, (req, res) => handlePortalFhSync(req, res, supabase));
+// Phase 6 — Custom API integrations
+app.get(   "/portal/api/custom-integrations",         requirePortalAuth, (req, res) => handleGetCustomIntegrations(req, res, supabase));
+app.post(  "/portal/api/custom-integrations",         requirePortalAuth, (req, res) => handleCreateCustomIntegration(req, res, supabase));
+app.patch( "/portal/api/custom-integrations/:id",     requirePortalAuth, (req, res) => handleUpdateCustomIntegration(req, res, supabase));
+app.delete("/portal/api/custom-integrations/:id",     requirePortalAuth, (req, res) => handleDeleteCustomIntegration(req, res, supabase));
+app.post(  "/portal/api/custom-integrations/:id/test",requirePortalAuth, (req, res) => handleTestCustomIntegration(req, res, supabase));
 app.get( "/portal/api/messaging",      requirePortalAuth, (req, res) => handlePortalMessaging(req, res, supabase));
 app.patch("/portal/api/messaging",     requirePortalAuth, (req, res) => handlePortalUpdateMessaging(req, res, supabase));
 app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePortalBotConfig(req, res, supabase));

@@ -1035,6 +1035,59 @@ tr:hover td { background: var(--panel2); }
   </div>
 </div>
 
+<!-- ── Custom API integration modal ─────────────────────────────────────────── -->
+<div class="modal-backdrop" id="customApiModal">
+  <div class="modal" style="max-width:680px;max-height:90vh;overflow-y:auto;">
+    <div class="modal-title" id="customApiModalTitle">New API Integration</div>
+    <div id="customApiModalError" class="error-msg" style="display:none"></div>
+
+    <!-- Basic Info -->
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px;">Basic Info</div>
+    <div class="form-group">
+      <label>Name</label>
+      <input class="form-input" type="text" id="capiName" placeholder="e.g. My Booking System">
+    </div>
+    <div class="form-group">
+      <label>Description <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+      <input class="form-input" type="text" id="capiDesc" placeholder="What this API does">
+    </div>
+    <div class="form-group">
+      <label>Base URL</label>
+      <input class="form-input" type="url" id="capiBaseUrl" placeholder="https://api.example.com">
+      <div class="form-hint">All endpoint paths are relative to this URL.</div>
+    </div>
+
+    <!-- Authentication -->
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Authentication</div>
+    <div class="form-group">
+      <label>Auth Type</label>
+      <select class="form-input" id="capiAuthType" onchange="updateAuthFields()">
+        <option value="none">None</option>
+        <option value="bearer">Bearer Token</option>
+        <option value="api_key_header">API Key (Header)</option>
+        <option value="api_key_query">API Key (Query Param)</option>
+        <option value="basic">Basic Auth</option>
+      </select>
+    </div>
+    <div id="capiAuthFields"></div>
+
+    <!-- Headers -->
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Global Headers <span style="font-weight:400;text-transform:none;">(optional)</span></div>
+    <div id="capiHeadersList"></div>
+    <button class="btn btn-ghost btn-sm" onclick="addHeaderRow()" style="margin-bottom:12px;">+ Add header</button>
+
+    <!-- Endpoints -->
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Endpoints</div>
+    <div id="capiEndpointsList"></div>
+    <button class="btn btn-ghost btn-sm" onclick="addEndpointRow()" style="margin-bottom:12px;">+ Add endpoint</button>
+
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeCustomApiModal()">Cancel</button>
+      <button class="btn btn-primary" id="capiSaveBtn" onclick="saveCustomApi()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
 // Highmark Client Portal — SPA
@@ -2821,11 +2874,23 @@ function renderIntegrationSection(s, status) {
     ${roField('API Key', s.weather?.enabled ? 'Configured (global)' : null, s.weather?.enabled ? 'Global API key is set.' : 'Contact Highmark to configure the OpenWeather API key.')}
   </div>`;
 
-  return `${twilioCard}${fareharborCard}${snotelCard}${weatherCard}`;
+  // ── Custom APIs card ───────────────────────────────────────────────────────
+  const customApiCard = `<div class="card" style="margin-bottom:16px;" id="customApiCard">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <span style="font-size:20px;">🔌</span>
+      <div style="flex:1;font-weight:700;font-size:15px;">Custom APIs</div>
+    </div>
+    <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">Connect any external API. Availability, pricing, inventory, CRM — the bot will use live data from these endpoints in conversations.</p>
+    <div id="customApiList"><div class="loading">Loading…</div></div>
+    ${editable ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openCustomApiModal()">+ Add API</button>` : ''}
+  </div>`;
+
+  return `${twilioCard}${fareharborCard}${snotelCard}${weatherCard}${customApiCard}`;
 }
 
 function setupIntegrationEvents() {
-  // nothing to bind — all actions are inline onclick handlers
+  // Load custom integrations list
+  loadCustomIntegrations();
 }
 
 function escHtml(str) {
@@ -3584,6 +3649,325 @@ async function saveOnboardingDraft() {
     statusEl.style.color   = 'var(--danger, #e53)';
     statusEl.textContent   = 'Could not save draft — DB unavailable.';
   }
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────
+init().catch(err => { console.error('Portal init error:', err); redirectToLogin(); });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 6 — Custom API Integration UI
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _customApis = [];       // current list
+let _capiEditId = null;     // null = new, uuid = editing
+
+// ── Load & render list ────────────────────────────────────────────────────────
+async function loadCustomIntegrations() {
+  const listEl = document.getElementById('customApiList');
+  if (!listEl) return;
+  const r = await apiFetch('/custom-integrations');
+  if (!r) { listEl.innerHTML = '<span style="font-size:12px;color:var(--text2);">Could not load.</span>'; return; }
+  _customApis = r.integrations ?? [];
+  renderCustomApiList();
+}
+
+function renderCustomApiList() {
+  const listEl = document.getElementById('customApiList');
+  if (!listEl) return;
+  if (!_customApis.length) {
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--text2);">No custom APIs configured yet.</div>';
+    return;
+  }
+  listEl.innerHTML = _customApis.map((api) => {
+    const statusColor = api.last_test_status === 'connected' ? '#6ee7b7'
+                      : api.last_test_status === 'failed'    ? '#fca5a5' : 'var(--text2)';
+    const statusLabel = api.last_test_status === 'connected' ? 'Connected'
+                      : api.last_test_status === 'failed'    ? 'Failed' : 'Never tested';
+    const epCount     = (api.endpoints ?? []).length;
+    const testedAt    = api.last_tested_at ? new Date(api.last_tested_at).toLocaleDateString() : null;
+    return `<div style="border:1px solid var(--border2);border-radius:8px;padding:12px;margin-bottom:10px;display:flex;align-items:flex-start;gap:12px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:600;font-size:13px;margin-bottom:2px;">${escHtml(api.name)}</div>
+        <div style="font-size:11px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(api.base_url)}</div>
+        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:11px;color:${statusColor};">● ${statusLabel}</span>
+          ${epCount ? `<span style="font-size:11px;color:var(--text2);">${epCount} endpoint${epCount===1?'':'s'}</span>` : ''}
+          ${testedAt ? `<span style="font-size:11px;color:var(--text2);">Tested ${testedAt}</span>` : ''}
+          ${!api.enabled ? '<span class="pill" style="font-size:10px;background:var(--panel2);">Disabled</span>' : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button class="btn btn-ghost btn-sm" onclick="editCustomApi('${api.id}')">Edit</button>
+        <button class="btn btn-ghost btn-sm" style="color:#fca5a5;" onclick="deleteCustomApi('${api.id}','${escHtml(api.name)}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Modal open / close ────────────────────────────────────────────────────────
+function openCustomApiModal(editId = null) {
+  _capiEditId = editId;
+  const modal   = document.getElementById('customApiModal');
+  const title   = document.getElementById('customApiModalTitle');
+  const errEl   = document.getElementById('customApiModalError');
+  errEl.style.display = 'none';
+
+  if (editId) {
+    const api = _customApis.find(a => a.id === editId);
+    if (!api) return;
+    title.textContent = 'Edit API Integration';
+    document.getElementById('capiName').value    = api.name    ?? '';
+    document.getElementById('capiDesc').value    = api.description ?? '';
+    document.getElementById('capiBaseUrl').value = api.base_url ?? '';
+    document.getElementById('capiAuthType').value = api.auth_type ?? 'none';
+    updateAuthFields(api.auth_config);
+    renderHeaderRows(api.headers ?? {});
+    renderEndpointRows(api.endpoints ?? []);
+  } else {
+    title.textContent = 'New API Integration';
+    document.getElementById('capiName').value    = '';
+    document.getElementById('capiDesc').value    = '';
+    document.getElementById('capiBaseUrl').value = '';
+    document.getElementById('capiAuthType').value = 'none';
+    updateAuthFields();
+    renderHeaderRows({});
+    renderEndpointRows([]);
+  }
+  modal.classList.add('open');
+}
+
+function closeCustomApiModal() {
+  document.getElementById('customApiModal').classList.remove('open');
+  _capiEditId = null;
+}
+
+function editCustomApi(id) { openCustomApiModal(id); }
+
+async function deleteCustomApi(id, name) {
+  if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+  const r = await apiFetch(`/custom-integrations/${id}`, { method: 'DELETE' });
+  if (!r && _lastApiError) { alert(_lastApiError); return; }
+  await loadCustomIntegrations();
+}
+
+// ── Auth fields ───────────────────────────────────────────────────────────────
+function updateAuthFields(existing = {}) {
+  const type  = document.getElementById('capiAuthType').value;
+  const wrap  = document.getElementById('capiAuthFields');
+  const a     = existing;
+  let html    = '';
+  if (type === 'bearer') {
+    html = `<div class="form-group"><label>Token</label>
+      <input class="form-input" type="password" id="capiAuthToken" placeholder="${a.has_token ? 'Leave blank to keep current' : 'Bearer token…'}" autocomplete="new-password"></div>`;
+  } else if (type === 'api_key_header' || type === 'api_key_query') {
+    const label = type === 'api_key_header' ? 'Header Name' : 'Query Param Name';
+    html = `<div class="two-col">
+      <div class="form-group"><label>${label}</label>
+        <input class="form-input" type="text" id="capiAuthKeyName" value="${escHtml(a.key_name??'')}" placeholder="e.g. X-API-Key"></div>
+      <div class="form-group"><label>Key Value</label>
+        <input class="form-input" type="password" id="capiAuthKeyVal" placeholder="${a.has_value ? 'Leave blank to keep current' : 'Enter key…'}" autocomplete="new-password"></div>
+    </div>`;
+  } else if (type === 'basic') {
+    html = `<div class="two-col">
+      <div class="form-group"><label>Username</label>
+        <input class="form-input" type="text" id="capiAuthUser" value="${escHtml(a.username??'')}" placeholder="username"></div>
+      <div class="form-group"><label>Password</label>
+        <input class="form-input" type="password" id="capiAuthPass" placeholder="${a.has_password ? 'Leave blank to keep current' : 'password…'}" autocomplete="new-password"></div>
+    </div>`;
+  }
+  wrap.innerHTML = html;
+}
+
+function buildAuthConfig() {
+  const type = document.getElementById('capiAuthType').value;
+  if (type === 'bearer')       return { token: document.getElementById('capiAuthToken')?.value ?? '' };
+  if (type === 'api_key_header' || type === 'api_key_query') return {
+    key_name:  document.getElementById('capiAuthKeyName')?.value ?? '',
+    key_value: document.getElementById('capiAuthKeyVal')?.value  ?? '',
+  };
+  if (type === 'basic') return {
+    username: document.getElementById('capiAuthUser')?.value ?? '',
+    password: document.getElementById('capiAuthPass')?.value ?? '',
+  };
+  return {};
+}
+
+// ── Header rows ───────────────────────────────────────────────────────────────
+function renderHeaderRows(headers = {}) {
+  const wrap  = document.getElementById('capiHeadersList');
+  const pairs = Object.entries(headers);
+  wrap.innerHTML = pairs.map((_, i) => headerRowHtml(i, pairs[i][0], pairs[i][1])).join('');
+}
+
+function headerRowHtml(i, key = '', val = '') {
+  return `<div class="two-col" id="hdr_${i}" style="margin-bottom:8px;align-items:flex-start;">
+    <input class="form-input" type="text"     id="hdrKey_${i}" value="${escHtml(key)}" placeholder="Header name">
+    <div style="display:flex;gap:6px;">
+      <input class="form-input" type="text"   id="hdrVal_${i}" value="${escHtml(val)}" placeholder="Header value" style="flex:1;">
+      <button class="btn btn-ghost btn-sm" onclick="removeHeaderRow(${i})" style="padding:0 8px;flex-shrink:0;">✕</button>
+    </div>
+  </div>`;
+}
+
+function addHeaderRow() {
+  const wrap  = document.getElementById('capiHeadersList');
+  const count = wrap.querySelectorAll('[id^="hdr_"]').length;
+  const div   = document.createElement('div');
+  div.innerHTML = headerRowHtml(count);
+  wrap.appendChild(div.firstElementChild);
+}
+
+function removeHeaderRow(i) {
+  document.getElementById(`hdr_${i}`)?.remove();
+}
+
+function collectHeaders() {
+  const wrap = document.getElementById('capiHeadersList');
+  const rows = wrap.querySelectorAll('[id^="hdr_"]');
+  const out  = {};
+  rows.forEach((_, i) => {
+    const k = document.getElementById(`hdrKey_${i}`)?.value.trim();
+    const v = document.getElementById(`hdrVal_${i}`)?.value.trim();
+    if (k && v) out[k] = v;
+  });
+  return out;
+}
+
+// ── Endpoint rows ─────────────────────────────────────────────────────────────
+function renderEndpointRows(endpoints = []) {
+  const wrap = document.getElementById('capiEndpointsList');
+  wrap.innerHTML = endpoints.map((ep, i) => endpointRowHtml(i, ep)).join('');
+}
+
+function endpointRowHtml(i, ep = {}) {
+  return `<div style="border:1px solid var(--border2);border-radius:8px;padding:12px;margin-bottom:10px;" id="ep_${i}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <span style="font-size:12px;font-weight:600;color:var(--text2);">Endpoint ${i + 1}</span>
+      <button class="btn btn-ghost btn-sm" style="color:#fca5a5;padding:0 8px;" onclick="removeEndpointRow(${i})">Remove</button>
+    </div>
+    <div class="two-col">
+      <div class="form-group"><label class="form-label">Name</label>
+        <input class="form-input" type="text" id="epName_${i}" value="${escHtml(ep.name??'')}" placeholder="e.g. Get Availability"></div>
+      <div class="form-group"><label class="form-label">Method</label>
+        <select class="form-input" id="epMethod_${i}">
+          ${['GET','POST','PUT','PATCH'].map(m => `<option${(ep.method??'GET')===m?' selected':''}>${m}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Path</label>
+      <input class="form-input" type="text" id="epPath_${i}" value="${escHtml(ep.path??'')}" placeholder="/availability">
+      <div class="form-hint">Relative to base URL</div>
+    </div>
+    <div class="form-group"><label class="form-label">Default Params <span style="color:var(--text3);font-weight:400;">(JSON, optional)</span></label>
+      <input class="form-input" type="text" id="epParams_${i}" value="${escHtml(ep.params && Object.keys(ep.params).length ? JSON.stringify(ep.params) : '')}" placeholder='{"date":"today"}'></div>
+    <div class="two-col">
+      <div class="form-group"><label class="form-label">Context Label</label>
+        <input class="form-input" type="text" id="epLabel_${i}" value="${escHtml(ep.context_label??'')}" placeholder="AVAILABILITY">
+        <div class="form-hint">How this data appears in bot context</div>
+      </div>
+      <div class="form-group" style="padding-top:22px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="epAlways_${i}"${ep.inject_always?' checked':''}>
+          <span style="font-size:13px;">Inject always</span>
+        </label>
+        <div class="form-hint">Fetch before every bot response</div>
+      </div>
+    </div>
+    <div id="epTestResult_${i}" style="display:none;font-size:12px;margin-top:6px;"></div>
+    <button class="btn btn-ghost btn-sm" style="margin-top:4px;" onclick="testCustomEndpoint(${i})">Test endpoint</button>
+  </div>`;
+}
+
+function addEndpointRow() {
+  const wrap  = document.getElementById('capiEndpointsList');
+  const count = wrap.querySelectorAll('[id^="ep_"]').length;
+  const div   = document.createElement('div');
+  div.innerHTML = endpointRowHtml(count);
+  wrap.appendChild(div.firstElementChild);
+}
+
+function removeEndpointRow(i) {
+  document.getElementById(`ep_${i}`)?.remove();
+}
+
+function collectEndpoints() {
+  const wrap  = document.getElementById('capiEndpointsList');
+  const rows  = wrap.querySelectorAll('[id^="ep_"]');
+  const out   = [];
+  rows.forEach((_, i) => {
+    const name   = document.getElementById(`epName_${i}`)?.value.trim();
+    const path   = document.getElementById(`epPath_${i}`)?.value.trim();
+    const method = document.getElementById(`epMethod_${i}`)?.value ?? 'GET';
+    const label  = document.getElementById(`epLabel_${i}`)?.value.trim() || name || 'API DATA';
+    const always = document.getElementById(`epAlways_${i}`)?.checked ?? false;
+    const rawP   = document.getElementById(`epParams_${i}`)?.value.trim();
+    let params   = {};
+    if (rawP) { try { params = JSON.parse(rawP); } catch { /* ignore bad JSON */ } }
+    if (name || path) out.push({ name, path, method, params, context_label: label, inject_always: always });
+  });
+  return out;
+}
+
+// ── Test endpoint (pre-save) ──────────────────────────────────────────────────
+async function testCustomEndpoint(epIdx) {
+  if (!_capiEditId) {
+    alert('Save the integration first, then test individual endpoints.');
+    return;
+  }
+  const resultEl = document.getElementById(`epTestResult_${epIdx}`);
+  resultEl.textContent = 'Testing…';
+  resultEl.style.color = 'var(--text2)';
+  resultEl.style.display = 'block';
+
+  const r = await apiFetch(`/custom-integrations/${_capiEditId}/test`, {
+    method: 'POST',
+    body:   JSON.stringify({ endpoint_index: epIdx }),
+  });
+  if (!r) {
+    resultEl.textContent = _lastApiError || 'Test failed';
+    resultEl.style.color = '#fca5a5';
+    return;
+  }
+  if (r.ok) {
+    const keys = r.schema ? Object.keys(r.schema).slice(0,5).join(', ') : '';
+    resultEl.textContent = `✓ Connected${keys ? ' — fields: ' + keys : ''}`;
+    resultEl.style.color = '#6ee7b7';
+  } else {
+    resultEl.textContent = `✗ ${r.error ?? 'Failed'}`;
+    resultEl.style.color = '#fca5a5';
+  }
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+async function saveCustomApi() {
+  const btn   = document.getElementById('capiSaveBtn');
+  const errEl = document.getElementById('customApiModalError');
+  errEl.style.display = 'none';
+  btn.disabled = true; btn.textContent = 'Saving…';
+
+  const body = {
+    name:        document.getElementById('capiName').value.trim(),
+    description: document.getElementById('capiDesc').value.trim() || null,
+    base_url:    document.getElementById('capiBaseUrl').value.trim(),
+    auth_type:   document.getElementById('capiAuthType').value,
+    auth_config: buildAuthConfig(),
+    headers:     collectHeaders(),
+    endpoints:   collectEndpoints(),
+  };
+
+  const method = _capiEditId ? 'PATCH' : 'POST';
+  const path   = _capiEditId ? `/custom-integrations/${_capiEditId}` : '/custom-integrations';
+  const r      = await apiFetch(path, { method, body: JSON.stringify(body) });
+
+  btn.disabled = false; btn.textContent = 'Save';
+  if (!r || r.error) {
+    errEl.textContent   = r?.error ?? _lastApiError ?? 'Save failed';
+    errEl.style.display = 'block';
+    return;
+  }
+  closeCustomApiModal();
+  await loadCustomIntegrations();
+  showToast(_capiEditId ? 'API integration updated' : 'API integration created');
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────

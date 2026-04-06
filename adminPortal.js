@@ -30,6 +30,10 @@ import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.j
 import { VALID_BOOKING_MODES, serializeClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { normalizePhone, isValidPhone } from "./phoneUtils.js";
 import { startAutoConfig, getDraft, updateDraft, commitDraftToDb, createClientFromWebsite, buildNextSteps } from "./onboardingConfig.js";
+import {
+  createIntegration, updateIntegration, deleteIntegration,
+  getClientIntegrations, testEndpoint, sanitizeForPortal,
+} from "./apiIntegrations.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
@@ -1409,4 +1413,111 @@ export async function handleListPortalUsers(req, res, supabase) {
     .order("created_at", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ users: data ?? [] });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 6 — Custom API Integration handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── GET /portal/api/custom-integrations ──────────────────────────────────────
+export async function handleGetCustomIntegrations(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+  try {
+    const rows = await getClientIntegrations(supabase, clientId);
+    return res.json({ integrations: rows.map(sanitizeForPortal) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── POST /portal/api/custom-integrations ─────────────────────────────────────
+export async function handleCreateCustomIntegration(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+  try {
+    const { data, error } = await createIntegration(supabase, clientId, req.body ?? {});
+    if (error) return res.status(400).json({ error });
+    return res.status(201).json({ integration: sanitizeForPortal(data) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── PATCH /portal/api/custom-integrations/:id ────────────────────────────────
+export async function handleUpdateCustomIntegration(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+  const { id } = req.params;
+  try {
+    const { data, error } = await updateIntegration(supabase, id, clientId, req.body ?? {});
+    if (error) return res.status(400).json({ error });
+    if (!data)  return res.status(404).json({ error: "Integration not found" });
+    return res.json({ integration: sanitizeForPortal(data) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── DELETE /portal/api/custom-integrations/:id ───────────────────────────────
+export async function handleDeleteCustomIntegration(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+  const { id } = req.params;
+  try {
+    const { error } = await deleteIntegration(supabase, id, clientId);
+    if (error) return res.status(500).json({ error });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── POST /portal/api/custom-integrations/:id/test ────────────────────────────
+// Body: { endpoint_index: 0, params: {} }
+export async function handleTestCustomIntegration(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const endpointIdx    = req.body?.endpoint_index ?? 0;
+  const overrideParams = req.body?.params ?? {};
+
+  try {
+    // Fetch full row (including auth secrets) from DB for the test
+    const rows = await getClientIntegrations(supabase, clientId);
+    const integration = rows.find((r) => r.id === id);
+    if (!integration) return res.status(404).json({ error: "Integration not found" });
+
+    const result = await testEndpoint(integration, endpointIdx, overrideParams);
+
+    // Persist test result + schema if successful
+    const updates = {
+      last_tested_at:   new Date().toISOString(),
+      last_test_status: result.ok ? "connected" : "failed",
+    };
+    if (result.ok && result.schema)  updates.response_schema = result.schema;
+    if (result.ok && result.sample)  updates.sample_response = result.sample;
+    await supabase.from("client_api_integrations").update(updates).eq("id", id);
+
+    // Never expose full response body through portal — return schema + summary
+    return res.json({
+      ok:           result.ok,
+      status:       result.status ?? null,
+      error:        result.error  ?? null,
+      schema:       result.schema ?? null,
+      sample:       result.sample ?? null,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 }
