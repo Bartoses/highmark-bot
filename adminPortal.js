@@ -506,10 +506,11 @@ export async function handlePortalSettings(req, res, supabase) {
     fareharbor: {
       enabled:   client.fareharborEnabled ?? false,
       companies: (client.fareharborCompanies ?? []).map((co) => ({
-        id:        co.id        ?? null,
-        name:      co.name      ?? null,
-        shortname: co.shortname ?? null,
-        has_key:   !!(co.user_key || co.userKeyEnv), // never expose actual key
+        id:          co.id        ?? null,
+        name:        co.name      ?? null,
+        shortname:   co.shortname ?? null,
+        has_key:     !!(co.user_key || co.userKeyEnv), // never expose actual key
+        has_app_key: !!(co.app_key),                   // never expose actual key
       })),
     },
     // SNOTEL stations
@@ -634,8 +635,8 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
     updates.crawl_settings = req.body.crawl_settings;
   }
 
-  // fareharbor_companies — array of { id, name, shortname, user_key? }
-  // user_key is write-only: empty string means "keep existing" (don't clear)
+  // fareharbor_companies — array of { id, name, shortname, user_key?, app_key? }
+  // user_key / app_key are write-only: empty string means "keep existing" (don't clear)
   if (req.body.fareharbor_companies !== undefined) {
     if (!Array.isArray(req.body.fareharbor_companies)) {
       return res.status(400).json({ error: "fareharbor_companies must be an array" });
@@ -646,12 +647,14 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
     updates.fareharbor_companies = req.body.fareharbor_companies.map((co) => {
       const prev = existingCos.find((e) => e.id === co.id) ?? {};
       const userKey = (co.user_key ?? "").trim();
+      const appKey  = (co.app_key  ?? "").trim();
       return {
         id:         co.id        ?? prev.id        ?? null,
         name:       co.name      ?? prev.name      ?? null,
         shortname:  co.shortname ?? prev.shortname ?? null,
         userKeyEnv: prev.userKeyEnv ?? null,              // preserve env var reference
         user_key:   userKey || prev.user_key || null,     // empty string = keep existing
+        app_key:    appKey  || prev.app_key  || null,     // empty string = keep existing
       };
     });
   }
@@ -954,26 +957,30 @@ export async function handlePortalIntegrations(req, res, supabase) {
 
 // ── POST /portal/api/integrations/fareharbor/test ────────────────────────────
 // Validates FH credentials by making a live API call. Never stores keys.
-// Body: { shortname, user_key? }
+// Body: { shortname, user_key?, app_key? }
 // Returns: { ok: true, shortname, item_count, items } | { ok: false, error }
 export async function handlePortalFhTest(req, res) {
   if (!requireClientAdmin(req, res)) return;
 
-  const { shortname, user_key } = req.body ?? {};
+  const { shortname, user_key, app_key } = req.body ?? {};
   if (!shortname?.trim()) return res.status(400).json({ error: "shortname is required" });
 
-  // Resolve user key: use provided key, then fall back to stored key for this company
+  // Resolve keys: use provided key, then fall back to stored key for this company
   const clientId = resolvePortalClientId(req);
   const client   = getAllClients()[clientId];
   const existing = (client?.fareharborCompanies ?? []).find((c) => c.shortname === shortname.trim()) ?? {};
-  const resolvedKey = (user_key ?? "").trim()
+  const resolvedUserKey = (user_key ?? "").trim()
     || existing.user_key
     || (existing.userKeyEnv ? process.env[existing.userKeyEnv] : null)
     || "";
+  const resolvedAppKey = (app_key ?? "").trim()
+    || existing.app_key
+    || process.env.FAREHARBOR_APP_KEY
+    || "";
 
   const headers = {
-    "X-FareHarbor-API-App":  process.env.FAREHARBOR_APP_KEY ?? "",
-    "X-FareHarbor-API-User": resolvedKey,
+    "X-FareHarbor-API-App":  resolvedAppKey,
+    "X-FareHarbor-API-User": resolvedUserKey,
   };
 
   try {

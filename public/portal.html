@@ -2752,6 +2752,7 @@ function renderIntegrationSection(s, status) {
       <input type="hidden" id="fhCoId_${i}" value="${escHtml(co.id ?? '')}">
       ${rwField(`fhCoName_${i}`, 'Company Name', co.name, null)}
       ${rwField(`fhCoShortname_${i}`, 'Shortname (FH URL slug)', co.shortname, 'Used in booking links: fareharbor.com/embeds/book/{shortname}/…')}
+      ${secretField(`fhCoAppKey_${i}`, 'App API Key', co.has_app_key, 'FareHarbor app-level API key. Leave blank to use the global key.')}
       ${secretField(`fhCoKey_${i}`, 'User API Key', co.has_key, 'Your FareHarbor user API key. Leave blank to keep current.')}
       ${editable ? `<div id="fhTestResult_${i}" style="display:none;font-size:12px;margin-top:4px;"></div>
       <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="testFhConnection(${i})">Test connection</button>` : ''}
@@ -2845,8 +2846,10 @@ function addFhCompany() {
         <input class="form-input" type="text" id="fhCoName_${i}" value="" placeholder="e.g. Colorado Sled Rentals"></div>
       <div class="form-group"><label class="form-label" for="fhCoShortname_${i}">Shortname (FH URL slug)</label>
         <input class="form-input" type="text" id="fhCoShortname_${i}" value="" placeholder="e.g. coloradosledrentals"></div>
+      <div class="form-group"><label class="form-label" for="fhCoAppKey_${i}">App API Key</label>
+        <input class="form-input" type="password" id="fhCoAppKey_${i}" value="" placeholder="FareHarbor app key (leave blank to use global)" autocomplete="new-password"></div>
       <div class="form-group"><label class="form-label" for="fhCoKey_${i}">User API Key</label>
-        <input class="form-input" type="password" id="fhCoKey_${i}" value="" placeholder="Enter key…" autocomplete="new-password"></div>
+        <input class="form-input" type="password" id="fhCoKey_${i}" value="" placeholder="Enter user key…" autocomplete="new-password"></div>
     </div>`;
   // Insert before the + Add company button
   const addBtn = wrap.querySelector('[onclick="addFhCompany()"]');
@@ -2886,8 +2889,9 @@ async function saveFareharborConfig() {
     const id       = document.getElementById(`fhCoId_${i}`)?.value.trim() || `co_${i}`;
     const name     = document.getElementById(`fhCoName_${i}`)?.value.trim() || null;
     const shortname = document.getElementById(`fhCoShortname_${i}`)?.value.trim() || null;
+    const app_key  = document.getElementById(`fhCoAppKey_${i}`)?.value.trim() || '';
     const user_key  = document.getElementById(`fhCoKey_${i}`)?.value.trim() || '';
-    if (name || shortname) companies.push({ id, name, shortname, user_key });
+    if (name || shortname) companies.push({ id, name, shortname, app_key, user_key });
   });
 
   const body = { fareharbor_enabled: enabled, fareharbor_companies: companies };
@@ -2902,6 +2906,7 @@ async function testFhConnection(idx) {
   const btn      = document.querySelector(`#fhCo_${idx} [onclick="testFhConnection(${idx})"]`);
   const resultEl = document.getElementById(`fhTestResult_${idx}`);
   const shortname = document.getElementById(`fhCoShortname_${idx}`)?.value.trim();
+  const app_key   = document.getElementById(`fhCoAppKey_${idx}`)?.value.trim();
   const user_key  = document.getElementById(`fhCoKey_${idx}`)?.value.trim();
   if (!shortname) {
     resultEl.textContent = 'Enter a shortname first.';
@@ -2912,6 +2917,7 @@ async function testFhConnection(idx) {
   if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
   resultEl.style.display = 'none';
   const body = { shortname };
+  if (app_key)  body.app_key  = app_key;
   if (user_key) body.user_key = user_key;
   const r = await apiFetch('/integrations/fareharbor/test', { method: 'POST', body: JSON.stringify(body) });
   if (btn) { btn.disabled = false; btn.textContent = 'Test connection'; }
