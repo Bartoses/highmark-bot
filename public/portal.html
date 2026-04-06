@@ -310,6 +310,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="analytics">
         <span class="nav-icon">📊</span> Analytics
       </div>
+      <div class="nav-item" data-section="optimization">
+        <span class="nav-icon">🎯</span> Optimization
+      </div>
       <div class="nav-item" data-section="settings">
         <span class="nav-icon">⚙</span> Settings
       </div>
@@ -429,6 +432,15 @@ tr:hover td { background: var(--panel2); }
           </select>
         </div>
         <div id="analyticsContent"><div class="loading">Loading…</div></div>
+      </div>
+
+      <!-- OPTIMIZATION -->
+      <div class="section" id="sec-optimization">
+        <div class="section-header">
+          <span class="section-title">Optimization</span>
+          <button class="btn btn-ghost btn-sm client-admin-only" id="runOptBtn" onclick="runOptimizationAnalysis()">Run Analysis</button>
+        </div>
+        <div id="optimizationContent"><div class="loading">Loading…</div></div>
       </div>
 
       <!-- SETTINGS -->
@@ -728,6 +740,10 @@ tr:hover td { background: var(--panel2); }
           <div class="more-link-list">
             <div class="more-link-item" onclick="switchSection('settings')">
               <span>⚙</span> Settings
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item" onclick="switchSection('optimization')">
+              <span>🎯</span> Optimization
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item" onclick="switchSection('knowledge')">
@@ -1210,7 +1226,7 @@ async function signOut() {
 // ── Section routing ────────────────────────────────────────────────────────
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
-  analytics: 'Analytics', settings: 'Settings', knowledge: 'Knowledge',
+  analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
   integrations: 'Integrations', messaging: 'Messaging', 'bot-config': 'Bot Config', 'booking-config': 'Booking Config',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
 };
@@ -1230,7 +1246,8 @@ function switchSection(name) {
   if (name === 'dashboard')  loadDashboard();
   if (name === 'leads')      { leadsOffset = 0; loadLeads(); setupLeadsEvents(); }
   if (name === 'campaigns')  { loadCampaigns(); setupCampaignEvents(); }
-  if (name === 'analytics')  loadAnalytics();
+  if (name === 'analytics')    loadAnalytics();
+  if (name === 'optimization') loadOptimization();
   if (name === 'settings')   loadSettings();
   if (name === 'users')      loadUsers();
   if (name === 'clients')      loadClients();
@@ -1602,6 +1619,120 @@ async function loadAnalytics() {
       </table></div>
     </div>` : ''}
   `;
+}
+
+// ── OPTIMIZATION ─────────────────────────────────────────────────────────
+async function loadOptimization() {
+  document.getElementById('optimizationContent').innerHTML = '<div class="loading">Loading…</div>';
+  const d = await apiFetch('/optimization');
+  if (!d) { document.getElementById('optimizationContent').innerHTML = '<div class="error-msg">Failed to load optimization data.</div>'; return; }
+  renderOptimization(d);
+}
+
+function renderOptimization(d) {
+  const { insights = [], score } = d;
+  const el = document.getElementById('optimizationContent');
+
+  const noData = !score || score.conversations_analyzed < 5;
+
+  const scoreHtml = noData ? `
+    <div class="card" style="text-align:center;padding:32px 24px;">
+      <div style="font-size:42px;margin-bottom:8px;">📭</div>
+      <div style="font-weight:600;font-size:15px;margin-bottom:6px;">Not enough data yet</div>
+      <div style="color:var(--text2);font-size:13px;">Analysis requires at least 5 real conversations. Check back once you have more traffic.</div>
+      ${score ? `<div style="margin-top:14px;color:var(--text3);font-size:12px;">${score.conversations_analyzed ?? 0} conversations analyzed</div>` : ''}
+    </div>
+  ` : (() => {
+    const s = score.score;
+    const color = s >= 75 ? '#22c55e' : s >= 50 ? '#f59e0b' : '#ef4444';
+    const label = s >= 75 ? 'Healthy' : s >= 50 ? 'Needs Attention' : 'Action Required';
+    return `
+    <div class="two-col" style="margin-bottom:0;">
+      <div class="card" style="text-align:center;">
+        <div class="card-title" style="margin-bottom:12px;">Conversion Health Score</div>
+        <div style="font-size:52px;font-weight:700;color:${color};line-height:1;">${s}</div>
+        <div style="font-size:12px;font-weight:600;color:${color};margin-top:4px;text-transform:uppercase;letter-spacing:.05em;">${label}</div>
+        <div style="color:var(--text2);font-size:12px;margin-top:10px;">${score.conversations_analyzed} conversations · last 30 days</div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px;">Key Metrics</div>
+        <div class="stats-grid" style="margin-bottom:0;">
+          <div class="stat-card">
+            <div class="val">${score.lead_capture_rate != null ? Math.round(score.lead_capture_rate * 100) + '%' : '—'}</div>
+            <div class="lbl">Lead Rate</div>
+          </div>
+          <div class="stat-card">
+            <div class="val">${score.dropoff_rate != null ? Math.round(score.dropoff_rate * 100) + '%' : '—'}</div>
+            <div class="lbl">Drop-off</div>
+          </div>
+          <div class="stat-card">
+            <div class="val">${score.frustrated_rate != null ? Math.round(score.frustrated_rate * 100) + '%' : '—'}</div>
+            <div class="lbl">Frustrated</div>
+          </div>
+          <div class="stat-card">
+            <div class="val">${score.leads_captured ?? 0}</div>
+            <div class="lbl">Leads</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  })();
+
+  const insightCards = insights.length === 0 ? `
+    <div class="card" style="text-align:center;padding:28px 24px;">
+      <div style="font-size:32px;margin-bottom:8px;">✅</div>
+      <div style="font-weight:600;font-size:14px;">No active insights</div>
+      <div style="color:var(--text2);font-size:13px;margin-top:4px;">Everything looks good — or run a fresh analysis to check.</div>
+    </div>
+  ` : insights.map(ins => {
+    const severityColor = ins.severity === 'high' ? '#ef4444' : ins.severity === 'medium' ? '#f59e0b' : '#6b7280';
+    const severityBg    = ins.severity === 'high' ? 'rgba(239,68,68,.08)' : ins.severity === 'medium' ? 'rgba(245,158,11,.08)' : 'rgba(107,114,128,.08)';
+    return `
+    <div class="card" style="border-left:3px solid ${severityColor};padding-left:16px;" id="opt-ins-${ins.id}">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">
+        <span style="background:${severityBg};color:${severityColor};font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;margin-top:1px;">${ins.severity}</span>
+        <div style="font-weight:600;font-size:14px;flex:1;">${escHtml(ins.title)}</div>
+        <button class="btn btn-ghost btn-sm" style="color:var(--text3);font-size:12px;white-space:nowrap;flex-shrink:0;" onclick="dismissOptInsight('${ins.id}')">Dismiss</button>
+      </div>
+      <div style="color:var(--text2);font-size:13px;margin-bottom:8px;line-height:1.5;">${escHtml(ins.description)}</div>
+      <div style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:${ins.action_section ? '10px' : '0'};">
+        <strong>Suggestion:</strong> ${escHtml(ins.suggestion)}
+      </div>
+      ${ins.metric_label ? `<div style="font-size:12px;color:var(--text3);margin-bottom:${ins.action_section ? '10px' : '0'};">${escHtml(ins.metric_label)}</div>` : ''}
+      ${ins.action_section ? `<button class="btn btn-ghost btn-sm client-admin-only" onclick="switchSection('${ins.action_section}')">${escHtml(ins.action_label ?? 'View')}</button>` : ''}
+    </div>`;
+  }).join('');
+
+  const analyzedAt = score?.analyzed_at
+    ? `<div style="color:var(--text3);font-size:12px;margin-top:6px;">Last analyzed: ${fmt(score.analyzed_at)}</div>`
+    : '';
+
+  el.innerHTML = `
+    ${scoreHtml}
+    ${!noData ? `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 12px;">
+      <div style="font-weight:600;font-size:14px;">${insights.length > 0 ? insights.length + ' Active Insight' + (insights.length === 1 ? '' : 's') : 'Insights'}</div>
+      ${analyzedAt}
+    </div>` : ''}
+    ${insightCards}
+  `;
+}
+
+async function runOptimizationAnalysis() {
+  const btn = document.getElementById('runOptBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
+  const d = await apiFetch('/optimization/run', { method: 'POST' });
+  if (btn) { btn.disabled = false; btn.textContent = 'Run Analysis'; }
+  if (!d) { alert('Analysis failed.'); return; }
+  if (d.skipped) { alert('Not enough data yet — need at least 5 conversations.'); return; }
+  loadOptimization();
+}
+
+async function dismissOptInsight(id) {
+  const res = await apiFetch(`/optimization/dismiss/${id}`, { method: 'POST' });
+  if (!res?.ok) { alert('Failed to dismiss insight.'); return; }
+  const card = document.getElementById(`opt-ins-${id}`);
+  if (card) card.remove();
 }
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────

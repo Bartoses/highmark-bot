@@ -37,7 +37,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
   handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync,
   handleGetCustomIntegrations, handleCreateCustomIntegration, handleUpdateCustomIntegration,
-  handleDeleteCustomIntegration, handleTestCustomIntegration } from "./adminPortal.js";
+  handleDeleteCustomIntegration, handleTestCustomIntegration,
+  handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
@@ -2222,6 +2223,10 @@ app.post(  "/portal/api/custom-integrations",         requirePortalAuth, (req, r
 app.patch( "/portal/api/custom-integrations/:id",     requirePortalAuth, (req, res) => handleUpdateCustomIntegration(req, res, supabase));
 app.delete("/portal/api/custom-integrations/:id",     requirePortalAuth, (req, res) => handleDeleteCustomIntegration(req, res, supabase));
 app.post(  "/portal/api/custom-integrations/:id/test",requirePortalAuth, (req, res) => handleTestCustomIntegration(req, res, supabase));
+// Phase 7 — Optimization Engine
+app.get( "/portal/api/optimization",           requirePortalAuth, (req, res) => handleGetOptimization(req, res));
+app.post("/portal/api/optimization/run",        requirePortalAuth, (req, res) => handleRunOptimizationAnalysis(req, res));
+app.post("/portal/api/optimization/dismiss/:id",requirePortalAuth, (req, res) => handleDismissInsight(req, res));
 app.get( "/portal/api/messaging",      requirePortalAuth, (req, res) => handlePortalMessaging(req, res, supabase));
 app.patch("/portal/api/messaging",     requirePortalAuth, (req, res) => handlePortalUpdateMessaging(req, res, supabase));
 app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePortalBotConfig(req, res, supabase));

@@ -34,6 +34,7 @@ import {
   createIntegration, updateIntegration, deleteIntegration,
   getClientIntegrations, testEndpoint, sanitizeForPortal,
 } from "./apiIntegrations.js";
+import { runOptimizationAnalysis, getOptimizationInsights, dismissInsight } from "./optimizationEngine.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
@@ -1517,6 +1518,73 @@ export async function handleTestCustomIntegration(req, res, supabase) {
       schema:       result.schema ?? null,
       sample:       result.sample ?? null,
     });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── Phase 7 — Optimization Engine ────────────────────────────────────────────
+
+// GET /portal/api/optimization
+// Returns latest insights + score for the requesting client.
+export async function handleGetOptimization(req, res) {
+  const supabase  = req.supabase;
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  try {
+    const result = await getOptimizationInsights(supabase, clientId);
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// POST /portal/api/optimization/run
+// Triggers a fresh analysis run. Requires internal_admin or client_admin.
+export async function handleRunOptimizationAnalysis(req, res) {
+  const supabase  = req.supabase;
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const user = req.portalUser;
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (user.role === "client_user") return res.status(403).json({ error: "Forbidden" });
+
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  // Resolve the client object (needed by analysis engine for config gap checks)
+  const allClients = getAllClients();
+  const client = allClients.find(c => c.id === clientId);
+  if (!client) return res.status(404).json({ error: "Client not found" });
+
+  try {
+    const result = await runOptimizationAnalysis(supabase, client);
+    if (!result.ok) return res.status(500).json({ error: result.error });
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// POST /portal/api/optimization/dismiss/:id
+// Marks an insight as dismissed so it no longer appears.
+export async function handleDismissInsight(req, res) {
+  const supabase  = req.supabase;
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  const { id } = req.params;
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  try {
+    const result = await dismissInsight(supabase, id, clientId);
+    if (result.error) return res.status(500).json({ error: result.error });
+    return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

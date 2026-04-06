@@ -15,6 +15,7 @@ import { parse as parseHtml } from "node-html-parser";
 import cron from "node-cron";
 import { getDefaultClient, getAllClients } from "./clients.js";
 import { runCrawlerForClient, buildCrawlerContext } from "./crawler.js";
+import { runOptimizationAnalysis } from "./optimizationEngine.js";
 
 const FAREHARBOR_BASE     = "https://fareharbor.com/api/external/v1";
 const OPENWEATHER_BASE    = "https://api.openweathermap.org/data/2.5";
@@ -718,6 +719,14 @@ export async function initKnowledgeBase(supabase, anthropic) {
       })
       .catch(() => {});
   }
+
+  // Optimization Engine (Phase 7): daily at 5am — analyze all active clients
+  cron.schedule("0 5 * * *", () => {
+    for (const c of Object.values(getAllClients())) {
+      if (c.id === "highmark_demo") continue; // skip demo client
+      runOptimizationAnalysis(supabase, c).catch(() => {});
+    }
+  });
 
   console.log("[KB] Knowledge base initialized.");
 }

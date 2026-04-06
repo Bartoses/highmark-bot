@@ -43,10 +43,14 @@ import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSetti
   handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
   handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync,
   handleGetCustomIntegrations, handleCreateCustomIntegration,
-  handleUpdateCustomIntegration, handleDeleteCustomIntegration } from "./adminPortal.js";
+  handleUpdateCustomIntegration, handleDeleteCustomIntegration,
+  handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight } from "./adminPortal.js";
 import {
   createIntegration, inferSchema, sanitizeForPortal, getCustomApiContext,
 } from "./apiIntegrations.js";
+import {
+  generateOptimizationInsights, scoreClientPerformance,
+} from "./optimizationEngine.js";
 import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb,
   buildNextSteps, findRecentDraftForUrl } from "./onboardingConfig.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
@@ -2979,6 +2983,7 @@ async function main() {
   await test59(); // One-Click Client Creation (Phase 4): buildNextSteps, findRecentDraftForUrl, handler guards
   await test61(); // FareHarbor Auto-Detect + Connect (Phase 5): handlePortalFhTest, handlePortalFhSync auth guards
   await test63(); // Custom API Integration Builder (Phase 6): inferSchema, sanitizeForPortal, validation, route guards
+  await test64(); // Optimization Engine (Phase 7): generateOptimizationInsights, scoreClientPerformance, handler guards
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -3002,6 +3007,7 @@ async function main() {
     await test60(); // Phase 4: create-client route auth guard
     await test62(); // Phase 5: FH route auth guards
     await test63integration(); // Phase 6: custom API route auth guards
+    await test64integration(); // Phase 7: optimization route auth guards
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -8423,6 +8429,180 @@ async function test63integration() {
     r.status === 401
       ? pass(`test63: ${method} ${path} → 401 without token`)
       : fail(`test63: ${method} ${path} auth guard`, `status=${r.status}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test64 — Phase 7: AI Optimization Engine (unit tests, no server)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test64() {
+  console.log("\n[test64] Phase 7: Optimization Engine — generateOptimizationInsights + scoreClientPerformance");
+
+  const mockAnalysis = (overrides = {}) => ({
+    dropOffs:      { count: 0, rate: 0, hasBookingIntent: 0, hasAvailability: 0, hasPricing: 0 },
+    missedLeads:   { missedCount: 0, leadRate: 0.2, totalLeads: 5 },
+    bookingGaps:   { bookingIntentConvos: 0, bookedConvos: 0, gapCount: 0, gapRate: 0 },
+    frustration:   { frustratedCount: 0, frustratedRate: 0, handoffCount: 0, handoffRate: 0 },
+    earlyDropOffs: { count: 0, rate: 0 },
+    firstMessage:  { avgLen: 120, longCount: 0, longRate: 0 },
+    configGaps:    { noBookingLinks: false, noFareharbor: false, noLeadCapture: false, bookingMode: "fareharbor" },
+    ...overrides,
+  });
+
+  // ── generateOptimizationInsights ──────────────────────────────────────────
+
+  // No issues → no insights
+  {
+    const insights = generateOptimizationInsights(mockAnalysis(), 20);
+    insights.length === 0
+      ? pass("test64: no issues → 0 insights")
+      : fail("test64: no-issue baseline", `got ${insights.length} insights`);
+  }
+
+  // High drop-off → high severity insight
+  {
+    const a = mockAnalysis({ dropOffs: { count: 15, rate: 0.6, hasBookingIntent: 2, hasAvailability: 1, hasPricing: 1 } });
+    const insights = generateOptimizationInsights(a, 25);
+    const found = insights.find(i => i.insight_type === "early_dropoff" && i.severity === "high");
+    found
+      ? pass("test64: high drop-off → early_dropoff high severity")
+      : fail("test64: high drop-off insight", `insights=${JSON.stringify(insights.map(i=>i.insight_type))}`);
+  }
+
+  // Missed leads → high severity
+  {
+    const a = mockAnalysis({ missedLeads: { missedCount: 8, leadRate: 0.05, totalLeads: 1 } });
+    const insights = generateOptimizationInsights(a, 20);
+    const found = insights.find(i => i.insight_type === "missed_lead");
+    found
+      ? pass("test64: missed leads → missed_lead insight")
+      : fail("test64: missed_lead insight", `insights=${JSON.stringify(insights.map(i=>i.insight_type))}`);
+  }
+
+  // No booking links → medium severity
+  {
+    const a = mockAnalysis({ configGaps: { noBookingLinks: true, noFareharbor: true, noLeadCapture: false, bookingMode: "informational" } });
+    const insights = generateOptimizationInsights(a, 10);
+    const found = insights.find(i => i.insight_type === "no_booking_config");
+    found
+      ? pass("test64: no booking config → no_booking_config insight")
+      : fail("test64: no_booking_config insight", `insights=${JSON.stringify(insights.map(i=>i.insight_type))}`);
+  }
+
+  // Sort order: high before medium before low
+  {
+    const a = mockAnalysis({
+      dropOffs:    { count: 20, rate: 0.65, hasBookingIntent: 3, hasAvailability: 4, hasPricing: 4 },
+      missedLeads: { missedCount: 5, leadRate: 0.05, totalLeads: 1 },
+      frustration: { frustratedCount: 5, frustratedRate: 0.25, handoffCount: 2, handoffRate: 0.1 },
+      configGaps:  { noBookingLinks: false, noFareharbor: false, noLeadCapture: false, bookingMode: "fareharbor" },
+    });
+    const insights = generateOptimizationInsights(a, 30);
+    const order = { high: 0, medium: 1, low: 2 };
+    const sorted = insights.every((ins, i) =>
+      i === 0 || order[ins.severity] >= order[insights[i - 1].severity]
+    );
+    sorted
+      ? pass("test64: insights sorted high → medium → low")
+      : fail("test64: insight sort order", insights.map(i => i.severity).join(','));
+  }
+
+  // ── scoreClientPerformance ────────────────────────────────────────────────
+
+  // Perfect client → 100
+  {
+    const score = scoreClientPerformance(mockAnalysis(), 20);
+    score === 100
+      ? pass("test64: perfect client → score 100")
+      : fail("test64: perfect score", `got ${score}`);
+  }
+
+  // Heavy drop-off + no booking config → low score
+  {
+    const a = mockAnalysis({
+      dropOffs:    { count: 20, rate: 0.65, hasBookingIntent: 0, hasAvailability: 0, hasPricing: 0 },
+      bookingGaps: { bookingIntentConvos: 10, bookedConvos: 2, gapCount: 8, gapRate: 0.8 },
+      configGaps:  { noBookingLinks: true, noFareharbor: true, noLeadCapture: false, bookingMode: "informational" },
+    });
+    const score = scoreClientPerformance(a, 30);
+    score < 50
+      ? pass(`test64: heavy issues → low score (${score})`)
+      : fail("test64: heavy issues score", `got ${score}, expected < 50`);
+  }
+
+  // Score is always 0-100
+  {
+    const a = mockAnalysis({
+      dropOffs:     { count: 50, rate: 1.0, hasBookingIntent: 10, hasAvailability: 10, hasPricing: 10 },
+      missedLeads:  { missedCount: 20, leadRate: 0.0, totalLeads: 0 },
+      bookingGaps:  { bookingIntentConvos: 20, bookedConvos: 0, gapCount: 20, gapRate: 1.0 },
+      frustration:  { frustratedCount: 20, frustratedRate: 0.5, handoffCount: 15, handoffRate: 0.5 },
+      earlyDropOffs:{ count: 20, rate: 0.5 },
+      firstMessage: { avgLen: 600, longCount: 10, longRate: 0.6 },
+      configGaps:   { noBookingLinks: true, noFareharbor: true, noLeadCapture: true, bookingMode: "informational" },
+    });
+    const score = scoreClientPerformance(a, 40);
+    score >= 0 && score <= 100
+      ? pass(`test64: worst-case score clamped (${score})`)
+      : fail("test64: score clamping", `got ${score}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test64integration — Phase 7: optimization route auth guards (requires server)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test64integration() {
+  console.log("\n[test64] Phase 7: optimization route auth guards");
+
+  function mockRes() {
+    const r = { statusCode: 200, body: null };
+    r.status  = (c)    => { r.statusCode = c; return r; };
+    r.json    = (data) => { r.body = data; return r; };
+    return r;
+  }
+
+  // Handler: handleGetOptimization — 503 when no DB
+  {
+    const req = { portalUser: { role: "client_admin", clientId: "csr_rea", isClientAdmin: true }, query: {}, params: {}, body: {} };
+    const res = mockRes();
+    await handleGetOptimization(req, res);
+    res.statusCode === 503
+      ? pass("test64: handleGetOptimization — no DB → 503")
+      : fail("test64: handleGetOptimization no DB", `status=${res.statusCode}`);
+  }
+
+  // Handler: handleRunOptimizationAnalysis — 403 for client_user
+  {
+    const req = { portalUser: { role: "client_user", clientId: "csr_rea", isClientAdmin: false }, query: {}, params: {}, body: {}, supabase: {} };
+    const res = mockRes();
+    await handleRunOptimizationAnalysis(req, res);
+    res.statusCode === 403
+      ? pass("test64: handleRunOptimizationAnalysis — client_user → 403")
+      : fail("test64: handleRunOptimizationAnalysis client_user", `status=${res.statusCode}`);
+  }
+
+  // Handler: handleDismissInsight — 503 when no DB
+  {
+    const req = { portalUser: { role: "client_admin", clientId: "csr_rea", isClientAdmin: true }, query: {}, params: { id: "abc" }, body: {} };
+    const res = mockRes();
+    await handleDismissInsight(req, res);
+    res.statusCode === 503
+      ? pass("test64: handleDismissInsight — no DB → 503")
+      : fail("test64: handleDismissInsight no DB", `status=${res.statusCode}`);
+  }
+
+  // Route auth guards — all 3 routes require Bearer token
+  for (const [method, path, body] of [
+    ["GET",  "/portal/api/optimization",           null],
+    ["POST", "/portal/api/optimization/run",        "{}"],
+    ["POST", "/portal/api/optimization/dismiss/fake-id", "{}"],
+  ]) {
+    const opts = { method, headers: { "Content-Type": "application/json" } };
+    if (body) opts.body = body;
+    const r = await fetch(`${BASE_URL}${path}`, opts);
+    r.status === 401
+      ? pass(`test64: ${method} ${path} → 401 without token`)
+      : fail(`test64: ${method} ${path} auth guard`, `status=${r.status}`);
   }
 }
 
