@@ -403,11 +403,15 @@ async function refreshSnowConditions(supabase, client) {
     const stationResults = {};
     await Promise.all(
       stations.map(async (station) => {
+        // Support both object {id, name, elevation} and plain ID string formats
+        const id   = typeof station === 'string' ? station : station.id;
+        const name = typeof station === 'string' ? station : (station.name ?? station.id);
+        const elevation = typeof station === 'string' ? '' : (station.elevation ?? '');
         try {
-          const reading = await fetchSnotelStation(station.id);
-          if (reading) stationResults[station.name] = { ...station, ...reading };
+          const reading = await fetchSnotelStation(id);
+          if (reading) stationResults[name] = { id, name, elevation, ...reading };
         } catch (err) {
-          console.warn(`[KB] SNOTEL ${station.name} failed (non-fatal):`, err.message);
+          console.warn(`[KB] SNOTEL ${name} failed (non-fatal):`, err.message);
         }
       })
     );

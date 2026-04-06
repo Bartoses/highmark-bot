@@ -2797,16 +2797,18 @@ function renderIntegrationSection(s, status) {
 
   // ── SNOTEL card ────────────────────────────────────────────────────────────
   const snotelStations = s.snotelStations ?? [];
+  // Normalize: stations may be objects {id, name, ...} or plain ID strings
+  const snotelIds = snotelStations.map(st => typeof st === 'string' ? st : (st.id ?? '')).filter(Boolean);
   const snotelCard = `<div class="card" style="margin-bottom:16px;">
     ${cardHeader('❄️', 'SNOTEL — Snow Conditions', syncBadge('snow_conditions'))}
     <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">USDA snow telemetry stations for real-time snow depth, SWE, and temperature data. No API key needed.</p>
     ${editable
       ? `<div class="form-group">
            <label class="form-label" for="snotelStations">Station IDs</label>
-           <textarea class="form-input" id="snotelStations" rows="4" placeholder="One station ID per line, e.g. 680:CO:SNTL">${escHtml(snotelStations.join('\n'))}</textarea>
+           <textarea class="form-input" id="snotelStations" rows="4" placeholder="One station ID per line, e.g. 680:CO:SNTL">${escHtml(snotelIds.join('\n'))}</textarea>
            <div class="form-hint">Station IDs in format NNNNN:ST:SNTL. Find IDs at wcc.sc.egov.usda.gov.</div>
          </div>`
-      : roField('Stations', snotelStations.length ? snotelStations.join(', ') : null, 'No stations configured')
+      : roField('Stations', snotelIds.length ? snotelIds.join(', ') : null, 'No stations configured')
     }
     ${saveBtn('intSnotelSaveBtn', 'saveSnotelConfig()')}
   </div>`;
