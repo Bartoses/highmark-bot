@@ -1527,8 +1527,7 @@ export async function handleTestCustomIntegration(req, res, supabase) {
 
 // GET /portal/api/optimization
 // Returns latest insights + score for the requesting client.
-export async function handleGetOptimization(req, res) {
-  const supabase  = req.supabase;
+export async function handleGetOptimization(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
 
   const clientId = resolvePortalClientId(req);
@@ -1544,8 +1543,7 @@ export async function handleGetOptimization(req, res) {
 
 // POST /portal/api/optimization/run
 // Triggers a fresh analysis run. Requires internal_admin or client_admin.
-export async function handleRunOptimizationAnalysis(req, res) {
-  const supabase  = req.supabase;
+export async function handleRunOptimizationAnalysis(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
 
   const user = req.portalUser;
@@ -1571,8 +1569,7 @@ export async function handleRunOptimizationAnalysis(req, res) {
 
 // POST /portal/api/optimization/dismiss/:id
 // Marks an insight as dismissed so it no longer appears.
-export async function handleDismissInsight(req, res) {
-  const supabase  = req.supabase;
+export async function handleDismissInsight(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
 
   const clientId = resolvePortalClientId(req);

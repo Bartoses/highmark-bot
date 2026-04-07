@@ -2224,9 +2224,9 @@ app.patch( "/portal/api/custom-integrations/:id",     requirePortalAuth, (req, r
 app.delete("/portal/api/custom-integrations/:id",     requirePortalAuth, (req, res) => handleDeleteCustomIntegration(req, res, supabase));
 app.post(  "/portal/api/custom-integrations/:id/test",requirePortalAuth, (req, res) => handleTestCustomIntegration(req, res, supabase));
 // Phase 7 — Optimization Engine
-app.get( "/portal/api/optimization",           requirePortalAuth, (req, res) => handleGetOptimization(req, res));
-app.post("/portal/api/optimization/run",        requirePortalAuth, (req, res) => handleRunOptimizationAnalysis(req, res));
-app.post("/portal/api/optimization/dismiss/:id",requirePortalAuth, (req, res) => handleDismissInsight(req, res));
+app.get( "/portal/api/optimization",           requirePortalAuth, (req, res) => handleGetOptimization(req, res, supabase));
+app.post("/portal/api/optimization/run",        requirePortalAuth, (req, res) => handleRunOptimizationAnalysis(req, res, supabase));
+app.post("/portal/api/optimization/dismiss/:id",requirePortalAuth, (req, res) => handleDismissInsight(req, res, supabase));
 app.get( "/portal/api/messaging",      requirePortalAuth, (req, res) => handlePortalMessaging(req, res, supabase));
 app.patch("/portal/api/messaging",     requirePortalAuth, (req, res) => handlePortalUpdateMessaging(req, res, supabase));
 app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePortalBotConfig(req, res, supabase));

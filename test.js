@@ -8573,9 +8573,9 @@ async function test64integration() {
 
   // Handler: handleRunOptimizationAnalysis — 403 for client_user
   {
-    const req = { portalUser: { role: "client_user", clientId: "csr_rea", isClientAdmin: false }, query: {}, params: {}, body: {}, supabase: {} };
+    const req = { portalUser: { role: "client_user", clientId: "csr_rea", isClientAdmin: false }, query: {}, params: {}, body: {} };
     const res = mockRes();
-    await handleRunOptimizationAnalysis(req, res);
+    await handleRunOptimizationAnalysis(req, res, {});
     res.statusCode === 403
       ? pass("test64: handleRunOptimizationAnalysis — client_user → 403")
       : fail("test64: handleRunOptimizationAnalysis client_user", `status=${res.statusCode}`);
