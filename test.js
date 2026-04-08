@@ -44,13 +44,18 @@ import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSetti
   handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync,
   handleGetCustomIntegrations, handleCreateCustomIntegration,
   handleUpdateCustomIntegration, handleDeleteCustomIntegration,
-  handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight } from "./adminPortal.js";
+  handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight,
+  handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus } from "./adminPortal.js";
 import {
   createIntegration, inferSchema, sanitizeForPortal, getCustomApiContext,
 } from "./apiIntegrations.js";
 import {
   generateOptimizationInsights, scoreClientPerformance,
 } from "./optimizationEngine.js";
+import {
+  identifyRewriteCandidates, generateRewrite, updateRewriteStatus,
+  getAcceptedRewriteInstruction, invalidateRewriteCache,
+} from "./rewriteEngine.js";
 import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb,
   buildNextSteps, findRecentDraftForUrl } from "./onboardingConfig.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
@@ -2984,6 +2989,7 @@ async function main() {
   await test61(); // FareHarbor Auto-Detect + Connect (Phase 5): handlePortalFhTest, handlePortalFhSync auth guards
   await test63(); // Custom API Integration Builder (Phase 6): inferSchema, sanitizeForPortal, validation, route guards
   await test64(); // Optimization Engine (Phase 7): generateOptimizationInsights, scoreClientPerformance, handler guards
+  await test65(); // Rewrite Engine (Phase 8): identifyRewriteCandidates, generateRewrite, updateRewriteStatus, cache, handler guards
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -3008,6 +3014,7 @@ async function main() {
     await test62(); // Phase 5: FH route auth guards
     await test63integration(); // Phase 6: custom API route auth guards
     await test64integration(); // Phase 7: optimization route auth guards
+    await test65integration(); // Phase 8: rewrite route auth guards
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -8603,6 +8610,338 @@ async function test64integration() {
     r.status === 401
       ? pass(`test64: ${method} ${path} → 401 without token`)
       : fail(`test64: ${method} ${path} auth guard`, `status=${r.status}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test65 — Phase 8: Rewrite Engine (unit tests, no server)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test65() {
+  console.log("\n[test65] Phase 8: Rewrite Engine — identifyRewriteCandidates, generateRewrite, updateRewriteStatus, cache");
+
+  const mockClient = {
+    id: "csr_rea",
+    name: "Colorado Sled Rentals",
+    tone: "warm and knowledgeable",
+    bookingMode: "fareharbor",
+  };
+
+  // ── identifyRewriteCandidates — returns empty for empty DB ──────────────
+  {
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          eq:    () => ({ neq: () => ({ gte: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [] }) }) }) }) }),
+        }),
+      }),
+    };
+    const candidates = await identifyRewriteCandidates(mockSupabase, "csr_rea");
+    candidates.length === 0
+      ? pass("test65: identifyRewriteCandidates — empty DB → []")
+      : fail("test65: identifyRewriteCandidates empty", `got ${candidates.length}`);
+  }
+
+  // ── identifyRewriteCandidates — filters positive outcomes ───────────────
+  {
+    const now = new Date();
+    const twoDaysAgo = new Date(now - 2 * 86400_000).toISOString();
+
+    // Conversation with booking_step > 0 should be skipped (positive outcome)
+    const posConvo = {
+      id: "c1", messages: [
+        { role: "user", content: "I want to book", intent: "booking" },
+        { role: "user", content: "Great, let's go", intent: "booking" },
+        { role: "assistant", content: "Here is your booking link: https://example.com" },
+      ],
+      booking_step: 2, booking_data: {}, handoff: false, updated_at: twoDaysAgo,
+    };
+
+    // Drop-off conversation — should be a candidate
+    const dropConvo = {
+      id: "c2", messages: [
+        { role: "user", content: "What's the price?", intent: null },
+        { role: "user", content: "Is there a discount?", intent: null },
+        { role: "assistant", content: "Our pricing starts at $149 per person for a 2-hour tour. Let me know if you have questions." },
+      ],
+      booking_step: null, booking_data: {}, handoff: false, updated_at: twoDaysAgo,
+    };
+
+    const mockSupa = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ neq: () => ({ gte: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [posConvo, dropConvo] }) }) }) }) }),
+        }),
+      }),
+    };
+
+    const candidates = await identifyRewriteCandidates(mockSupa, "csr_rea");
+    // posConvo has booking_step=2 → filtered; dropConvo is a candidate
+    candidates.length === 1 && candidates[0].conversation_id === "c2"
+      ? pass("test65: identifyRewriteCandidates — filters positive outcomes, keeps drop-offs")
+      : fail("test65: identifyRewriteCandidates filter", `got ${candidates.length} candidates: ${JSON.stringify(candidates.map(c=>c.conversation_id))}`);
+  }
+
+  // ── identifyRewriteCandidates — insight type mapping ────────────────────
+  {
+    const twoDaysAgo = new Date(Date.now() - 2 * 86400_000).toISOString();
+    const bookingConvo = {
+      id: "c3", messages: [
+        { role: "user", content: "Can I book for Saturday?", intent: "booking" },
+        { role: "user", content: "What times are available?", intent: "availability" },
+        { role: "assistant", content: "We have several openings — visit our website to see all available slots." },
+      ],
+      booking_step: null, booking_data: {}, handoff: false, updated_at: twoDaysAgo,
+    };
+
+    const mockSupa = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ neq: () => ({ gte: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [bookingConvo] }) }) }) }) }),
+        }),
+      }),
+    };
+
+    const candidates = await identifyRewriteCandidates(mockSupa, "csr_rea");
+    candidates.length === 1 && candidates[0].insight_type === "booking_gap"
+      ? pass("test65: identifyRewriteCandidates — booking intent → booking_gap insight type")
+      : fail("test65: identifyRewriteCandidates insight type", `got ${candidates[0]?.insight_type}`);
+  }
+
+  // ── generateRewrite — null anthropic → returns null gracefully ──────────
+  {
+    // Simulate an anthropic client that throws
+    const badAnthropic = {
+      messages: { create: async () => { throw new Error("API unavailable"); } },
+    };
+    const candidate = {
+      conversation_id: "c1",
+      original_message: "We offer tours on request.",
+      context_summary: "Do you have tours this weekend?",
+      insight_type: "booking_gap",
+    };
+    const result = await generateRewrite(badAnthropic, candidate, mockClient);
+    result === null
+      ? pass("test65: generateRewrite — API error → null (graceful)")
+      : fail("test65: generateRewrite API error", `got ${JSON.stringify(result)}`);
+  }
+
+  // ── generateRewrite — malformed JSON → null ──────────────────────────────
+  {
+    const badAnthropic = {
+      messages: { create: async () => ({ content: [{ text: "not valid json at all" }] }) },
+    };
+    const candidate = {
+      conversation_id: "c1",
+      original_message: "Check our website.",
+      context_summary: "What's the price?",
+      insight_type: "pricing_no_action",
+    };
+    const result = await generateRewrite(badAnthropic, candidate, mockClient);
+    result === null
+      ? pass("test65: generateRewrite — malformed JSON → null")
+      : fail("test65: generateRewrite malformed JSON", `got ${JSON.stringify(result)}`);
+  }
+
+  // ── generateRewrite — valid response → structured result ─────────────────
+  {
+    const goodAnthropic = {
+      messages: {
+        create: async () => ({
+          content: [{
+            text: JSON.stringify({
+              rewritten_message: "We've got openings this weekend — want me to check exact times for you?",
+              rewrite_reason: "Ends with a specific question that keeps the conversation going.",
+              rewrite_pattern: "add_cta",
+            }),
+          }],
+        }),
+      },
+    };
+    const candidate = {
+      conversation_id: "c1",
+      original_message: "We offer tours on request.",
+      context_summary: "Do you have tours this weekend?",
+      insight_type: "booking_gap",
+    };
+    const result = await generateRewrite(goodAnthropic, candidate, mockClient);
+    result !== null && result.rewritten_message && result.rewrite_pattern === "add_cta"
+      ? pass("test65: generateRewrite — valid response → structured result")
+      : fail("test65: generateRewrite valid", `got ${JSON.stringify(result)}`);
+  }
+
+  // ── generateRewrite — invalid pattern → normalized to 'add_cta' ──────────
+  {
+    const anthropicInvalidPattern = {
+      messages: {
+        create: async () => ({
+          content: [{
+            text: JSON.stringify({
+              rewritten_message: "Better message here.",
+              rewrite_reason: "Much better.",
+              rewrite_pattern: "totally_invalid_pattern",
+            }),
+          }],
+        }),
+      },
+    };
+    const candidate = { conversation_id: "c1", original_message: "Ok.", context_summary: "Hi", insight_type: "early_dropoff" };
+    const result = await generateRewrite(anthropicInvalidPattern, candidate, mockClient);
+    result?.rewrite_pattern === "add_cta"
+      ? pass("test65: generateRewrite — invalid pattern → normalized to add_cta")
+      : fail("test65: generateRewrite pattern normalization", `got ${result?.rewrite_pattern}`);
+  }
+
+  // ── updateRewriteStatus — invalid status → error ─────────────────────────
+  {
+    const mockSupa = { from: () => ({ update: () => ({ eq: () => ({ eq: () => Promise.resolve({ error: null }) }) }) }) };
+    const result = await updateRewriteStatus(mockSupa, "id1", "csr_rea", "invalid_status");
+    result.error?.includes("Invalid status")
+      ? pass("test65: updateRewriteStatus — invalid status → error")
+      : fail("test65: updateRewriteStatus invalid status", `got ${JSON.stringify(result)}`);
+  }
+
+  // ── getAcceptedRewriteInstruction — null supabase → empty string ─────────
+  {
+    const result = await getAcceptedRewriteInstruction(null, "csr_rea");
+    result === ""
+      ? pass("test65: getAcceptedRewriteInstruction — null supabase → empty string")
+      : fail("test65: getAcceptedRewriteInstruction null supa", `got "${result}"`);
+  }
+
+  // ── getAcceptedRewriteInstruction — caches result ───────────────────────
+  {
+    let callCount = 0;
+    const mockSupa = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            in: () => ({
+              order: () => ({
+                limit: () => {
+                  callCount++;
+                  return Promise.resolve({ data: [] });
+                },
+              }),
+            }),
+          }),
+        }),
+      }),
+    };
+
+    invalidateRewriteCache("test-cache-client");
+    await getAcceptedRewriteInstruction(mockSupa, "test-cache-client");
+    await getAcceptedRewriteInstruction(mockSupa, "test-cache-client"); // second call — should use cache
+    callCount === 1
+      ? pass("test65: getAcceptedRewriteInstruction — caches result (1 DB call for 2 fetches)")
+      : fail("test65: rewrite cache", `DB called ${callCount} times (expected 1)`);
+    invalidateRewriteCache("test-cache-client");
+  }
+
+  // ── invalidateRewriteCache — forces fresh fetch ──────────────────────────
+  {
+    let callCount = 0;
+    const mockSupa = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            in: () => ({
+              order: () => ({
+                limit: () => {
+                  callCount++;
+                  return Promise.resolve({ data: [] });
+                },
+              }),
+            }),
+          }),
+        }),
+      }),
+    };
+
+    invalidateRewriteCache("test-inv-client");
+    await getAcceptedRewriteInstruction(mockSupa, "test-inv-client");
+    invalidateRewriteCache("test-inv-client");
+    await getAcceptedRewriteInstruction(mockSupa, "test-inv-client");
+    callCount === 2
+      ? pass("test65: invalidateRewriteCache — forces fresh DB fetch")
+      : fail("test65: invalidateRewriteCache", `DB called ${callCount} times (expected 2)`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test65integration — Phase 8: rewrite route auth guards (requires server)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test65integration() {
+  console.log("\n[test65] Phase 8: rewrite route auth guards + handler guards");
+
+  function mockRes() {
+    const r = { statusCode: 200, body: null };
+    r.status  = (c)    => { r.statusCode = c; return r; };
+    r.json    = (data) => { r.body = data; return r; };
+    return r;
+  }
+
+  // handleGetRewrites — 503 when no DB
+  {
+    const req = { portalUser: { role: "client_admin", clientId: "csr_rea", isClientAdmin: true }, query: {}, params: {}, body: {} };
+    const res = mockRes();
+    await handleGetRewrites(req, res, undefined);
+    res.statusCode === 503
+      ? pass("test65: handleGetRewrites — no DB → 503")
+      : fail("test65: handleGetRewrites no DB", `status=${res.statusCode}`);
+  }
+
+  // handleRunRewrites — 403 for client_user
+  {
+    const req = { portalUser: { role: "client_user", clientId: "csr_rea", isClientAdmin: false }, query: {}, params: {}, body: {} };
+    const res = mockRes();
+    await handleRunRewrites(req, res, {}, {});
+    res.statusCode === 403
+      ? pass("test65: handleRunRewrites — client_user → 403")
+      : fail("test65: handleRunRewrites client_user", `status=${res.statusCode}`);
+  }
+
+  // handleRunRewrites — 503 when no supabase
+  {
+    const req = { portalUser: { role: "client_admin", clientId: "csr_rea", isClientAdmin: true }, query: {}, params: {}, body: {} };
+    const res = mockRes();
+    await handleRunRewrites(req, res, undefined, {});
+    res.statusCode === 503
+      ? pass("test65: handleRunRewrites — no DB → 503")
+      : fail("test65: handleRunRewrites no DB", `status=${res.statusCode}`);
+  }
+
+  // handleRunRewrites — 503 when no anthropic
+  {
+    const req = { portalUser: { role: "client_admin", clientId: "csr_rea", isClientAdmin: true }, query: {}, params: {}, body: {} };
+    const res = mockRes();
+    await handleRunRewrites(req, res, {}, undefined);
+    res.statusCode === 503
+      ? pass("test65: handleRunRewrites — no anthropic → 503")
+      : fail("test65: handleRunRewrites no anthropic", `status=${res.statusCode}`);
+  }
+
+  // handleUpdateRewriteStatus — 403 for client_user
+  {
+    const req = { portalUser: { role: "client_user", clientId: "csr_rea", isClientAdmin: false }, query: {}, params: { id: "x" }, body: { status: "accepted" } };
+    const res = mockRes();
+    await handleUpdateRewriteStatus(req, res, {});
+    res.statusCode === 403
+      ? pass("test65: handleUpdateRewriteStatus — client_user → 403")
+      : fail("test65: handleUpdateRewriteStatus client_user", `status=${res.statusCode}`);
+  }
+
+  // Route auth guards — all 3 routes require Bearer token
+  for (const [method, path, body] of [
+    ["GET",   "/portal/api/rewrites",          null],
+    ["POST",  "/portal/api/rewrites/run",       "{}"],
+    ["PATCH", "/portal/api/rewrites/fake-id",   "{}"],
+  ]) {
+    const opts = { method, headers: { "Content-Type": "application/json" } };
+    if (body) opts.body = body;
+    const r = await fetch(`${BASE_URL}${path}`, opts);
+    r.status === 401
+      ? pass(`test65: ${method} ${path} → 401 without token`)
+      : fail(`test65: ${method} ${path} auth guard`, `status=${r.status}`);
   }
 }
 

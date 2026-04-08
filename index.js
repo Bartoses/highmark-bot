@@ -38,8 +38,10 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync,
   handleGetCustomIntegrations, handleCreateCustomIntegration, handleUpdateCustomIntegration,
   handleDeleteCustomIntegration, handleTestCustomIntegration,
-  handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight } from "./adminPortal.js";
+  handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight,
+  handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
+import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
@@ -1895,8 +1897,9 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       const knowledgeCtx = await getKnowledgeContext(supabase, client);
 
       // Phase 6: custom API integrations — inject inject_always endpoint data
-      const customApiCtx = await getCustomApiContext(supabase, client.id, rawBody).catch(() => "");
-      const fullKnowledgeCtx = [knowledgeCtx, customApiCtx].filter(Boolean).join("\n\n") || knowledgeCtx;
+      const customApiCtx    = await getCustomApiContext(supabase, client.id, rawBody).catch(() => "");
+      const rewriteCtx      = await getAcceptedRewriteInstruction(supabase, client.id).catch(() => "");
+      const fullKnowledgeCtx = [knowledgeCtx, customApiCtx, rewriteCtx].filter(Boolean).join("\n\n") || knowledgeCtx;
 
       // Live truth — resolve before Claude to prevent pitching unavailable offerings.
       // Phase 3: delegates to adapter registry (FareHarbor, Static, Hours, etc.)
@@ -2227,6 +2230,10 @@ app.post(  "/portal/api/custom-integrations/:id/test",requirePortalAuth, (req, r
 app.get( "/portal/api/optimization",           requirePortalAuth, (req, res) => handleGetOptimization(req, res, supabase));
 app.post("/portal/api/optimization/run",        requirePortalAuth, (req, res) => handleRunOptimizationAnalysis(req, res, supabase));
 app.post("/portal/api/optimization/dismiss/:id",requirePortalAuth, (req, res) => handleDismissInsight(req, res, supabase));
+// Phase 8 — Rewrite Engine
+app.get(  "/portal/api/rewrites",      requirePortalAuth, (req, res) => handleGetRewrites(req, res, supabase));
+app.post( "/portal/api/rewrites/run",  requirePortalAuth, (req, res) => handleRunRewrites(req, res, supabase, anthropic));
+app.patch("/portal/api/rewrites/:id",  requirePortalAuth, (req, res) => handleUpdateRewriteStatus(req, res, supabase));
 app.get( "/portal/api/messaging",      requirePortalAuth, (req, res) => handlePortalMessaging(req, res, supabase));
 app.patch("/portal/api/messaging",     requirePortalAuth, (req, res) => handlePortalUpdateMessaging(req, res, supabase));
 app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePortalBotConfig(req, res, supabase));

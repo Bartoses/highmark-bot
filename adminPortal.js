@@ -35,6 +35,7 @@ import {
   getClientIntegrations, testEndpoint, sanitizeForPortal,
 } from "./apiIntegrations.js";
 import { runOptimizationAnalysis, getOptimizationInsights, dismissInsight } from "./optimizationEngine.js";
+import { runRewriteGeneration, getRewriteSuggestions, updateRewriteStatus } from "./rewriteEngine.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
@@ -1580,6 +1581,83 @@ export async function handleDismissInsight(req, res, supabase) {
 
   try {
     const result = await dismissInsight(supabase, id, clientId);
+    if (result.error) return res.status(500).json({ error: result.error });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── Phase 8 — Rewrite Engine ───────────────────────────────────────────────
+
+// GET /portal/api/rewrites
+// Returns all non-rejected rewrite suggestions for the client.
+export async function handleGetRewrites(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  try {
+    const result = await getRewriteSuggestions(supabase, clientId);
+    if (result.error) return res.status(500).json({ error: result.error });
+    return res.json({ suggestions: result.suggestions });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// POST /portal/api/rewrites/run
+// Generates new rewrite suggestions. Requires client_admin or internal_admin.
+export async function handleRunRewrites(req, res, supabase, anthropic) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!anthropic) return res.status(503).json({ error: "AI unavailable" });
+
+  const user = req.portalUser;
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (user.role === "client_user") return res.status(403).json({ error: "Forbidden" });
+
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  const allClients = getAllClients();
+  const client = allClients.find(c => c.id === clientId);
+  if (!client) return res.status(404).json({ error: "Client not found" });
+
+  try {
+    const result = await runRewriteGeneration(supabase, anthropic, client);
+    if (!result.ok) return res.status(500).json({ error: result.error });
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// PATCH /portal/api/rewrites/:id
+// Accept (optionally with edited message), reject, or reset to pending.
+// Requires client_admin or internal_admin.
+export async function handleUpdateRewriteStatus(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+
+  const user = req.portalUser;
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (user.role === "client_user") return res.status(403).json({ error: "Forbidden" });
+
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  const { id } = req.params;
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  const { status, edited_message } = req.body ?? {};
+  if (!status) return res.status(400).json({ error: "status required" });
+
+  try {
+    const result = await updateRewriteStatus(
+      supabase, id, clientId, status,
+      edited_message ?? null,
+      user.email ?? null,
+    );
     if (result.error) return res.status(500).json({ error: result.error });
     return res.json({ ok: true });
   } catch (err) {

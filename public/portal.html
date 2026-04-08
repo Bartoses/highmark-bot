@@ -438,9 +438,20 @@ tr:hover td { background: var(--panel2); }
       <div class="section" id="sec-optimization">
         <div class="section-header">
           <span class="section-title">Optimization</span>
-          <button class="btn btn-ghost btn-sm client-admin-only" id="runOptBtn" onclick="runOptimizationAnalysis()">Run Analysis</button>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-ghost btn-sm client-admin-only" id="runRewriteBtn" onclick="runRewrites()" title="Generate AI message rewrites">Rewrite Messages</button>
+            <button class="btn btn-ghost btn-sm client-admin-only" id="runOptBtn" onclick="runOptimizationAnalysis()">Run Analysis</button>
+          </div>
         </div>
         <div id="optimizationContent"><div class="loading">Loading…</div></div>
+        <!-- Rewrites panel — shown below insights -->
+        <div id="rewritesPanel" style="display:none;margin-top:24px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div style="font-weight:600;font-size:14px;">Message Rewrites</div>
+            <div style="color:var(--text3);font-size:12px;" id="rewritesSubtitle"></div>
+          </div>
+          <div id="rewritesContent"></div>
+        </div>
       </div>
 
       <!-- SETTINGS -->
@@ -1624,9 +1635,17 @@ async function loadAnalytics() {
 // ── OPTIMIZATION ─────────────────────────────────────────────────────────
 async function loadOptimization() {
   document.getElementById('optimizationContent').innerHTML = '<div class="loading">Loading…</div>';
-  const d = await apiFetch('/optimization');
+  const [d, rw] = await Promise.all([
+    apiFetch('/optimization'),
+    apiFetch('/rewrites'),
+  ]);
   if (!d) { document.getElementById('optimizationContent').innerHTML = '<div class="error-msg">Failed to load optimization data.</div>'; return; }
   renderOptimization(d);
+  if (rw) {
+    const panel = document.getElementById('rewritesPanel');
+    if (panel) panel.style.display = 'block';
+    renderRewrites(rw.suggestions ?? []);
+  }
 }
 
 function renderOptimization(d) {
@@ -1732,6 +1751,129 @@ async function dismissOptInsight(id) {
   const res = await apiFetch(`/optimization/dismiss/${id}`, { method: 'POST' });
   if (!res?.ok) { alert('Failed to dismiss insight.'); return; }
   const card = document.getElementById(`opt-ins-${id}`);
+  if (card) card.remove();
+}
+
+// ── REWRITES ──────────────────────────────────────────────────────────────
+
+async function loadRewrites() {
+  const panel = document.getElementById('rewritesPanel');
+  const el    = document.getElementById('rewritesContent');
+  if (!panel || !el) return;
+  el.innerHTML = '<div class="loading">Loading…</div>';
+  panel.style.display = 'block';
+
+  const d = await apiFetch('/rewrites');
+  if (!d) { el.innerHTML = '<div class="error-msg">Failed to load rewrites.</div>'; return; }
+  renderRewrites(d.suggestions ?? []);
+}
+
+function renderRewrites(suggestions) {
+  const el  = document.getElementById('rewritesContent');
+  const sub = document.getElementById('rewritesSubtitle');
+  if (!el) return;
+
+  const pending  = suggestions.filter(s => s.status === 'pending');
+  const accepted = suggestions.filter(s => s.status === 'accepted' || s.status === 'auto_applied');
+  const total    = suggestions.length;
+
+  if (sub) {
+    sub.textContent = total === 0 ? '' :
+      `${pending.length} pending · ${accepted.length} applied`;
+  }
+
+  if (!total) {
+    el.innerHTML = `<div class="card" style="text-align:center;padding:24px;">
+      <div style="font-size:28px;margin-bottom:6px;">✍️</div>
+      <div style="font-weight:600;font-size:13px;">No rewrites yet</div>
+      <div style="color:var(--text2);font-size:12px;margin-top:4px;">Click "Rewrite Messages" to generate AI-improved versions of weak responses.</div>
+    </div>`;
+    return;
+  }
+
+  const patternLabel = { add_cta:'Add CTA', increase_specificity:'More Specific', reduce_friction:'Less Friction', add_urgency:'Add Urgency', shorten:'Shorter' };
+  const statusColor  = { pending:'#6b7280', accepted:'#22c55e', auto_applied:'#3b82f6', rejected:'#ef4444' };
+  const statusLabel  = { pending:'Pending', accepted:'Applied', auto_applied:'Auto-Applied', rejected:'Rejected' };
+
+  el.innerHTML = suggestions.map(s => {
+    const isApplied  = s.status === 'accepted' || s.status === 'auto_applied';
+    const isPending  = s.status === 'pending';
+    const sc = statusColor[s.status] ?? '#6b7280';
+    const sl = statusLabel[s.status] ?? s.status;
+    const pl = patternLabel[s.rewrite_pattern] ?? s.rewrite_pattern;
+
+    const editId = `edit-${s.id}`;
+
+    return `<div class="card" id="rw-card-${s.id}" style="margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+        <span style="background:rgba(107,114,128,.1);color:var(--text2);font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;">${escHtml(pl)}</span>
+        <span style="font-size:11px;font-weight:600;color:${sc};padding:2px 8px;background:${sc}18;border-radius:12px;">${sl}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:auto;">${escHtml(s.insight_type?.replace(/_/g,' ') ?? '')}</span>
+      </div>
+
+      ${s.context_summary ? `<div style="font-size:12px;color:var(--text3);margin-bottom:10px;padding:8px;background:var(--bg);border-radius:6px;font-style:italic;">"${escHtml(s.context_summary.slice(0,120))}"</div>` : ''}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em;">Before</div>
+          <div style="font-size:13px;color:var(--text2);background:var(--bg);padding:10px;border-radius:6px;line-height:1.4;">${escHtml(s.original_message)}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em;">After</div>
+          ${isPending
+            ? `<textarea id="${editId}" style="width:100%;font-size:13px;background:var(--bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:10px;line-height:1.4;resize:vertical;min-height:80px;font-family:inherit;box-sizing:border-box;">${escHtml(s.rewritten_message)}</textarea>`
+            : `<div style="font-size:13px;color:var(--text);background:var(--panel);padding:10px;border-radius:6px;line-height:1.4;border:1px solid var(--border2);">${escHtml(s.rewritten_message)}</div>`
+          }
+        </div>
+      </div>
+
+      <div style="font-size:12px;color:var(--text2);margin-bottom:${isPending ? '12px' : '0'};line-height:1.4;">
+        <strong>Why:</strong> ${escHtml(s.rewrite_reason)}
+      </div>
+
+      ${isPending ? `<div class="client-admin-only" style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="acceptRewrite('${s.id}', '${editId}')">Apply</button>
+        <button class="btn btn-ghost btn-sm" onclick="rejectRewrite('${s.id}')">Reject</button>
+      </div>` : ''}
+
+      ${isApplied ? `<div style="font-size:11px;color:var(--text3);margin-top:2px;">
+        Applied ${s.reviewed_at ? fmt(s.reviewed_at) : ''} · v${s.version ?? 1}
+        <button class="btn btn-ghost btn-sm client-admin-only" style="margin-left:8px;font-size:11px;" onclick="rejectRewrite('${s.id}')">Remove</button>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function runRewrites() {
+  const btn = document.getElementById('runRewriteBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+  const d = await apiFetch('/rewrites/run', { method: 'POST' });
+  if (btn) { btn.disabled = false; btn.textContent = 'Rewrite Messages'; }
+  if (!d) { alert('Failed to generate rewrites.'); return; }
+  if (d.skipped) { alert('Not enough drop-off conversations to analyze yet.'); return; }
+  await loadRewrites();
+}
+
+async function acceptRewrite(id, editId) {
+  const textarea = document.getElementById(editId);
+  const edited   = textarea ? textarea.value.trim() : null;
+  const res = await apiFetch(`/rewrites/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'accepted', edited_message: edited }),
+  });
+  if (!res?.ok) { alert('Failed to apply rewrite.'); return; }
+  loadRewrites();
+}
+
+async function rejectRewrite(id) {
+  const res = await apiFetch(`/rewrites/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'rejected' }),
+  });
+  if (!res?.ok) { alert('Failed to reject rewrite.'); return; }
+  const card = document.getElementById(`rw-card-${id}`);
   if (card) card.remove();
 }
 
