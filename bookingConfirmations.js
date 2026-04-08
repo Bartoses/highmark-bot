@@ -12,6 +12,7 @@ import fetch from "node-fetch";
 import cron from "node-cron";
 import { scheduleMessage } from "./scheduler.js";
 import { getAllClients } from "./clients.js";
+import { scheduleReminders } from "./messagingEngine.js";
 
 const FAREHARBOR_BASE = "https://fareharbor.com/api/external/v1";
 
@@ -101,7 +102,7 @@ export function buildFollowUpText(booking) {
   return text.length <= 320 ? text : text.slice(0, 317) + "...";
 }
 
-export function buildCancellationText(booking) {
+export function buildCancellationText(booking, bookingLink) {
   const firstName = (booking.contact?.name ?? "there").split(" ")[0];
   const itemName  = booking.availability?.item?.name ?? "your tour";
 
@@ -111,8 +112,10 @@ export function buildCancellationText(booking) {
     day:   "numeric",
   });
 
-  const text = `Hey ${firstName}, your ${itemName} on ${dateStr} has been cancelled. Questions? Reply here or call ${HANDOFF_PHONE}.`;
-  return text.length <= 200 ? text : text.slice(0, 197) + "...";
+  const base   = `Hey ${firstName}, your ${itemName} on ${dateStr} has been cancelled. Questions? Reply here or call ${HANDOFF_PHONE}.`;
+  const rebook = bookingLink ? ` Want to rebook? ${bookingLink}` : "";
+  const text   = base + rebook;
+  return text.length <= 320 ? text : text.slice(0, 317) + "...";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -235,7 +238,9 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
       return;
     }
 
-    const cancelText = buildCancellationText(booking);
+    // Include rebooking link in cancellation text if rebooking is enabled
+    const rebookLink = (msgConfig?.enable_rebooking && fhClient?.bookingUrls?.[0]) ? fhClient.bookingUrls[0] : null;
+    const cancelText = buildCancellationText(booking, rebookLink);
     try {
       await twilioClient.messages.create({ body: cancelText, from: fromNumber, to: sendTo });
       console.log(`[CONFIRM] Cancellation sent to ${sendTo} for booking ${bookingPk}`);
@@ -307,6 +312,12 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
 
   // Pre-seed conversation so Summit has context when guest replies
   await preSeedConversation(booking, confirmText, supabase, fromNumber);
+
+  // Schedule reminders (24h + same-day) if enabled in messaging_config
+  if (msgConfig?.enable_reminders) {
+    scheduleReminders(supabase, booking, sendTo, fromNumber, msgConfig, fhClient?.id ?? null)
+      .catch(err => console.error("[CONFIRM] Reminder scheduling error:", err.message));
+  }
 
   // Schedule 30-minute follow-up via durable scheduler (survives Railway restarts)
   try {

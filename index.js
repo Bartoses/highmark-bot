@@ -51,6 +51,7 @@ import { getRuntimeClientConfig } from "./clientConfig.js";
 import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction } from "./conversationEngine.js";
 import { selectResponseMode, buildResponseModeInstruction } from "./responseMode.js";
 import { resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
+import { detectCancellationIntent, detectRescheduleIntent, handleCancellationMessage, handleRescheduleMessage } from "./messagingEngine.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1571,6 +1572,24 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         );
       } else {
         replyText = enforceLength(client.handoffReply(client.handoffPhone));
+      }
+    }
+
+    // CONFIRMED GUEST: Cancellation / Reschedule intent
+    // Intercepts lifecycle messages from guests who have a confirmed booking.
+    // Returns a deterministic reply — no Claude call needed.
+    else if (
+      convo.sessionType === "confirmed_guest" &&
+      convo.bookingData?.activity &&
+      !isNew &&
+      (detectCancellationIntent(rawBody) || detectRescheduleIntent(rawBody))
+    ) {
+      if (detectCancellationIntent(rawBody)) {
+        console.log(`[MSG] Cancellation intent from confirmed guest — ${fromNumber}`);
+        replyText = enforceLength(handleCancellationMessage(convo, client));
+      } else {
+        console.log(`[MSG] Reschedule intent from confirmed guest — ${fromNumber}`);
+        replyText = enforceLength(handleRescheduleMessage(convo, client));
       }
     }
 

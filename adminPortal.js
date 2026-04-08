@@ -1067,8 +1067,11 @@ const MESSAGING_DEFAULTS = {
   enable_confirmation_texts: false,
   enable_reminders:          false,
   reminder_hours_before:     24,
+  reminder_24h:              true,
+  reminder_same_day:         false,
   enable_cancellations:      true,
   enable_rebooking:          false,
+  custom_templates:          {},
 };
 
 // ── GET /portal/api/messaging ────────────────────────────────────────────────
@@ -1080,7 +1083,7 @@ export async function handlePortalMessaging(req, res, supabase) {
 
   const { data, error } = await supabase
     .from("messaging_config")
-    .select("client_id, enable_confirmation_texts, enable_reminders, reminder_hours_before, enable_cancellations, enable_rebooking")
+    .select("client_id, enable_confirmation_texts, enable_reminders, reminder_hours_before, reminder_24h, reminder_same_day, enable_cancellations, enable_rebooking, custom_templates")
     .eq("client_id", clientId)
     .maybeSingle();
 
@@ -1109,7 +1112,7 @@ export async function handlePortalUpdateMessaging(req, res, supabase) {
   const body = req.body ?? {};
   const updates = { client_id: clientId, updated_at: new Date().toISOString() };
 
-  const boolFields = ["enable_confirmation_texts", "enable_reminders", "enable_cancellations", "enable_rebooking"];
+  const boolFields = ["enable_confirmation_texts", "enable_reminders", "reminder_24h", "reminder_same_day", "enable_cancellations", "enable_rebooking"];
   for (const f of boolFields) {
     if (body[f] !== undefined) updates[f] = !!body[f];
   }
@@ -1120,6 +1123,21 @@ export async function handlePortalUpdateMessaging(req, res, supabase) {
       return res.status(400).json({ error: "reminder_hours_before must be an integer between 1 and 168" });
     }
     updates.reminder_hours_before = hrs;
+  }
+
+  if (body.custom_templates !== undefined) {
+    if (typeof body.custom_templates !== "object" || Array.isArray(body.custom_templates)) {
+      return res.status(400).json({ error: "custom_templates must be an object" });
+    }
+    // Sanitize: only allow known template keys, values must be strings ≤ 400 chars
+    const VALID_TEMPLATE_KEYS = ["reminder_24h", "reminder_same_day", "cancellation_rebook"];
+    const sanitized = {};
+    for (const [k, v] of Object.entries(body.custom_templates)) {
+      if (VALID_TEMPLATE_KEYS.includes(k) && typeof v === "string") {
+        sanitized[k] = v.slice(0, 400);
+      }
+    }
+    updates.custom_templates = sanitized;
   }
 
   if (Object.keys(updates).length === 2) {

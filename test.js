@@ -56,6 +56,11 @@ import {
   identifyRewriteCandidates, generateRewrite, updateRewriteStatus,
   getAcceptedRewriteInstruction, invalidateRewriteCache,
 } from "./rewriteEngine.js";
+import {
+  detectCancellationIntent, detectRescheduleIntent,
+  handleCancellationMessage, handleRescheduleMessage,
+  resolveTemplate, scheduleReminders, DEFAULT_TEMPLATES,
+} from "./messagingEngine.js";
 import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb,
   buildNextSteps, findRecentDraftForUrl } from "./onboardingConfig.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
@@ -2990,6 +2995,7 @@ async function main() {
   await test63(); // Custom API Integration Builder (Phase 6): inferSchema, sanitizeForPortal, validation, route guards
   await test64(); // Optimization Engine (Phase 7): generateOptimizationInsights, scoreClientPerformance, handler guards
   await test65(); // Rewrite Engine (Phase 8): identifyRewriteCandidates, generateRewrite, updateRewriteStatus, cache, handler guards
+  await test66(); // Messaging Engine (Phase 9): detectCancellationIntent, detectRescheduleIntent, resolveTemplate, scheduleReminders, handlers
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -8942,6 +8948,170 @@ async function test65integration() {
     r.status === 401
       ? pass(`test65: ${method} ${path} → 401 without token`)
       : fail(`test65: ${method} ${path} auth guard`, `status=${r.status}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test66 — Phase 9: Messaging Engine (detectCancellationIntent, detectRescheduleIntent,
+//          resolveTemplate, scheduleReminders, handleCancellationMessage, handleRescheduleMessage)
+// ─────────────────────────────────────────────────────────────────────────────
+async function test66() {
+  console.log("\n[test66] Phase 9: Messaging Engine — intent detection, templates, reminders");
+
+  // ── detectCancellationIntent ──────────────────────────────────────────────
+  const cancelTrue = [
+    "I need to cancel",
+    "cancel my booking please",
+    "I can't make it",
+    "I won't make it tomorrow",
+    "cancelling my reservation",
+    "call it off",
+  ];
+  for (const msg of cancelTrue) {
+    detectCancellationIntent(msg)
+      ? pass(`test66: detectCancellationIntent true — "${msg}"`)
+      : fail(`test66: detectCancellationIntent false positive`, `"${msg}" should be true`);
+  }
+
+  const cancelFalse = [
+    "what's the cancellation policy?",
+    "don't cancel my booking",
+    "do not cancel that",
+    "how much is it?",
+    "I'd love to book",
+  ];
+  for (const msg of cancelFalse) {
+    !detectCancellationIntent(msg)
+      ? pass(`test66: detectCancellationIntent false — "${msg}"`)
+      : fail(`test66: detectCancellationIntent false negative`, `"${msg}" should be false`);
+  }
+
+  // ── detectRescheduleIntent ────────────────────────────────────────────────
+  const reschedTrue = [
+    "can I reschedule?",
+    "I want to change my date",
+    "move my booking to next week",
+    "pick another day",
+    "postpone the tour",
+    "can we do a different time",
+  ];
+  for (const msg of reschedTrue) {
+    detectRescheduleIntent(msg)
+      ? pass(`test66: detectRescheduleIntent true — "${msg}"`)
+      : fail(`test66: detectRescheduleIntent false positive`, `"${msg}" should be true`);
+  }
+
+  const reschedFalse = ["what time does it start?", "how much does it cost?", "cancel please"];
+  for (const msg of reschedFalse) {
+    !detectRescheduleIntent(msg)
+      ? pass(`test66: detectRescheduleIntent false — "${msg}"`)
+      : fail(`test66: detectRescheduleIntent false negative`, `"${msg}" should be false`);
+  }
+
+  // ── resolveTemplate — default templates ───────────────────────────────────
+  {
+    const tpl = resolveTemplate(null, "reminder_24h", { name: "Alice", activity: "Snowmobile Tour", time: "10am MST" });
+    (tpl.includes("Snowmobile Tour") && tpl.includes("10am MST"))
+      ? pass("test66: resolveTemplate — default reminder_24h interpolated")
+      : fail("test66: resolveTemplate default", tpl);
+  }
+
+  // ── resolveTemplate — custom template overrides ───────────────────────────
+  {
+    const cfg = { custom_templates: { reminder_24h: "Hey {name}! Don't forget your {activity} tomorrow!" } };
+    const tpl = resolveTemplate(cfg, "reminder_24h", { name: "Bob", activity: "RZR Rental" });
+    (tpl === "Hey Bob! Don't forget your RZR Rental tomorrow!")
+      ? pass("test66: resolveTemplate — custom template applied")
+      : fail("test66: resolveTemplate custom", tpl);
+  }
+
+  // ── resolveTemplate — unknown type returns empty string ───────────────────
+  {
+    const tpl = resolveTemplate(null, "nonexistent_type", {});
+    tpl === ""
+      ? pass("test66: resolveTemplate — unknown type returns empty string")
+      : fail("test66: resolveTemplate unknown type", `got "${tpl}"`);
+  }
+
+  // ── scheduleReminders — skips when enable_reminders is false ─────────────
+  {
+    const result = await scheduleReminders({}, {}, "+15551234567", "+15559999999", { enable_reminders: false }, "csr_rea");
+    result.scheduled === 0
+      ? pass("test66: scheduleReminders — skips when disabled")
+      : fail("test66: scheduleReminders disabled", JSON.stringify(result));
+  }
+
+  // ── scheduleReminders — skips when no start_at ───────────────────────────
+  {
+    const result = await scheduleReminders({}, { availability: {} }, "+15551234567", "+15559999999", { enable_reminders: true }, "csr_rea");
+    result.scheduled === 0
+      ? pass("test66: scheduleReminders — skips when no start_at")
+      : fail("test66: scheduleReminders no start_at", JSON.stringify(result));
+  }
+
+  // ── scheduleReminders — skips past times (24h reminder in the past) ───────
+  {
+    const pastBooking = {
+      pk: "9999",
+      contact: { name: "Test" },
+      availability: { start_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), item: { name: "Tour" } },
+    };
+    const mockSb = { from: () => ({ insert: async () => ({ data: {}, error: null }) }) };
+    // Event is only 1h away — 24h reminder would be in the past, same-day (2h before) would also be past
+    const result = await scheduleReminders(mockSb, pastBooking, "+15551234567", "+15559999999",
+      { enable_reminders: true, reminder_24h: true, reminder_same_day: true }, "csr_rea");
+    result.scheduled === 0
+      ? pass("test66: scheduleReminders — skips reminders already in the past")
+      : fail("test66: scheduleReminders past event", JSON.stringify(result));
+  }
+
+  // ── handleCancellationMessage — no booking link ───────────────────────────
+  {
+    const convo  = { bookingData: { activity: "Snowmobile Tour", date: "Saturday, April 12" }, sessionType: "confirmed_guest" };
+    const client = { supportPhone: "(970) 439-1707", handoffPhone: "(970) 439-1707" };
+    const reply  = handleCancellationMessage(convo, client);
+    (reply.includes("Snowmobile Tour") && reply.includes("April 12") && reply.includes("(970) 439-1707"))
+      ? pass("test66: handleCancellationMessage — includes activity, date, phone")
+      : fail("test66: handleCancellationMessage", reply);
+  }
+
+  // ── handleCancellationMessage — with booking link ─────────────────────────
+  {
+    const convo  = { bookingData: { activity: "RZR Rental", date: "Sunday" }, sessionType: "confirmed_guest" };
+    const client = { supportPhone: "(970) 555-0001", bookingUrls: ["https://example.com/book"] };
+    const reply  = handleCancellationMessage(convo, client);
+    reply.includes("https://example.com/book")
+      ? pass("test66: handleCancellationMessage — includes booking link when available")
+      : fail("test66: handleCancellationMessage booking link", reply);
+  }
+
+  // ── handleRescheduleMessage — with booking link ───────────────────────────
+  {
+    const convo  = { bookingData: { activity: "Guided Tour", date: "Monday" }, sessionType: "confirmed_guest" };
+    const client = { supportPhone: "(970) 555-0002", bookingLink: "https://example.com/rebook" };
+    const reply  = handleRescheduleMessage(convo, client);
+    (reply.includes("Guided Tour") && reply.includes("https://example.com/rebook"))
+      ? pass("test66: handleRescheduleMessage — includes activity and rebooking link")
+      : fail("test66: handleRescheduleMessage", reply);
+  }
+
+  // ── handleRescheduleMessage — phone fallback when no link ─────────────────
+  {
+    const convo  = { bookingData: { activity: "Bike Tour" }, sessionType: "confirmed_guest" };
+    const client = { handoffPhone: "(970) 555-0003" };
+    const reply  = handleRescheduleMessage(convo, client);
+    reply.includes("(970) 555-0003")
+      ? pass("test66: handleRescheduleMessage — falls back to phone when no link")
+      : fail("test66: handleRescheduleMessage phone fallback", reply);
+  }
+
+  // ── DEFAULT_TEMPLATES coverage ────────────────────────────────────────────
+  {
+    const keys = ["reminder_24h", "reminder_same_day", "cancellation_rebook"];
+    const allPresent = keys.every(k => typeof DEFAULT_TEMPLATES[k] === "string" && DEFAULT_TEMPLATES[k].length > 0);
+    allPresent
+      ? pass("test66: DEFAULT_TEMPLATES — all expected keys present")
+      : fail("test66: DEFAULT_TEMPLATES missing keys", JSON.stringify(Object.keys(DEFAULT_TEMPLATES)));
   }
 }
 

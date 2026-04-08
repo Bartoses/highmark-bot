@@ -3355,26 +3355,40 @@ function renderMessagingSection(cfg, editable) {
     ? `<div style="margin-top:20px;"><button class="btn btn-primary" onclick="saveMessagingConfig()">Save Messaging Settings</button></div>`
     : `<div style="margin-top:12px;font-size:12px;color:var(--text2);">Contact your admin to change messaging settings.</div>`;
 
-  const reminderHrs = editable
-    ? `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div><div style="font-size:13px;font-weight:600;">Reminder timing</div><div style="font-size:12px;color:var(--text2);margin-top:2px;">Hours before the booking to send the reminder</div></div>
-          <input type="number" id="msg_reminder_hours" min="1" max="168" value="${escHtml(String(cfg.reminder_hours_before ?? 24))}" style="width:64px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:13px;text-align:center;">
-        </div>
+  const reminderSubToggles = (cfg.enable_reminders || !editable)
+    ? `<div style="padding:8px 0 8px 16px;border-bottom:1px solid var(--border);background:var(--panel2);border-radius:0 0 6px 6px;margin-top:-1px;">
+        ${toggle('msg_reminder_24h', '24-hour reminder', cfg.reminder_24h !== false, 'Sent the day before the booking')}
+        ${toggle('msg_reminder_same_day', 'Same-day reminder', !!cfg.reminder_same_day, 'Sent 2 hours before start time')}
       </div>`
-    : `<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border);">
-        <div><div style="font-size:13px;font-weight:600;">Reminder timing</div><div style="font-size:12px;color:var(--text2);margin-top:2px;">Hours before the booking</div></div>
-        <span style="font-size:13px;font-weight:600;">${cfg.reminder_hours_before ?? 24}h</span>
-      </div>`;
+    : '';
+
+  function tplField(id, label, key, defaultText) {
+    const val = escHtml(cfg.custom_templates?.[key] ?? '');
+    if (!editable) return '';
+    return `<div style="margin-bottom:12px;">
+      <div style="font-size:12px;font-weight:600;margin-bottom:4px;">${label}</div>
+      <textarea id="${id}" rows="2" placeholder="${escHtml(defaultText)}" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;resize:vertical;">${val}</textarea>
+    </div>`;
+  }
+
+  const templatesSection = editable ? `
+    <div style="margin-top:20px;">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Custom Message Templates</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override default message text. Use {name}, {activity}, {date}, {time}, {phone}, {booking_link} as placeholders. Leave blank to use the default.</div>
+      ${tplField('tpl_reminder_24h',     '24-hour reminder',   'reminder_24h',     'Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.')}
+      ${tplField('tpl_reminder_same_day','Same-day reminder',  'reminder_same_day','Today\'s the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.')}
+      ${tplField('tpl_cancel_rebook',    'Rebooking offer (in cancellation text)', 'cancellation_rebook', 'Want to pick a new date? {booking_link}')}
+    </div>` : '';
 
   return `<div class="card">
     <div class="card-title" style="margin-bottom:4px;">SMS Automation</div>
     <div style="font-size:12px;color:var(--text2);margin-bottom:16px;">Control which automated messages are sent to guests.</div>
     ${toggle('msg_confirmations', 'Booking Confirmations', cfg.enable_confirmation_texts, 'Send a confirmation text immediately after a booking is made')}
     ${toggle('msg_cancellations', 'Cancellation Texts', cfg.enable_cancellations, 'Notify guests when their booking is cancelled')}
-    ${toggle('msg_reminders', 'Reminders', cfg.enable_reminders, 'Send a reminder before the booking date')}
-    ${cfg.enable_reminders || !editable ? reminderHrs : ''}
-    ${toggle('msg_rebooking', 'Rebooking Suggestions', cfg.enable_rebooking, 'Offer alternative dates when a booking is cancelled')}
+    ${toggle('msg_rebooking', 'Rebooking Suggestions', cfg.enable_rebooking, 'Include a rebooking link in cancellation texts')}
+    ${toggle('msg_reminders', 'Reminders', cfg.enable_reminders, 'Send automated reminders before the booking date')}
+    ${reminderSubToggles}
+    ${templatesSection}
     ${saveBtn}
   </div>`;
 }
@@ -3384,16 +3398,28 @@ async function saveMessagingConfig() {
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   const body = {};
-  const conf = document.getElementById('msg_confirmations');
-  const canc = document.getElementById('msg_cancellations');
-  const remi = document.getElementById('msg_reminders');
-  const rebo = document.getElementById('msg_rebooking');
-  const hrs  = document.getElementById('msg_reminder_hours');
-  if (conf) body.enable_confirmation_texts = conf.checked;
-  if (canc) body.enable_cancellations      = canc.checked;
-  if (remi) body.enable_reminders          = remi.checked;
-  if (rebo) body.enable_rebooking          = rebo.checked;
-  if (hrs)  body.reminder_hours_before     = parseInt(hrs.value, 10);
+  const conf    = document.getElementById('msg_confirmations');
+  const canc    = document.getElementById('msg_cancellations');
+  const remi    = document.getElementById('msg_reminders');
+  const r24h    = document.getElementById('msg_reminder_24h');
+  const rSame   = document.getElementById('msg_reminder_same_day');
+  const rebo    = document.getElementById('msg_rebooking');
+  const tpl24h  = document.getElementById('tpl_reminder_24h');
+  const tplSame = document.getElementById('tpl_reminder_same_day');
+  const tplCanc = document.getElementById('tpl_cancel_rebook');
+
+  if (conf)  body.enable_confirmation_texts = conf.checked;
+  if (canc)  body.enable_cancellations      = canc.checked;
+  if (remi)  body.enable_reminders          = remi.checked;
+  if (r24h)  body.reminder_24h             = r24h.checked;
+  if (rSame) body.reminder_same_day        = rSame.checked;
+  if (rebo)  body.enable_rebooking         = rebo.checked;
+
+  const custom_templates = {};
+  if (tpl24h  && tpl24h.value.trim())  custom_templates.reminder_24h        = tpl24h.value.trim();
+  if (tplSame && tplSame.value.trim()) custom_templates.reminder_same_day   = tplSame.value.trim();
+  if (tplCanc && tplCanc.value.trim()) custom_templates.cancellation_rebook = tplCanc.value.trim();
+  if (Object.keys(custom_templates).length > 0) body.custom_templates = custom_templates;
 
   const r = await apiFetch('/messaging', { method: 'PATCH', body: JSON.stringify(body) });
   if (btn) { btn.disabled = false; btn.textContent = 'Save Messaging Settings'; }
