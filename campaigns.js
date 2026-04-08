@@ -24,7 +24,7 @@
 import { scheduleMessage } from "./scheduler.js";
 import { trackDemoEvent }  from "./demoAnalytics.js";
 
-const VALID_AUDIENCE_TYPES = ["all_leads", "engaged_leads", "new_leads"];
+const VALID_AUDIENCE_TYPES = ["all_leads", "engaged_leads", "new_leads", "missed_leads"];
 const VALID_STATUSES       = ["draft", "scheduled", "sending", "sent", "failed"];
 const PACE_MS              = 200; // ms between messages to avoid Twilio rate limits
 
@@ -88,6 +88,12 @@ export async function selectAudience(supabase, { clientId, audienceType }) {
       break;
     case "new_leads":
       query = query.eq("status", "new");
+      break;
+    case "missed_leads":
+      // leads that came in 7+ days ago with no engagement — recovery targets
+      query = query
+        .in("status", ["new", "contacted"])
+        .lte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
       break;
     case "all_leads":
     default:

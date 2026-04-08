@@ -39,7 +39,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handleGetCustomIntegrations, handleCreateCustomIntegration, handleUpdateCustomIntegration,
   handleDeleteCustomIntegration, handleTestCustomIntegration,
   handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight,
-  handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus } from "./adminPortal.js";
+  handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus,
+  handlePortalAudiencePreview } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
@@ -2216,11 +2217,12 @@ app.patch("/portal/api/clients/:id",         requirePortalAuth, (req, res) => ha
 app.get(  "/portal/api/dashboard",           requirePortalAuth, (req, res) => handlePortalDashboard(req, res, supabase));
 app.get(  "/portal/api/leads",               requirePortalAuth, (req, res) => handlePortalLeads(req, res, supabase));
 app.patch("/portal/api/leads/:id",           requirePortalAuth, (req, res) => handlePortalUpdateLead(req, res, supabase));
-app.get(  "/portal/api/campaigns",           requirePortalAuth, (req, res) => handlePortalCampaigns(req, res, supabase));
-app.post( "/portal/api/campaigns",           requirePortalAuth, (req, res) => handlePortalCreateCampaign(req, res, supabase));
-app.get(  "/portal/api/campaigns/:id",       requirePortalAuth, (req, res) => handlePortalGetCampaign(req, res, supabase));
-app.patch("/portal/api/campaigns/:id",       requirePortalAuth, (req, res) => handlePortalUpdateCampaign(req, res, supabase));
-app.post( "/portal/api/campaigns/:id/send",  requirePortalAuth, (req, res) => handlePortalSendCampaign(req, res, supabase, crmSupabase));
+app.get(  "/portal/api/campaigns",                  requirePortalAuth, (req, res) => handlePortalCampaigns(req, res, supabase));
+app.post( "/portal/api/campaigns",                  requirePortalAuth, (req, res) => handlePortalCreateCampaign(req, res, supabase));
+app.get(  "/portal/api/campaigns/audience-preview", requirePortalAuth, (req, res) => handlePortalAudiencePreview(req, res, supabase));
+app.get(  "/portal/api/campaigns/:id",              requirePortalAuth, (req, res) => handlePortalGetCampaign(req, res, supabase));
+app.patch("/portal/api/campaigns/:id",              requirePortalAuth, (req, res) => handlePortalUpdateCampaign(req, res, supabase));
+app.post( "/portal/api/campaigns/:id/send",         requirePortalAuth, (req, res) => handlePortalSendCampaign(req, res, supabase, crmSupabase));
 app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
 app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res, supabase));
 app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));

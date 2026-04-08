@@ -26,7 +26,7 @@
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients, loadDbClients } from "./clients.js";
 import { getIntegrationStatus, syncFhForClient } from "./knowledgeBase.js";
-import { createCampaign, enqueueCampaign, getCampaignStats } from "./campaigns.js";
+import { createCampaign, enqueueCampaign, getCampaignStats, selectAudience } from "./campaigns.js";
 import { VALID_BOOKING_MODES, serializeClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { normalizePhone, isValidPhone } from "./phoneUtils.js";
 import { startAutoConfig, getDraft, updateDraft, commitDraftToDb, createClientFromWebsite, buildNextSteps } from "./onboardingConfig.js";
@@ -216,7 +216,7 @@ export async function handlePortalLeads(req, res, supabase) {
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id is required" });
 
-  const { status, lead_type, limit = 50, offset = 0 } = req.query;
+  const { status, lead_type, search, limit = 50, offset = 0 } = req.query;
 
   let query = supabase
     .from("leads")
@@ -227,6 +227,10 @@ export async function handlePortalLeads(req, res, supabase) {
 
   if (status)    query = query.eq("status", status);
   if (lead_type) query = query.eq("lead_type", lead_type);
+  if (search) {
+    const term = search.replace(/[%_]/g, "\\$&");
+    query = query.or(`contact_name.ilike.%${term}%,contact_phone.ilike.%${term}%,requested_service.ilike.%${term}%`);
+  }
 
   const { data, error, count } = await query;
   if (error) return res.status(500).json({ error: error.message });
@@ -247,7 +251,7 @@ export async function handlePortalUpdateLead(req, res, supabase) {
   if (fetchErr || !existing) return res.status(404).json({ error: "Lead not found" });
   if (existing.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
 
-  const { status, notes } = req.body;
+  const { status, notes, contact_name, contact_email, requested_service, preferred_timeframe } = req.body;
   if (status && !VALID_LEAD_STATUSES.includes(status)) {
     return res.status(400).json({
       error: `Invalid status. Must be one of: ${VALID_LEAD_STATUSES.join(", ")}`,
@@ -255,17 +259,41 @@ export async function handlePortalUpdateLead(req, res, supabase) {
   }
 
   const updates = { updated_at: new Date().toISOString() };
-  if (status !== undefined) updates.status = status;
-  if (notes  !== undefined) updates.notes  = notes;
+  if (status             !== undefined) updates.status             = status;
+  if (notes              !== undefined) updates.notes              = notes;
+  if (contact_name       !== undefined) updates.contact_name       = contact_name       || null;
+  if (contact_email      !== undefined) updates.contact_email      = contact_email      || null;
+  if (requested_service  !== undefined) updates.requested_service  = requested_service  || null;
+  if (preferred_timeframe!== undefined) updates.preferred_timeframe= preferred_timeframe|| null;
 
   if (Object.keys(updates).length === 1) {
-    return res.status(400).json({ error: "No updatable fields provided (status or notes)" });
+    return res.status(400).json({ error: "No updatable fields provided" });
   }
 
   const { data, error } = await supabase
     .from("leads").update(updates).eq("id", id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ lead: data });
+}
+
+// ── GET /portal/api/campaigns/audience-preview ────────────────────────────────
+// Returns count + sample names for a given audience_type, without sending.
+export async function handlePortalAudiencePreview(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const audienceType = req.query.audience_type ?? "all_leads";
+  try {
+    const leads = await selectAudience(supabase, { clientId, audienceType });
+    const names = leads
+      .map(l => (l.contact_name ?? "").split(" ")[0])
+      .filter(Boolean)
+      .slice(0, 5);
+    return res.json({ count: leads.length, sample_names: names });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 }
 
 // ── GET /portal/api/campaigns ─────────────────────────────────────────────────

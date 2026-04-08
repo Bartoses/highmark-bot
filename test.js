@@ -45,7 +45,8 @@ import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSetti
   handleGetCustomIntegrations, handleCreateCustomIntegration,
   handleUpdateCustomIntegration, handleDeleteCustomIntegration,
   handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight,
-  handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus } from "./adminPortal.js";
+  handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus,
+  handlePortalLeads, handlePortalUpdateLead, handlePortalAudiencePreview } from "./adminPortal.js";
 import {
   createIntegration, inferSchema, sanitizeForPortal, getCustomApiContext,
 } from "./apiIntegrations.js";
@@ -2996,6 +2997,7 @@ async function main() {
   await test64(); // Optimization Engine (Phase 7): generateOptimizationInsights, scoreClientPerformance, handler guards
   await test65(); // Rewrite Engine (Phase 8): identifyRewriteCandidates, generateRewrite, updateRewriteStatus, cache, handler guards
   await test66(); // Messaging Engine (Phase 9): detectCancellationIntent, detectRescheduleIntent, resolveTemplate, scheduleReminders, handlers
+  await test67(); // Revenue Engine (Phase 10): selectAudience missed_leads, interpolateMessage, portal leads/update/audience-preview handlers
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -9112,6 +9114,236 @@ async function test66() {
     allPresent
       ? pass("test66: DEFAULT_TEMPLATES — all expected keys present")
       : fail("test66: DEFAULT_TEMPLATES missing keys", JSON.stringify(Object.keys(DEFAULT_TEMPLATES)));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// test67 — Revenue Engine (Phase 10): selectAudience missed_leads,
+//           interpolateMessage, handlePortalLeads search,
+//           handlePortalUpdateLead expanded fields, handlePortalAudiencePreview
+// ─────────────────────────────────────────────────────────────────────────────
+async function test67() {
+  const { selectAudience, interpolateMessage } = await import("./campaigns.js");
+
+  console.log("\nTEST 67: Revenue Engine (Phase 10) — selectAudience, interpolateMessage, portal handlers\n");
+
+  function mockRes() {
+    const r = { _status: 200, _body: null };
+    r.status = (c) => { r._status = c; return r; };
+    r.json   = (d) => { r._body = d; return r; };
+    return r;
+  }
+
+  // ── selectAudience: missed_leads filters by status + created_at ─────────────
+  {
+    const rows = [];
+    const supabaseMock = {
+      from: () => ({
+        select: () => ({
+          eq: function() { return this; },
+          in: function(col, vals) { this._in = vals; return this; },
+          lte: function(col, val) { this._lte = val; return this; },
+          not: function() { return this; },
+          _in: null, _lte: null,
+          then: function(resolve) {
+            resolve({ data: rows, error: null });
+          },
+        }),
+      }),
+    };
+    const result = await selectAudience(supabaseMock, { clientId: "x", audienceType: "missed_leads" });
+    Array.isArray(result)
+      ? pass("test67: selectAudience missed_leads — returns array")
+      : fail("test67: selectAudience missed_leads", result);
+  }
+
+  // ── interpolateMessage: {{first_name}} substitution ────────────────────────
+  {
+    const out = interpolateMessage("Hey {{first_name}}, check it out!", { contact_name: "Jane Smith" });
+    out === "Hey Jane, check it out!"
+      ? pass("test67: interpolateMessage {{first_name}} — extracts first word")
+      : fail("test67: interpolateMessage {{first_name}}", out);
+  }
+
+  // ── interpolateMessage: {{name}} substitution ──────────────────────────────
+  {
+    const out = interpolateMessage("Hi {{name}}!", { contact_name: "Jane Smith" });
+    out === "Hi Jane Smith!"
+      ? pass("test67: interpolateMessage {{name}} — full name")
+      : fail("test67: interpolateMessage {{name}}", out);
+  }
+
+  // ── interpolateMessage: fallback when no name ──────────────────────────────
+  {
+    const out = interpolateMessage("Hey {{first_name}}", {});
+    out === "Hey there"
+      ? pass("test67: interpolateMessage fallback — uses 'there' when no name")
+      : fail("test67: interpolateMessage fallback", out);
+  }
+
+  // ── handlePortalLeads: 503 when no supabase ────────────────────────────────
+  {
+    const req = { portalUser: { clientId: "csr_rea", role: "client_user" }, query: {} };
+    const res = mockRes();
+    await handlePortalLeads(req, res, null);
+    res._status === 503
+      ? pass("test67: handlePortalLeads — 503 when no supabase")
+      : fail("test67: handlePortalLeads 503", res._status);
+  }
+
+  // ── handlePortalLeads: 400 when no clientId resolves ──────────────────────
+  {
+    const req = { portalUser: { role: "client_user", clientId: null }, query: {} };
+    const res = mockRes();
+    await handlePortalLeads(req, res, {});
+    res._status === 400
+      ? pass("test67: handlePortalLeads — 400 when no clientId")
+      : fail("test67: handlePortalLeads 400", res._status);
+  }
+
+  // ── handlePortalUpdateLead: accepts expanded fields ────────────────────────
+  {
+    const capturedUpdate = {};
+    const supabaseMock = {
+      from: () => ({
+        select: () => ({
+          eq: function() { return this; },
+          single: async () => ({ data: { id: "lead1", client_id: "csr_rea" }, error: null }),
+        }),
+        update: (fields) => {
+          Object.assign(capturedUpdate, fields);
+          return {
+            eq: function() { return this; },
+            select: function() { return this; },
+            single: async () => ({ data: { id: "lead1" }, error: null }),
+          };
+        },
+      }),
+    };
+    const req = {
+      portalUser: { clientId: "csr_rea", role: "client_admin" },
+      params: { id: "lead1" },
+      body: {
+        contact_name: "Bob Jones",
+        contact_email: "bob@example.com",
+        status: "contacted",
+        requested_service: "guided snowmobile tour",
+        preferred_timeframe: "this weekend",
+        notes: "called once",
+      },
+    };
+    const res = mockRes();
+    await handlePortalUpdateLead(req, res, supabaseMock);
+    const allFields = capturedUpdate.contact_name === "Bob Jones" &&
+      capturedUpdate.contact_email === "bob@example.com" &&
+      capturedUpdate.requested_service === "guided snowmobile tour" &&
+      capturedUpdate.preferred_timeframe === "this weekend" &&
+      capturedUpdate.status === "contacted";
+    allFields
+      ? pass("test67: handlePortalUpdateLead — saves all expanded fields")
+      : fail("test67: handlePortalUpdateLead expanded fields", JSON.stringify(capturedUpdate));
+  }
+
+  // ── handlePortalUpdateLead: null-coerces empty strings ────────────────────
+  {
+    const capturedUpdate = {};
+    const supabaseMock = {
+      from: () => ({
+        select: () => ({
+          eq: function() { return this; },
+          single: async () => ({ data: { id: "lead2", client_id: "csr_rea" }, error: null }),
+        }),
+        update: (fields) => {
+          Object.assign(capturedUpdate, fields);
+          return {
+            eq: function() { return this; },
+            select: function() { return this; },
+            single: async () => ({ data: { id: "lead2" }, error: null }),
+          };
+        },
+      }),
+    };
+    const req = {
+      portalUser: { clientId: "csr_rea", role: "client_admin" },
+      params: { id: "lead2" },
+      body: { contact_name: "", contact_email: "", status: "new" },
+    };
+    const res = mockRes();
+    await handlePortalUpdateLead(req, res, supabaseMock);
+    capturedUpdate.contact_name === null && capturedUpdate.contact_email === null
+      ? pass("test67: handlePortalUpdateLead — empty strings coerced to null")
+      : fail("test67: handlePortalUpdateLead null coerce", JSON.stringify(capturedUpdate));
+  }
+
+  // ── handlePortalUpdateLead: rejects invalid status ────────────────────────
+  {
+    const supabaseMock = {
+      from: () => ({
+        select: () => ({
+          eq: function() { return this; },
+          single: async () => ({ data: { id: "lead3", client_id: "csr_rea" }, error: null }),
+        }),
+      }),
+    };
+    const req = {
+      portalUser: { clientId: "csr_rea", role: "client_admin" },
+      params: { id: "lead3" },
+      body: { status: "banana" },
+    };
+    const res = mockRes();
+    await handlePortalUpdateLead(req, res, supabaseMock);
+    res._status === 400
+      ? pass("test67: handlePortalUpdateLead — 400 on invalid status")
+      : fail("test67: handlePortalUpdateLead invalid status", res._status);
+  }
+
+  // ── handlePortalAudiencePreview: 503 when no supabase ────────────────────
+  {
+    const req = { portalUser: { clientId: "csr_rea", role: "client_user" }, query: {} };
+    const res = mockRes();
+    await handlePortalAudiencePreview(req, res, null);
+    res._status === 503
+      ? pass("test67: handlePortalAudiencePreview — 503 when no supabase")
+      : fail("test67: handlePortalAudiencePreview 503", res._status);
+  }
+
+  // ── handlePortalAudiencePreview: returns count + sample_names ────────────
+  {
+    const fakeleads = [
+      { id: "1", contact_phone: "+17205551111", contact_name: "Alice Brown", status: "new" },
+      { id: "2", contact_phone: "+17205552222", contact_name: "Carlos Rivera", status: "new" },
+      { id: "3", contact_phone: "+17205553333", contact_name: null, status: "new" },
+    ];
+    const supabaseMock = {
+      from: () => ({
+        select: () => ({
+          eq: function() { return this; },
+          in: function() { return this; },
+          not: function() { return this; },
+          then: function(resolve) { resolve({ data: fakeleads, error: null }); },
+        }),
+      }),
+    };
+    const req = {
+      portalUser: { clientId: "csr_rea", role: "client_user" },
+      query: { audience_type: "new_leads" },
+    };
+    const res = mockRes();
+    await handlePortalAudiencePreview(req, res, supabaseMock);
+    const body = res._body;
+    body?.count === 3 && Array.isArray(body?.sample_names) && body.sample_names.includes("Alice")
+      ? pass("test67: handlePortalAudiencePreview — returns count and sample names")
+      : fail("test67: handlePortalAudiencePreview result", JSON.stringify(body));
+  }
+
+  // ── handlePortalAudiencePreview: 400 when no clientId ────────────────────
+  {
+    const req = { portalUser: { clientId: null, role: "client_user" }, query: {} };
+    const res = mockRes();
+    await handlePortalAudiencePreview(req, res, {});
+    res._status === 400
+      ? pass("test67: handlePortalAudiencePreview — 400 when no clientId")
+      : fail("test67: handlePortalAudiencePreview 400", res._status);
   }
 }
 

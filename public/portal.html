@@ -390,6 +390,7 @@ tr:hover td { background: var(--panel2); }
           <span class="section-title">Leads</span>
         </div>
         <div class="filter-bar">
+          <input type="text" id="leadSearch" placeholder="Search name, phone, service…" style="flex:1;min-width:160px;max-width:260px;padding:6px 10px;font-size:12px;border:1px solid var(--border2);border-radius:6px;background:var(--panel);color:var(--text);outline:none;">
           <select id="leadStatusFilter">
             <option value="">All statuses</option>
             <option value="new">New</option>
@@ -828,13 +829,19 @@ tr:hover td { background: var(--panel2); }
   <div class="modal">
     <div class="modal-title">Update Lead</div>
     <div id="leadModalError" class="error-msg" style="display:none"></div>
-    <div class="form-group">
-      <label>Name</label>
-      <input type="text" id="leadModalName" readonly style="opacity:.6">
+    <div class="two-col">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="leadModalName" placeholder="Contact name">
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="text" id="leadModalPhone" readonly style="opacity:.6">
+      </div>
     </div>
     <div class="form-group">
-      <label>Phone</label>
-      <input type="text" id="leadModalPhone" readonly style="opacity:.6">
+      <label>Email</label>
+      <input type="email" id="leadModalEmail" placeholder="contact@example.com">
     </div>
     <div class="two-col">
       <div class="form-group">
@@ -853,6 +860,14 @@ tr:hover td { background: var(--panel2); }
         <label>Type</label>
         <input type="text" id="leadModalType" readonly style="opacity:.6">
       </div>
+    </div>
+    <div class="form-group">
+      <label>Requested service</label>
+      <input type="text" id="leadModalService" placeholder="e.g. guided snowmobile tour">
+    </div>
+    <div class="form-group">
+      <label>Preferred timeframe</label>
+      <input type="text" id="leadModalTimeframe" placeholder="e.g. this weekend, March 15">
     </div>
     <div class="form-group">
       <label>Notes</label>
@@ -876,14 +891,23 @@ tr:hover td { background: var(--panel2); }
     </div>
     <div class="form-group">
       <label>Audience</label>
-      <select id="campAudience">
+      <select id="campAudience" onchange="fetchAudiencePreview()">
         <option value="all_leads">All leads (new, contacted, engaged, scheduled)</option>
         <option value="engaged_leads">Engaged leads only</option>
         <option value="new_leads">New leads only</option>
+        <option value="missed_leads">Missed leads (7+ days, no engagement)</option>
       </select>
+      <div id="audiencePreview" class="form-hint" style="margin-top:4px;min-height:16px;"></div>
     </div>
     <div class="form-group">
-      <label>Message</label>
+      <label style="display:flex;justify-content:space-between;align-items:center;">
+        Message
+        <span style="display:flex;gap:6px;">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('missed_lead')" title="Missed Lead Recovery template">Missed Lead</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('reengagement')" title="Re-engagement template">Re-engage</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('promo')" title="Promo template">Promo</button>
+        </span>
+      </label>
       <textarea id="campMessage" placeholder="Hi {{name}}, your message here…"></textarea>
       <div class="form-hint">Use {{name}} for first + last name, {{first_name}} for first name only.</div>
     </div>
@@ -1393,20 +1417,26 @@ async function loadDashboard() {
 
 // ── LEADS ──────────────────────────────────────────────────────────────────
 let leadsEventsSet = false;
+let leadsSearchTimer = null;
 function setupLeadsEvents() {
   if (leadsEventsSet) return;
   leadsEventsSet = true;
   document.getElementById('leadStatusFilter').addEventListener('change', () => { leadsOffset = 0; loadLeads(); });
   document.getElementById('leadTypeFilter').addEventListener('change',  () => { leadsOffset = 0; loadLeads(); });
   document.getElementById('leadsRefreshBtn').addEventListener('click',  () => { leadsOffset = 0; loadLeads(); });
+  document.getElementById('leadSearch').addEventListener('input', () => {
+    clearTimeout(leadsSearchTimer);
+    leadsSearchTimer = setTimeout(() => { leadsOffset = 0; loadLeads(); }, 350);
+  });
 }
 
 async function loadLeads() {
   document.getElementById('leadsTable').innerHTML = '<div class="loading">Loading…</div>';
   const status    = document.getElementById('leadStatusFilter').value;
   const lead_type = document.getElementById('leadTypeFilter').value;
+  const search    = document.getElementById('leadSearch')?.value?.trim() ?? '';
   const clientParam = me?.isAdmin ? `&client_id=${me.clientId ?? ''}` : '';
-  const qs = `?limit=${LEADS_LIMIT}&offset=${leadsOffset}${status ? '&status='+status : ''}${lead_type ? '&lead_type='+lead_type : ''}${clientParam}`;
+  const qs = `?limit=${LEADS_LIMIT}&offset=${leadsOffset}${status ? '&status='+status : ''}${lead_type ? '&lead_type='+lead_type : ''}${search ? '&search='+encodeURIComponent(search) : ''}${clientParam}`;
   const d  = await apiFetch(`/leads${qs}`);
   if (!d) { document.getElementById('leadsTable').innerHTML = '<div class="error-msg">Failed to load leads.</div>'; return; }
 
@@ -1448,11 +1478,14 @@ async function loadLeads() {
 
 function openLeadModal(lead) {
   activeLead = lead;
-  document.getElementById('leadModalName').value   = lead.contact_name ?? '';
-  document.getElementById('leadModalPhone').value  = lead.contact_phone ?? '';
-  document.getElementById('leadModalStatus').value = lead.status ?? 'new';
-  document.getElementById('leadModalType').value   = lead.lead_type ?? '';
-  document.getElementById('leadModalNotes').value  = lead.notes ?? '';
+  document.getElementById('leadModalName').value      = lead.contact_name ?? '';
+  document.getElementById('leadModalPhone').value     = lead.contact_phone ?? '';
+  document.getElementById('leadModalEmail').value     = lead.contact_email ?? '';
+  document.getElementById('leadModalStatus').value    = lead.status ?? 'new';
+  document.getElementById('leadModalType').value      = lead.lead_type ?? '';
+  document.getElementById('leadModalService').value   = lead.requested_service ?? '';
+  document.getElementById('leadModalTimeframe').value = lead.preferred_timeframe ?? '';
+  document.getElementById('leadModalNotes').value     = lead.notes ?? '';
   document.getElementById('leadModalError').style.display = 'none';
   document.getElementById('leadModal').classList.add('open');
 }
@@ -1462,8 +1495,12 @@ document.getElementById('leadModalSave').addEventListener('click', async () => {
   btn.disabled = true;
   btn.textContent = 'Saving…';
   const r = await apiPatch(`/leads/${activeLead.id}`, {
-    status: document.getElementById('leadModalStatus').value,
-    notes:  document.getElementById('leadModalNotes').value,
+    contact_name:       document.getElementById('leadModalName').value.trim() || null,
+    contact_email:      document.getElementById('leadModalEmail').value.trim() || null,
+    status:             document.getElementById('leadModalStatus').value,
+    requested_service:  document.getElementById('leadModalService').value.trim() || null,
+    preferred_timeframe: document.getElementById('leadModalTimeframe').value.trim() || null,
+    notes:              document.getElementById('leadModalNotes').value,
   });
   btn.disabled = false;
   btn.textContent = 'Save changes';
@@ -1513,13 +1550,42 @@ async function loadCampaigns() {
   });
 }
 
+const CAMPAIGN_TEMPLATES = {
+  missed_lead:  "Hey {{first_name}}, it looks like you reached out a while back but we never connected. We still have availability — want to book a tour? Reply YES and we'll get you set up.",
+  reengagement: "Hi {{first_name}}! Just checking in — are you still interested in booking? We'd love to get you out here. Reply YES or let us know a good time.",
+  promo:        "Hey {{first_name}}, we have a limited-time offer just for you. Reply YES to claim it or ask any questions — happy to help!",
+};
+
+function applyCampaignTemplate(type) {
+  const tpl = CAMPAIGN_TEMPLATES[type];
+  if (tpl) document.getElementById('campMessage').value = tpl;
+}
+
+let audiencePreviewTimer = null;
+async function fetchAudiencePreview() {
+  const audienceType = document.getElementById('campAudience').value;
+  const el = document.getElementById('audiencePreview');
+  if (!el) return;
+  el.textContent = 'Checking…';
+  clearTimeout(audiencePreviewTimer);
+  audiencePreviewTimer = setTimeout(async () => {
+    const clientParam = me?.isAdmin && me.clientId ? `&client_id=${me.clientId}` : '';
+    const d = await apiFetch(`/campaigns/audience-preview?audience_type=${audienceType}${clientParam}`);
+    if (!d) { el.textContent = ''; return; }
+    const names = d.sample_names?.length ? ` (e.g. ${d.sample_names.join(', ')})` : '';
+    el.textContent = `${d.count} recipient${d.count !== 1 ? 's' : ''}${names}`;
+  }, 300);
+}
+
 function openCampaignModal() {
   document.getElementById('campName').value = '';
   document.getElementById('campMessage').value = '';
   document.getElementById('campScheduled').value = '';
   document.getElementById('campAudience').value = 'all_leads';
+  document.getElementById('audiencePreview').textContent = '';
   document.getElementById('campaignModalError').style.display = 'none';
   document.getElementById('campaignModal').classList.add('open');
+  fetchAudiencePreview();
 }
 
 async function saveCampaignDraft() {
@@ -1717,8 +1783,11 @@ function renderOptimization(d) {
       <div style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:${ins.action_section ? '10px' : '0'};">
         <strong>Suggestion:</strong> ${escHtml(ins.suggestion)}
       </div>
-      ${ins.metric_label ? `<div style="font-size:12px;color:var(--text3);margin-bottom:${ins.action_section ? '10px' : '0'};">${escHtml(ins.metric_label)}</div>` : ''}
-      ${ins.action_section ? `<button class="btn btn-ghost btn-sm client-admin-only" onclick="switchSection('${ins.action_section}')">${escHtml(ins.action_label ?? 'View')}</button>` : ''}
+      ${ins.metric_label ? `<div style="font-size:12px;color:var(--text3);margin-bottom:10px;">${escHtml(ins.metric_label)}</div>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${ins.action_section ? `<button class="btn btn-ghost btn-sm client-admin-only" onclick="switchSection('${ins.action_section}')">${escHtml(ins.action_label ?? 'View')}</button>` : ''}
+        ${['missed_lead_recovery', 'low_engagement', 'booking_gap'].includes(ins.insight_type) ? `<button class="btn btn-ghost btn-sm client-admin-only" onclick="openCampaignFromInsight('${ins.insight_type}')">+ Create Campaign</button>` : ''}
+      </div>
     </div>`;
   }).join('');
 
@@ -1745,6 +1814,27 @@ async function runOptimizationAnalysis() {
   if (!d) { alert('Analysis failed.'); return; }
   if (d.skipped) { alert('Not enough data yet — need at least 5 conversations.'); return; }
   loadOptimization();
+}
+
+function openCampaignFromInsight(insightType) {
+  const audienceMap = {
+    missed_lead_recovery: 'missed_leads',
+    low_engagement:       'new_leads',
+    booking_gap:          'engaged_leads',
+  };
+  const templateMap = {
+    missed_lead_recovery: 'missed_lead',
+    low_engagement:       'reengagement',
+    booking_gap:          'reengagement',
+  };
+  switchSection('campaigns');
+  setTimeout(() => {
+    openCampaignModal();
+    const audience = audienceMap[insightType] ?? 'all_leads';
+    document.getElementById('campAudience').value = audience;
+    applyCampaignTemplate(templateMap[insightType] ?? 'reengagement');
+    fetchAudiencePreview();
+  }, 100);
 }
 
 async function dismissOptInsight(id) {
