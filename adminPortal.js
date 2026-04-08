@@ -1556,7 +1556,7 @@ export async function handleRunOptimizationAnalysis(req, res, supabase) {
 
   // Resolve the client object (needed by analysis engine for config gap checks)
   const allClients = getAllClients();
-  const client = allClients.find(c => c.id === clientId);
+  const client = allClients[clientId];
   if (!client) return res.status(404).json({ error: "Client not found" });
 
   try {
@@ -1621,7 +1621,7 @@ export async function handleRunRewrites(req, res, supabase, anthropic) {
   if (!clientId) return res.status(400).json({ error: "client_id required" });
 
   const allClients = getAllClients();
-  const client = allClients.find(c => c.id === clientId);
+  const client = allClients[clientId];
   if (!client) return res.status(404).json({ error: "Client not found" });
 
   try {
