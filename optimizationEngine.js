@@ -24,7 +24,7 @@ async function collectConversationMetrics(supabase, clientId) {
   // Fetch recent conversations for this client (exclude test sessions)
   const { data: convos, error } = await supabase
     .from("conversations")
-    .select("id, messages, booking_step, booking_data, handoff, consecutive_frustrated, created_at, updated_at, session_type")
+    .select("from_number, to_number, messages, booking_step, booking_data, handoff, consecutive_frustrated, created_at, updated_at, session_type")
     .eq("client_id", clientId)
     .neq("session_type", "test")
     .gte("created_at", since)
@@ -63,7 +63,7 @@ function extractConvoFeatures(convo) {
   const stage       = bookingData._stage ?? "new";
 
   return {
-    id:               convo.id,
+    id:               `${convo.from_number}:${convo.to_number}`,
     messageCount:     messages.length,
     userMessageCount: userMsgs.length,
     botMessageCount:  botMsgs.length,

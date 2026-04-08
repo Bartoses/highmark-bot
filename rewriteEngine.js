@@ -34,7 +34,7 @@ export async function identifyRewriteCandidates(supabase, clientId) {
 
   const { data: convos } = await supabase
     .from("conversations")
-    .select("id, messages, booking_step, booking_data, handoff, updated_at")
+    .select("from_number, to_number, messages, booking_step, booking_data, handoff, updated_at")
     .eq("client_id", clientId)
     .neq("session_type", "test")
     .gte("created_at", since)
@@ -82,7 +82,7 @@ export async function identifyRewriteCandidates(supabase, clientId) {
     if (intents.includes("recommendation"))                               insightType = "missed_lead";
 
     candidates.push({
-      conversation_id:  convo.id,
+      conversation_id:  null,
       original_message: lastBotMsg.content.slice(0, 600),
       context_summary:  lastUser.slice(0, 200),
       insight_type:     insightType,

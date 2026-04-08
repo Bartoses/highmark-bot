@@ -8676,7 +8676,7 @@ async function test65() {
 
     const candidates = await identifyRewriteCandidates(mockSupa, "csr_rea");
     // posConvo has booking_step=2 → filtered; dropConvo is a candidate
-    candidates.length === 1 && candidates[0].conversation_id === "c2"
+    candidates.length === 1 && candidates[0].conversation_id === null
       ? pass("test65: identifyRewriteCandidates — filters positive outcomes, keeps drop-offs")
       : fail("test65: identifyRewriteCandidates filter", `got ${candidates.length} candidates: ${JSON.stringify(candidates.map(c=>c.conversation_id))}`);
   }
