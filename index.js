@@ -21,7 +21,7 @@ import { createClient } from "@supabase/supabase-js";
 import { initKnowledgeBase, getKnowledgeContext, getFareHarborItems, getFareHarborKbRow, getFareHarborAvailability } from "./knowledgeBase.js";
 import { runCrawlerForClient } from "./crawler.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
-import { resolveClient, CLIENTS, getDefaultClient, getAllClients } from "./clients.js";
+import { resolveClient, CLIENTS, getDefaultClient, getAllClients, resolveClientById } from "./clients.js";
 import { initBookingConfirmations, buildConfirmationText, buildFollowUpText, buildCancellationText } from "./bookingConfirmations.js";
 import { initCRM, checkOptOut, handleOptOutKeyword, handleOptInKeyword, upsertContact, addTagsToContact, trackCampaignReply, deriveTagsFromMessage, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { processScheduledMessages } from "./scheduler.js";
@@ -53,6 +53,7 @@ import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversa
 import { selectResponseMode, buildResponseModeInstruction } from "./responseMode.js";
 import { resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
 import { detectCancellationIntent, detectRescheduleIntent, handleCancellationMessage, handleRescheduleMessage } from "./messagingEngine.js";
+import { sendMessageWeb, createWebSession, getWebClientConfig } from "./webChat.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -2063,10 +2064,59 @@ app.post("/reset", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// WEB CHAT — Phase 11: embed widget API
+// Public (no auth) — rate-limited by IP limiter above.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Serve the embed script publicly (no auth required — it's meant to be embedded)
+const __uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
+app.get("/embed.js", (_req, res) => {
+  res.set("Content-Type", "application/javascript");
+  res.set("Cache-Control", "public, max-age=300"); // 5-min CDN cache
+  res.sendFile(path.join(__uiDir, "embed.js"));
+});
+
+// Public config endpoint: returns non-secret client config for the widget
+app.get("/web/config/:clientId", ipLimiter, async (req, res) => {
+  const { clientId } = req.params;
+  let client = resolveClientById(clientId);
+  if (!client) return res.status(404).json({ error: "Client not found" });
+  try {
+    client = await getRuntimeClientConfig(client, supabase);
+  } catch { /* use static config */ }
+  return res.json(getWebClientConfig(client));
+});
+
+// Web chat message handler: same bot logic as SMS, JSON transport
+app.post("/web/chat", ipLimiter, async (req, res) => {
+  const { clientId, sessionId, message } = req.body ?? {};
+  if (!clientId || !sessionId || !message?.trim()) {
+    return res.status(400).json({ error: "clientId, sessionId, and message are required" });
+  }
+
+  let client = resolveClientById(clientId);
+  if (!client) return res.status(404).json({ error: "Client not found" });
+
+  try {
+    client = await getRuntimeClientConfig(client, supabase);
+  } catch { /* use static config */ }
+
+  // Ensure session row exists (fire-and-forget)
+  createWebSession(supabase, clientId, sessionId).catch(() => {});
+
+  try {
+    const result = await sendMessageWeb(supabase, anthropic, client, sessionId, message.trim());
+    return res.json(result);
+  } catch (err) {
+    console.error("[WEB_CHAT] sendMessageWeb error:", err.message);
+    return res.status(500).json({ error: "Bot error", reply: "Sorry, I ran into an issue. Please try again in a moment!" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL TEST UI — TEST_MODE only
 // Browser-based QA console. Run with: npm run ui
 // ─────────────────────────────────────────────────────────────────────────────
-const __uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
 app.use("/public", requireUiAccess, express.static(__uiDir));
 app.get("/ui", requireUiAccess, (_req, res) => res.sendFile(path.join(__uiDir, "ui.html")));
 
