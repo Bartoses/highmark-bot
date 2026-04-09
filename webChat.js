@@ -302,16 +302,26 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       );
     }
 
-    // If Claude promised a link but forgot the URL, append the best matching one directly.
-    // More reliable than regeneration — Claude's second attempt also fails unpredictably.
+    // If Claude promised a link but has no real https:// URL, inject the correct one.
+    // Also strips hallucinated bare-domain URLs (e.g. "coloradosledrentals.com/...") that
+    // Claude sometimes generates — they look like links but aren't clickable.
     if (containsLinkPromise(replyText) && !containsUrl(replyText)) {
-      const allLinks   = resolveAllBookingLinks(client);
-      // Use recent conversation turns as context for link matching
-      const recentCtx  = convo.messages.slice(-6).map((m) => m.content).join(" ");
-      const matched    = findRelevantBookingLink(recentCtx, allLinks, { season });
-      const linkUrl    = matched?.link?.url ?? matched?.links?.[0]?.url ?? null;
-      if (linkUrl) replyText = `${replyText.trimEnd()} ${linkUrl}`;
-      console.log(`[WEB_CHAT] Link injection: promised=${containsLinkPromise(replyText)} url=${linkUrl ?? "none"}`);
+      // Remove bare-domain URLs Claude may have hallucinated (no protocol = not real)
+      const cleaned = replyText
+        .replace(/\b[\w-]+\.(?:com|org|net|io|co)\/\S*/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      const allLinks  = resolveAllBookingLinks(client);
+      const recentCtx = convo.messages.slice(-6).map((m) => m.content).join(" ");
+      const matched   = findRelevantBookingLink(recentCtx, allLinks, { season });
+      const linkUrl   = matched?.link?.url ?? matched?.links?.[0]?.url ?? null;
+      if (linkUrl) {
+        replyText = `${cleaned.trimEnd()} ${linkUrl}`;
+        console.log(`[WEB_CHAT] Link injected: ${linkUrl}`);
+      } else {
+        replyText = cleaned;
+      }
     }
 
     replyText = enforceLength(replyText, 480);
