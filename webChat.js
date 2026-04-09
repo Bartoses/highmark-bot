@@ -40,11 +40,12 @@ import { saveLead, notifyBusinessOfLead } from "./leads.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 // True if the reply promises a link but forgot to include a real https:// URL.
-// Handles smart/curly apostrophes, "right here:" vs "right there:", and bare domains.
+// Handles smart/curly apostrophes, "right here:" vs "right there:", bracket placeholders.
 function containsLinkPromise(text) {
   const t = text ?? "";
-  return /here.{0,2}s the link/i.test(t)         ||
-         /right (there|here):/i.test(t)           ||
+  return /here.{0,2}s the link/i.test(t)                        ||
+         /right (there|here):/i.test(t)                          ||
+         /\[[\w_ ]+ link\]/i.test(t)                             ||  // [rzr_kremmling link]
          /\b(book here|the link is|booking link below|link to book|here.{0,2}s your link|grab your (date|spot) (here|there|at|below))\b/i.test(t);
 }
 
@@ -326,8 +327,9 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     // If Claude promised a link OR hallucinated a bare-domain URL, replace with the real https:// link.
     // Triggers on: "right here:", "right there:", "here's the link", bare domain URLs, etc.
     if ((containsLinkPromise(replyText) || containsBareDomainUrl(replyText)) && !containsUrl(replyText)) {
-      // Remove bare-domain URLs Claude may have hallucinated (no protocol = not real)
+      // Remove hallucinated bare-domain URLs and bracket placeholders like [rzr_kremmling link]
       const cleaned = replyText
+        .replace(/\[[\w_ ]+ link\]/gi, "")
         .replace(/\b[\w-]+\.(?:com|org|net|io|co)\/\S*/gi, "")
         .replace(/\s{2,}/g, " ")
         .trim();

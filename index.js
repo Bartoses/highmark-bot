@@ -368,9 +368,11 @@ ${isSummer ? `━━━ SUMMER KNOWLEDGE ━━━
 CSR Summer RZR Rentals:
 - Steamboat: 2151 Downhill Dr | Kremmling: 1606 Park Ave
 - Self-guided, up to 8 hours, pre-loaded GPS with Polaris Ride Command
-- Turbo PRO S 4-Seater: 168HP turbo — thrill seekers, experienced riders (use rzr_steamboat or rzr_kremmling)
-- General 1000 4-Seater: 100HP — families, beginner-friendly, extra storage (use rzr_steamboat or rzr_kremmling)
+- Turbo PRO S 4-Seater: 168HP turbo — thrill seekers, experienced riders
+- General 1000 4-Seater: 100HP — families, beginner-friendly, extra storage
 - Both seat 4 adults. Trailer rental available. Books via Polaris Adventures (NOT FareHarbor).
+- Steamboat bookings: ${urls.rzr_steamboat ?? "(see booking links)"}
+- Kremmling bookings: ${urls.rzr_kremmling ?? "(see booking links)"}
 - Season: roughly late June–September depending on snow melt at Buffalo Pass (10,000+ ft)
 
 ━━━ RZR TRAIL AREAS ━━━
@@ -438,12 +440,13 @@ FIRE & ENVIRONMENT:
 - Avoid muddy trails after rain (causes lasting damage to soils)
 - Routt National Forest fire restriction status: fs.usda.gov/arp or call Hahns Peak / Bears Ears District (970) 870-2299
 
-SUMMER ROUTING:
-Family + summer → General 1000 + North Routt or Kremmling BLM
-Thrill seeker + summer → Turbo PRO S + Buffalo Pass
-First-timer / beginner → General 1000 + Kremmling BLM
-Experienced + wants epic scenery → Turbo PRO S + Rabbit Ears Pass / Buffalo Pass loop
-Any RZR/ATV question → summer options` : ""}
+SUMMER ROUTING (always include the full booking URL in your reply):
+Family + Steamboat → General 1000 + North Routt: ${urls.rzr_steamboat ?? ""}
+Family + Kremmling → General 1000 + Kremmling BLM: ${urls.rzr_kremmling ?? ""}
+Thrill seeker + Steamboat → Turbo PRO S + Buffalo Pass: ${urls.rzr_steamboat ?? ""}
+First-timer / beginner → General 1000 + Kremmling BLM: ${urls.rzr_kremmling ?? ""}
+Experienced + scenic → Turbo PRO S + Rabbit Ears Pass: ${urls.rzr_steamboat ?? ""}
+Any RZR question → include the relevant URL above in your reply` : ""}
 
 ━━━ WHAT TO WEAR (all seasons) ━━━
 Waterproof/windproof outer layer, warm waterproof gloves, wool socks (no cotton), goggles (helmets provided). Water, snacks, camera. Leave jewelry at home.
