@@ -4549,7 +4549,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <!-- ── Portal Test-Bot Widget ─────────────────────────────────────────────── -->
 <style>
-#pc-wrap { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+#pc-wrap { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; pointer-events: none; }
+#pc-toggle-btn { pointer-events: auto; }
+#pc-panel:not(.pc-hidden) { pointer-events: auto; }
 @media (max-width: 640px) { #pc-wrap { bottom: 72px; right: 12px; } #pc-panel { width: calc(100vw - 24px); } }
 #pc-toggle-btn { width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer; background: #10b981; color: #fff; font-size: 20px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(16,185,129,.4); transition: transform .15s; }
 #pc-toggle-btn:hover { transform: scale(1.07); }
