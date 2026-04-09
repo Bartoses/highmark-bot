@@ -30,6 +30,7 @@ import {
   updateConversationStage,
   buildResponsePlan,
   containsPhoneAsk,
+  findRelevantBookingLink,
 } from "./index.js";
 import { getKnowledgeContext } from "./knowledgeBase.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
@@ -38,14 +39,31 @@ import { saveLead, notifyBusinessOfLead } from "./leads.js";
 // RESPONSE VALIDATORS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// True if the reply says "here's the link / right there: / book here" but has no URL
+// True if the reply promises a link but forgot to include the URL.
+// Handles smart/curly apostrophes and avoids \b-after-colon failures.
 function containsLinkPromise(text) {
-  return /\b(here'?s the link|right there:|book here|the link is|click here|booking link below|link to book)\b/i.test(text ?? "");
+  const t = text ?? "";
+  return /here.{0,2}s the link/i.test(t)  ||
+         /right there:/i.test(t)           ||
+         /\b(book here|the link is|booking link below|link to book|here.{0,2}s your link)\b/i.test(t);
 }
 
 // True if the text contains any http/https URL
 function containsUrl(text) {
   return /https?:\/\/\S+/.test(text ?? "");
+}
+
+// Build a normalized booking links array from client config.
+// Works for both static clients (bookingUrls object) and DB clients (bookingLinks array).
+function resolveAllBookingLinks(client) {
+  const portalLinks = (client.bookingLinks ?? []).filter((l) => l.url);
+  if (portalLinks.length) return portalLinks;
+  return Object.entries(client.bookingUrls ?? {}).map(([key, url]) => ({
+    title:         key.replace(/_/g, " "),
+    url,
+    description:   "",
+    metadata_json: { label: key, keywords: key.split("_") },
+  }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,12 +302,16 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       );
     }
 
-    // Regenerate once if Claude promised a link but forgot to include it
+    // If Claude promised a link but forgot the URL, append the best matching one directly.
+    // More reliable than regeneration — Claude's second attempt also fails unpredictably.
     if (containsLinkPromise(replyText) && !containsUrl(replyText)) {
-      replyText = await callClaude(
-        anthropic, convo, client, season, knowledgeCtx,
-        `${webInstruction}\nCRITICAL: Your previous response referenced a booking link but did not include the actual URL. You MUST include the full URL (starting with https://) directly in your reply. Use the URLs from the Available booking links section.`
-      );
+      const allLinks   = resolveAllBookingLinks(client);
+      // Use recent conversation turns as context for link matching
+      const recentCtx  = convo.messages.slice(-6).map((m) => m.content).join(" ");
+      const matched    = findRelevantBookingLink(recentCtx, allLinks, { season });
+      const linkUrl    = matched?.link?.url ?? matched?.links?.[0]?.url ?? null;
+      if (linkUrl) replyText = `${replyText.trimEnd()} ${linkUrl}`;
+      console.log(`[WEB_CHAT] Link injection: promised=${containsLinkPromise(replyText)} url=${linkUrl ?? "none"}`);
     }
 
     replyText = enforceLength(replyText, 480);
