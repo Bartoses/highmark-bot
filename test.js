@@ -33,6 +33,7 @@ import {
   ensureUrlInResponse,
 } from "./index.js";
 
+import { extractBookingContext, matchConfigLink, resolveBookingLink, normalizeClientLinks } from "./bookingLinks.js";
 import { buildConfirmationText, buildFollowUpText } from "./bookingConfirmations.js";
 import { checkOptOut, upsertContact, addTagsToContact, OPT_OUT_KEYWORDS, OPT_IN_KEYWORDS } from "./crm.js";
 import { getKnowledgeContext, getIntegrationStatus } from "./knowledgeBase.js";
@@ -2999,6 +3000,7 @@ async function main() {
   await test66(); // Messaging Engine (Phase 9): detectCancellationIntent, detectRescheduleIntent, resolveTemplate, scheduleReminders, handlers
   await test67(); // Revenue Engine (Phase 10): selectAudience missed_leads, interpolateMessage, portal leads/update/audience-preview handlers
   await test68(); // Web Chat (Phase 11): webFromNumber, webToNumber, getWebConversation, saveWebConversation, getWebClientConfig, /web/config + /web/chat routes
+  await test69(); // Booking Link Resolution Engine: extractBookingContext, matchConfigLink, normalizeClientLinks, resolveBookingLink
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -9534,6 +9536,259 @@ async function test68() {
     cfg.position === "right"
       ? pass("test68: getWebClientConfig — sensible defaults")
       : fail("test68: getWebClientConfig defaults", JSON.stringify(cfg));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 69: Booking Link Resolution Engine
+// extractBookingContext, matchConfigLink, normalizeClientLinks, resolveBookingLink
+// ─────────────────────────────────────────────────────────────────────────────
+async function test69() {
+  console.log("\nTEST 69: Booking Link Resolution Engine — extractBookingContext, matchConfigLink, resolveBookingLink");
+
+  // ── extractBookingContext ─────────────────────────────────────────────────
+
+  {
+    const r = extractBookingContext("I want to book a 2hr tour");
+    r.entity === "2hr_tour"
+      ? pass("test69: extractBookingContext — 2hr tour detected")
+      : fail("test69: extractBookingContext 2hr", `got entity=${r.entity}`);
+  }
+
+  {
+    const r = extractBookingContext("3 hr guided snowmobile adventure");
+    r.entity === "3hr_tour"
+      ? pass("test69: extractBookingContext — 3hr tour detected")
+      : fail("test69: extractBookingContext 3hr", `got entity=${r.entity}`);
+  }
+
+  {
+    const r = extractBookingContext("I want a private tour");
+    r.entity === "private_tour"
+      ? pass("test69: extractBookingContext — private tour detected")
+      : fail("test69: extractBookingContext private", `got entity=${r.entity}`);
+  }
+
+  {
+    const r = extractBookingContext("RZR rental near Steamboat");
+    r.entity === "rzr" && r.location === "steamboat"
+      ? pass("test69: extractBookingContext — RZR + steamboat detected")
+      : fail("test69: extractBookingContext rzr+location", `entity=${r.entity} location=${r.location}`);
+  }
+
+  {
+    const r = extractBookingContext("can I rent a sled in Kremmling?");
+    r.entity === "rental" && r.location === "kremmling"
+      ? pass("test69: extractBookingContext — rental + kremmling detected")
+      : fail("test69: extractBookingContext rental+kremmling", `entity=${r.entity} location=${r.location}`);
+  }
+
+  {
+    const r = extractBookingContext("rabbit ears adventures guided tour");
+    r.company === "rea" && r.entity === "guided_tour"
+      ? pass("test69: extractBookingContext — REA company + guided detected")
+      : fail("test69: extractBookingContext rea+guided", `company=${r.company} entity=${r.entity}`);
+  }
+
+  {
+    const r = extractBookingContext("colorado sled rentals backcountry proride");
+    r.company === "csr" && r.entity === "proride"
+      ? pass("test69: extractBookingContext — CSR company + proride detected")
+      : fail("test69: extractBookingContext csr+proride", `company=${r.company} entity=${r.entity}`);
+  }
+
+  {
+    const r = extractBookingContext("just browsing");
+    r.entity === null && r.company === null && r.location === null
+      ? pass("test69: extractBookingContext — generic message → all null")
+      : fail("test69: extractBookingContext nulls", `entity=${r.entity} company=${r.company} location=${r.location}`);
+  }
+
+  // ── normalizeClientLinks ─────────────────────────────────────────────────
+
+  {
+    // Static bookingUrls object → normalized array
+    const client = {
+      bookingUrls: {
+        rea_2hr_tour: "https://fareharbor.com/2hr",
+        rzr_steamboat: "https://adventures.polaris.com/steamboat",
+      },
+    };
+    const links = normalizeClientLinks(client);
+    links.length === 2 &&
+    links.every((l) => l.url && l.title && l.metadata_json)
+      ? pass("test69: normalizeClientLinks — bookingUrls → 2 normalized links")
+      : fail("test69: normalizeClientLinks bookingUrls", `got ${links.length} links: ${JSON.stringify(links.map((l) => l.title))}`);
+  }
+
+  {
+    // Portal bookingLinks take precedence over bookingUrls
+    const client = {
+      bookingUrls: { old_url: "https://old.example.com" },
+      bookingLinks: [
+        { title: "2hr Tour", url: "https://portal.example.com/2hr", description: "Two hour guided" },
+      ],
+    };
+    const links = normalizeClientLinks(client);
+    links.length === 1 && links[0].url === "https://portal.example.com/2hr"
+      ? pass("test69: normalizeClientLinks — portal bookingLinks take precedence over bookingUrls")
+      : fail("test69: normalizeClientLinks portal precedence", `got ${JSON.stringify(links)}`);
+  }
+
+  {
+    // Location metadata from key names
+    const client = { bookingUrls: { rzr_kremmling: "https://polaris.com/k", csr_steamboat_unguided: "https://fh.com/s" } };
+    const links = normalizeClientLinks(client);
+    const kremLink = links.find((l) => l.metadata_json?.location === "kremmling");
+    const sbLink   = links.find((l) => l.metadata_json?.location === "steamboat");
+    kremLink && sbLink
+      ? pass("test69: normalizeClientLinks — location metadata extracted from key names")
+      : fail("test69: normalizeClientLinks location meta", `kremLink=${!!kremLink} sbLink=${!!sbLink}`);
+  }
+
+  // ── matchConfigLink ───────────────────────────────────────────────────────
+
+  {
+    // Single link → always high confidence
+    const client = { bookingUrls: { rea_browse_all: "https://fh.com/rea" } };
+    const ctx    = { message: "book now", entity: null, company: null, location: null, season: "winter" };
+    const result = matchConfigLink(ctx, client);
+    result?.url === "https://fh.com/rea" && result?.confidence === 1.0 && result?.source === "config"
+      ? pass("test69: matchConfigLink — single link → high confidence")
+      : fail("test69: matchConfigLink single", JSON.stringify(result));
+  }
+
+  {
+    // RZR entity → polaris link wins over snowmobile link
+    const client = {
+      bookingUrls: {
+        rea_2hr_tour:  "https://fh.com/rea",
+        rzr_steamboat: "https://polaris.com/rzr",
+      },
+    };
+    const ctx = { message: "rzr rental please", entity: "rzr", company: null, location: null, season: "summer" };
+    const result = matchConfigLink(ctx, client);
+    result?.url?.includes("polaris")
+      ? pass("test69: matchConfigLink — rzr entity → polaris link wins")
+      : fail("test69: matchConfigLink rzr", `got url=${result?.url}`);
+  }
+
+  {
+    // Company match: REA entity → REA link wins over CSR
+    const client = {
+      bookingUrls: {
+        rea_2hr_tour: "https://fh.com/rea",
+        csr_browse_all: "https://fh.com/csr",
+      },
+    };
+    const ctx = { message: "rabbit ears 2 hour tour", entity: "2hr_tour", company: "rea", location: null, season: "winter" };
+    const result = matchConfigLink(ctx, client);
+    result?.url?.includes("rea")
+      ? pass("test69: matchConfigLink — REA company + 2hr → REA link")
+      : fail("test69: matchConfigLink rea company", `got url=${result?.url}`);
+  }
+
+  {
+    // Location match: kremmling → kremmling link wins
+    const client = {
+      bookingUrls: {
+        csr_steamboat_unguided: "https://fh.com/steamboat",
+        csr_kremmling_unguided: "https://fh.com/kremmling",
+      },
+    };
+    const ctx = { message: "sled rental near kremmling", entity: "rental", company: "csr", location: "kremmling", season: "winter" };
+    const result = matchConfigLink(ctx, client);
+    result?.url?.includes("kremmling")
+      ? pass("test69: matchConfigLink — kremmling location → kremmling link")
+      : fail("test69: matchConfigLink kremmling location", `got url=${result?.url}`);
+  }
+
+  {
+    // No links → null
+    const result = matchConfigLink({ message: "book now" }, { bookingUrls: {} });
+    result === null
+      ? pass("test69: matchConfigLink — empty client → null")
+      : fail("test69: matchConfigLink empty", `got ${JSON.stringify(result)}`);
+  }
+
+  // ── resolveBookingLink (config path, no DB needed) ───────────────────────
+
+  {
+    // High-confidence config match returns immediately (confidence >= 0.9)
+    const csrRea = CLIENTS.csr_rea;
+    const ctx    = extractBookingContext("book a 3hr tour");
+    const result = await resolveBookingLink({
+      message:  "book a 3hr tour",
+      entity:   ctx.entity,
+      company:  ctx.company,
+      location: ctx.location,
+      season:   "winter",
+      client:   csrRea,
+      supabase: null,
+    });
+    result?.url?.startsWith("https://") && result?.source === "config"
+      ? pass(`test69: resolveBookingLink — "3hr tour" → config URL: ${result.url}`)
+      : fail("test69: resolveBookingLink 3hr tour", JSON.stringify(result));
+  }
+
+  {
+    // RZR in summer → polaris URL
+    const csrRea = CLIENTS.csr_rea;
+    const ctx    = extractBookingContext("rzr rental Steamboat");
+    const result = await resolveBookingLink({
+      message:  "rzr rental Steamboat",
+      entity:   ctx.entity,
+      company:  ctx.company,
+      location: ctx.location,
+      season:   "summer",
+      client:   csrRea,
+      supabase: null,
+    });
+    result?.url?.includes("polaris") || result?.url?.includes("rzr")
+      ? pass(`test69: resolveBookingLink — RZR + summer → Polaris URL: ${result?.url}`)
+      : fail("test69: resolveBookingLink rzr summer", JSON.stringify(result));
+  }
+
+  {
+    // Kremmling sled rental → CSR kremmling link
+    const csrRea = CLIENTS.csr_rea;
+    const ctx    = extractBookingContext("sled rental in kremmling");
+    const result = await resolveBookingLink({
+      message:  "sled rental in kremmling",
+      entity:   ctx.entity,
+      company:  ctx.company,
+      location: ctx.location,
+      season:   "winter",
+      client:   csrRea,
+      supabase: null,
+    });
+    // The kremmling URL contains "coloradosledrentals" (CSR's shortname), not literal "csr" or "kremmling"
+    (result?.url?.includes("coloradosledrentals") || result?.url?.includes("kremmling"))
+      ? pass(`test69: resolveBookingLink — "kremmling sled rental" → CSR URL: ${result?.url}`)
+      : fail("test69: resolveBookingLink kremmling rental", JSON.stringify(result));
+  }
+
+  {
+    // Client with no booking URLs → null
+    const emptyClient = { id: "empty", bookingMode: "informational", bookingUrls: {}, bookingLinks: [] };
+    const result = await resolveBookingLink({ message: "book now", season: "winter", client: emptyClient, supabase: null });
+    result === null
+      ? pass("test69: resolveBookingLink — client with no URLs → null")
+      : fail("test69: resolveBookingLink no urls", JSON.stringify(result));
+  }
+
+  {
+    // Fallback: vague message with no entity/company → still returns a URL
+    const csrRea = CLIENTS.csr_rea;
+    const result = await resolveBookingLink({
+      message: "I want to book something",
+      season:  "winter",
+      client:  csrRea,
+      supabase: null,
+    });
+    result?.url?.startsWith("https://")
+      ? pass(`test69: resolveBookingLink — vague message → fallback URL: ${result?.url} (source=${result?.source})`)
+      : fail("test69: resolveBookingLink vague fallback", JSON.stringify(result));
   }
 }
 

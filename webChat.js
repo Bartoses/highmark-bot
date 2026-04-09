@@ -30,51 +30,15 @@ import {
   updateConversationStage,
   buildResponsePlan,
   containsPhoneAsk,
-  findRelevantBookingLink,
+  ensureUrlInResponse,
 } from "./index.js";
 import { getKnowledgeContext } from "./knowledgeBase.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RESPONSE VALIDATORS
-// ─────────────────────────────────────────────────────────────────────────────
-
-// True if the reply promises a link but forgot to include a real https:// URL.
-// Handles smart/curly apostrophes, "right here:" vs "right there:", bracket placeholders,
-// bare domains, and any "here:" used as a link pointer.
-function containsLinkPromise(text) {
-  const t = text ?? "";
-  return /here.{0,2}s the link/i.test(t)                                ||
-         /right (there|here):/i.test(t)                                  ||
-         /\b(date|spot|rental|booking|reservation|book|details).{0,20}here:/i.test(t) ||
-         /\bhere:\s*(\(|$)/i.test(t)                                     ||  // "here: (Use code..." or "here:" at end
-         /\w\s+here:\s*\S/i.test(t)                                      ||  // "adventure here: coloradosledrentals.com"
-         /\[[\w_ ]+ link\]/i.test(t)                                     ||  // [rzr_kremmling link]
-         /\b(book here|the link is|booking link below|link to book|here.{0,2}s your link|grab your (date|spot) (here|there|at|below))\b/i.test(t);
-}
-
-// True if text contains a bare-domain URL (no https://) — Claude hallucination.
-// Catches both "coloradosledrentals.com" and "coloradosledrentals.com/path".
-function containsBareDomainUrl(text) {
-  return /\b[\w-]{3,}\.(?:com|org|net|io|co)\b/i.test(text ?? "");
-}
+import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 
 // True if the text contains any http/https URL
 function containsUrl(text) {
   return /https?:\/\/\S+/.test(text ?? "");
-}
-
-// Build a normalized booking links array from client config.
-// Works for both static clients (bookingUrls object) and DB clients (bookingLinks array).
-function resolveAllBookingLinks(client) {
-  const portalLinks = (client.bookingLinks ?? []).filter((l) => l.url);
-  if (portalLinks.length) return portalLinks;
-  return Object.entries(client.bookingUrls ?? {}).map(([key, url]) => ({
-    title:         key.replace(/_/g, " "),
-    url,
-    description:   "",
-    metadata_json: { label: key, keywords: key.split("_") },
-  }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -311,10 +275,31 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     const knowledgeCtx = await getKnowledgeContext(supabase, client).catch(() => "");
     const plan         = buildResponsePlan(intent, sentiment, buying, convo, client);
 
+    // Pre-resolve booking link when booking intent detected or message is booking-related.
+    // Injecting the real URL into the instruction prevents Claude from hallucinating links.
+    let resolvedLink = null;
+    const isBookingRelated = intent === "booking" ||
+      /book|reserve|booking link|how do i book|where.*book|send.*link/i.test(message);
+    if (isBookingRelated) {
+      const ctx = extractBookingContext(message);
+      resolvedLink = await resolveBookingLink({
+        message,
+        entity:   ctx.entity,
+        company:  ctx.company,
+        location: ctx.location,
+        season,
+        client,
+        supabase,
+      }).catch(() => null);
+    }
+
     // Web-specific instructions injected into the system prompt context
     const webInstruction = [
       "CHANNEL: This is a web chat widget (not SMS). The visitor has NOT provided a phone number.",
       "Do NOT ask for a phone number. If you need contact info, ask for their name and email instead.",
+      resolvedLink
+        ? `BOOKING LINK: Include this exact URL in your response (do not modify it): ${resolvedLink.url}`
+        : "",
       plan.mustRecommend ? "Answer their question FIRST before any lead capture." : "",
       plan.shouldSoftClose && plan.microClose ? `Soft close opportunity: ${plan.microClose}` : "",
     ].filter(Boolean).join("\n");
@@ -329,28 +314,10 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       );
     }
 
-    // If Claude promised a link OR hallucinated a bare-domain URL, replace with the real https:// link.
-    // Triggers on: "right here:", "right there:", "here's the link", bare domain URLs, etc.
-    if ((containsLinkPromise(replyText) || containsBareDomainUrl(replyText)) && !containsUrl(replyText)) {
-      // Remove hallucinated bare-domain URLs, bracket placeholders, and "links not loading" apologies
-      const cleaned = replyText
-        .replace(/\[[\w_ ]+ link\]/gi, "")
-        .replace(/\b[\w-]{3,}\.(?:com|org|net|io|co)(\/\S*)?\b/gi, "")
-        .replace(/\(?[Bb]ooking links?[^)]*(?:loading|available|right now)[^)]*\)?\.?/g, "")
-        .replace(/\(?[Ww]ant me to have the team reach out[^)]*\)?\.?/g, "")
-        .replace(/\s{2,}/g, " ")
-        .trim();
-
-      const allLinks  = resolveAllBookingLinks(client);
-      const recentCtx = convo.messages.slice(-6).map((m) => m.content).join(" ");
-      const matched   = findRelevantBookingLink(recentCtx, allLinks, { season });
-      const linkUrl   = matched?.link?.url ?? matched?.links?.[0]?.url ?? null;
-      if (linkUrl) {
-        replyText = `${cleaned.trimEnd()} ${linkUrl}`;
-        console.log(`[WEB_CHAT] Link injected: ${linkUrl}`);
-      } else {
-        replyText = cleaned;
-      }
+    // Safety net: if we pre-resolved a link but it's not in the response, append it.
+    if (resolvedLink && !containsUrl(replyText)) {
+      replyText = ensureUrlInResponse(replyText, resolvedLink.url);
+      console.log(`[WEB_CHAT] Safety-net link appended: ${resolvedLink.url}`);
     }
 
     replyText = enforceLength(replyText, 480);

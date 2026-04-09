@@ -54,6 +54,7 @@ import { selectResponseMode, buildResponseModeInstruction } from "./responseMode
 import { resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
 import { detectCancellationIntent, detectRescheduleIntent, handleCancellationMessage, handleRescheduleMessage } from "./messagingEngine.js";
 import { sendMessageWeb, createWebSession, getWebClientConfig } from "./webChat.js";
+import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1708,33 +1709,28 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     //   and send the most relevant link directly.
     else if (intent === "booking" && convo.bookingStep === null && client.bookingMode === "fareharbor") {
 
-      // DIRECT LINK REQUEST: skip tour menu, send the best matching link immediately.
-      // Saves a round trip and an extra Claude call when intent is unambiguous.
+      // DIRECT LINK REQUEST: skip tour menu, resolve and send the best matching link immediately.
+      // Uses resolveBookingLink (config → API → crawl → fallback) — no model-generated URLs.
       if (isDirectLinkRequest(rawBody)) {
-        const allLinks = getClientBookingLinks(client);
-        const result   = findRelevantBookingLink(rawBody, allLinks, { season });
-        if (result) {
+        const bCtx = extractBookingContext(rawBody);
+        const resolved = await resolveBookingLink({
+          message: rawBody,
+          entity:   bCtx.entity,
+          company:  bCtx.company,
+          location: bCtx.location,
+          season,
+          client,
+          supabase,
+        });
+        if (resolved?.url) {
           const knowledgeCtx = await getKnowledgeContext(supabase, client);
-          if (result.link) {
-            convo.bookingStep          = 2;
-            convo.bookingData.activity = result.link.title;
-            replyText = await getClaudeReply(
-              convo, client, season, knowledgeCtx,
-              `Guest asked for a booking link directly. Send them this link: ${result.link.url}. Include the full URL. Keep it brief and warm.`
-            );
-            replyText = ensureUrlInResponse(replyText, result.link.url);
-          } else if (result.links?.length) {
-            // 2-3 close options — short disambiguation instead of full menu
-            const numbered = result.links.map((l, i) => `${i + 1}. ${l.title}`).join("\n");
-            convo.bookingStep              = 1;
-            convo.bookingData.menuOptions  = result.links.map((l) => ({
-              label: l.title, url: l.url, company: "portal", pk: null,
-            }));
-            replyText = await getClaudeReply(
-              convo, client, season, knowledgeCtx,
-              `Guest wants a booking link. Offer these choices briefly and ask them to reply with the number:\n${numbered}`
-            );
-          }
+          convo.bookingStep          = 2;
+          convo.bookingData.activity = resolved.url;
+          replyText = await getClaudeReply(
+            convo, client, season, knowledgeCtx,
+            `Guest asked for a booking link directly. Send them this link: ${resolved.url}. Include the full URL. Keep it brief and warm.`
+          );
+          replyText = ensureUrlInResponse(replyText, resolved.url);
         }
       }
 
