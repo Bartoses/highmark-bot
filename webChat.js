@@ -40,12 +40,15 @@ import { saveLead, notifyBusinessOfLead } from "./leads.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 // True if the reply promises a link but forgot to include a real https:// URL.
-// Handles smart/curly apostrophes, "right here:" vs "right there:", bracket placeholders.
+// Handles smart/curly apostrophes, "right here:" vs "right there:", bracket placeholders,
+// and any phrase that ends with "here:" or "there:" implying a URL should follow.
 function containsLinkPromise(text) {
   const t = text ?? "";
-  return /here.{0,2}s the link/i.test(t)                        ||
-         /right (there|here):/i.test(t)                          ||
-         /\[[\w_ ]+ link\]/i.test(t)                             ||  // [rzr_kremmling link]
+  return /here.{0,2}s the link/i.test(t)                                ||
+         /right (there|here):/i.test(t)                                  ||
+         /\b(date|spot|rental|booking|reservation|book|details).{0,20}here:/i.test(t) ||
+         /\bhere:\s*(\(|$)/i.test(t)                                     ||  // "here: (Use code..." or "here:" at end
+         /\[[\w_ ]+ link\]/i.test(t)                                     ||  // [rzr_kremmling link]
          /\b(book here|the link is|booking link below|link to book|here.{0,2}s your link|grab your (date|spot) (here|there|at|below))\b/i.test(t);
 }
 

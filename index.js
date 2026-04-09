@@ -330,6 +330,7 @@ Never run multi-step data collection on your own. One soft question, then stop �
 - For general/ambiguous booking requests: use the browse-all links so the guest picks their own item.
 - For specific tour choices: use the individual item link.
 - Always include the full URL directly in your reply — never say "click here" without the link.
+- RZR/UTV/off-road booking requests: ALWAYS include the Polaris Adventures URL from SUMMER ROUTING above — never give a phone number as the primary response. Customers pre-book in advance; always send the link.
 Available booking links:
 ${bookingRef}
 
