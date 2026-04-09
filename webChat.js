@@ -41,20 +41,22 @@ import { saveLead, notifyBusinessOfLead } from "./leads.js";
 
 // True if the reply promises a link but forgot to include a real https:// URL.
 // Handles smart/curly apostrophes, "right here:" vs "right there:", bracket placeholders,
-// and any phrase that ends with "here:" or "there:" implying a URL should follow.
+// bare domains, and any "here:" used as a link pointer.
 function containsLinkPromise(text) {
   const t = text ?? "";
   return /here.{0,2}s the link/i.test(t)                                ||
          /right (there|here):/i.test(t)                                  ||
          /\b(date|spot|rental|booking|reservation|book|details).{0,20}here:/i.test(t) ||
          /\bhere:\s*(\(|$)/i.test(t)                                     ||  // "here: (Use code..." or "here:" at end
+         /\w\s+here:\s*\S/i.test(t)                                      ||  // "adventure here: coloradosledrentals.com"
          /\[[\w_ ]+ link\]/i.test(t)                                     ||  // [rzr_kremmling link]
          /\b(book here|the link is|booking link below|link to book|here.{0,2}s your link|grab your (date|spot) (here|there|at|below))\b/i.test(t);
 }
 
-// True if text contains a bare-domain URL (no https://) — Claude hallucination
+// True if text contains a bare-domain URL (no https://) — Claude hallucination.
+// Catches both "coloradosledrentals.com" and "coloradosledrentals.com/path".
 function containsBareDomainUrl(text) {
-  return /\b[\w-]+\.(?:com|org|net|io|co)\/\S+/i.test(text ?? "");
+  return /\b[\w-]{3,}\.(?:com|org|net|io|co)\b/i.test(text ?? "");
 }
 
 // True if the text contains any http/https URL
@@ -333,7 +335,7 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       // Remove hallucinated bare-domain URLs, bracket placeholders, and "links not loading" apologies
       const cleaned = replyText
         .replace(/\[[\w_ ]+ link\]/gi, "")
-        .replace(/\b[\w-]+\.(?:com|org|net|io|co)\/\S*/gi, "")
+        .replace(/\b[\w-]{3,}\.(?:com|org|net|io|co)(\/\S*)?\b/gi, "")
         .replace(/\(?[Bb]ooking links?[^)]*(?:loading|available|right now)[^)]*\)?\.?/g, "")
         .replace(/\(?[Ww]ant me to have the team reach out[^)]*\)?\.?/g, "")
         .replace(/\s{2,}/g, " ")
