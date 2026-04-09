@@ -4449,12 +4449,18 @@ function pcRender() {
   pcScrollBottom();
 }
 
+function pcLinkify(text) {
+  const esc = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return esc.replace(/https?:\/\/[^\s<>"]+/g, url =>
+    `<a href="${url}" target="_blank" rel="noopener" style="color:inherit;word-break:break-all;text-decoration:underline;">${url}</a>`);
+}
+
 function pcAppend(role, text) {
   const box = document.getElementById('pc-messages');
   if (!box) return;
   const d = document.createElement('div');
   d.className = `pc-msg ${role === 'assistant' ? 'pc-bot' : 'pc-user'}`;
-  d.textContent = text;
+  d.innerHTML = pcLinkify(text);
   box.appendChild(d);
 }
 

@@ -134,12 +134,18 @@
     scrollBottom();
   }
 
+  function linkify(text) {
+    const esc = text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    return esc.replace(/https?:\/\/[^\s<>"]+/g, url =>
+      `<a href="${url}" target="_blank" rel="noopener" style="color:inherit;word-break:break-all;text-decoration:underline;">${url}</a>`);
+  }
+
   function appendMessageEl(role, text) {
     const container = document.getElementById("hm-messages");
     if (!container) return;
     const div = document.createElement("div");
     div.className = `hm-msg ${role === "assistant" ? "hm-bot" : "hm-user"}`;
-    div.textContent = text;
+    div.innerHTML = linkify(text);
     container.appendChild(div);
   }
 

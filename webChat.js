@@ -35,6 +35,20 @@ import { getKnowledgeContext } from "./knowledgeBase.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// RESPONSE VALIDATORS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// True if the reply says "here's the link / right there: / book here" but has no URL
+function containsLinkPromise(text) {
+  return /\b(here'?s the link|right there:|book here|the link is|click here|booking link below|link to book)\b/i.test(text ?? "");
+}
+
+// True if the text contains any http/https URL
+function containsUrl(text) {
+  return /https?:\/\/\S+/.test(text ?? "");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SESSION KEYS — prefixed to avoid collision with real phone numbers
 // ─────────────────────────────────────────────────────────────────────────────
 export function webFromNumber(sessionId) { return `web:${sessionId}`; }
@@ -267,6 +281,14 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       replyText = await callClaude(
         anthropic, convo, client, season, knowledgeCtx,
         "IMPORTANT: Do NOT ask for a phone number — this is web chat. If you need contact info, ask for email."
+      );
+    }
+
+    // Regenerate once if Claude promised a link but forgot to include it
+    if (containsLinkPromise(replyText) && !containsUrl(replyText)) {
+      replyText = await callClaude(
+        anthropic, convo, client, season, knowledgeCtx,
+        `${webInstruction}\nCRITICAL: Your previous response referenced a booking link but did not include the actual URL. You MUST include the full URL (starting with https://) directly in your reply. Use the URLs from the Available booking links section.`
       );
     }
 
