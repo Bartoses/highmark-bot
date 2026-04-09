@@ -39,13 +39,18 @@ import { saveLead, notifyBusinessOfLead } from "./leads.js";
 // RESPONSE VALIDATORS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// True if the reply promises a link but forgot to include the URL.
-// Handles smart/curly apostrophes and avoids \b-after-colon failures.
+// True if the reply promises a link but forgot to include a real https:// URL.
+// Handles smart/curly apostrophes, "right here:" vs "right there:", and bare domains.
 function containsLinkPromise(text) {
   const t = text ?? "";
-  return /here.{0,2}s the link/i.test(t)  ||
-         /right there:/i.test(t)           ||
-         /\b(book here|the link is|booking link below|link to book|here.{0,2}s your link)\b/i.test(t);
+  return /here.{0,2}s the link/i.test(t)         ||
+         /right (there|here):/i.test(t)           ||
+         /\b(book here|the link is|booking link below|link to book|here.{0,2}s your link|grab your (date|spot) (here|there|at|below))\b/i.test(t);
+}
+
+// True if text contains a bare-domain URL (no https://) — Claude hallucination
+function containsBareDomainUrl(text) {
+  return /\b[\w-]+\.(?:com|org|net|io|co)\/\S+/i.test(text ?? "");
 }
 
 // True if the text contains any http/https URL
@@ -230,7 +235,23 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     await supabase.from("conversations").delete()
       .eq("from_number", from).eq("to_number", to);
     const opener = enforceLength(getSeasonalOpener(client, getCurrentSeason()), 480);
-    console.log(`[WEB_CHAT] RESETNOW — conversation cleared for session=${sessionId} client=${client.id}`);
+    // Save fresh conversation so the next real message doesn't retrigger the opener
+    const freshConvo = {
+      messages:              [{ role: "assistant", content: opener, timestamp: new Date().toISOString() }],
+      bookingStep:           null,
+      bookingData:           { activity: null, date: null, groupSize: null, company: null },
+      handoff:               false,
+      consecutiveFrustrated: 0,
+      sessionType:           "web",
+      leadStep:              null,
+      leadData:              null,
+      stage:                 "new",
+      leadCaptureAttempted:  false,
+      leadCapturePendingName: false,
+      commercialState:       { recommendationGiven: false, leadCaptureAttempts: 0 },
+    };
+    await saveWebConversation(supabase, from, to, freshConvo, client.id);
+    console.log(`[WEB_CHAT] RESETNOW — conversation reset for session=${sessionId} client=${client.id}`);
     return { reply: opener, reset: true };
   }
 
@@ -302,10 +323,9 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       );
     }
 
-    // If Claude promised a link but has no real https:// URL, inject the correct one.
-    // Also strips hallucinated bare-domain URLs (e.g. "coloradosledrentals.com/...") that
-    // Claude sometimes generates — they look like links but aren't clickable.
-    if (containsLinkPromise(replyText) && !containsUrl(replyText)) {
+    // If Claude promised a link OR hallucinated a bare-domain URL, replace with the real https:// link.
+    // Triggers on: "right here:", "right there:", "here's the link", bare domain URLs, etc.
+    if ((containsLinkPromise(replyText) || containsBareDomainUrl(replyText)) && !containsUrl(replyText)) {
       // Remove bare-domain URLs Claude may have hallucinated (no protocol = not real)
       const cleaned = replyText
         .replace(/\b[\w-]+\.(?:com|org|net|io|co)\/\S*/gi, "")
