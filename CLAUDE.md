@@ -33,45 +33,32 @@ clients.js             — per-client configuration registry + resolveClient(toN
 index.js               — main Express server, SMS webhook, all bot logic, booking state machine
 knowledgeBase.js       — FH items (24hr cron) + FH availability (3hr cron) + weather (1hr cron) + website (7-day cron, hash-gated) + crawler cron wiring
 crawler.js             — Phase 2 whole-site crawler: crawlSite, classifyPageType, extractPageFacts (Haiku, hash-gated), buildCrawlerContext, runCrawlerForClient
-db1_client_pages.sql   — migration: creates client_pages table for page-level website content storage (Phase 2)
-db1_crawl_settings.sql — migration: adds crawl_settings JSONB column to clients table (Phase 2)
-phoneUtils.js          — phone normalization: normalizePhone, isValidPhone, formatPhoneForDisplay (Phase 1)
-livetruth.js           — live availability truth: isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction (Phase 1)
-conversationEngine.js  — config-driven conversation: getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction (Chunk 16)
+clientConfig.js        — getRuntimeClientConfig(): merges DB settings into static client on every SMS request
+phoneUtils.js          — phone normalization: normalizePhone, isValidPhone, formatPhoneForDisplay
+livetruth.js           — live availability truth: isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction
+conversationEngine.js  — config-driven conversation: getConversationConfig, buildMainMenu, routeMenuSelection
 bookingConfirmations.js — FareHarbor webhook receiver + 30min polling + confirmation texts
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging; opt_outs writes to DB1, contacts mirror to DB2
-db1_opt_outs.sql       — migration: creates opt_outs table in DB1 (run once; replaces DB2 opt_outs as authoritative store)
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
 cron-worker.js         — standalone Railway cron service entry point (node cron-worker.js, */5 * * * *)
 test.js                — automated test suite (788 tests), spawns its own server on port 3099
-demoFlow.js            — guided demo state machine for bookingMode=demo clients (Chunk 7)
-demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints (Chunk 7C)
-db1_demo_analytics.sql — migration: creates demo_events table for analytics tracking
-followUpEngine.js      — lead follow-up sequencing: scheduleFollowUps() + checkAndMarkLeadEngaged() (Chunk 8)
-db1_lead_followup.sql  — migration: adds lifecycle columns to leads + lead_id to scheduled_messages (Chunk 8)
-campaigns.js           — campaign engine: createCampaign, selectAudience, enqueueCampaign, getCampaignStats, interpolateMessage (Chunk 9)
-adminCampaigns.js      — campaign admin routes: POST/GET/PATCH campaigns + POST :id/send (Chunk 9)
-db1_campaigns.sql      — migration: creates campaigns + campaign_recipients tables (Chunk 9)
-portalAuth.js          — portal JWT middleware factory: makePortalAuth(supabase) + resolvePortalClientId(req) (Chunk 10)
-adminPortal.js         — portal API handlers: dashboard, leads, campaigns, analytics, settings + admin user mgmt (Chunk 10)
-db1_portal.sql         — migration: creates portal_users table for client portal auth (Chunk 10)
-public/portal-login.html — client portal login page (Supabase Auth email+password)
-public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Analytics, Settings, Users & Access
-public/portal-accept.html — invite acceptance page: validates token, sets password, auto-signs-in via anon key
-adminInvites.js        — invite lifecycle handlers: create, info, accept, revoke, resend, deactivate (Chunk 11)
-db1_portal_invites.sql — migration: creates portal_invites table with token, expiry, status constraints (Chunk 11)
+demoFlow.js            — guided demo state machine for bookingMode=demo clients
+demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin summary/events endpoints
+followUpEngine.js      — lead follow-up sequencing: scheduleFollowUps() + checkAndMarkLeadEngaged()
+campaigns.js           — campaign engine: createCampaign, selectAudience, enqueueCampaign, getCampaignStats
+adminCampaigns.js      — campaign admin routes: POST/GET/PATCH campaigns + POST :id/send
+portalAuth.js          — portal JWT middleware factory: makePortalAuth(supabase) + resolvePortalClientId(req)
+adminPortal.js         — portal API handlers: dashboard, leads, campaigns, analytics, settings + admin user mgmt
+adminInvites.js        — invite lifecycle handlers: create, info, accept, revoke, resend, deactivate
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
-adminLeads.js          — admin lead management: list, get, update, summary routes (Chunk 5 + 8)
-adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages (Chunk 8)
-adminClients.js        — client provisioning: create/update/list/readiness routes (Chunk 6)
-db1_clients.sql        — migration: creates clients table for DB-backed client provisioning (Chunk 6)
-db1_lead_capture.sql   — migration: adds lead_step/lead_data to conversations + creates leads table
-db1_waitlist.sql       — migration: adds waitlist_pending/waitlist_context to conversations + lead_type to leads
-db1_lead_mgmt.sql      — migration: extended status values + updated_by audit column on leads
-db1_lead_name.sql      — migration: adds contact_email to leads table (run after db1_lead_mgmt.sql)
-db1_cancellation_sent.sql — migration: adds cancellation_sent column to confirmations_sent
+adminLeads.js          — admin lead management: list, get, update, summary routes
+adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages
+adminClients.js        — client provisioning: create/update/list/readiness routes
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
+public/portal-login.html — client portal login page
+public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Analytics, Settings, Users & Access
+public/portal-accept.html — invite acceptance page
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
 db2_crm_schema.sql     — DB2 CRM schema (Supabase Project 2 SQL editor)
 railway.json           — Railway deployment config
@@ -79,35 +66,35 @@ PROMPTS.md             — Session starter prompts
 .env                   — local secrets (never commit)
 ```
 
+**SQL migrations** (run once in Supabase DB1 SQL editor):
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`
+
 ---
 
 ## Multi-Client Architecture
 
 Client config lives in `clients.js` — edit that file to add or update clients.
 Each client entry defines: `id`, `botName`, `tone`, `inboundPhones`, `supportPhone`, `handoffPhone`,
-`bookingMode` (`fareharbor` | `informational` | `lead_capture`), `fareharborCompanies`, `scrapeUrls`,
-`snotelStations`, `bookingUrls`, `services`, `faq`, `hours`, `crmEnabled`, `openerText`, `handoffReply`.
+`bookingMode`, `fareharborCompanies`, `scrapeUrls`, `snotelStations`, `bookingUrls`, `services`, `faq`, `hours`, `crmEnabled`, `openerText`, `handoffReply`.
 
 **To onboard a new client:**
 1. Add an entry to `CLIENTS` in `clients.js`
-2. Set `LONE_PINE_TWILIO_NUMBER` (or `<CLIENT>_TWILIO_NUMBER`) env var in Railway
+2. Set `<CLIENT>_TWILIO_NUMBER` env var in Railway
 3. No other code changes required — `resolveClient(toNumber)` routes automatically
 
-**bookingMode values:**
-- `fareharbor` — FareHarbor booking menu + real-time availability (CSR/REA)
-- `informational` — Q&A + optional lead capture flow if `leadCaptureEnabled: true` (Lone Pine)
+**bookingMode values:** `fareharbor` | `informational` | `lead_capture` | `call_only` | `static_links` | `hybrid` | `api_live_booking` (alias for fareharbor) | `demo`
 
 **Current clients:**
 | Client | ID | Mode | Twilio Number |
 |---|---|---|---|
 | Colorado Sled Rentals + Rabbit Ears Adventures | `csr_rea` | `fareharbor` | +18335786496 (pending) · demo: +18668906657 |
 | Lone Pine Performance | `lone_pine` | `informational` | +18336489744 (pending) |
+| Highmark Demo | `highmark_demo` | `demo` | +18668906657 (active) |
 
 **Railway env vars still needed per deployment:**
 - `FAREHARBOR_ENABLED` — `true` for Tier 2 FH access
 - `CONFIRMATIONS_ENABLED` — `true` when ready to text real guests
 - `CONFIRMATIONS_TEST_PHONE` — redirect all confirmation texts here while testing
-- `CLIENT_PHONE` / `HANDOFF_PHONE` — overrides csr_rea defaults if needed
 
 ---
 
@@ -123,46 +110,26 @@ Commands: `/reset` (fresh conversation), `/quit`
 ```bash
 npm test
 ```
-Spawns its own server on port 3099. Runs all 116 scenarios automatically.
+Spawns its own server on port 3099. Runs all 788 scenarios automatically.
 
 ### Server + curl tests (TEST_MODE)
-**Terminal 1:**
 ```bash
+# Terminal 1:
 npm run dev:test
-```
-**Terminal 2 — example curl tests:**
-```bash
-# Health check
+# Terminal 2:
 curl http://localhost:3000/
-
-# Fresh greeting
 curl -s -X POST http://localhost:3000/sms \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "Body=Hey&From=%2B15550001234&To=%2B15559999999"
-
-# Reset conversation
-curl -s -X POST http://localhost:3000/reset \
-  -H "Content-Type: application/json" \
-  -d '{"from":"+15550001234"}'
 ```
 
-### Twilio Virtual Phone testing (real Twilio flow)
-Requires: Twilio number webhook set to `https://highmark-bot-production.up.railway.app/sms`, `TEST_MODE` NOT set on Railway.
-
+### Twilio Virtual Phone testing
 ```bash
-chmod +x virtual-test.sh
 ./virtual-test.sh          # show scenario menu
 ./virtual-test.sh 1        # new guest greeting
-./virtual-test.sh 3        # beginner booking flow
-./virtual-test.sh 9        # DEMO trigger (owner notified)
+./virtual-test.sh 9        # DEMO trigger
 ```
-
-Virtual Phone numbers:
-- Bot demo number (From): `+18668906657` (active — use for demos until new numbers verified)
-- Bot CSR/REA primary (From): `+18335786496` (pending Twilio verification)
-- Bot Lone Pine (From): `+18336489744` (pending Twilio verification)
-- Virtual Phone (acts as customer): `+18777804236`
-
+Virtual Phone (acts as customer): `+18777804236`
 Scenarios: 1=greeting, 2=snow conditions, 3=beginner booking, 4=experienced rider, 5=group of 8 handoff, 6=explicit handoff, 7=sentiment escalation, 8=reservation lookup, 9=DEMO trigger, 10=SUMMITDEMO
 
 ### Key scenarios to verify after every change
@@ -186,9 +153,6 @@ Scenarios: 1=greeting, 2=snow conditions, 3=beginner booking, 4=experienced ride
 git add <changed files>    # never commit .env
 git commit -m "your message"
 git push origin main
-```
-Then verify:
-```bash
 curl https://highmark-bot-production.up.railway.app/
 ```
 Expected: `{"status":"Highmark running ✅", ...}`
@@ -202,58 +166,24 @@ Expected: `{"status":"Highmark running ✅", ...}`
 2. STOP/HELP/START keywords (TCPA — processed before anything else)
 3. Opted-out gate (silently drop)
 4. Load conversation from Supabase
-5. Intent + sentiment classification
-6. Booking mode routing (per client.bookingMode):
-   - `fareharbor`: booking state machine (null → 1 → 2) + FareHarbor tour menu
-   - `informational`: booking intent → phone CTA via Claude, no state machine
-7. Claude called with system prompt + KB context (prompt dispatched by bookingMode)
-8. Save conversation to Supabase, return TwiML
-9. CRM upsert/tagging — only if `client.crmEnabled` is true
+5. `checkAndMarkLeadEngaged()` — marks lead engaged if they replied
+6. `getRuntimeClientConfig()` — merge DB settings into client object
+7. Demo routing (`bookingMode=demo` → `handleDemoFlow()`, bypasses all production logic)
+8. Intent + sentiment classification
+9. Booking mode routing (per client.bookingMode)
+10. Claude called with system prompt + KB context
+11. Save conversation to Supabase, return TwiML
+12. CRM upsert/tagging — only if `client.crmEnabled` is true
 
 ### Conversation Stage Machine
-Tracked in `convo.stage` (stored inside `booking_data._stage` — no schema migration needed):
 `new → discovery → engaged → considering → high_intent → lead_captured → closed | handoff`
-- `updateConversationStage(convo, buyingSignals, intent, sentiment)` — runs once per turn, never downgrades, frustrated→handoff
-- `detectBuyingSignals(body, convo)` → `{ strength: none|low|medium|high, signals[], inferredGoal }`
-- `shouldAttemptLeadCapture(convo, signals, client)` — fires proactive soft ask at considering+ with medium/high signal; respects all guard conditions (min 2 turns, not frustrated, not already attempted)
-- `extractLeadInfo(body)` — pulls phone/email from message text; used in waitlist + organic YES handlers
-- `buildLeadCapturePrompt(client, inferredGoal)` — context-aware soft ask matched to brand and conversation goal
-- `detectIntent` expanded: adds `recommendation` for "what's best for me / which option" messages
-- TEST_MODE meta: now includes `stage`, `buyingSignalStrength`, `buyingSignals`
-- Response priority + pacing rules added to both system prompts (RESPONSE PRIORITY + PACING blocks)
-- SMS channel awareness: bot never asks for phone number (already have it from `From`); on YES asks for name only; saves lead after name received
-- Name capture pre-flight: `leadCapturePendingName` flag stored in `booking_data._leadCapturePendingName`; resolves before waitlist pre-flight
-- `saveLead()` uses `contact_name` column; `contact_email` included only post-migration (`db1_lead_name.sql`)
-- 243/243 tests pass
-
-### Commercial Decision Layer (index.js)
-Deterministic logic layer that runs before every Claude call to enforce answer-first, expertise-first behavior:
-
-- `scoreBuyingIntent(body, convo)` → `{ score: 0-100, strength, reasons[] }` — numeric weighted scoring; 15+ = low, 35+ = medium, 60+ = high
-- `needsExpertiseFirst(intent, buyingSignals, convo)` → boolean — returns true when bot must answer/recommend BEFORE any lead capture attempt; clears once `commercialState.recommendationGiven = true`
-- `getMicroClose(client, inferredGoal)` → string — per-client soft close library; one ask only, never stacked
-- `buildResponsePlan(intent, sentiment, buyingSignals, convo, client)` → plan object — deterministic pre-call decision: `{ primaryGoal, mustRecommend, mustIncludeLocalContext, shouldSoftClose, shouldAttemptLeadCapture, forbiddenMoves[], microClose }`
-- `formatResponsePlanInstruction(plan, client)` → string — converts plan to Claude instruction injected as CURRENT CONTEXT
-- `containsPhoneAsk(text)` → boolean — post-gen validator; if true, response is regenerated once with a correction instruction
-- `commercialState` persisted in `booking_data._commercialState` (no schema migration): `{ recommendationGiven, leadCaptureAttempts }`
-- `recommendationGiven` set to true in DEFAULT block after any `recommendation` intent response — unlocks proactive lead capture on next turn
-- Proactive lead capture block now requires `!needsExpertiseFirst()` — recommendation turns always answer first
-- TEST_MODE meta includes `recommendationGiven`
-
-### Context-Aware Personality
-Both system prompts (`buildSystemPromptCsrRea` and `buildSystemPromptInformational`) include a `PERSONALITY & TONE` block that instructs Claude to:
-- Match energy to the guest (playful → playful, concise → concise, frustrated → no humor)
-- Classify sarcasm before responding: playful bravado vs. irritated vs. literal
-- Tie any humor to the specific offering, machine, or trail being discussed — never generic
-- Tighten tone as the conversation moves toward booking or support resolution
-- Never re-ask questions already answered in prior turns
-The base voice is set by `client.tone` in `clients.js`. The PERSONALITY & TONE block governs how that voice adapts in real time. Automatically inherited by all future clients via `bookingMode`.
+Stored in `booking_data._stage` (no schema migration needed). Never downgrades. Frustrated → handoff.
+Commercial Decision Layer (`buildResponsePlan`) runs before every Claude call: enforces answer-first, expertise-first behavior. `containsPhoneAsk()` post-validates and regenerates if needed.
 
 ### Rate Limiting
-Two layers on `/sms`:
 - **IP limiter** — 30 req/min per IP (express-rate-limit)
 - **Phone limiter** — 10 msg/min per phone number (in-memory Map)
-Both return `<Response></Response>` TwiML on 429 so Twilio doesn't retry.
+Both return `<Response></Response>` TwiML on 429.
 
 ### Conversation Store
 Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_number):
@@ -264,279 +194,80 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
   booking_data:           { activity, date, groupSize, company, booking_pk, menuOptions },
   handoff:                false,
   consecutive_frustrated: 0,
-  session_type:           "live" | "test",   // "test" for UI console sessions
-  client_id:              "csr_rea"           // set from resolveClient(toNumber) — always correct
+  session_type:           "live" | "test",
+  client_id:              "csr_rea"
 }
 ```
 
 ### Booking State Machine
 - `null` — not started
-- `1` — tour menu shown, waiting for guest to pick (menuOptions stored in bookingData)
+- `1` — tour menu shown, waiting for guest to pick
 - `2` — booking link sent
-- `3` — confirmation text sent (pre-seeded by bookingConfirmations.js)
+- `3` — confirmation text sent
 - `4` — 30-min follow-up sent
 
 ### Booking Rules
 - Same-day bookings NOT allowed — minimum 1 day advance booking required
-- Availability window always starts from tomorrow in both KB refresh and real-time checks
+- Availability window always starts from tomorrow
 - Groups 6+ always handoff
-- `informational` clients never enter the FH booking state machine
-  - If `leadCaptureEnabled: true`: booking intent starts 3-step lead capture flow (service → callback → timeframe)
-  - Otherwise: booking intent routes directly to phone CTA
+- `informational` clients: booking intent → 3-step lead capture (if `leadCaptureEnabled`) or phone CTA
 
 ### Lead Capture Flow (leads.js + informational mode)
-Used by Lone Pine Performance — collects service request without pretending to confirm appointments.
-- **Step 1** (leadStep=1): bot asks what service is needed; includes phone CTA as escape hatch
-- **Step 2** (leadStep=2): bot asks for callback number; "same" uses guest's inbound number
-- **Step 3** (leadStep=3): bot asks for preferred timeframe
-- **Complete** (leadStep→null): `saveLead()` writes to `leads` table; `notifyBusinessOfLead()` SMS to `client.leadNotificationPhone`; confirmation sent to guest
-- Abort: guest replies with "call/phone/never mind/cancel/skip" during step 1 → handoffReply
-- DB: `lead_step` (int) + `lead_data` (jsonb) columns on `conversations` — migration: `db1_lead_capture.sql`
-
-### Per-Client Behavior Config (clients.js fields)
-- `bookingMode` — `fareharbor` | `informational`
-- `leadCaptureEnabled` — enables 3-step lead capture for informational clients
-- `leadNotificationPhone` — SMS destination for new lead notifications
-- `crmEnabled` — gates all CRM upsert/tagging; `false` means no contact records created
-- `openerText` — first-message text (overrides getSeasonalOpener generic logic)
-- `handoffReply(phone)` — function returning text sent on explicit handoff intent
-
-### Branded Openers (getSeasonalOpener)
-`getSeasonalOpener(client, seasonOverride?)` — exported from index.js. CSR/REA openers now include the business name in all seasonal variants:
-- **Winter**: `"Hey! You're texting Colorado Sled Rentals + Rabbit Ears Adventures. I'm Summit 🏔 your guide to snowmobiling in Steamboat. Guided tours or self-guided rental — what sounds like you?"`
-- **Summer**: `"Hey! You're texting Colorado Sled Rentals + Rabbit Ears Adventures. I'm Summit 🏔 your guide to RZR adventures in Steamboat. Self-guided off-road fun — want to explore?"`
-- **Shoulder**: `"Hey! You're texting Colorado Sled Rentals + Rabbit Ears Adventures. I'm Summit 🏔 snowmobile season winding down, RZR season kicking off. What adventure are you planning?"`
-- `openerText` override (e.g. Lone Pine) takes precedence over seasonal logic
-- `seasonOverride` optional second param enables deterministic testing of specific seasonal branches
-
-### Admin Lead Management (adminLeads.js — Chunk 5)
-Internal API for viewing and updating captured leads. Protected by `requireUiAccess` (same `UI_SECRET` as the UI console).
-
-**Routes:**
-- `GET /admin/leads` — paginated list; query params: `client_id`, `status`, `lead_type`, `limit` (default 50), `offset` (default 0); newest first
-- `PATCH /admin/leads/:id` — update `status`, `notes`, and/or `updated_by`; returns updated lead
-- `GET /admin/leads/summary` — aggregate counts; query param: `client_id`; returns `{ by_status, by_type, total }`
-
-**Valid statuses:** `new | contacted | scheduled | closed | ignored`
-
-**Migrations required:**
-- `db1_lead_mgmt.sql` — adds check constraint for status values + `updated_by` audit column
-
-**Access:**
-```bash
-curl "https://highmark-bot-production.up.railway.app/admin/leads?key=YOUR_UI_SECRET"
-curl -X PATCH "https://highmark-bot-production.up.railway.app/admin/leads/LEAD_ID?key=YOUR_UI_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"status":"contacted","notes":"Left voicemail"}'
-```
-
-### Admin Client Provisioning (adminClients.js — Chunk 6)
-Internal API for adding and managing clients without code edits. Protected by `requireUiAccess`.
-
-**Routes:**
-- `GET /admin/clients` — list all clients (static + DB-backed) with readiness; optional `?active=true/false`
-- `GET /admin/clients/:id` — single client with readiness summary
-- `POST /admin/clients` — create new DB-backed client; applies defaults automatically
-- `PATCH /admin/clients/:id` — update DB-backed client (static clients → 400, edit `clients.js`)
-
-**Validation on create/update:**
-- `id`: required, lowercase alphanumeric + underscores, unique
-- `booking_mode`: one of `fareharbor | informational | lead_capture`
-- `inbound_phones`: E.164 format, globally unique across all clients
-- Static clients (in `clients.js`) are read-only via API
-
-**Defaults applied on create:**
-- `bot_name`: "Summit" | `tone`: "warm, helpful, and knowledgeable" | `timezone`: "America/Denver"
-- `active`: true | `waitlist_enabled`: true | all feature flags: false
-- `website_url`: auto-set from first `scrape_urls` entry if not provided
-
-**Readiness checks** (`computeReadiness(client)`):
-- `inbound_phone` — at least 1 Twilio number assigned
-- `website_or_scrape` — website_url or scrape_urls present
-- `support_contact` — support_phone or handoff_phone set
-- `booking_mode` — valid mode set
-- `bot_identity` — bot_name set
-
-**Runtime loading:** `initClients(supabase)` runs at server startup, loads active DB rows into `_runtimeClients` via `loadDbClients()`. `resolveClient()` checks DB clients first, then static clients. After create/update, registry reloads automatically (no restart needed).
-
-**Migration required:** `db1_clients.sql` — run in Supabase DB1 SQL editor before first use.
-
-**Access:**
-```bash
-curl "https://highmark-bot-production.up.railway.app/admin/clients?key=YOUR_UI_SECRET"
-curl -X POST "https://highmark-bot-production.up.railway.app/admin/clients?key=YOUR_UI_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"id":"new_client","name":"New Business","booking_mode":"informational","support_phone":"(970) 555-0001","website_url":"https://example.com"}'
-```
+Step 1: what service needed → Step 2: callback number → Step 3: preferred timeframe → `saveLead()` + `notifyBusinessOfLead()`. Abort on "call/phone/never mind/cancel/skip" → handoffReply.
 
 ### Demo Mode (demoFlow.js)
-Guided, conversion-focused sales demo for prospects. No AI calls, no real APIs. Fully deterministic.
+`highmark_demo` client owns +18668906657. Fully deterministic, no AI calls. 3 paths (Q&A / Lead Capture / Booking) + lead capture funnel. State in `booking_data._demo`. Global commands: MENU, BACK, START OVER, YES/4 → lead capture. Analytics tracked in `demo_events` via `demoAnalytics.js`.
 
-**Design principle:** This is a sales tool, not just a demo. Every response has a clear next step. No dead ends.
+### Lead Follow-up Engine (followUpEngine.js)
+`scheduleFollowUps(supabase, lead, fromPhone)` queues SMS sequences into `scheduled_messages`. Cron worker cancels if lead becomes engaged/converted. Lead statuses: `new → contacted → engaged → converted/closed/ignored`. Edit `SEQUENCES` in followUpEngine.js to add/modify sequences.
 
-**Client:** `highmark_demo` in `clients.js` — owns +18668906657. `bookingMode: "demo"`, `isDemo: true`.
+### Campaign Engine (campaigns.js + adminCampaigns.js)
+Outbound SMS to filtered audience (`all_leads`, `engaged_leads`, `new_leads`). Templates support `{{name}}` / `{{first_name}}`. Status: `draft → sending/scheduled`. Routes: `POST/GET/PATCH /admin/campaigns`, `POST /admin/campaigns/:id/send`.
 
-**Demo number:** +1 866 890 6657. Routes to `handleDemoFlow()` in index.js before any production logic.
+### Client Portal (portalAuth.js + adminPortal.js)
+`/portal` — Supabase Auth + `portal_users` table. Roles: `internal_admin`, `client_admin`, `client_user`. JWT validated on every `/portal/api/*` request. 3-layer client scoping. Sections: Dashboard, Leads, Campaigns, Analytics, Settings, Users & Access.
+- `client_user` → read-only (403 on mutating operations)
+- `client_admin` → manage own client + invite users (cannot escalate to internal_admin)
+- `internal_admin` → access any client via `?client_id=`
+- Settings PATCH: identity, contact info, booking mode, feature toggles (DB-backed clients only)
 
-**Flow overview:**
-1. First text → opener with 4 options (Q&A / Lead Capture / Booking / Get started)
-2. Pick 1/2/3 → feature path intro (simulated customer interaction)
-3. Any reply → value followup + unexplored paths OR stronger CTA if all paths seen
-4. YES / "4" / "get this" → lead capture (name → business → website) → save + notify admin
-5. `complete` is NOT a dead end — MENU, path picks, and YES all work
+### Invite-Based Portal Access (adminInvites.js)
+64-char token, 72h expiry, single-use. `portal-accept.html` → client sets password → auto sign-in. Admin routes: `POST/GET /admin/portal-invites`, `:id/resend`, `:id/revoke`. Portal routes: `GET/POST /portal/api/invites`, `GET/POST /portal/api/users`.
 
-**State machine steps:** `awaiting_menu → path_intro → path_followup → [path_cta] → lead_name → lead_business → lead_website → complete`
-
-**State persisted in:** `conversations.booking_data._demo` (JSONB, no schema migration needed)
-
-**Global navigation commands (work from any state):**
-- `MENU` / `OPTIONS` — show main menu with ✅ markers for explored paths
-- `BACK` — return to previous step
-- `START OVER` / `DEMO` / `RESTART` / `RESET` — full reset to opener
-- `4` or any YES intent — jump directly to lead capture
-
-**Lead storage:** `leads` table, `lead_type="demo"`, `client_id="highmark_demo"`, `source="sms"`
-
-**Admin notification:** SMS to `DEMO_NOTIFY_PHONE` env var (falls back to `CONFIRMATIONS_TEST_PHONE`)
-
-**Pricing tier config:** `tier` field on all clients — `"free" | "growth" | "pro" | "demo"`. Config only, no billing.
-
-**Extending the demo for new features (campaigns, CRM, analytics, etc.):**
-Add an entry to `PATHS` in `demoFlow.js` with `label`, `menuLine`, `intro`, and `followup`. The state machine handles routing, menu rendering, ✅ markers, and CTA logic automatically. No other changes needed.
-
-**Testing:**
-```bash
-npm run chat  # switch phone to +18668906657 in chat.js, or
-./virtual-test.sh 9  # triggers DEMO keyword
-# UI: https://highmark-bot-production.up.railway.app/ui?key=highmark2026
-#   → select "Highmark Demo" client → test all menu paths, MENU/BACK/START OVER
-```
-
-**Testing UI:** All clients appear in the UI selector at `/ui?key=UI_SECRET`. Demo client is marked `isDemo: true`.
-
-**Session tip:** Start a new Claude session when moving from demo/sales work to website/landing page work.
-
-### Demo Analytics (demoAnalytics.js — Chunk 7C)
-Lightweight fire-and-forget funnel tracking for the demo. Never awaited by callers — DB latency never impacts response time.
-
-**Tracked events:**
-| Event | Fired when |
-|---|---|
-| `demo_started` | First contact with demo bot |
-| `demo_path_selected` | User picks Q&A / Lead Capture / Booking (any state) |
-| `demo_cta_shown` | `demo_followup` → `demo_cta` transition |
-| `demo_interest_expressed` | YES intent detected in any demo state |
-| `demo_lead_capture_started` | YES intent → entering `lead_name` step |
-| `demo_lead_captured` | Lead saved successfully to `leads` table |
-| `demo_reset` | START OVER / DEMO / RESTART / RESET keyword |
-
-**Admin read routes (protected by `UI_SECRET`):**
-- `GET /admin/demo-analytics/summary` — funnel totals + conversion rates; optional `?since=YYYY-MM-DD`
-- `GET /admin/demo-analytics/events` — recent raw events (latest-first); filters: `event_name`, `demo_path`, `source`, `since`, `limit` (max 200)
-
-**Source field:** `"sms"` for Twilio, `"ui"` for UI console (detected via `isUiReq(req)` in index.js).
-
-**DB migration required:** Run `db1_demo_analytics.sql` in Supabase DB1 SQL editor before first use.
-
-**Access:**
-```bash
-curl "https://highmark-bot-production.up.railway.app/admin/demo-analytics/summary?key=YOUR_UI_SECRET"
-curl "https://highmark-bot-production.up.railway.app/admin/demo-analytics/events?key=YOUR_UI_SECRET&event_name=demo_lead_captured"
-```
-
-### Lead Follow-up Engine (followUpEngine.js — Chunk 8)
-Automated SMS follow-up sequences for captured leads. Runs entirely via `scheduled_messages` + the existing cron worker.
-
-**Lead lifecycle (status field on `leads` table):**
-| Status | Meaning | Set by |
-|---|---|---|
-| `new` | Just captured, follow-ups queued | `saveLead()` |
-| `contacted` | First outbound follow-up sent | Worker after successful send |
-| `engaged` | Lead replied to a message | `checkAndMarkLeadEngaged()` on inbound SMS |
-| `converted` | Became a customer | Manual PATCH `/admin/leads/:id` |
-| `scheduled` | Appointment booked | Manual PATCH |
-| `closed` | No longer active | Manual PATCH |
-| `ignored` | Not qualified | Manual PATCH |
-
-**How follow-ups work:**
-1. `saveLead()` returns the full lead row (including `id`)
-2. Caller passes the row to `scheduleFollowUps(supabase, lead, fromPhone)` — fire-and-forget
-3. `scheduleFollowUps` inserts one row per step into `scheduled_messages`, linked by `lead_id`
-4. The cron worker (`cron-worker.js` every 5 min) checks `lead.status` before each send — cancels if ENGAGED/CONVERTED
-5. After a successful send: worker promotes `new → contacted` and updates `last_contacted_at`
-6. On any inbound SMS: `checkAndMarkLeadEngaged()` marks lead ENGAGED and cancels remaining pending messages
-
-**Follow-up sequences (edit in SEQUENCES in followUpEngine.js):**
-| lead_type | Steps | Delays |
-|---|---|---|
-| `demo` | 3 messages | ~1 min, +1 day, +3 days |
-| `booking` | 1 message | ~2 min |
-| `waitlist` | 1 message | ~5 min |
-
-To add a new sequence: add a key to `SEQUENCES` in `followUpEngine.js`. No other changes needed.
-
-**from_phone override:** `scheduleFollowUps` stores `fromPhone` in `msg.metadata.from_phone`. The worker checks this before `TWILIO_PHONE_NUMBER`, so demo leads send from `+18668906657` and production leads from their configured number.
-
-**Stop conditions — leads never receive follow-ups after they've replied:**
-- `checkAndMarkLeadEngaged(supabase, fromPhone)` runs fire-and-forget on every inbound SMS (after TCPA checks, before demo/AI routing)
-- Worker double-checks `lead.status` before every send — cancels if engaged/converted
-
-**DB migration required:** Run `db1_lead_followup.sql` in Supabase DB1 before first use. Adds: `last_contacted_at`, `next_follow_up_at`, `business_name`, `website` to `leads`; `lead_id` to `scheduled_messages`.
-
-**Admin endpoints:**
-```bash
-GET /admin/leads                          # list all leads
-GET /admin/leads/:id                      # single lead
-PATCH /admin/leads/:id                    # update status/notes
-GET /admin/scheduled-messages             # view follow-up queue (filter: status, lead_id, client_id)
-GET /admin/scheduled-messages?status=pending   # pending queue
-GET /admin/scheduled-messages?lead_id=LEAD_ID  # messages for one lead
-```
-
-**Debugging failed sends:**
-1. `GET /admin/scheduled-messages?status=failed` — see error column
-2. `GET /admin/leads/:id` — check `last_contacted_at`, `next_follow_up_at`, `status`
-3. Check Railway cron logs: `[SCHEDULER]` prefix lines
-4. Failed messages retry up to 3× (5 min, 15 min backoff) then status=failed
-
-**businessName/website columns:** Added to migration and `saveLead()` signature. To activate for demo leads, uncomment the `businessName`/`website` params in `demoFlow.js` lead_website handler after running `db1_lead_followup.sql`.
-
-**Session tip:** Start a new Claude session when moving from this follow-up engine work to campaigns or billing systems.
-
-### Session Tips
-Start a new Claude session when switching from architecture/refactor work to behavior tuning or UI work — when switching from SMS flow work to admin/internal workflow work — and when moving from admin provisioning work to public website/sales funnel work. Keeps context focused and saves credits.
-
-### TEST_MODE
-When `TEST_MODE=true` (local only, never set on Railway):
-- Twilio sends are skipped entirely
-- `/sms` returns `{ reply: "..." }` JSON instead of TwiML
-- `/reset` endpoint becomes available
+### Runtime Config Loader (clientConfig.js)
+`getRuntimeClientConfig(client, supabase)` — called per request, applies DB overrides to static client objects. Normalizes `api_live_booking → fareharbor`. Builds `scrapeSources` from `client_scrape_sources` table and `bookingLinks` from `client_booking_options` table (both optional; fall back to static config). `humanHandoffEnabled: false` suppresses handoff routing.
 
 ### Scheduled Messages (scheduler.js)
-30-min follow-up and all future delayed SMS use the `scheduled_messages` Supabase table.
-- `scheduleMessage(supabase, { phone, body, message_type, send_at, ... })` — inserts a row
-- `processScheduledMessages(supabase, twilioClient, crmSupabase)` — worker: claim → opt-out check → send → update status
-- Retry backoff: 5 min after attempt 1, 15 min after attempt 2, then `failed`
-- Opt-out check: cancels with reason before Twilio call (TCPA safe)
-- Stale lock recovery: rows stuck in `processing` > 5 min are reclaimed on next worker run
-- Railway cron: separate `highmark-cron` service running `node cron-worker.js` every 5 min
-- Table: `scheduled_messages` in DB1 — see `db1_scheduled_messages.sql`
+`scheduleMessage()` inserts row; `processScheduledMessages()` worker: claim → opt-out check → send → update status. Retry: 5 min, 15 min, then `failed`. Stale lock recovery after 5 min. Railway cron service (`highmark-cron`) runs every 5 min.
 
 ### Booking Confirmations (bookingConfirmations.js)
-- Confirmation text includes FareHarbor booking link: `fareharbor.com/embeds/book/{shortname}/items/{item_pk}/booking/{uuid}/`
-  - Uses `booking.uuid` + `booking.availability.item.pk` from FH webhook payload
-  - Falls back gracefully (no link) if `uuid` is absent
-- Cancellation texts are idempotent — `cancellation_sent` boolean in `confirmations_sent` prevents duplicate texts
-- Poller catches missed cancellations: scans `confirmations_sent` for rows where FH status is now `cancelled` but `cancellation_sent=false`
-- Rebooking flow: cancel text for old booking + confirmation text for new booking, resilient to downtime
-- DB1 migration required: `db1_cancellation_sent.sql` (adds `cancellation_sent` column)
+FH webhook + 30-min poller. Confirmation link: `fareharbor.com/embeds/book/{shortname}/items/{pk}/booking/{uuid}/`. Cancellations idempotent via `cancellation_sent` column. Rebooking: cancel old + confirm new.
+
+### Whole-Site Crawler (crawler.js)
+BFS crawl from `crawlSettings.primaryUrl`, same-domain only, skips junk paths. Per-page: classify (10 types) → Haiku fact extraction (hash-gated). Output: `buildCrawlerContext()` assembles ≤1500 char `WEBSITE KNOWLEDGE:` block from `client_pages` table. Cron: Monday 4am.
+Enable: `crawlSettings: { enabled: true, primaryUrl: "https://..." }` in `clients.js` or via `crawl_settings` JSONB on DB-backed clients.
+
+### Knowledge Base Refresh
+| Data | Cron | Method |
+|---|---|---|
+| FH items (catalog, pricing) | Daily 2am | JS from FH API |
+| FH availability | Every 3hr | JS from FH minimal endpoint |
+| Weather | Every 1hr | OpenWeather (Steamboat + Rabbit Ears Pass + Storm Peak) |
+| Snow conditions | Every 3hr (:30) | SNOTEL 4 stations + CAIC avalanche danger |
+| Website | Monday 3am | Single Haiku call, hash-gated |
+| Whole-site crawl | Monday 4am | crawler.js BFS + per-page Haiku |
+
+### Season Detection
+- `getCurrentSeason()` → `winter` (Nov-Mar), `shoulder` (Apr-May), `summer` (Jun-Oct)
+- Shoulder: BOTH snowmobile + RZR knowledge injected
+- RZR does NOT use FareHarbor — books via Polaris Adventures platform
 
 ### Special Triggers
 - `DEMO` — sends Highmark-branded opener + notifies owner (+17202892483)
 - `SUMMITDEMO` — resets conversation + sends seasonal opener (internal demos)
 - `STOP / UNSUBSCRIBE / QUIT / END / CANCEL` — TCPA opt-out (processed first)
 - `START / UNSTOP` — opt-in
-- `HELP` — returns program name, msg frequency notice, STOP instruction, support phone
+- `HELP` — program name, msg frequency notice, STOP instruction, support phone
 
 ### TCPA Compliance Order (in /sms)
 1. STOP keywords → opt-out + confirmation text
@@ -546,381 +277,37 @@ When `TEST_MODE=true` (local only, never set on Railway):
 5. All other processing
 
 ### Message Length
-Default 320 chars (2 texts) for all replies. `enforceLength(text, max=320)` — never truncates URLs.
-
-### Knowledge Base Context (4 sections injected into every Claude call)
-```
-WEATHER (date): <Steamboat + Rabbit Ears Pass conditions, 3-day forecast>
-AVAILABILITY: <open slot counts + next open date per tour>
-TOUR DETAILS: <item names, descriptions, price ranges from FH items API>
-BUSINESS INFO: <policies, seasonal, FAQ from website>
-DYNAMIC BOOKING LINKS: <per-item FH URLs, auto-updated from cached PKs>
-```
-
-### Season Detection
-- `getCurrentSeason()` → `winter` (Nov-Mar), `shoulder` (Apr-May), `summer` (Jun-Oct)
-- `isWinter = season === "winter" || season === "shoulder"` → injects winter snowmobile knowledge
-- `isSummer = season === "summer" || season === "shoulder"` → injects summer RZR knowledge
-- In `shoulder`, BOTH knowledge blocks are included (season transition overlap)
-- Summer RZR knowledge includes: 4 trail areas (Buffalo Pass, North Routt, Rabbit Ears Pass, Kremmling BLM), OHV rules, safety tips, fire restrictions, riding advice
-- RZR does NOT use FareHarbor — books via Polaris Adventures platform
-
-### Knowledge Base Refresh (zero Claude tokens for FH + weather)
-| Data | Cron | Method |
-|---|---|---|
-| FH items (catalog, pricing) | Daily at 2am | JS from FH API — no Claude |
-| FH availability (slots) | Every 3hr | JS from FH minimal endpoint — no Claude |
-| Weather | Every 1hr | JS from OpenWeather (Steamboat + Rabbit Ears Pass + Storm Peak summit) — no Claude |
-| Snow conditions | Every 3hr (offset :30) | SNOTEL 4 stations + CAIC avalanche danger — no Claude |
-| Website (policies, FAQ) | Monday 3am | Single Haiku call, hash-gated — skips if content unchanged |
-| Whole-site crawl | Monday 4am | `crawler.js`: BFS crawl + per-page Haiku, hash-gated |
-
-- `buildFhSummary()` formats availability string directly in JS
-- `getPriceRange()` reads `customer_type_rates[].total_including_tax` from FH API
-- `extractMeaningfulText()` pre-filters HTML to pricing/policy content before Claude
-- `hashContent()` SHA-256s the pre-processed text — Claude skipped if hash matches last run
-- `buildCrawlerContext(clientId, supabase)` assembles context from `client_pages` table; `getKnowledgeContext` prefers this over legacy website KB when crawler data exists
-
-### Whole-Site Crawler (crawler.js — Phase 2)
-Per-client website crawler that stores page-level facts and assembles compact bot context.
-
-**How it works:**
-1. `crawlSite(primaryUrl, options)` — BFS from primary URL, follows same-domain links; skips junk paths (wp-admin, query strings, images, cart, login, etc.); configurable `maxDepth` (default 2) + `maxPages` (default 20)
-2. `classifyPageType(url, title, text)` — classifies each page into one of 10 types: `homepage|services|pricing|booking|faq|policies|hours|contact|seasonal|other`
-3. `extractPageFacts(page, client, anthropic)` — single Haiku call per page; **hash-gated** (skips if `content_hash` unchanged); returns `{ summary, key_facts[] }`
-4. `buildCrawlerContext(clientId, supabase)` — assembles from `client_pages` table, ordered by type priority (homepage > services > pricing > …), capped at 1500 chars
-5. `runCrawlerForClient(supabase, anthropic, client)` — orchestrates full pipeline; called from weekly cron + startup check
-
-**Enabling crawl for a client:**
-- Static clients (`clients.js`): add `crawlSettings: { enabled: true, primaryUrl: "https://..." }` to the client object
-- DB-backed clients: run `db1_crawl_settings.sql` migration, then update via `PATCH /admin/clients/:id { "crawl_settings": { "enabled": true, "primary_url": "https://..." } }`
-
-**crawl_settings object fields:**
-| Field | Default | Description |
-|---|---|---|
-| `enabled` | false | Must be true to activate |
-| `primary_url` | (websiteUrl) | Root URL to start crawl from |
-| `seed_urls` | [] | Additional starting pages |
-| `max_depth` | 2 | Link-hop depth limit |
-| `max_pages` | 20 | Total page fetch cap |
-| `deny_patterns` | [] | URL substrings to skip (e.g. "/blog") |
-
-**Context in system prompt:**
-When crawler data exists, `getKnowledgeContext` outputs a `WEBSITE KNOWLEDGE:` block instead of the legacy `BUSINESS INFO:` block. Example:
-```
-WEBSITE KNOWLEDGE:
-Overview: Colorado Sled Rentals — guided snowmobile tours + self-guided rentals in Steamboat Springs — guided tours from $189; rentals from $149
-Services: Rabbit Ears Adventures guided tours: 2-hour, half-day, full-day — group sizes 2-8; minimum age 16
-Pricing: Tours from $189/person, rentals from $149 — deposit required at booking
-Policies: 14-day cancellation for full refund — minimum age 16; weight limit 275lbs; closed-toe shoes required
-Hours: Open daily 8am-5pm December through March
-Contact: 970-555-0001; info@coloradosled.com
-```
-
-**DB migration required:** Run `db1_client_pages.sql` + `db1_crawl_settings.sql` in Supabase DB1 SQL editor before first use.
-
-### FareHarbor API Notes
-- Items endpoint: `/companies/{shortname}/items/` — returns catalog with pricing
-- Availability: `/companies/{shortname}/items/{pk}/minimal/availabilities/date-range/{start}/{end}/`
-  - Must use `minimal` endpoint (full date-range endpoint returns 403 for REA key)
-  - Open slots: filter by `capacity > 0 || is_available === true`
-
-### Booking URLs
-- `csr_browse_all` — guest browses all CSR sled options (use for general requests)
-- `rea_browse_all` — guest browses all REA tour options
-- Individual item URLs built dynamically from FH item PKs cached in knowledge_base table
-
-### Client Portal (Chunk 10)
-Authenticated client-facing portal for managing leads, campaigns, analytics, and settings. Separate from the internal testing UI at `/ui?key=...`.
-
-**URL:** `/portal` → redirects to `/portal/login`
-**Portal sections:** Dashboard · Leads · Campaigns · Analytics · Settings
-
-**Auth model:**
-- Supabase Auth (email + password)
-- `portal_users` table: maps `auth_user_id` → `role` + `client_id`
-- Roles:
-  - `internal_admin` — Highmark staff, can access any client via `?client_id=`, see all Tools
-  - `client_admin` — Business admin, scoped to own client; can invite/manage users within their account; cannot invite `internal_admin`
-  - `client_user` — Read-only access, scoped to own client
-- JWT validated server-side on every `/portal/api/*` request via `makePortalAuth(supabase)` middleware
-
-**Client scoping:** Enforced server-side at three layers:
-1. Middleware: validates JWT, attaches `req.portalUser`
-2. `resolvePortalClientId(req)`: derives effective `client_id` (client_user + client_admin always use own; internal_admin uses query param)
-3. DB query: every query explicitly filters `.eq("client_id", resolvedClientId)`
-
-**Required env var:** `SUPABASE_ANON_KEY` — the Supabase project's anon key (safe to expose to browsers). Returned by `GET /portal/config`. NEVER use `SUPABASE_KEY` (service role) client-side.
-
-**Provisioning a new portal user:**
-```bash
-curl -X POST "https://highmark-bot-production.up.railway.app/admin/portal-users?key=YOUR_UI_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"email":"client@example.com","password":"secure-pw","role":"client_user","client_id":"csr_rea"}'
-```
-This creates a Supabase Auth user and inserts the `portal_users` row in one call.
-
-**Portal API endpoints (all require Bearer JWT):**
-- `GET /portal/api/me` — current user info
-- `GET /portal/api/dashboard` — lead counts, recent leads/campaigns, demo analytics
-- `GET /portal/api/leads` — paginated leads (filterable by status, lead_type)
-- `PATCH /portal/api/leads/:id` — update lead status/notes
-- `GET /portal/api/campaigns` — campaign list
-- `POST /portal/api/campaigns` — create draft campaign
-- `GET /portal/api/campaigns/:id` — campaign details + stats
-- `PATCH /portal/api/campaigns/:id` — edit draft campaign
-- `POST /portal/api/campaigns/:id/send` — send/enqueue campaign
-- `GET /portal/api/analytics` — event funnel, lead funnel, campaign summary
-- `GET /portal/api/settings` — client settings: identity, contact, booking, feature toggles
-- `PATCH /portal/api/settings` — update DB-backed client settings; requires `client_admin` or `internal_admin` role; `client_user` → 403
-
-**Admin routes (UI_SECRET protected — internal only):**
-- `POST /admin/portal-users` — create portal user (accepts internal_admin, client_admin, client_user)
-- `GET /admin/portal-users` — list portal users
-
-**Settings editing:** Only DB-backed clients (created via `POST /admin/clients`) can be edited. Static clients (`csr_rea`, `lone_pine`) return `editable: false` with a read-only view.
-
-**Settings fields returned by GET /portal/api/settings:**
-- Identity: `name`, `botName`, `tone`
-- Contact: `supportPhone`, `supportEmail`, `leadNotificationPhone`, `websiteUrl`
-- Booking: `bookingMode`, `bookingLink`, `humanHandoffEnabled`
-- Features: `campaignsEnabled`, `followupsEnabled`, `leadCaptureEnabled`, `waitlistEnabled`
-
-**Settings UI subsections (portal.html):**
-- **General** — name, bot name, tone, support phone, lead notification phone, email, website
-- **Booking** — booking link URL field + human handoff checkbox
-- **Features** — toggle checkboxes for campaigns, follow-ups, lead capture, waitlist
-- Read-only clients see all subsections with On/Off pills (no edit controls)
-
-**RBAC on mutating portal operations:**
-- `PATCH /portal/api/settings` — `client_admin` or `internal_admin` only
-- `POST /portal/api/campaigns` — `client_admin` or `internal_admin` only
-- `PATCH /portal/api/campaigns/:id` — `client_admin` or `internal_admin` only
-- `POST /portal/api/campaigns/:id/send` — `client_admin` or `internal_admin` only
-- `client_user` → 403 on all of the above
-
-**DB migrations required for settings features:**
-- `db1_clients.sql` — base clients table (Chunk 6)
-- `db1_client_settings.sql` — adds campaigns_enabled, followups_enabled, human_handoff_enabled, booking_link, settings_json (run after db1_clients.sql)
-
-**What stays unchanged:** The internal testing UI at `/ui?key=...`, all `/admin/*` routes (UI_SECRET), and all `/sms` bot logic are completely untouched. The portal is an additive layer.
-
-**Migration required:** Run `db1_portal.sql` in Supabase DB1 SQL editor before first use.
-
-**To add a new portal module:** Add handler(s) to `adminPortal.js`, register routes in `index.js` under `requirePortalAuth`, add a section to `public/portal.html`.
-
-### Invite-Based Portal Access (Chunk 11)
-Controlled account provisioning — no open self-serve signup. Internal admins create invite links; clients accept to set a password and gain scoped portal access.
-
-**Invite model (`portal_invites` table):**
-- `invite_token` — 64-char hex (32 bytes `crypto.randomBytes`), unique, single-use
-- `status` — `pending | accepted | expired | revoked` (CHECK constraint)
-- `expires_at` — 72 hours from creation; auto-marked `expired` on first access after expiry
-- `client_id` — scopes the accepted user to a specific client (null = internal_admin)
-- `invited_by` — email of the admin who created the invite
-
-**Admin invite controls (UI_SECRET protected):**
-- `POST /admin/portal-invites` — create invite (`email`, `role`, `client_id`)
-- `GET  /admin/portal-invites` — list all invites (filterable by status, client_id)
-- `POST /admin/portal-invites/:id/resend` — regenerate token + extend expiry 72h
-- `POST /admin/portal-invites/:id/revoke` — mark as revoked (cannot be accepted)
-- `PATCH /admin/portal-users/:id` — deactivate/reactivate an existing portal user
-
-**Portal-auth invite controls (JWT + admin role required):**
-- `GET  /portal/api/invites` — list invites scoped to requesting admin's client
-- `POST /portal/api/invites` — create invite (internal_admin only)
-- `POST /portal/api/invites/:id/resend` — resend/refresh token
-- `POST /portal/api/invites/:id/revoke` — revoke invite
-- `GET  /portal/api/users` — list portal users (admin only)
-- `PATCH /portal/api/users/:id` — deactivate/reactivate user (admin only)
-
-**Public (no auth) invite acceptance routes:**
-- `GET /portal/api/invite-info?token=...` — validates token, returns `{ email, role, clientId }` (never echoes token)
-- `POST /portal/api/accept-invite` — `{ token, password }` → creates Supabase Auth user + `portal_users` row → marks invite `accepted`
-- `GET /portal/invite` — serves `portal-accept.html`
-- `GET /portal/users` — serves `portal.html` (Users & Access section, admin-only)
-
-**Accept flow:**
-1. Admin creates invite → gets `invite_url` (e.g. `https://.../portal/invite?token=...`)
-2. Client opens URL → `portal-accept.html` fetches invite-info to show their email
-3. Client sets password → `POST /portal/api/accept-invite` → Supabase Auth user created server-side
-4. Page signs in client-side with anon key → stores JWT in localStorage → redirects to `/portal/dashboard`
-5. Fallback: if client-side sign-in fails → redirect to `/portal/login?activated=1`
-
-**Portal UX — Users & Access section (`/portal/users`):**
-- Visible to `client_admin` AND `internal_admin` (`.client-admin-only { display: none }`); `client_user` still blocked by `switchSection()` guard
-- **Portal Users table**: Email, Role (admin/mgr/client pill), Client, Status (active/inactive), Created date, Deactivate/Reactivate button
-- **Invites table**: Email, Role, Client, Status, Expires (pending only), Resend + Revoke buttons (pending only)
-- **"+ Invite user" button**: modal shows email, role dropdown, client dropdown
-  - `client_admin`: client dropdown hidden (always own client); `internal_admin` role option hidden
-  - `internal_admin`: sees all options including `internal_admin` role and client selector
-- After creating/resending: invite URL shown inline with one-click copy button
-- All actions (create, resend, revoke, deactivate) refresh the tables automatically
-
-**How to invite a client user from the portal (as internal_admin or client_admin):**
-1. Log in → go to Users & Access → click "+ Invite user"
-2. Enter email, select role (`Client user` or `Client admin`), select client (internal_admin only)
-3. Copy the invite URL → send to the client out-of-band (email, Slack, etc.)
-4. Client opens the URL → sets a password → automatically signed in → lands on dashboard
-
-**How to invite an internal admin (internal_admin only):**
-- Same flow, but select role `Internal admin` — client dropdown is hidden
-
-**Resend**: generates a new token + extends expiry 72h. Shows the new URL in the modal.
-**Revoke**: immediately invalidates the invite link. Accepted invites cannot be revoked — deactivate the user instead.
-
-**Security:** Token not echoed in `invite-info` response. If `portal_users` insert fails after auth user created, `supabase.auth.admin.deleteUser` cleans up the orphan.
-
-**Migration required:** Run `db1_portal_invites.sql` in Supabase DB1 SQL editor before first use.
-
-```bash
-# Create invite via API (admin curl — or use the portal UI)
-curl -X POST "https://highmark-bot-production.up.railway.app/admin/portal-invites?key=YOUR_UI_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"email":"client@example.com","role":"client_user","client_id":"csr_rea"}'
-
-# List pending invites
-curl "https://highmark-bot-production.up.railway.app/admin/portal-invites?key=YOUR_UI_SECRET&status=pending"
-
-# Revoke an invite
-curl -X POST "https://highmark-bot-production.up.railway.app/admin/portal-invites/INVITE_ID/revoke?key=YOUR_UI_SECRET"
-
-# Deactivate a user
-curl -X PATCH "https://highmark-bot-production.up.railway.app/admin/portal-users/USER_ID?key=YOUR_UI_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"active":false}'
-```
-
-**Current limitation:** No public self-serve signup. All accounts require an admin invite.
-
-**Session tip:** Start a new Claude session when moving to billing, subscriptions, or plan enforcement — this session has been focused on invite/portal access.
-
-### Campaign Engine (campaigns.js + adminCampaigns.js — Chunk 9)
-Outbound SMS campaign system. Sends templated messages to a filtered audience, tracks delivery per recipient.
-
-**Admin routes (protected by `UI_SECRET`):**
-- `POST /admin/campaigns` — create a campaign (`client_id`, `name`, `message_body`, optional `audience_type`, `scheduled_at`)
-- `GET  /admin/campaigns?client_id=X` — list campaigns for a client; filter by `status`
-- `GET  /admin/campaigns/:id` — single campaign + `stats` (total/pending/sent/failed/cancelled)
-- `PATCH /admin/campaigns/:id` — update a draft campaign (name, message_body, audience_type, scheduled_at)
-- `POST /admin/campaigns/:id/send` — enqueue campaign; body `{ from_phone }` (optional)
-
-**Audience types:** `all_leads` (new/contacted/engaged/scheduled), `engaged_leads`, `new_leads`
-
-**Sending flow:**
-1. `enqueueCampaign()` selects audience from `leads` table
-2. Inserts one `campaign_recipients` row per lead
-3. Inserts one `scheduled_messages` row per lead (staggered 200ms) with `metadata.campaign_recipient_id`
-4. Cron worker processes `scheduled_messages` → updates `campaign_recipients.status` on send/fail
-
-**Template interpolation:** `{{name}}` → `contact_name` (fallback: "there"), `{{first_name}}` → first word of name. Case-insensitive.
-
-**Status lifecycle:** `draft` → `sending`|`scheduled` (on send trigger) → (campaign_recipients track per-message state)
-
-**DB migration required:** Run `db1_campaigns.sql` in Supabase DB1 before first use.
-
-```bash
-curl -X POST "https://highmark-bot-production.up.railway.app/admin/campaigns?key=YOUR_UI_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"client_id":"csr_rea","name":"Summer Promo","message_body":"Hey {{name}}, summer rides are open! Book at the link.","audience_type":"engaged_leads"}'
-
-curl -X POST "https://highmark-bot-production.up.railway.app/admin/campaigns/CAMPAIGN_ID/send?key=YOUR_UI_SECRET"
-```
+Default 320 chars (2 texts). `enforceLength(text, max=320)` — never truncates URLs.
 
 ### DB1 vs DB2 — What Lives Where
-- **DB1 (primary)**: conversations, leads, scheduled_messages, confirmations_sent, campaigns (Chunk 9), campaign_recipients, portal_users, portal_invites, clients, demo_events, knowledge_base, opt_outs (all clients)
+- **DB1 (primary)**: conversations, leads, scheduled_messages, confirmations_sent, campaigns, campaign_recipients, portal_users, portal_invites, clients, demo_events, knowledge_base, client_pages, opt_outs (all clients)
 - **DB2 (CSR/REA CRM)**: contacts, campaign_sends, opt_outs (mirror only — DB1 is authoritative)
 
-**opt_outs split:** Bot writes STOP/START to DB1 `opt_outs` (universal). When `client.crmEnabled=true`, also mirrors `contacts.opted_in` to DB2 for CRM accuracy. Scheduler opt-out check uses DB1 only. Run `db1_opt_outs.sql` migration in Supabase DB1 before first use.
-
-**To clear test opt-outs:** `DELETE FROM opt_outs;` in Supabase DB1 (not DB2).
-
-**To clean up test data from the UI console:**
+**Test data cleanup:**
 ```sql
 DELETE FROM conversations WHERE session_type = 'test';
 DELETE FROM leads WHERE source = 'ui';
+DELETE FROM opt_outs;  -- clear test opt-outs (DB1 only)
 ```
-
-### DB2 CRM Security
-- RLS enabled on all 4 tables: contacts, campaigns, campaign_sends, opt_outs
-- Service role key bypasses RLS automatically — bot is unaffected
 
 ### Tier Model
 - **Tier 1** ($200-300/mo): `FAREHARBOR_ENABLED=false` — bot Q&A + booking links
 - **Tier 2** ($400-500/mo): `FAREHARBOR_ENABLED=true` — real-time availability + live KB
 
-### Multi-Client Path (future)
-Currently one Railway deployment = one client. When managing 4+ clients:
-- `clients` table in Supabase keyed by `to_number`
-- Load config at request time, no redeploy needed
+### FareHarbor API Notes
+- Items: `/companies/{shortname}/items/`
+- Availability: `/companies/{shortname}/items/{pk}/minimal/availabilities/date-range/{start}/{end}/`
+  - Must use `minimal` endpoint (full date-range returns 403 for REA key)
+  - Open slots: filter by `capacity > 0 || is_available === true`
 
-### Runtime Config Loader (clientConfig.js — Chunk 14)
-Merges DB-backed settings into the static client object on every SMS request.
-
-**`getRuntimeClientConfig(client, supabase)`** — called in index.js after opted-out gate, before demo/bot logic.
-
-**What it does:**
-- For static clients (csr_rea, lone_pine): fetches DB row and applies overrides for botName, tone, feature toggles, bookingLink
-- For DB-backed clients (`_fromDb: true`): skips DB fetch (already applied via `loadDbClients()`)
-- Normalizes `api_live_booking` → `fareharbor` (runtime alias, identical behavior)
-- Builds `client.scrapeSources` array from `client_scrape_sources` table (fallback: `client.scrapeUrls`)
-- Builds `client.bookingLinks` array from `client_booking_options` table (fallback: `client.bookingUrls`)
-- Ensures `client.humanHandoffEnabled` is always a boolean (default: `true`)
-
-**New booking modes (VALID_BOOKING_MODES):**
-| Mode | Behavior |
-|---|---|
-| `fareharbor` | FH API real-time availability (existing) |
-| `api_live_booking` | Alias for fareharbor — normalized at runtime |
-| `informational` | Q&A + phone CTA + optional lead capture (existing) |
-| `lead_capture` | Structured 3-step lead collection (existing) |
-| `call_only` | Phone CTA only, no booking links shown |
-| `static_links` | Numbered list of `bookingLinks` shown to guest |
-| `hybrid` | Booking links + phone CTA |
-
-**Feature toggle enforcement:**
-- `humanHandoffEnabled: false` — suppresses both auto-frustrated and explicit handoff routing (falls through to Claude)
-- `leadCaptureEnabled` — already enforced via `client.bookingMode === "informational" && client.leadCaptureEnabled`
-- `campaignsEnabled` / `followupsEnabled` — portal display gates; scheduler enforcement is a future task
-
-**New tables (optional migrations — run when ready to manage via portal):**
-- `client_scrape_sources` — per-client URL management: url, label, source_type, active, sort_order
-- `client_booking_options` — per-client booking links: type, title, description, url, metadata_json, sort_order
-
-**`dbRowToClient()` in clients.js** now maps: `campaigns_enabled`, `followups_enabled`, `human_handoff_enabled`, `booking_link`.
-
-**`resolveClientById(id)`** — new export from clients.js; resolves by ID (not phone number).
-
-**`knowledgeBase.js`** — init + all cron jobs use `getAllClients()` instead of `CLIENTS` (was missing DB-backed clients). `refreshWebsiteKnowledge` accepts `scrapeSources` array from getRuntimeClientConfig.
-
-**SETTINGS_HELP** — exported constant with human-readable descriptions for each settings field; for future portal tooltip UI.
+### TEST_MODE
+When `TEST_MODE=true` (local only, never set on Railway):
+- Twilio sends skipped; `/sms` returns `{ reply: "..." }` JSON
+- `/reset` endpoint available
 
 ---
 
-## Known TODOs (Before Full Production)
+## Open TODOs
 
-1. ~~**Booking follow-up `setTimeout`**~~ — DONE. Durable `scheduled_messages` + `highmark-cron` Railway service (every 5 min).
-2. ~~**Rebooking cancellations**~~ — DONE. Idempotent cancel texts, poller catches missed cancellations, `cancellation_sent` column tracks state.
-3. ~~**Booking link in confirmation**~~ — DONE. Uses `booking.uuid` + `item.pk` from FH payload.
-4. ~~**Lead capture flow (Lone Pine)**~~ — DONE. 3-step SMS flow + `leads` table + business notification. Run `db1_lead_capture.sql` migration in Supabase before deploy.
-5. ~~**Admin lead management**~~ — DONE. List/filter/update/summary routes at `/admin/leads`. Run `db1_lead_mgmt.sql` migration to enable extended statuses + `updated_by`. Protected by `UI_SECRET`.
-6. ~~**Client onboarding + provisioning**~~ — DONE. DB-backed client registry. POST/PATCH/GET `/admin/clients`. Validation, defaults, readiness checks. Run `db1_clients.sql` migration in Supabase DB1 before deploy.
-7. ~~**Sales + Demo engine**~~ — DONE. `highmark_demo` client owns +18668906657. Guided 3-path SMS demo (Q&A / Lead Capture / Booking), lead capture, admin notification. `bookingMode: "demo"` in clients.js; demoFlow.js handles deterministic state machine.
-8. ~~**Lead lifecycle + automated follow-up engine**~~ — DONE. `followUpEngine.js`: scheduleFollowUps() + checkAndMarkLeadEngaged(). DB worker sends follow-ups, stops on reply, promotes new→contacted→engaged. Run `db1_lead_followup.sql` migration. Admin: GET /admin/leads/:id, GET /admin/scheduled-messages.
-9. ~~**Campaign engine**~~ — DONE. `campaigns.js` + `adminCampaigns.js`. POST/GET/PATCH campaigns + POST :id/send. Audience targeting (all_leads/engaged_leads/new_leads), 200ms pacing, `{{name}}`/`{{first_name}}` interpolation. `campaign_recipients` updated on send/fail by scheduler. Run `db1_campaigns.sql` migration in Supabase DB1 before use.
-10. ~~**Client portal**~~ — DONE. Authenticated portal at `/portal`. Supabase Auth + `portal_users` table. Dashboard, Leads, Campaigns, Analytics, Settings. JWT-protected API with 3-layer client scoping. Run `db1_portal.sql` + set `SUPABASE_ANON_KEY` env var. Provision users via `POST /admin/portal-users?key=UI_SECRET`.
-11. ~~**Invite-based portal access**~~ — DONE. `adminInvites.js`: tokenized invite lifecycle (create, info, accept, revoke, resend, deactivate). `portal_invites` table, 64-char token, 72h expiry, single-use. `portal-accept.html` + `GET /portal/invite`. Users & Access section in portal SPA. Run `db1_portal_invites.sql` migration in Supabase DB1 before use.
-12. ~~**client_admin role**~~ — DONE. Self-service user management for business accounts. `client_admin` can invite/manage users within their own client; blocked from `internal_admin` escalation. `isClientAdmin` flag on req.portalUser. Users & Access nav visible to `client_admin`. Role pill: admin/mgr/client. Run `db1_client_admin.sql` migration in Supabase DB1 before use.
-13. ~~**Portal settings — feature toggles + RBAC**~~ — DONE. Settings UI has three subsections: General, Booking (booking_link, human_handoff toggle), Features (campaigns, followups, lead_capture, waitlist toggles). GET/PATCH /portal/api/settings returns + saves all toggle fields. `client_user` blocked from PATCH settings and POST/PATCH/send campaigns (403). `handleCreatePortalUser` now accepts `client_admin` role. Run `db1_client_settings.sql` migration in Supabase DB1. 638/638 tests pass.
-14. ~~**Runtime config loader + multi-source scraping + flexible booking modes**~~ — DONE. `clientConfig.js`: `getRuntimeClientConfig(client, supabase)` merges DB settings per request; `humanHandoffEnabled=false` suppresses handoff routing; `api_live_booking` normalizes to `fareharbor`. `clients.js`: `dbRowToClient()` maps new toggle columns; `resolveClientById(id)` added. `knowledgeBase.js`: init + crons use `getAllClients()` (was missing DB-backed clients); `refreshWebsiteKnowledge` supports `scrapeSources`. `adminClients.js`: adds `call_only`, `static_links`, `api_live_booking`, `hybrid` to `VALID_BOOKING_MODES`. `index.js`: enriches client per-request; routes `call_only`/`static_links`/`hybrid` booking intents. Optional migrations: `db1_scrape_sources.sql` (multi-source scraping table) + `db1_booking_options.sql` (per-client booking links table). 664/664 tests pass.
-15. ~~**Branded opener**~~ — DONE. CSR/REA first message now includes business name in all three seasonal variants. `getSeasonalOpener(client, seasonOverride?)` exported and testable.
-16. ~~**opt_outs to DB1**~~ — DONE. TCPA compliance now universal (all clients). Moved from DB2 CRM to DB1. `db1_opt_outs.sql` migration required. DB2 contacts.opted_in still mirrors for CRM. Scheduler check updated. Bot opt-out guards no longer gated on `crmSupabase`.
-17. ~~**client_id attribution fix**~~ — DONE. `saveConversation` now always writes `client_id` on every upsert (was missing, defaulted to `csr_rea` for all clients). Lone Pine and future clients correctly attributed.
-18. ~~**Test data tagging**~~ — DONE. UI console sessions: `session_type='test'` on new conversations, `source='ui'` on leads. Filter/delete with `WHERE session_type='test'` or `WHERE source='ui'` in DB1.
-19. ~~**Portal Tools nav + homepage login**~~ — DONE. Admin-only Tools section in portal sidebar links to all test consoles and Highmark website. Homepage `/home` nav has "Client login" link to `/portal/login`.
-20. **Confirmations live test** — Twilio toll-free verification in progress (submitted 2026-03-24). Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
-21. **Website** — usehighmark.com landing page served at `/home`. Client login link added. Next step: billing, plan enforcement, or advanced analytics.
-22. ~~**Phase 1: Live truth + phone normalization**~~ — DONE. `livetruth.js`: availability-sensitive detection (9 regex patterns), FH cached truth resolver (reads `knowledge_base` table, no extra API calls), `buildTruthInstruction` injects grounding constraint into DEFAULT Claude block. `phoneUtils.js`: `normalizePhone` (E.164), `isValidPhone`, `formatPhoneForDisplay`. Phones normalized in leads.js, crm.js, adminPortal.js. 760/760 tests pass.
-23. ~~**Phase 2: Whole-site crawler + structured knowledge**~~ — DONE. `crawler.js`: same-domain BFS crawl, junk-path filtering, 10-type page classification, Haiku fact extraction per page (hash-gated), compact context builder (`buildCrawlerContext`) from `client_pages` table. `knowledgeBase.js` wires cron (Monday 4am) + startup check + prefers crawler context over legacy website KB in `getKnowledgeContext`. Migrations: `db1_client_pages.sql` + `db1_crawl_settings.sql`. Enable per client via `crawlSettings: { enabled: true, primaryUrl: "https://..." }` in `clients.js` or via `crawl_settings` JSONB on DB-backed clients. 788/788 tests pass.
-
-**Session tip:** Start a new Claude session when moving to billing, subscriptions, plan enforcement, or public website work.
+20. **Confirmations live test** — Twilio toll-free verification submitted 2026-03-24. Once approved, flip `CONFIRMATIONS_ENABLED=true` and verify texts arrive.
+21. **Website** — usehighmark.com landing page at `/home`. Next: billing, plan enforcement, or advanced analytics.

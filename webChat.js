@@ -281,7 +281,14 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     const isBookingRelated = intent === "booking" ||
       /book|reserve|booking link|how do i book|where.*book|send.*link/i.test(message);
     if (isBookingRelated) {
-      const ctx = extractBookingContext(message);
+      // Include recent conversation context so entity signals from prior turns carry forward
+      // (e.g. user said "tell me about RZR" then "booking page" → should resolve to RZR link)
+      const recentContext = convo.messages
+        .slice(-6)
+        .filter(m => m.role === "user" || m.role === "assistant")
+        .map(m => m.content)
+        .join(" ");
+      const ctx = extractBookingContext(message + " " + recentContext);
       resolvedLink = await resolveBookingLink({
         message,
         entity:   ctx.entity,

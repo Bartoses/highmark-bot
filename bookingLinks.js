@@ -141,8 +141,12 @@ function scoreLink(link, context) {
     if (haystack.includes(word)) score += 8;
   }
 
-  // Slight deprioritize generic browse-all
-  if (/browse.?all/i.test(haystack)) score -= 3;
+  // Browse-all links: deprioritize when a specific entity/company/location is known,
+  // but prefer them for generic queries (e.g. "booking page", "where do I book?")
+  if (/browse.?all/i.test(haystack)) {
+    score -= 3; // default: slightly deprioritize vs. specific links
+    if (!entity && !company && !location) score += 15; // net +12 for generic queries
+  }
 
   return score;
 }

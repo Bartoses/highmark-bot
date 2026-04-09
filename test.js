@@ -9790,6 +9790,40 @@ async function test69() {
       ? pass(`test69: resolveBookingLink — vague message → fallback URL: ${result?.url} (source=${result?.source})`)
       : fail("test69: resolveBookingLink vague fallback", JSON.stringify(result));
   }
+
+  {
+    // Generic "booking page" query (no entity/company/location) → browse-all preferred over specific tour
+    const client = {
+      id: "test",
+      bookingUrls: {
+        rea_browse_all:  "https://fh.com/rea/browse",
+        csr_browse_all:  "https://fh.com/csr/browse",
+        rea_2hr_tour:    "https://fh.com/rea/2hr",
+        rea_private_tour:"https://fh.com/rea/private",
+      },
+    };
+    const ctx    = { message: "booking page", entity: null, company: null, location: null, season: "winter" };
+    const result = matchConfigLink(ctx, client);
+    result?.url?.includes("browse")
+      ? pass(`test69: matchConfigLink — generic query → browse-all wins: ${result.url}`)
+      : fail("test69: matchConfigLink generic browse-all", `expected browse URL, got ${result?.url}`);
+  }
+
+  {
+    // When entity IS specified, browse-all should NOT win over specific match
+    const client = {
+      id: "test",
+      bookingUrls: {
+        rea_browse_all: "https://fh.com/rea/browse",
+        rea_2hr_tour:   "https://fh.com/rea/2hr",
+      },
+    };
+    const ctx    = { message: "book a 2hr tour", entity: "2hr_tour", company: "rea", location: null, season: "winter" };
+    const result = matchConfigLink(ctx, client);
+    result?.url?.includes("2hr")
+      ? pass("test69: matchConfigLink — entity specified → specific link wins over browse-all")
+      : fail("test69: matchConfigLink entity vs browse-all", `expected 2hr URL, got ${result?.url}`);
+  }
 }
 
 main().catch((e) => {
