@@ -496,27 +496,7 @@ tr:hover td { background: var(--panel2); }
           <span class="section-title">Knowledge</span>
           <button class="btn btn-ghost btn-sm" onclick="loadKnowledge()">↻ Refresh</button>
         </div>
-
-        <!-- Integration Status Cards -->
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-title" style="margin-bottom:14px;">Live Data Integrations</div>
-          <div id="knowledgeIntegrations"><div class="loading">Loading…</div></div>
-        </div>
-
-        <!-- Knowledge Sources — read-only summary, manage in Settings -->
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-            <span>Knowledge Sources</span>
-            <button class="btn btn-ghost btn-sm client-admin-only" onclick="switchSection('settings');setTimeout(()=>document.getElementById('settingsKnowledgeTab')?.click(),200)">Manage in Settings ›</button>
-          </div>
-          <div id="knowledgeSources"><div class="loading">Loading…</div></div>
-        </div>
-
-        <!-- Crawled Pages -->
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-title" style="margin-bottom:14px;">Crawled Pages</div>
-          <div id="knowledgePages"><div class="loading">Loading…</div></div>
-        </div>
+        <div id="knowledgeContent"><div class="loading">Loading…</div></div>
       </div><!-- /sec-knowledge -->
 
       <!-- INTEGRATIONS -->
@@ -2078,13 +2058,6 @@ async function loadSettings() {
         </table>
       </div>
       <div class="card" style="margin-top:16px;">
-        <div class="card-title">Knowledge Sources</div>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>URL / Label</th><th>Type</th><th>Status</th></tr></thead>
-          <tbody>${srcRows}</tbody>
-        </table></div>
-      </div>
-      <div class="card" style="margin-top:16px;">
         <div class="card-title">Booking</div>
         <table style="width:100%;border-collapse:collapse;">
           ${row('Booking link', d.bookingLink)}
@@ -2105,22 +2078,15 @@ async function loadSettings() {
           ${tog('Waitlist', d.waitlistEnabled)}
         </table>
       </div>
-      <div class="card" style="margin-top:16px;">
-        <div class="card-title">Crawler</div>
-        <table style="width:100%;border-collapse:collapse;">
-          ${tog('Enabled', (d.crawlSettings ?? {}).enabled)}
-          ${row('Primary URL', (d.crawlSettings ?? {}).primaryUrl)}
-        </table>
-        <div style="margin-top:14px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;">Crawled pages <span id="crawlPageCount" style="font-weight:400;font-size:11px;"></span></div>
-            ${(me?.isAdmin || me?.isClientAdmin) ? `<button class="btn btn-sm" id="crawlNowBtn" style="font-size:12px;padding:4px 12px;" onclick="triggerCrawlNow()">Crawl now</button>` : ''}
+      <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-weight:600;font-size:13px;margin-bottom:2px;">Website &amp; Knowledge</div>
+            <div style="font-size:12px;color:var(--text2);">Manage website URL, crawler settings, and view what the bot knows</div>
           </div>
-          <div id="crawlMsg" style="display:none;margin-bottom:8px;"></div>
-          <div id="crawlPagesTable"><div style="color:var(--text3);font-size:12px;padding:8px 0;">Loading…</div></div>
+          <button class="btn btn-ghost btn-sm" onclick="switchSection('knowledge')">Go to Knowledge →</button>
         </div>
       </div>`;
-    loadCrawlPages();
     return;
   }
 
@@ -2129,7 +2095,6 @@ async function loadSettings() {
     `<option value="${val}" ${d.bookingMode === val ? 'selected' : ''}>${lbl}</option>`
   ).join('');
 
-  const srcTableHtml = renderScrapeSourcesTable(d.scrapeSources ?? [], canEdit);
   const bkTableHtml  = renderBookingOptionsTable(d.bookingLinks ?? [], canEdit, d.bookingMode);
 
   document.getElementById('settingsContent').innerHTML = `
@@ -2156,13 +2121,14 @@ async function loadSettings() {
       </div>
     </div>
 
-    <div class="card" style="margin-top:16px;">
-      <div class="card-header-row" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-        <div class="card-title" style="margin-bottom:0;">Knowledge Sources</div>
-        <button class="btn btn-ghost btn-sm" onclick="openSrcModal()">+ Add source</button>
+    <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:2px;">Website &amp; Knowledge</div>
+          <div style="font-size:12px;color:var(--text2);">Set your website URL, manage crawler settings, and see what the bot knows — all in one place</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="switchSection('knowledge')">Go to Knowledge →</button>
       </div>
-      <div class="form-hint" style="margin-bottom:12px;">URLs the bot scrapes weekly to build its knowledge base. Add your FAQ page, pricing page, or any public content URL.</div>
-      <div id="srcTable">${srcTableHtml}</div>
     </div>
 
     <div class="card" style="margin-top:16px;">
@@ -2272,51 +2238,6 @@ async function loadSettings() {
       </div>
     </div>
 
-    <div class="card" style="margin-top:16px;" id="crawlerCard">
-      <div class="card-title">Crawler</div>
-      <div class="form-hint" style="margin-bottom:14px;">Whole-site knowledge crawler — follows links from your primary URL, extracts structured facts per page (AI-powered, hash-gated), and uses them to answer guest questions accurately. Runs weekly + on-demand.</div>
-      ${(() => {
-        const cs = d.crawlSettings ?? {};
-        return `
-        <div class="toggle-row" style="margin-bottom:14px;">
-          <label class="toggle">
-            <input type="checkbox" id="crawl_enabled" ${cs.enabled && canEdit ? 'checked' : ''} ${!canEdit ? 'disabled' : ''}>
-            <span class="toggle-slider"></span>
-          </label>
-          <label for="crawl_enabled" style="cursor:pointer;">
-            <span style="font-weight:600;">Enable crawler</span>
-            <span style="display:block;color:var(--text2);font-size:11px;">Crawl this site weekly and extract page-level facts for the bot</span>
-          </label>
-        </div>
-        <div class="form-group">
-          <label>Primary URL</label>
-          <input type="url" id="crawl_primary_url" value="${cs.primaryUrl ?? d.websiteUrl ?? ''}" placeholder="https://yoursite.com/">
-          <div class="form-hint">Root URL to start crawling from (default: Website URL above)</div>
-        </div>
-        <div class="two-col">
-          <div class="form-group">
-            <label>Max depth <span style="color:var(--text2);font-size:11px;">(link hops)</span></label>
-            <input type="number" id="crawl_max_depth" value="${cs.maxDepth ?? 2}" min="1" max="3" style="width:80px;">
-          </div>
-          <div class="form-group">
-            <label>Max pages</label>
-            <input type="number" id="crawl_max_pages" value="${cs.maxPages ?? 20}" min="1" max="50" style="width:80px;">
-          </div>
-        </div>
-        <div class="form-group">
-          <label>Deny patterns <span style="color:var(--text2);font-size:11px;">(comma-separated URL substrings to skip)</span></label>
-          <input type="text" id="crawl_deny_patterns" value="${(cs.denyPatterns ?? []).join(', ')}" placeholder="/blog, /news, /press">
-        </div>`;
-      })()}
-      <div style="margin-top:14px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;">Crawled pages <span id="crawlPageCount" style="font-weight:400;font-size:11px;"></span></div>
-          ${me?.isAdmin ? `<button class="btn btn-sm" id="crawlNowBtn" style="font-size:12px;padding:4px 12px;" onclick="triggerCrawlNow()">Crawl now</button>` : ''}
-        </div>
-        <div id="crawlPagesTable"><div style="color:var(--text3);font-size:12px;padding:8px 0;">Loading…</div></div>
-      </div>
-    </div>
-
     <div style="display:flex;justify-content:flex-end;margin-top:16px;">
       <button class="btn btn-primary" id="settingsSaveBtn">Save changes</button>
     </div>`;
@@ -2362,9 +2283,6 @@ async function loadSettings() {
   };
   convRenderMenu();
 
-  // ── Crawl pages table ──────────────────────────────────────────────────────
-  loadCrawlPages();
-
   document.getElementById('settingsSaveBtn').addEventListener('click', async () => {
     const btn   = document.getElementById('settingsSaveBtn');
     const msgEl = document.getElementById('settingsMsg');
@@ -2399,15 +2317,6 @@ async function loadSettings() {
         enable_recommendations:  document.getElementById('conv_recommendations').checked,
         enable_lead_prompts:     document.getElementById('conv_lead_prompts').checked,
         main_menu_options:       _convMenuItems.filter(o => o.label && o.key),
-      },
-      crawl_settings: {
-        enabled:       document.getElementById('crawl_enabled').checked,
-        primary_url:   document.getElementById('crawl_primary_url').value.trim() || null,
-        max_depth:     parseInt(document.getElementById('crawl_max_depth').value) || 2,
-        max_pages:     parseInt(document.getElementById('crawl_max_pages').value) || 20,
-        deny_patterns: document.getElementById('crawl_deny_patterns').value.trim()
-          ? document.getElementById('crawl_deny_patterns').value.trim().split(',').map(s => s.trim()).filter(Boolean)
-          : [],
       },
     };
     if (me?.isAdmin) body.client_id = me.clientId;
@@ -2913,76 +2822,175 @@ document.getElementById('clientModal')?.addEventListener('click', e => {
 });
 
 // ── Knowledge section ──────────────────────────────────────────────────────
-async function loadKnowledge() {
-  document.getElementById('knowledgeIntegrations').innerHTML = '<div class="loading">Loading…</div>';
-  document.getElementById('knowledgeSources').innerHTML      = '<div class="loading">Loading…</div>';
-  document.getElementById('knowledgePages').innerHTML        = '<div class="loading">Loading…</div>';
+const PAGE_TYPE_LABELS = { homepage:'Home', services:'Services', pricing:'Pricing', booking:'Booking', faq:'FAQ', policies:'Policies', hours:'Hours', contact:'Contact', seasonal:'Seasonal', other:'Info' };
+const PAGE_TYPE_ICONS  = { homepage:'🏠', services:'🎯', pricing:'💰', booking:'📅', faq:'❓', policies:'📋', hours:'🕒', contact:'📞', seasonal:'❄️', other:'📄' };
 
-  const [integData, sourcesData, pagesData] = await Promise.all([
-    apiFetch('/integrations'),
-    apiFetch('/scrape-sources'),
-    apiFetch('/crawl-pages'),
+async function loadKnowledge() {
+  document.getElementById('knowledgeContent').innerHTML = '<div class="loading">Loading…</div>';
+  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const [settingsData, pagesData, integData] = await Promise.all([
+    apiFetch(`/settings${clientParam}`),
+    apiFetch(`/crawl-pages${clientParam}`),
+    apiFetch(`/integrations${clientParam}`),
   ]);
 
-  // Integration status cards
-  const intWrap = document.getElementById('knowledgeIntegrations');
-  if (!integData?.integrations) {
-    intWrap.innerHTML = '<div class="error-msg" style="display:block">Could not load integration status.</div>';
-  } else {
-    try {
-      intWrap.innerHTML = renderIntegrationCards(integData.integrations);
-    } catch (e) {
-      console.error('[Knowledge] render error:', e);
-      intWrap.innerHTML = '<div class="error-msg" style="display:block">Error rendering integration status.</div>';
-    }
-  }
+  const d       = settingsData ?? {};
+  const pages   = pagesData?.pages ?? [];
+  const cs      = d.crawlSettings ?? {};
+  const canEdit = d.editable !== false && (me?.isClientAdmin || me?.isAdmin);
+  const websiteUrl = cs.primaryUrl || d.websiteUrl || '';
+  const crawlEnabled = cs.enabled ?? false;
+  const lastCrawled = pages.length ? pages.reduce((latest, p) => p.fetched_at > latest ? p.fetched_at : latest, '') : null;
+  const okPages = pages.filter(p => p.status === 'ok');
 
-  // Knowledge sources table
-  const srcWrap = document.getElementById('knowledgeSources');
-  const sources  = sourcesData?.sources ?? [];
-  if (!sources.length) {
-    srcWrap.innerHTML = '<div class="empty-state" style="padding:12px 0;">No scrape sources configured. Add them in Settings → Knowledge Sources.</div>';
-  } else {
-    const rows = sources.map(s => `<tr>
-      <td style="font-size:12px;word-break:break-all;">${s.url}</td>
-      <td>${s.label ?? '<span style="color:var(--text2)">—</span>'}</td>
-      <td>${s.source_type ?? 'website'}</td>
-      <td><span class="pill ${s.active ? 'pill-green' : 'pill-failed'}">${s.active ? 'Active' : 'Inactive'}</span></td>
-    </tr>`).join('');
-    srcWrap.innerHTML = `<div class="tbl-wrap"><table>
-      <thead><tr><th>URL</th><th>Label</th><th>Type</th><th>Status</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>`;
-  }
+  // ── Website card ────────────────────────────────────────────────────────────
+  const crawlStatus = pages.length === 0
+    ? '<span style="color:var(--text3);">Not crawled yet</span>'
+    : `<span style="color:var(--accent);">${okPages.length} page${okPages.length !== 1 ? 's' : ''} crawled</span>${lastCrawled ? ` · <span style="color:var(--text2);">Last: ${fmt(lastCrawled)}</span>` : ''}`;
 
-  // Crawled pages table
-  const pagesWrap = document.getElementById('knowledgePages');
-  const pages = pagesData?.pages ?? [];
+  const websiteCard = `
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div class="card-title" style="margin-bottom:0;">Website — Source of Truth</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${canEdit ? `<button class="btn btn-ghost btn-sm" id="knCrawlBtn" onclick="knTriggerCrawl()">↺ Crawl now</button>
+          <button class="btn btn-primary btn-sm" id="knSaveBtn" onclick="knSaveWebsite()">Save</button>` : ''}
+        </div>
+      </div>
+      <div id="knMsg" style="display:none;margin-bottom:10px;"></div>
+      <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+        <div class="form-group" style="flex:1;min-width:200px;margin-bottom:0;">
+          <label style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;">Website URL</label>
+          ${canEdit
+            ? `<input type="url" id="kn_website_url" value="${escHtml(websiteUrl)}" placeholder="https://yoursite.com" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px;outline:none;">`
+            : `<div style="font-size:13px;padding:6px 0;">${websiteUrl ? `<a href="${escHtml(websiteUrl)}" target="_blank" style="color:var(--accent);">${escHtml(websiteUrl)}</a>` : '<span style="color:var(--text3);">Not set</span>'}</div>`}
+        </div>
+        <div style="flex-shrink:0;padding-top:${canEdit ? '22px' : '6px'};">
+          <label style="display:flex;align-items:center;gap:8px;cursor:${canEdit ? 'pointer' : 'default'};">
+            ${canEdit
+              ? `<input type="checkbox" id="kn_crawl_enabled" ${crawlEnabled ? 'checked' : ''} style="width:15px;height:15px;">`
+              : `<span style="color:${crawlEnabled ? 'var(--accent)' : 'var(--text3)'};">${crawlEnabled ? '✓' : '○'}</span>`}
+            <span style="font-size:13px;font-weight:500;">Auto-crawl weekly</span>
+          </label>
+        </div>
+      </div>
+      <div style="margin-top:10px;font-size:12px;">${crawlStatus}</div>
+      <div id="knCrawlMsg" style="display:none;margin-top:8px;font-size:12px;"></div>
+    </div>`;
+
+  // ── What the bot knows (crawled pages with summaries) ────────────────────
+  let pagesHtml;
   if (!pages.length) {
-    pagesWrap.innerHTML = '<div class="empty-state" style="padding:12px 0;">No pages crawled yet. Crawler runs weekly when enabled in Settings.</div>';
+    pagesHtml = `<div class="empty-state" style="padding:20px 0;">
+      <div style="font-size:28px;margin-bottom:8px;">📄</div>
+      <div style="font-weight:600;margin-bottom:4px;">No pages crawled yet</div>
+      <div style="color:var(--text2);font-size:12px;">
+        ${websiteUrl ? 'Click "Crawl now" above to extract knowledge from your website.' : 'Set your website URL above and click "Crawl now".'}
+      </div>
+    </div>`;
   } else {
-    const rows = pages.slice(0, 30).map(p => {
-      const typeLabels = { homepage:'Home', services:'Services', pricing:'Pricing', booking:'Booking', faq:'FAQ', policies:'Policies', hours:'Hours', contact:'Contact', seasonal:'Seasonal', other:'Info' };
-      const typeLabel = typeLabels[p.page_type] ?? p.page_type ?? '–';
-      const statusPill = p.status === 'ok'
-        ? '<span class="pill pill-green">OK</span>'
-        : `<span class="pill pill-failed">${p.status ?? '?'}</span>`;
-      const crawledAt = p.fetched_at ? fmt(p.fetched_at) : '–';
-      const title     = p.title ?? '';
-      const url       = p.url ?? '';
-      const shortUrl  = url.length > 50 ? url.slice(0, 47) + '…' : url;
-      return `<tr>
-        <td style="font-size:12px;">${title ? `<strong>${title}</strong><br>` : ''}<span style="color:var(--text2);font-size:11px;">${shortUrl}</span></td>
-        <td>${typeLabel}</td>
-        <td>${statusPill}</td>
-        <td style="font-size:12px;color:var(--text2);">${crawledAt}</td>
-      </tr>`;
-    }).join('');
-    const moreNote = pages.length > 30 ? `<div style="padding:8px 0;font-size:12px;color:var(--text2);">Showing 30 of ${pages.length} pages.</div>` : '';
-    pagesWrap.innerHTML = `<div class="tbl-wrap"><table>
-      <thead><tr><th>Page</th><th>Type</th><th>Status</th><th>Last crawled</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>${moreNote}`;
+    // Sort by type priority: homepage first, then services, pricing, booking, faq...
+    const typeOrder = ['homepage','services','pricing','booking','faq','policies','hours','contact','seasonal','other'];
+    const sorted = [...pages].sort((a,b) => {
+      const ai = typeOrder.indexOf(a.page_type ?? 'other');
+      const bi = typeOrder.indexOf(b.page_type ?? 'other');
+      return ai - bi;
+    });
+    pagesHtml = sorted.slice(0, 30).map(p => {
+      const icon    = PAGE_TYPE_ICONS[p.page_type] ?? '📄';
+      const label   = PAGE_TYPE_LABELS[p.page_type] ?? (p.page_type ?? '');
+      const isOk    = p.status === 'ok';
+      const summary = p.summary?.trim();
+      const title   = p.title?.trim() || '';
+      const urlShort = (p.url ?? '').replace(/^https?:\/\//, '').slice(0, 60);
+      return `
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px;background:var(--panel);">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:${summary ? '8px' : '0'};">
+            <span style="font-size:15px;">${icon}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:13px;">${escHtml(title || label)}</div>
+              <div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(urlShort)}</div>
+            </div>
+            <span class="pill ${isOk ? 'pill-green' : 'pill-failed'}" style="flex-shrink:0;">${label}</span>
+          </div>
+          ${summary ? `<div style="font-size:12px;color:var(--text2);line-height:1.5;border-top:1px solid var(--border);padding-top:8px;">${escHtml(summary)}</div>` : ''}
+        </div>`;
+    }).join('') + (pages.length > 30 ? `<div style="font-size:12px;color:var(--text3);padding:4px 0;">Showing 30 of ${pages.length} pages</div>` : '');
+  }
+
+  const knowsCard = `
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div class="card-title" style="margin-bottom:0;">What the Bot Knows</div>
+        ${okPages.length ? `<span style="font-size:12px;color:var(--text2);">${okPages.length} page${okPages.length !== 1 ? 's' : ''}</span>` : ''}
+      </div>
+      ${pagesHtml}
+    </div>`;
+
+  // ── Live data integrations ──────────────────────────────────────────────────
+  let integHtml = '';
+  if (integData?.integrations) {
+    try { integHtml = renderIntegrationCards(integData.integrations); }
+    catch { integHtml = '<div class="error-msg" style="display:block">Error rendering integration status.</div>'; }
+  }
+  const liveCard = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-title" style="margin-bottom:14px;">Live Data</div>
+      ${integHtml || '<div style="color:var(--text3);font-size:12px;">Could not load live data status.</div>'}
+    </div>`;
+
+  document.getElementById('knowledgeContent').innerHTML = websiteCard + knowsCard + liveCard;
+}
+
+async function knSaveWebsite() {
+  const btn   = document.getElementById('knSaveBtn');
+  const msgEl = document.getElementById('knMsg');
+  if (!btn) return;
+  btn.disabled = true; btn.textContent = 'Saving…';
+
+  const websiteUrl   = document.getElementById('kn_website_url')?.value?.trim() || null;
+  const crawlEnabled = document.getElementById('kn_crawl_enabled')?.checked ?? false;
+
+  const body = {
+    website_url:    websiteUrl,
+    crawl_settings: { enabled: crawlEnabled, primary_url: websiteUrl },
+  };
+  if (me?.isAdmin) body.client_id = me.clientId;
+
+  const r = await apiPatch('/settings', body);
+  btn.disabled = false; btn.textContent = 'Save';
+
+  msgEl.style.display = 'block';
+  if (!r) {
+    msgEl.className = 'error-msg'; msgEl.textContent = 'Save failed. You may not have permission to edit this client.';
+  } else {
+    msgEl.className = 'success-msg'; msgEl.textContent = 'Website saved.';
+    setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
+  }
+}
+
+async function knTriggerCrawl() {
+  const btn   = document.getElementById('knCrawlBtn');
+  const msgEl = document.getElementById('knCrawlMsg');
+  if (!btn) return;
+
+  // Auto-save URL first if set
+  const websiteUrl = document.getElementById('kn_website_url')?.value?.trim();
+  if (websiteUrl) await knSaveWebsite();
+
+  btn.disabled = true; btn.textContent = '↺ Crawling…';
+  msgEl.style.display = 'block'; msgEl.style.color = 'var(--text2)'; msgEl.textContent = 'Crawling your website… this may take 30–60 seconds.';
+
+  const crawlQp = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const r = await apiFetch(`/crawl-now${crawlQp}`, { method: 'POST' });
+
+  btn.disabled = false; btn.textContent = '↺ Crawl now';
+
+  if (!r || r.error) {
+    msgEl.style.color = 'var(--danger)'; msgEl.textContent = r?.error || 'Crawl failed. Check the website URL and try again.';
+  } else {
+    msgEl.style.color = 'var(--accent)'; msgEl.textContent = `✓ Crawled ${r.pagesProcessed ?? 0} pages. Refreshing…`;
+    setTimeout(() => loadKnowledge(), 1500);
   }
 }
 
