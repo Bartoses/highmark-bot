@@ -330,10 +330,12 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     // If Claude promised a link OR hallucinated a bare-domain URL, replace with the real https:// link.
     // Triggers on: "right here:", "right there:", "here's the link", bare domain URLs, etc.
     if ((containsLinkPromise(replyText) || containsBareDomainUrl(replyText)) && !containsUrl(replyText)) {
-      // Remove hallucinated bare-domain URLs and bracket placeholders like [rzr_kremmling link]
+      // Remove hallucinated bare-domain URLs, bracket placeholders, and "links not loading" apologies
       const cleaned = replyText
         .replace(/\[[\w_ ]+ link\]/gi, "")
         .replace(/\b[\w-]+\.(?:com|org|net|io|co)\/\S*/gi, "")
+        .replace(/\(?[Bb]ooking links?[^)]*(?:loading|available|right now)[^)]*\)?\.?/g, "")
+        .replace(/\(?[Ww]ant me to have the team reach out[^)]*\)?\.?/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
 
