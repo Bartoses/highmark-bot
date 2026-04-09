@@ -1188,12 +1188,15 @@ async function init() {
       // Pre-select first client
       me.clientId = clients[0].id;
       me.clientName = clients[0].name;
+      window.initPortalChat?.(me.clientId, me.clientName);
       sel.addEventListener('change', () => {
         const chosen = clients.find(c => c.id === sel.value);
         me.clientId   = chosen?.id ?? null;
         me.clientName = chosen?.name ?? null;
         badgeEl.textContent = me.clientName ?? me.clientId ?? 'Highmark Admin';
         document.title = `${me.clientName ?? 'Portal'} — Highmark`;
+        // Reinitialize test-bot widget with new client
+        window.initPortalChat?.(me.clientId, me.clientName);
         // Reload active section with new client
         const active = document.querySelector('.section.active')?.id?.replace('sec-','') ?? 'dashboard';
         switchSection(active);
@@ -1203,6 +1206,9 @@ async function init() {
 
   badgeEl.textContent = me.clientName ?? me.clientId ?? 'Highmark Admin';
   document.title = `${me.clientName ?? 'Portal'} — Highmark`;
+
+  // Initialize test-bot widget (for non-admin users, clientId is already set)
+  if (!me.isAdmin && me.clientId) window.initPortalChat?.(me.clientId, me.clientName);
 
   // Nav (sidebar + mobile bottom bar)
   document.querySelectorAll('.nav-item, .mob-nav-item').forEach(el => {
@@ -4358,6 +4364,225 @@ async function saveCustomApi() {
 
 // ── Start ──────────────────────────────────────────────────────────────────
 init().catch(err => { console.error('Portal init error:', err); redirectToLogin(); });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL TEST-BOT WIDGET
+// A floating chat panel tied to the currently selected client.
+// Sends to POST /web/chat. Session key = portal-<clientId> per tab.
+// RESETNOW clears the conversation and re-shows the opener.
+// ─────────────────────────────────────────────────────────────────────────────
+let pcSessionId    = null;
+let pcClientId     = null;
+let pcClientName   = null;
+let pcHistory      = [];   // { role, content }[]
+let pcTyping       = false;
+let pcOpen         = false;
+
+function pcGetSession(clientId) {
+  const key = `hm_portal_sess_${clientId}`;
+  let id = sessionStorage.getItem(key);
+  if (!id) {
+    id = `portal-${clientId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem(key, id);
+  }
+  return id;
+}
+
+function pcLoadHistory(clientId) {
+  try { return JSON.parse(sessionStorage.getItem(`hm_portal_hist_${clientId}`) || '[]'); }
+  catch { return []; }
+}
+
+function pcSaveHistory(clientId, msgs) {
+  try { sessionStorage.setItem(`hm_portal_hist_${clientId}`, JSON.stringify(msgs.slice(-40))); }
+  catch {}
+}
+
+// Called by init() and by the client-select dropdown onChange
+window.initPortalChat = function(clientId, clientName) {
+  if (!clientId) return;
+  if (pcClientId === clientId) return; // no change
+  pcClientId   = clientId;
+  pcClientName = clientName ?? clientId;
+  pcSessionId  = pcGetSession(clientId);
+  pcHistory    = pcLoadHistory(clientId);
+
+  // Update header label
+  const label = document.getElementById('pc-bot-label');
+  if (label) label.textContent = `Test Bot — ${pcClientName}`;
+
+  // Re-render history
+  pcRender();
+
+  // If no history yet, send a greeting to get the opener
+  if (pcHistory.length === 0 && pcOpen) pcSendGreeting();
+};
+
+window.togglePortalChat = function() {
+  pcOpen = !pcOpen;
+  const panel = document.getElementById('pc-panel');
+  const btn   = document.getElementById('pc-toggle-btn');
+  if (!panel) return;
+  panel.classList.toggle('pc-hidden', !pcOpen);
+  btn.textContent = pcOpen ? '✕' : '💬';
+  if (pcOpen && pcHistory.length === 0 && pcClientId) pcSendGreeting();
+  if (pcOpen) setTimeout(() => document.getElementById('pc-input')?.focus(), 50);
+};
+
+async function pcSendGreeting() {
+  await pcSend('hi', true); // silent — greeting appears as first bot reply
+}
+
+function pcRender() {
+  const box = document.getElementById('pc-messages');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const m of pcHistory) pcAppend(m.role, m.content);
+  pcScrollBottom();
+}
+
+function pcAppend(role, text) {
+  const box = document.getElementById('pc-messages');
+  if (!box) return;
+  const d = document.createElement('div');
+  d.className = `pc-msg ${role === 'assistant' ? 'pc-bot' : 'pc-user'}`;
+  d.textContent = text;
+  box.appendChild(d);
+}
+
+function pcShowTyping() {
+  const box = document.getElementById('pc-messages');
+  if (!box || box.querySelector('.pc-typing')) return;
+  const d = document.createElement('div');
+  d.className = 'pc-msg pc-bot pc-typing';
+  d.innerHTML = '<span></span><span></span><span></span>';
+  box.appendChild(d);
+  pcScrollBottom();
+}
+
+function pcRemoveTyping() {
+  document.querySelector('.pc-typing')?.remove();
+}
+
+function pcScrollBottom() {
+  const box = document.getElementById('pc-messages');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
+async function pcSendMessage() {
+  const inp  = document.getElementById('pc-input');
+  const text = inp?.value?.trim();
+  if (!text || pcTyping || !pcClientId) return;
+  inp.value = '';
+
+  const isReset = text.toUpperCase() === 'RESETNOW';
+
+  // Optimistically show user message (skip for greeting calls)
+  if (!isReset) {
+    pcHistory.push({ role: 'user', content: text });
+    pcSaveHistory(pcClientId, pcHistory);
+    pcAppend('user', text);
+    pcScrollBottom();
+  }
+
+  await pcSend(text, false);
+}
+
+async function pcSend(text, isGreeting) {
+  if (!pcClientId || !pcSessionId) return;
+  const sendBtn = document.getElementById('pc-send');
+  if (sendBtn) sendBtn.disabled = true;
+  pcTyping = true;
+  if (!isGreeting) pcShowTyping();
+
+  try {
+    const r = await fetch('/web/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ clientId: pcClientId, sessionId: pcSessionId, message: text }),
+    });
+    pcRemoveTyping();
+    pcTyping = false;
+    if (sendBtn) sendBtn.disabled = false;
+
+    if (!r.ok) { pcAppend('assistant', 'Error reaching bot. Try again.'); pcScrollBottom(); return; }
+
+    const data = await r.json();
+    const reply = data.reply || '…';
+
+    // If RESETNOW was the trigger, wipe history first
+    if (data.reset) {
+      pcHistory = [];
+      pcSaveHistory(pcClientId, pcHistory);
+      pcRender();
+    }
+
+    pcHistory.push({ role: 'assistant', content: reply });
+    pcSaveHistory(pcClientId, pcHistory);
+    pcAppend('assistant', reply);
+    pcScrollBottom();
+  } catch {
+    pcRemoveTyping();
+    pcTyping = false;
+    if (sendBtn) sendBtn.disabled = false;
+    pcAppend('assistant', 'Connection error — check your network.');
+    pcScrollBottom();
+  }
+}
+
+// Wire up input on DOMContentLoaded (elements exist by then)
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('pc-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); pcSendMessage(); }
+  });
+  document.getElementById('pc-send')?.addEventListener('click', pcSendMessage);
+});
 </script>
+
+<!-- ── Portal Test-Bot Widget ─────────────────────────────────────────────── -->
+<style>
+#pc-wrap { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+#pc-toggle-btn { width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer; background: #10b981; color: #fff; font-size: 20px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(16,185,129,.4); transition: transform .15s; }
+#pc-toggle-btn:hover { transform: scale(1.07); }
+#pc-panel { width: 320px; max-width: calc(100vw - 32px); background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 14px; box-shadow: 0 8px 32px rgba(0,0,0,.5); display: flex; flex-direction: column; overflow: hidden; margin-bottom: 10px; transition: opacity .2s, transform .2s; }
+#pc-panel.pc-hidden { opacity: 0; pointer-events: none; transform: translateY(10px); }
+#pc-header { background: #10b981; padding: 11px 14px; display: flex; align-items: center; gap: 8px; }
+#pc-bot-label { flex: 1; font-size: 12px; font-weight: 600; color: #fff; }
+#pc-header-reset { background: none; border: none; color: rgba(255,255,255,.8); cursor: pointer; font-size: 11px; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,.3); }
+#pc-header-reset:hover { background: rgba(255,255,255,.15); }
+#pc-messages { flex: 1; overflow-y: auto; padding: 12px 10px; display: flex; flex-direction: column; gap: 7px; max-height: 300px; min-height: 160px; background: #131313; }
+.pc-msg { max-width: 84%; padding: 8px 12px; border-radius: 12px; font-size: 12px; line-height: 1.5; word-break: break-word; }
+.pc-bot { background: #1e1e1e; border: 1px solid #2e2e2e; color: #e0e0e0; border-bottom-left-radius: 3px; align-self: flex-start; }
+.pc-user { background: #10b981; color: #fff; border-bottom-right-radius: 3px; align-self: flex-end; }
+.pc-typing span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #555; margin: 0 1px; animation: pc-bounce .9s infinite ease-in-out; }
+.pc-typing span:nth-child(2) { animation-delay: .15s; }
+.pc-typing span:nth-child(3) { animation-delay: .3s; }
+@keyframes pc-bounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-5px); } }
+#pc-footer { padding: 9px 10px; border-top: 1px solid #252525; display: flex; gap: 7px; background: #1a1a1a; }
+#pc-input { flex: 1; background: #0d0d0d; border: 1px solid #2e2e2e; border-radius: 16px; padding: 7px 12px; font-size: 12px; color: #e0e0e0; outline: none; resize: none; }
+#pc-input:focus { border-color: #10b981; }
+#pc-input::placeholder { color: #555; }
+#pc-send { background: #10b981; border: none; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+#pc-send:disabled { opacity: .5; cursor: default; }
+#pc-send svg { width: 14px; height: 14px; fill: #fff; }
+#pc-hint { text-align: center; padding: 4px 0 7px; font-size: 10px; color: #444; }
+</style>
+<div id="pc-wrap">
+  <div id="pc-panel" class="pc-hidden">
+    <div id="pc-header">
+      <span id="pc-bot-label">Test Bot</span>
+      <button id="pc-header-reset" onclick="(()=>{ document.getElementById('pc-input').value='RESETNOW'; pcSendMessage(); })()">↺ Reset</button>
+    </div>
+    <div id="pc-messages"></div>
+    <div id="pc-footer">
+      <textarea id="pc-input" placeholder="Message the bot…" rows="1"></textarea>
+      <button id="pc-send" aria-label="Send">
+        <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </button>
+    </div>
+    <div id="pc-hint">Type RESETNOW to reset conversation</div>
+  </div>
+  <button id="pc-toggle-btn" onclick="togglePortalChat()" aria-label="Test bot">💬</button>
+</div>
 </body>
 </html>

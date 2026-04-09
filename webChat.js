@@ -191,6 +191,17 @@ export function getWebClientConfig(client) {
 // Returns { reply: string, isNew?: boolean }
 // ─────────────────────────────────────────────────────────────────────────────
 export async function sendMessageWeb(supabase, anthropic, client, sessionId, message) {
+  // ── RESETNOW — clear conversation, return opener ──────────────────────────
+  if (message.toUpperCase().trim() === "RESETNOW") {
+    const from = webFromNumber(sessionId);
+    const to   = webToNumber(client.id);
+    await supabase.from("conversations").delete()
+      .eq("from_number", from).eq("to_number", to);
+    const opener = enforceLength(getSeasonalOpener(client, getCurrentSeason()), 480);
+    console.log(`[WEB_CHAT] RESETNOW — conversation cleared for session=${sessionId} client=${client.id}`);
+    return { reply: opener, reset: true };
+  }
+
   const { isNew, from, to, convo } = await getWebConversation(supabase, sessionId, client.id);
 
   // ── First message: return the opener immediately ────────────────────────────
