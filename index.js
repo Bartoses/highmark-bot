@@ -55,6 +55,7 @@ import { resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
 import { detectCancellationIntent, detectRescheduleIntent, handleCancellationMessage, handleRescheduleMessage } from "./messagingEngine.js";
 import { sendMessageWeb, createWebSession, getWebClientConfig } from "./webChat.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
+import { getOrchestratorReply } from "./agentOrchestrator.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1951,7 +1952,19 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
       // 480 chars (3 texts) — never cut off mid-thought
       const replyMax = 480;
-      replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, extraInstruction, replyMax);
+
+      // Phase 5: Agent Orchestrator — routes through multi-agent system when enabled.
+      // Falls back to existing getClaudeReply() path when disabled (default).
+      // Enable via: AGENT_ORCHESTRATOR_ENABLED=true in Railway env vars.
+      if (process.env.AGENT_ORCHESTRATOR_ENABLED === "true") {
+        replyText = await getOrchestratorReply(
+          convo, client, anthropic, rawBody,
+          fullKnowledgeCtx, extraInstruction,
+          { supabase, crmSupabase, twilioClient }
+        );
+      } else {
+        replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, extraInstruction, replyMax);
+      }
 
       // Post-generation validator: catch phone ask and regenerate once with stricter instruction
       if (containsPhoneAsk(replyText) && responsePlan.forbiddenMoves.includes("ask_for_phone_when_sms")) {
@@ -1961,7 +1974,16 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           planInstruction || null,
           "CORRECTION: Your previous draft asked for a phone number. The customer is already texting you — remove any phone-ask and replace with a soft offer like \"Want me to have the team reach out?\"",
         ].filter(Boolean).join("\n\n");
-        replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, correction, replyMax);
+        // Regenerate through same path (orchestrator or classic)
+        if (process.env.AGENT_ORCHESTRATOR_ENABLED === "true") {
+          replyText = await getOrchestratorReply(
+            convo, client, anthropic, rawBody,
+            fullKnowledgeCtx, correction,
+            { supabase, crmSupabase, twilioClient }
+          );
+        } else {
+          replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, correction, replyMax);
+        }
       }
 
       // Track that a recommendation was given — unlocks lead capture on the next turn

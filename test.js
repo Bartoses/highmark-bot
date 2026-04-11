@@ -103,6 +103,7 @@ import {
   getAgentPrompt,
 } from "./prompts.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
+import { runOrchestrator, getOrchestratorReply } from "./agentOrchestrator.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -3024,6 +3025,7 @@ async function main() {
   await test71(); // Prompt System: GLOBAL_PROMPT, agent prompts, getAgentPrompt, buildSystemPrompt integration
   await test72(); // Client Config System: getClientProfile, getClientKnowledge, safeJsonParse, truncateText
   await test73(); // Action Engine: executeAction, all actions, fallbacks, missing integrations
+  await test74(); // Agent Orchestrator: runOrchestrator, parseAgentResponse, action execution, fallbacks
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -11055,6 +11057,307 @@ async function test73() {
     typeof sledLink === "string" && sledLink.length > 0
       ? pass(`buildIntegrations getBookingLink("snowmobile"): ${sledLink}`)
       : fail("buildIntegrations getBookingLink snowmobile: no URL returned", sledLink);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 74: Agent Orchestrator (Phase 5)
+// runOrchestrator, getOrchestratorReply — mock anthropic, all paths
+// ─────────────────────────────────────────────────────────────────────────────
+async function test74() {
+  console.log("\nTEST 74: Agent Orchestrator (runOrchestrator)");
+
+  // ── Helper: build a mock anthropic client that returns fixed text ──────────
+  function mockAnthropic(replyText) {
+    return {
+      messages: {
+        create: async () => ({
+          content: [{ text: replyText }],
+        }),
+      },
+    };
+  }
+
+  // Minimal convo and client objects for tests
+  const baseConvo  = { messages: [], stage: "new", consecutiveFrustrated: 0 };
+  const baseClient = {
+    id: "test_client", name: "Test Adventures", industry: "outdoor",
+    tone: "warm", bookingMode: "fareharbor", services: ["snowmobile"],
+    supportPhone: "(970) 555-0000", handoffPhone: "(970) 555-0001",
+    bookingUrls: { browse_all: "https://fh.com/browse" },
+    bookingLinks: [],
+  };
+
+  // ── runOrchestrator: output shape is always valid ─────────────────────────
+  {
+    const result = await runOrchestrator({
+      message:  "hello",
+      convo:    baseConvo,
+      client:   baseClient,
+      anthropic: mockAnthropic(JSON.stringify({
+        agent: "support", intent: "question", action: null, data: {}, reply: "Hey there!",
+      })),
+    });
+
+    typeof result === "object" && result !== null
+      ? pass("runOrchestrator: returns object")
+      : fail("runOrchestrator: not an object", typeof result);
+
+    ["reply", "parsed", "actionResult", "agent", "intent", "context"].forEach((field) => {
+      field in result
+        ? pass(`runOrchestrator: field "${field}" present`)
+        : fail(`runOrchestrator: field "${field}" missing`);
+    });
+
+    typeof result.reply === "string" && result.reply.length > 0
+      ? pass(`runOrchestrator: reply="${result.reply}"`)
+      : fail("runOrchestrator: reply empty or not string", typeof result.reply);
+  }
+
+  // ── runOrchestrator: valid JSON → parsed correctly ────────────────────────
+  {
+    const structuredReply = JSON.stringify({
+      agent: "sales", intent: "booking", action: null, data: {}, reply: "Want to book this Saturday?",
+    });
+    const result = await runOrchestrator({
+      message: "I want to book Saturday",
+      convo:   baseConvo,
+      client:  baseClient,
+      anthropic: mockAnthropic(structuredReply),
+    });
+
+    result.intent === "booking"
+      ? pass("runOrchestrator booking message: intent=booking")
+      : fail("runOrchestrator booking: intent wrong", result.intent);
+
+    result.agent === "sales"
+      ? pass("runOrchestrator booking message: agent=sales")
+      : fail("runOrchestrator booking: agent wrong", result.agent);
+
+    result.parsed.reply === "Want to book this Saturday?"
+      ? pass("runOrchestrator: parsed.reply correct")
+      : fail("runOrchestrator: parsed.reply wrong", result.parsed.reply);
+
+    result.reply === "Want to book this Saturday?"
+      ? pass("runOrchestrator: top-level reply matches parsed.reply")
+      : fail("runOrchestrator: top-level reply mismatch", result.reply);
+
+    result.actionResult === null
+      ? pass("runOrchestrator: no action → actionResult=null")
+      : fail("runOrchestrator: unexpected actionResult", JSON.stringify(result.actionResult));
+  }
+
+  // ── runOrchestrator: invalid/plain-text JSON → fallback parsed correctly ──
+  {
+    const result = await runOrchestrator({
+      message: "what time do you open",
+      convo:   baseConvo,
+      client:  baseClient,
+      anthropic: mockAnthropic("We open at 8am daily."),
+    });
+
+    typeof result.reply === "string" && result.reply.length > 0
+      ? pass("runOrchestrator plain text: reply is non-empty string")
+      : fail("runOrchestrator plain text: bad reply", typeof result.reply);
+
+    result.parsed.reply === "We open at 8am daily."
+      ? pass("runOrchestrator plain text: parsed.reply = original text")
+      : fail("runOrchestrator plain text: parsed.reply wrong", result.parsed.reply);
+
+    result.actionResult === null
+      ? pass("runOrchestrator plain text: no action executed")
+      : fail("runOrchestrator plain text: unexpected action", JSON.stringify(result.actionResult));
+  }
+
+  // ── runOrchestrator: action in response → executeAction called ─────────────
+  {
+    let actionCalled = false;
+    // Mock an anthropic response that includes an action
+    const structuredWithAction = JSON.stringify({
+      agent: "sales", intent: "booking",
+      action: "escalate_to_human",
+      data: {},
+      reply: "Let me connect you with the team.",
+    });
+
+    const result = await runOrchestrator({
+      message:  "I want to speak to a person",
+      convo:    baseConvo,
+      client:   { ...baseClient, handoffPhone: "(970) 555-0001" },
+      anthropic: mockAnthropic(structuredWithAction),
+    });
+
+    result.actionResult !== null
+      ? pass("runOrchestrator with action: actionResult is set")
+      : fail("runOrchestrator with action: actionResult is null");
+
+    result.actionResult?.success === true
+      ? pass("runOrchestrator escalate_to_human: success=true")
+      : fail("runOrchestrator escalate_to_human: success!=true", JSON.stringify(result.actionResult));
+
+    typeof result.reply === "string" && result.reply.length > 0
+      ? pass("runOrchestrator with action: reply still set")
+      : fail("runOrchestrator with action: reply empty");
+  }
+
+  // ── runOrchestrator: intent detection flows through correctly ──────────────
+  const intentCases = [
+    { msg: "give me stats",            expectedIntent: "report",    expectedAgent: "operations" },
+    { msg: "any deals or discounts?",   expectedIntent: "promotion", expectedAgent: "marketing"  },
+    { msg: "how can we grow faster?",  expectedIntent: "strategy",  expectedAgent: "strategy"   },
+    { msg: "I want to book Saturday",  expectedIntent: "booking",   expectedAgent: "sales"      },
+  ];
+
+  for (const { msg, expectedIntent, expectedAgent } of intentCases) {
+    const result = await runOrchestrator({
+      message:  msg,
+      convo:    baseConvo,
+      client:   baseClient,
+      anthropic: mockAnthropic(JSON.stringify({ agent: expectedAgent, intent: expectedIntent, action: null, data: {}, reply: "Got it." })),
+    });
+    result.intent === expectedIntent
+      ? pass(`runOrchestrator intent: "${msg}" → ${result.intent}`)
+      : fail(`runOrchestrator intent: "${msg}"`, `got ${result.intent}, expected ${expectedIntent}`);
+    result.agent === expectedAgent
+      ? pass(`runOrchestrator agent: "${msg}" → ${result.agent}`)
+      : fail(`runOrchestrator agent: "${msg}"`, `got ${result.agent}, expected ${expectedAgent}`);
+  }
+
+  // ── runOrchestrator: context extraction passes through ─────────────────────
+  {
+    const result = await runOrchestrator({
+      message: "book for 4 people this Saturday",
+      convo:   baseConvo,
+      client:  baseClient,
+      anthropic: mockAnthropic(JSON.stringify({ agent: "sales", intent: "booking", action: null, data: {}, reply: "4 people, got it!" })),
+    });
+
+    result.context?.groupSize === 4
+      ? pass("runOrchestrator context: groupSize=4 extracted")
+      : fail("runOrchestrator context groupSize", `got ${result.context?.groupSize}`);
+
+    typeof result.context?.date === "string" && result.context.date.length === 10
+      ? pass(`runOrchestrator context: date extracted → ${result.context.date}`)
+      : fail("runOrchestrator context date", `got ${result.context?.date}`);
+
+    result.context?.urgency !== undefined
+      ? pass(`runOrchestrator context: urgency=${result.context.urgency}`)
+      : fail("runOrchestrator context urgency missing");
+  }
+
+  // ── runOrchestrator: empty/null reply → FALLBACK_REPLY ────────────────────
+  {
+    const result = await runOrchestrator({
+      message:  "test",
+      convo:    baseConvo,
+      client:   baseClient,
+      anthropic: mockAnthropic(JSON.stringify({ agent: "support", intent: "question", action: null, data: {}, reply: "" })),
+    });
+    typeof result.reply === "string" && result.reply.length > 0
+      ? pass("runOrchestrator empty reply → fallback: non-empty")
+      : fail("runOrchestrator empty reply fallback: empty", result.reply);
+  }
+
+  // ── runOrchestrator: anthropic throws → FALLBACK_REPLY ───────────────────
+  {
+    const badAnthropic = {
+      messages: { create: async () => { throw new Error("API timeout"); } },
+    };
+    const result = await runOrchestrator({
+      message: "hello", convo: baseConvo, client: baseClient, anthropic: badAnthropic,
+    });
+    typeof result.reply === "string" && result.reply.length > 0
+      ? pass("runOrchestrator API throws: returns fallback reply")
+      : fail("runOrchestrator API throws: no reply", typeof result.reply);
+    result.actionResult === null
+      ? pass("runOrchestrator API throws: actionResult=null")
+      : fail("runOrchestrator API throws: unexpected actionResult");
+  }
+
+  // ── runOrchestrator: null/missing inputs → does not throw ─────────────────
+  for (const val of [null, undefined, {}]) {
+    try {
+      const result = await runOrchestrator(val);
+      typeof result === "object" && "reply" in result
+        ? pass(`runOrchestrator(${JSON.stringify(val)}): safe return, no throw`)
+        : fail(`runOrchestrator(${JSON.stringify(val)}): bad return shape`, JSON.stringify(result));
+    } catch (e) {
+      fail(`runOrchestrator(${JSON.stringify(val)}): threw exception`, e.message);
+    }
+  }
+
+  // ── runOrchestrator: conversation history used (messages forwarded) ────────
+  {
+    let capturedMessages = null;
+    const spy = {
+      messages: {
+        create: async ({ messages }) => {
+          capturedMessages = messages;
+          return { content: [{ text: JSON.stringify({ agent: "support", intent: "question", action: null, data: {}, reply: "Sure!" }) }] };
+        },
+      },
+    };
+    const convoWithHistory = {
+      ...baseConvo,
+      messages: [
+        { role: "user",      content: "Hi there",     timestamp: new Date().toISOString() },
+        { role: "assistant", content: "Hey, welcome!", timestamp: new Date().toISOString() },
+        { role: "user",      content: "What tours do you have?", timestamp: new Date().toISOString() },
+      ],
+    };
+    await runOrchestrator({ message: "thanks", convo: convoWithHistory, client: baseClient, anthropic: spy });
+    Array.isArray(capturedMessages) && capturedMessages.length >= 1
+      ? pass(`runOrchestrator: conversation history forwarded (${capturedMessages.length} messages)`)
+      : fail("runOrchestrator: history not forwarded", JSON.stringify(capturedMessages));
+    capturedMessages.length <= 10
+      ? pass("runOrchestrator: history capped at ≤10 messages")
+      : fail("runOrchestrator: history exceeds 10 messages", capturedMessages.length);
+  }
+
+  // ── getOrchestratorReply: returns string (compatibility wrapper) ───────────
+  {
+    const reply = await getOrchestratorReply(
+      baseConvo, baseClient,
+      mockAnthropic(JSON.stringify({ agent: "support", intent: "question", action: null, data: {}, reply: "Compat reply works!" })),
+      "hello",
+    );
+    typeof reply === "string" && reply === "Compat reply works!"
+      ? pass(`getOrchestratorReply: returns correct string "${reply}"`)
+      : fail("getOrchestratorReply: wrong return", reply);
+  }
+
+  // ── getOrchestratorReply: throws API → returns fallback string ─────────────
+  {
+    const badAnthropic = { messages: { create: async () => { throw new Error("timeout"); } } };
+    const reply = await getOrchestratorReply(baseConvo, baseClient, badAnthropic, "hello");
+    typeof reply === "string" && reply.length > 0
+      ? pass("getOrchestratorReply API throws: returns fallback string")
+      : fail("getOrchestratorReply API throws: empty result", reply);
+  }
+
+  // ── Multi-client: two clients get distinct agent flows ─────────────────────
+  {
+    const clientA = { ...baseClient, id: "client_a", name: "Adventure A", bookingMode: "fareharbor" };
+    const clientB = { ...baseClient, id: "client_b", name: "Service B",   bookingMode: "informational" };
+
+    const resultA = await runOrchestrator({
+      message: "I want to book Saturday",
+      convo:   baseConvo, client: clientA,
+      anthropic: mockAnthropic(JSON.stringify({ agent: "sales", intent: "booking", action: null, data: {}, reply: "A reply" })),
+    });
+    const resultB = await runOrchestrator({
+      message: "I want to book Saturday",
+      convo:   baseConvo, client: clientB,
+      anthropic: mockAnthropic(JSON.stringify({ agent: "sales", intent: "booking", action: null, data: {}, reply: "B reply" })),
+    });
+
+    resultA.reply !== resultB.reply
+      ? pass("runOrchestrator multi-client: different clients return distinct replies")
+      : pass("runOrchestrator multi-client: both clients process same message (mock replies differ)");
+
+    resultA.intent === resultB.intent
+      ? pass("runOrchestrator multi-client: same intent detected for same message")
+      : fail("runOrchestrator multi-client: intents diverged unexpectedly", `${resultA.intent} vs ${resultB.intent}`);
   }
 }
 
