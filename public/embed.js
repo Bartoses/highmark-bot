@@ -311,15 +311,11 @@
   }
 
   async function sendGreeting() {
-    // Use configured greeting if available, otherwise hit the API
-    if (config.greeting) {
-      messages.push({ role: "assistant", content: config.greeting });
-      saveHistory(messages);
-      appendMessageEl("assistant", config.greeting);
-      scrollBottom();
-    } else {
-      await sendToApi("hi");
-    }
+    // Always fetch the greeting from the server — it returns getSeasonalOpener()
+    // which is the same opener the SMS bot sends to new numbers.
+    // The API handles this correctly: any first message from a new session
+    // returns the seasonal opener (config.greeting is only used for the portal preview).
+    await sendToApi("hi");
   }
 
   async function sendMessage() {
