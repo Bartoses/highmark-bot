@@ -9,9 +9,12 @@
   "use strict";
 
   // ── Bootstrap ───────────────────────────────────────────────────────────────
-  const script    = document.currentScript || document.querySelector("script[data-client]");
-  const CLIENT_ID = script?.getAttribute("data-client");
-  const BASE_URL  = script?.getAttribute("data-url") || (script?.src ? new URL(script.src).origin : "");
+  const script      = document.currentScript || document.querySelector("script[data-client]");
+  const CLIENT_ID   = script?.getAttribute("data-client");
+  const BASE_URL    = script?.getAttribute("data-url") || (script?.src ? new URL(script.src).origin : "");
+  // data-bottom overrides the config's bottomOffset — useful when the host site
+  // has a sticky nav/button the widget would cover (e.g. data-bottom="80")
+  const BOTTOM_ATTR = parseInt(script?.getAttribute("data-bottom"), 10) || null;
 
   if (!CLIENT_ID || !BASE_URL) {
     console.warn("[Highmark] Missing data-client or could not determine base URL.");
@@ -61,6 +64,7 @@
     delaySeconds: 0,
     autoOpen:     false,
     position:     "right",
+    bottomOffset: 20,  // px from bottom — increase to avoid sticky navs/buttons
   };
 
   // ── Panel width by size ──────────────────────────────────────────────────────
@@ -70,13 +74,14 @@
 
   // ── CSS (injected once; CSS vars updated dynamically) ───────────────────────
   function buildCSS() {
-    const pos = config.position === "left" ? "left:20px" : "right:20px";
-    const align = config.position === "left" ? "flex-start" : "flex-end";
-    const br = parseInt(config.borderRadius, 10) || 16;
-    const w = panelWidth();
+    const pos    = config.position === "left" ? "left:20px" : "right:20px";
+    const align  = config.position === "left" ? "flex-start" : "flex-end";
+    const br     = parseInt(config.borderRadius, 10) || 16;
+    const w      = panelWidth();
+    const bottom = BOTTOM_ATTR ?? config.bottomOffset ?? 20;
     return `
     #hm-widget * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    #hm-widget { position: fixed; ${pos}; bottom: 20px; z-index: 2147483647; display: flex; flex-direction: column; align-items: ${align}; pointer-events: none; }
+    #hm-widget { position: fixed; ${pos}; bottom: ${bottom}px; z-index: 2147483647; display: flex; flex-direction: column; align-items: ${align}; pointer-events: none; }
     #hm-btn { pointer-events: auto; }
     #hm-panel:not(.hm-hidden) { pointer-events: auto; }
     #hm-btn {

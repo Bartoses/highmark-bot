@@ -640,6 +640,11 @@ tr:hover td { background: var(--panel2); }
                   <label>Delay Before Showing <span class="form-hint" style="display:inline;">(seconds)</span></label>
                   <input type="number" id="ec-delay-seconds" class="form-input" value="0" min="0" max="60" oninput="updateEmbedPreview()">
                 </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Bottom Offset <span class="form-hint" style="display:inline;">(px from bottom)</span></label>
+                  <input type="number" id="ec-bottom-offset" class="form-input" value="20" min="0" max="300" oninput="updateEmbedPreview()">
+                  <div class="form-hint">Increase if the widget overlaps a sticky nav or button bar.</div>
+                </div>
               </div>
               <div class="form-group" style="margin-bottom:0;">
                 <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
@@ -3889,6 +3894,7 @@ async function loadEmbedConfig() {
   document.getElementById('ec-welcome-message').value   = cfg.welcome_message || '';
   document.getElementById('ec-position').value          = cfg.position        || 'bottom_right';
   document.getElementById('ec-delay-seconds').value     = cfg.delay_seconds   ?? 0;
+  document.getElementById('ec-bottom-offset').value     = cfg.bottom_offset   ?? 20;
   document.getElementById('ec-auto-open').checked       = !!cfg.auto_open;
   updateEmbedPreview();
 }
@@ -3908,6 +3914,7 @@ async function saveEmbedConfig() {
     welcome_message: document.getElementById('ec-welcome-message').value || null,
     position:        document.getElementById('ec-position').value,
     delay_seconds:   parseInt(document.getElementById('ec-delay-seconds').value, 10) || 0,
+    bottom_offset:   parseInt(document.getElementById('ec-bottom-offset').value, 10) || 20,
     auto_open:       document.getElementById('ec-auto-open').checked,
   };
 
@@ -3945,6 +3952,7 @@ function getEmbedFormValues() {
     welcomeMsg:     document.getElementById('ec-welcome-message')?.value || '',
     position:       document.getElementById('ec-position')?.value        || 'bottom_right',
     delaySeconds:   parseInt(document.getElementById('ec-delay-seconds')?.value, 10) || 0,
+    bottomOffset:   parseInt(document.getElementById('ec-bottom-offset')?.value, 10) || 20,
     autoOpen:       document.getElementById('ec-auto-open')?.checked     || false,
   };
 }
@@ -3965,8 +3973,9 @@ function updateEmbedPreview() {
   // Use actual bot opener text as the default greeting in preview
   const greetMsg = v.welcomeMsg || _embedOpenerText || `Hi! I'm ${_embedBotName} — how can I help?`;
 
+  const previewBottom = Math.min(v.bottomOffset, 60); // cap preview offset so it stays visible
   previewEl.innerHTML = `
-    <div style="position:absolute;bottom:16px;${posRight ? 'right:16px' : 'left:16px'};display:flex;flex-direction:column;align-items:${posRight ? 'flex-end' : 'flex-start'};gap:10px;width:${panelW};max-width:calc(100% - 32px);">
+    <div style="position:absolute;bottom:${previewBottom}px;${posRight ? 'right:16px' : 'left:16px'};display:flex;flex-direction:column;align-items:${posRight ? 'flex-end' : 'flex-start'};gap:10px;width:${panelW};max-width:calc(100% - 32px);">
       <!-- Chat panel -->
       <div style="width:100%;background:#fff;border-radius:${br}px;box-shadow:0 4px 24px rgba(0,0,0,.15);overflow:hidden;">
         <!-- Header -->

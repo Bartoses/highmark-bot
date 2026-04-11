@@ -178,17 +178,30 @@ export async function linkSessionToLead(supabase, sessionId, leadId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// getWebClientConfig — public-safe config blob for the widget frontend
+// getWebClientConfig — public-safe config blob for the widget frontend.
+// Accepts optional embedConfig row from the embed_config table; falls back to
+// static client fields and sensible defaults when no row exists yet.
 // ─────────────────────────────────────────────────────────────────────────────
-export function getWebClientConfig(client) {
+export function getWebClientConfig(client, embedConfig = null) {
+  const ec  = embedConfig ?? {};
+  const pos = (ec.position ?? client.widgetPosition ?? "bottom_right") === "bottom_left" ? "left" : "right";
   return {
-    clientId:     client.id,
-    name:         client.name,
-    botName:      client.botName ?? "Summit",
-    greeting:     client.openerText
-                    ?? `Hi! I'm ${client.botName ?? "Summit"} — how can I help today?`,
-    primaryColor: client.widgetColor ?? "#2563eb",
-    position:     client.widgetPosition ?? "right",
+    clientId:       client.id,
+    name:           client.name,
+    botName:        client.botName ?? "Summit",
+    greeting:       ec.welcome_message ?? client.openerText
+                      ?? `Hi! I'm ${client.botName ?? "Summit"} — how can I help today?`,
+    primaryColor:   ec.primary_color  ?? client.widgetColor ?? "#2563eb",
+    buttonColor:    ec.button_color   ?? ec.primary_color ?? client.widgetColor ?? "#2563eb",
+    textColor:      ec.text_color     ?? "#ffffff",
+    buttonText:     ec.button_text    ?? "Chat with us",
+    size:           ec.size           ?? "medium",
+    borderRadius:   ec.border_radius  ?? "16",
+    logoUrl:        ec.logo_url       ?? null,
+    delaySeconds:   ec.delay_seconds   ?? 0,
+    autoOpen:       ec.auto_open       ?? false,
+    position:       pos,
+    bottomOffset:   ec.bottom_offset   ?? 20,
   };
 }
 

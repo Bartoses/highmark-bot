@@ -1731,6 +1731,7 @@ const EMBED_DEFAULTS = {
   delay_seconds:   0,
   auto_open:       false,
   position:        "bottom_right",
+  bottom_offset:   20,
 };
 
 const EMBED_ALLOWED_FIELDS = Object.keys(EMBED_DEFAULTS);
