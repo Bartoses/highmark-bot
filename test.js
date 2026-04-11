@@ -104,6 +104,7 @@ import {
 } from "./prompts.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
 import { runOrchestrator, getOrchestratorReply } from "./agentOrchestrator.js";
+import { detectOwner, buildOwnerInstruction, routeOwnerAgent, isOwnerActionAllowed } from "./ownerMode.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -3026,6 +3027,7 @@ async function main() {
   await test72(); // Client Config System: getClientProfile, getClientKnowledge, safeJsonParse, truncateText
   await test73(); // Action Engine: executeAction, all actions, fallbacks, missing integrations
   await test74(); // Agent Orchestrator: runOrchestrator, parseAgentResponse, action execution, fallbacks
+  await test75(); // Owner Mode: detectOwner, buildOwnerInstruction, routeOwnerAgent, isOwnerActionAllowed, orchestrator integration
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -11358,6 +11360,282 @@ async function test74() {
     resultA.intent === resultB.intent
       ? pass("runOrchestrator multi-client: same intent detected for same message")
       : fail("runOrchestrator multi-client: intents diverged unexpectedly", `${resultA.intent} vs ${resultB.intent}`);
+  }
+}
+
+async function test75() {
+  console.log("\nTEST 75: Owner Mode (detectOwner, buildOwnerInstruction, routeOwnerAgent, isOwnerActionAllowed)");
+
+  // ── Base client configs for multi-client isolation tests ─────────────────
+  const clientA = {
+    id: "client_a", name: "Adventure A",
+    ownerPhone: "+19705550001",
+    supportPhone: "(970) 555-0002",
+  };
+  const clientB = {
+    id: "client_b", name: "Adventure B",
+    ownerPhone: "+13035550099",
+    supportPhone: "(303) 555-0100",
+  };
+  const clientNoOwner = {
+    id: "client_c", name: "No Owner Set",
+    supportPhone: "(720) 555-0200",
+  };
+  const clientWithOperators = {
+    id: "client_d", name: "Multi Operator",
+    ownerPhone: "+19705550001",
+    operatorPhones: ["+13035550010", "+17205550020"],
+  };
+
+  // ── detectOwner: exact E.164 match ────────────────────────────────────────
+  detectOwner("+19705550001", clientA) === true
+    ? pass("detectOwner: E.164 match → true")
+    : fail("detectOwner: E.164 match failed");
+
+  // ── detectOwner: normalized 10-digit match ────────────────────────────────
+  detectOwner("9705550001", clientA) === true
+    ? pass("detectOwner: 10-digit normalized match → true")
+    : fail("detectOwner: 10-digit normalized failed");
+
+  // ── detectOwner: display-format match ─────────────────────────────────────
+  detectOwner("(970) 555-0001", clientA) === true
+    ? pass("detectOwner: display format match → true")
+    : fail("detectOwner: display format failed");
+
+  // ── detectOwner: different phone → false ──────────────────────────────────
+  detectOwner("+19705550002", clientA) === false
+    ? pass("detectOwner: non-owner phone → false")
+    : fail("detectOwner: non-owner phone incorrectly matched");
+
+  // ── detectOwner: no ownerPhone on client → false ──────────────────────────
+  detectOwner("+19705550001", clientNoOwner) === false
+    ? pass("detectOwner: no ownerPhone → false")
+    : fail("detectOwner: no ownerPhone should be false");
+
+  // ── detectOwner: operator in operatorPhones list ──────────────────────────
+  detectOwner("+13035550010", clientWithOperators) === true
+    ? pass("detectOwner: operatorPhones[0] match → true")
+    : fail("detectOwner: operatorPhones[0] failed");
+
+  detectOwner("+17205550020", clientWithOperators) === true
+    ? pass("detectOwner: operatorPhones[1] match → true")
+    : fail("detectOwner: operatorPhones[1] failed");
+
+  // ── detectOwner: multi-client isolation ───────────────────────────────────
+  detectOwner("+19705550001", clientA) === true  &&
+  detectOwner("+19705550001", clientB) === false
+    ? pass("detectOwner: multi-client isolation — A owner is not B owner")
+    : fail("detectOwner: multi-client isolation failed");
+
+  detectOwner("+13035550099", clientB) === true  &&
+  detectOwner("+13035550099", clientA) === false
+    ? pass("detectOwner: multi-client isolation — B owner is not A owner")
+    : fail("detectOwner: multi-client isolation B→A failed");
+
+  // ── detectOwner: null/missing inputs → false (never throws) ───────────────
+  for (const [from, client, label] of [
+    [null,        clientA, "null fromNumber"],
+    [undefined,   clientA, "undefined fromNumber"],
+    ["",          clientA, "empty fromNumber"],
+    ["+1970000",  null,    "null client"],
+    ["+1970000",  undefined, "undefined client"],
+    ["not-phone", clientA, "invalid phone string"],
+  ]) {
+    try {
+      const result = detectOwner(from, client);
+      result === false
+        ? pass(`detectOwner(${label}): returns false safely`)
+        : fail(`detectOwner(${label}): expected false, got true`);
+    } catch (e) {
+      fail(`detectOwner(${label}): threw exception`, e.message);
+    }
+  }
+
+  // ── buildOwnerInstruction: returns non-empty string ───────────────────────
+  const instruction = buildOwnerInstruction(clientA);
+  typeof instruction === "string" && instruction.length > 20
+    ? pass("buildOwnerInstruction: returns non-empty string")
+    : fail("buildOwnerInstruction: too short or wrong type", typeof instruction);
+
+  instruction.includes("OWNER")
+    ? pass("buildOwnerInstruction: contains OWNER keyword")
+    : fail("buildOwnerInstruction: missing OWNER keyword");
+
+  instruction.includes(clientA.name)
+    ? pass(`buildOwnerInstruction: includes client name "${clientA.name}"`)
+    : fail("buildOwnerInstruction: missing client name");
+
+  instruction.includes("capture_lead") || instruction.toLowerCase().includes("do not")
+    ? pass("buildOwnerInstruction: mentions blocked action restrictions")
+    : fail("buildOwnerInstruction: missing restriction block");
+
+  // ── buildOwnerInstruction: null client → no throw ─────────────────────────
+  try {
+    const fallback = buildOwnerInstruction(null);
+    typeof fallback === "string" && fallback.length > 0
+      ? pass("buildOwnerInstruction(null): safe fallback string")
+      : fail("buildOwnerInstruction(null): empty result", fallback);
+  } catch (e) {
+    fail("buildOwnerInstruction(null): threw exception", e.message);
+  }
+
+  // ── routeOwnerAgent: known intents → correct agent ────────────────────────
+  const agentCases = [
+    ["report",    "operations"],
+    ["analytics", "operations"],
+    ["campaign",  "marketing"],
+    ["promotion", "marketing"],
+    ["strategy",  "strategy"],
+    ["support",   "operations"],
+    ["question",  "operations"],
+    ["booking",   "operations"],
+    ["schedule",  "operations"],
+    ["complaint", "operations"],
+    ["escalation","operations"],
+  ];
+  for (const [intent, expected] of agentCases) {
+    const got = routeOwnerAgent(intent);
+    got === expected
+      ? pass(`routeOwnerAgent("${intent}") → "${got}"`)
+      : fail(`routeOwnerAgent("${intent}")`, `got "${got}", expected "${expected}"`);
+  }
+
+  // ── routeOwnerAgent: unknown intent → "operations" fallback ───────────────
+  routeOwnerAgent("unknown_thing") === "operations"
+    ? pass("routeOwnerAgent: unknown intent → operations fallback")
+    : fail("routeOwnerAgent: unknown intent fallback wrong", routeOwnerAgent("unknown_thing"));
+
+  routeOwnerAgent(null) === "operations"
+    ? pass("routeOwnerAgent(null) → operations (no throw)")
+    : fail("routeOwnerAgent(null) unexpected result", routeOwnerAgent(null));
+
+  // ── isOwnerActionAllowed: allowed actions ─────────────────────────────────
+  const allowedActions = [
+    "create_booking", "check_availability", "update_contact",
+    "send_followup", "send_campaign", "generate_report",
+    null, undefined, "",
+  ];
+  for (const action of allowedActions) {
+    isOwnerActionAllowed(action) === true
+      ? pass(`isOwnerActionAllowed("${action}"): allowed`)
+      : fail(`isOwnerActionAllowed("${action}"): should be allowed`);
+  }
+
+  // ── isOwnerActionAllowed: blocked actions ─────────────────────────────────
+  const blockedActions = ["capture_lead", "escalate_to_human"];
+  for (const action of blockedActions) {
+    isOwnerActionAllowed(action) === false
+      ? pass(`isOwnerActionAllowed("${action}"): correctly blocked`)
+      : fail(`isOwnerActionAllowed("${action}"): should be blocked`);
+  }
+
+  // ── isOwnerActionAllowed: case-insensitive ────────────────────────────────
+  isOwnerActionAllowed("CAPTURE_LEAD") === false
+    ? pass("isOwnerActionAllowed: case-insensitive blocking (CAPTURE_LEAD)")
+    : fail("isOwnerActionAllowed: CAPTURE_LEAD should be blocked");
+
+  isOwnerActionAllowed("Escalate_To_Human") === false
+    ? pass("isOwnerActionAllowed: case-insensitive blocking (Escalate_To_Human)")
+    : fail("isOwnerActionAllowed: Escalate_To_Human should be blocked");
+
+  // ── runOrchestrator: owner mode sets ownerMode=true in result ─────────────
+  {
+    function mockAnthropic(text) {
+      return { messages: { create: async () => ({ content: [{ text }] }) } };
+    }
+    const ownerClient = {
+      id: "owner_test", name: "Test Co", industry: "outdoor", tone: "warm",
+      bookingMode: "fareharbor", services: ["tours"],
+      supportPhone: "(970) 555-0000", handoffPhone: "(970) 555-0001",
+      ownerPhone: "+19705551234",
+      bookingUrls: {}, bookingLinks: [],
+    };
+
+    const ownerResult = await runOrchestrator({
+      message:    "give me this week's bookings",
+      fromNumber: "+19705551234",
+      convo:      { messages: [] },
+      client:     ownerClient,
+      anthropic:  mockAnthropic(JSON.stringify({ agent: "operations", intent: "report", action: null, data: {}, reply: "Here's your report." })),
+    });
+
+    ownerResult.ownerMode === true
+      ? pass("runOrchestrator: owner phone → ownerMode=true in result")
+      : fail("runOrchestrator: ownerMode should be true", JSON.stringify(ownerResult.ownerMode));
+
+    ownerResult.agent === "operations"
+      ? pass("runOrchestrator: owner report intent → agent=operations")
+      : fail("runOrchestrator: owner agent wrong", ownerResult.agent);
+
+    typeof ownerResult.reply === "string" && ownerResult.reply.length > 0
+      ? pass("runOrchestrator: owner mode returns valid reply")
+      : fail("runOrchestrator: owner mode reply empty");
+  }
+
+  // ── runOrchestrator: non-owner → ownerMode=false ──────────────────────────
+  {
+    function mockAnthropic(text) {
+      return { messages: { create: async () => ({ content: [{ text }] }) } };
+    }
+    const ownerClient = {
+      id: "owner_test2", name: "Test Co", industry: "outdoor", tone: "warm",
+      bookingMode: "fareharbor", services: ["tours"],
+      supportPhone: "(970) 555-0000", handoffPhone: "(970) 555-0001",
+      ownerPhone: "+19705551234",
+      bookingUrls: {}, bookingLinks: [],
+    };
+
+    const guestResult = await runOrchestrator({
+      message:    "I want to book a tour",
+      fromNumber: "+13035559999",
+      convo:      { messages: [] },
+      client:     ownerClient,
+      anthropic:  mockAnthropic(JSON.stringify({ agent: "sales", intent: "booking", action: null, data: {}, reply: "Let me help!" })),
+    });
+
+    guestResult.ownerMode === false
+      ? pass("runOrchestrator: non-owner phone → ownerMode=false")
+      : fail("runOrchestrator: non-owner should have ownerMode=false", JSON.stringify(guestResult.ownerMode));
+  }
+
+  // ── runOrchestrator: owner blocked action is suppressed ────────────────────
+  {
+    function mockAnthropic(text) {
+      return { messages: { create: async () => ({ content: [{ text }] }) } };
+    }
+    const ownerClient = {
+      id: "owner_test3", name: "Test Co", industry: "outdoor", tone: "warm",
+      bookingMode: "fareharbor", services: ["tours"],
+      supportPhone: "(970) 555-0000", handoffPhone: "(970) 555-0001",
+      ownerPhone: "+19705551234",
+      bookingUrls: {}, bookingLinks: [],
+    };
+
+    const blockedResult = await runOrchestrator({
+      message:    "capture this lead",
+      fromNumber: "+19705551234",
+      convo:      { messages: [] },
+      client:     ownerClient,
+      anthropic:  mockAnthropic(JSON.stringify({
+        agent: "operations", intent: "question",
+        action: "capture_lead",
+        data: { name: "Test", phone: "+15550001111" },
+        reply: "Lead captured.",
+      })),
+    });
+
+    blockedResult.ownerMode === true
+      ? pass("runOrchestrator: owner blocked action test — ownerMode confirmed")
+      : fail("runOrchestrator: ownerMode should be true for blocked action test");
+
+    // actionResult.success should be false because action was blocked
+    blockedResult.actionResult !== null
+      ? pass("runOrchestrator: blocked action → actionResult set (not null)")
+      : fail("runOrchestrator: blocked action → actionResult should not be null");
+
+    blockedResult.actionResult?.success === false
+      ? pass("runOrchestrator: blocked action → actionResult.success=false")
+      : fail("runOrchestrator: blocked action success wrong", JSON.stringify(blockedResult.actionResult));
   }
 }
 

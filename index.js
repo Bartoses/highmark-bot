@@ -1960,7 +1960,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         replyText = await getOrchestratorReply(
           convo, client, anthropic, rawBody,
           fullKnowledgeCtx, extraInstruction,
-          { supabase, crmSupabase, twilioClient }
+          { supabase, crmSupabase, twilioClient, fromNumber }
         );
       } else {
         replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, extraInstruction, replyMax);
@@ -1979,7 +1979,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           replyText = await getOrchestratorReply(
             convo, client, anthropic, rawBody,
             fullKnowledgeCtx, correction,
-            { supabase, crmSupabase, twilioClient }
+            { supabase, crmSupabase, twilioClient, fromNumber }
           );
         } else {
           replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, correction, replyMax);

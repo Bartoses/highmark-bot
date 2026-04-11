@@ -31,6 +31,12 @@ import {
 import { getAgentPrompt, GLOBAL_PROMPT } from "./prompts.js";
 import { getClientKnowledge }             from "./clientConfig.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
+import {
+  detectOwner,
+  buildOwnerInstruction,
+  routeOwnerAgent,
+  isOwnerActionAllowed,
+} from "./ownerMode.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ORCHESTRATOR CONSTANTS
@@ -114,6 +120,7 @@ export async function runOrchestrator(params) {
     convo,
     client,
     anthropic,
+    fromNumber       = null,
     supabase         = null,
     crmSupabase      = null,
     twilioClient     = null,
@@ -123,17 +130,21 @@ export async function runOrchestrator(params) {
   // ── Safe defaults ──────────────────────────────────────────────────────────
   const msg = (typeof message === "string" ? message : "").trim();
 
-  let intent  = "question";
-  let context = { date: null, groupSize: null, serviceType: null, urgency: "low", returningUser: false };
-  let agent   = "support";
+  let intent    = "question";
+  let context   = { date: null, groupSize: null, serviceType: null, urgency: "low", returningUser: false };
+  let agent     = "support";
+  let ownerMode = false;
 
   try {
     // ── Step 1-3: Intent → context → agent ──────────────────────────────────
     intent  = agentDetectIntent(msg);
     context = detectContext(msg);
-    agent   = selectAgent(intent);
 
-    console.log(`[ORCHESTRATOR] msg="${msg.slice(0, 40)}…" intent=${intent} agent=${agent} urgency=${context.urgency}`);
+    // ── Owner detection (runs before agent selection) ────────────────────────
+    ownerMode = detectOwner(fromNumber, client);
+    agent = ownerMode ? routeOwnerAgent(intent) : selectAgent(intent);
+
+    console.log(`[ORCHESTRATOR] msg="${msg.slice(0, 40)}…" intent=${intent} agent=${agent} ownerMode=${ownerMode} urgency=${context.urgency}`);
 
     // ── Step 4-5: Build layered system prompt ────────────────────────────────
     // Pull per-client KB knowledge (400 chars max) — prefer passed-in context
@@ -145,12 +156,17 @@ export async function runOrchestrator(params) {
     // Append extra instruction to knowledge context so it's visible in the prompt
     const fullKnowledgeContext = [kbContext, extraInstruction].filter(Boolean).join("\n\n");
 
-    const systemPrompt = agentBuildSystemPrompt({
+    const baseSystemPrompt = agentBuildSystemPrompt({
       globalPrompt:     GLOBAL_PROMPT,
       clientProfile:    serializeClientProfile(client),
       agentPrompt:      getAgentPrompt(agent),
       knowledgeContext: fullKnowledgeContext,
     });
+
+    // Owner mode: append operator instruction to override guest-facing behavior
+    const systemPrompt = ownerMode
+      ? `${baseSystemPrompt}\n\n${buildOwnerInstruction(client)}`
+      : baseSystemPrompt;
 
     // ── Step 6: Claude API call ───────────────────────────────────────────────
     const history = buildHistory(convo);
@@ -185,22 +201,28 @@ export async function runOrchestrator(params) {
     // ── Step 8: Execute action if present ─────────────────────────────────────
     let actionResult = null;
     if (parsed.action && typeof parsed.action === "string") {
-      const integrations = buildIntegrations({ supabase, crmSupabase, twilioClient, client });
-      actionResult = await executeAction({
-        action:       parsed.action,
-        data:         parsed.data ?? {},
-        context,
-        client,
-        integrations,
-      });
+      // Owner mode: block customer-only actions
+      if (ownerMode && !isOwnerActionAllowed(parsed.action)) {
+        console.log(`[ORCHESTRATOR] owner mode blocked action=${parsed.action}`);
+        actionResult = { success: false, result: null, fallbackMessage: null };
+      } else {
+        const integrations = buildIntegrations({ supabase, crmSupabase, twilioClient, client });
+        actionResult = await executeAction({
+          action:       parsed.action,
+          data:         parsed.data ?? {},
+          context,
+          client,
+          integrations,
+        });
 
-      console.log(`[ORCHESTRATOR] action=${parsed.action} success=${actionResult.success}`);
+        console.log(`[ORCHESTRATOR] action=${parsed.action} success=${actionResult.success}`);
 
-      // If action failed and has a fallback message, incorporate it into the reply
-      if (!actionResult.success && actionResult.fallbackMessage) {
-        // Prefer Claude's reply if it already contains useful info, otherwise use fallback
-        if (!parsed.reply || parsed.reply.length < 20) {
-          parsed.reply = actionResult.fallbackMessage;
+        // If action failed and has a fallback message, incorporate it into the reply
+        if (!actionResult.success && actionResult.fallbackMessage) {
+          // Prefer Claude's reply if it already contains useful info, otherwise use fallback
+          if (!parsed.reply || parsed.reply.length < 20) {
+            parsed.reply = actionResult.fallbackMessage;
+          }
         }
       }
     }
@@ -213,7 +235,7 @@ export async function runOrchestrator(params) {
       reply = FALLBACK_REPLY;
     }
 
-    return { reply, parsed, actionResult, agent, intent, context };
+    return { reply, parsed, actionResult, agent, intent, context, ownerMode };
 
   } catch (e) {
     console.error("[ORCHESTRATOR] fatal error:", e.message);
@@ -224,6 +246,7 @@ export async function runOrchestrator(params) {
       agent,
       intent,
       context,
+      ownerMode,
     };
   }
 }
@@ -254,10 +277,11 @@ export async function getOrchestratorReply(
   message,
   knowledgeContext = "",
   extraInstruction = "",
-  { supabase = null, crmSupabase = null, twilioClient = null } = {}
+  { supabase = null, crmSupabase = null, twilioClient = null, fromNumber = null } = {}
 ) {
   const { reply } = await runOrchestrator({
     message, convo, client, anthropic,
+    fromNumber,
     supabase, crmSupabase, twilioClient,
     knowledgeContext, extraInstruction,
   });
