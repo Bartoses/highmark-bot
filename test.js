@@ -102,6 +102,7 @@ import {
   AGENT_PROMPTS,
   getAgentPrompt,
 } from "./prompts.js";
+import { executeAction, buildIntegrations } from "./actionEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -3022,6 +3023,7 @@ async function main() {
   await test70(); // Agent Core Foundation: detectIntent, detectContext, selectAgent, buildSystemPrompt, parseAgentResponse
   await test71(); // Prompt System: GLOBAL_PROMPT, agent prompts, getAgentPrompt, buildSystemPrompt integration
   await test72(); // Client Config System: getClientProfile, getClientKnowledge, safeJsonParse, truncateText
+  await test73(); // Action Engine: executeAction, all actions, fallbacks, missing integrations
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -10618,6 +10620,441 @@ async function test72() {
     composed.includes(profile.name)
       ? pass(`Integration: client name "${profile.name}" appears in composed prompt`)
       : fail("Integration: client name missing from composed prompt", profile.name);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 73: Action Engine (actionEngine.js)
+// executeAction — all actions, success paths, fallback paths, missing integrations
+// ─────────────────────────────────────────────────────────────────────────────
+async function test73() {
+  console.log("\nTEST 73: Action Engine (executeAction)");
+
+  // ── Result shape helper ────────────────────────────────────────────────────
+  function isValidResult(r) {
+    return (
+      typeof r === "object" && r !== null &&
+      "success"         in r &&
+      "result"          in r &&
+      "fallbackMessage" in r &&
+      typeof r.result === "object"
+    );
+  }
+
+  // ── executeAction: no action → fail safely ─────────────────────────────────
+  for (const val of [undefined, null, "", {}]) {
+    const r = await executeAction(val);
+    isValidResult(r) && r.success === false
+      ? pass(`executeAction(${JSON.stringify(val)}): returns safe fail result`)
+      : fail(`executeAction(${JSON.stringify(val)}): bad return shape`, JSON.stringify(r));
+  }
+
+  // ── executeAction: unknown action ─────────────────────────────────────────
+  {
+    const r = await executeAction({ action: "do_the_thing" });
+    isValidResult(r) && r.success === false
+      ? pass(`executeAction unknown action: returns fail result`)
+      : fail(`executeAction unknown action: bad shape`, JSON.stringify(r));
+  }
+
+  // ── create_booking: missing date/serviceType → fail with message ───────────
+  {
+    const r = await executeAction({ action: "create_booking", data: {}, context: {}, integrations: {} });
+    isValidResult(r) && r.success === false && typeof r.fallbackMessage === "string"
+      ? pass("create_booking missing data: returns fail + fallbackMessage")
+      : fail("create_booking missing data: bad result", JSON.stringify(r));
+  }
+
+  // ── create_booking: integration present → success ──────────────────────────
+  {
+    const mockIntegrations = {
+      booking: {
+        createBooking: async () => ({
+          bookingId: "BK-001",
+          confirmationDetails: { date: "2026-04-20", guests: 2 },
+        }),
+        getBookingLink: () => "https://example.com/book",
+      },
+    };
+    const r = await executeAction({
+      action: "create_booking",
+      data:   { date: "2026-04-20", groupSize: 2, serviceType: "snowmobile" },
+      context: {},
+      client: { id: "test_client" },
+      integrations: mockIntegrations,
+    });
+    isValidResult(r) && r.success === true && r.result.bookingId === "BK-001"
+      ? pass("create_booking success: bookingId returned")
+      : fail("create_booking success: bad result", JSON.stringify(r));
+  }
+
+  // ── create_booking: integration throws → fallback with link ───────────────
+  {
+    const mockIntegrations = {
+      booking: {
+        createBooking: async () => { throw new Error("API timeout"); },
+        getBookingLink: () => "https://example.com/book",
+      },
+    };
+    const r = await executeAction({
+      action: "create_booking",
+      data:   { date: "2026-04-20", serviceType: "snowmobile" },
+      integrations: mockIntegrations,
+    });
+    isValidResult(r) && r.success === false && r.fallbackMessage?.includes("https://example.com/book")
+      ? pass("create_booking API throws: fallback link in message")
+      : fail("create_booking API throws: bad fallback", JSON.stringify(r));
+  }
+
+  // ── create_booking: integration returns nothing → fallback ─────────────────
+  {
+    const mockIntegrations = {
+      booking: {
+        createBooking: async () => null,
+        getBookingLink: () => "https://example.com/book",
+      },
+    };
+    const r = await executeAction({
+      action: "create_booking",
+      data:   { date: "2026-04-20", serviceType: "tour" },
+      integrations: mockIntegrations,
+    });
+    isValidResult(r) && r.success === false
+      ? pass("create_booking null return: fallback result")
+      : fail("create_booking null return: bad shape", JSON.stringify(r));
+  }
+
+  // ── check_availability: no integration → fail with message ────────────────
+  {
+    const r = await executeAction({ action: "check_availability", data: {}, integrations: {} });
+    isValidResult(r) && r.success === false
+      ? pass("check_availability no integration: returns fail")
+      : fail("check_availability no integration: bad shape", JSON.stringify(r));
+  }
+
+  // ── check_availability: success path ──────────────────────────────────────
+  {
+    const mockIntegrations = {
+      booking: {
+        checkAvailability: async () => ({
+          available: true,
+          slots: [{ time: "9am", capacity: 8 }, { time: "1pm", capacity: 6 }],
+          nextOpen: "2026-04-20",
+        }),
+        getBookingLink: () => "https://example.com/book",
+      },
+    };
+    const r = await executeAction({
+      action: "check_availability",
+      data:   { date: "2026-04-20", serviceType: "snowmobile" },
+      integrations: mockIntegrations,
+    });
+    isValidResult(r) && r.success === true && r.result.available === true && Array.isArray(r.result.slots)
+      ? pass("check_availability success: available=true, slots returned")
+      : fail("check_availability success: bad result", JSON.stringify(r));
+    r.result.slots.length === 2
+      ? pass("check_availability success: 2 slots returned")
+      : fail("check_availability success: slot count", `got ${r.result.slots?.length}`);
+  }
+
+  // ── check_availability: API throws → graceful fallback ────────────────────
+  {
+    const mockIntegrations = {
+      booking: {
+        checkAvailability: async () => { throw new Error("network error"); },
+        getBookingLink: () => "https://fh.com/browse",
+      },
+    };
+    const r = await executeAction({ action: "check_availability", data: { date: "2026-04-20" }, integrations: mockIntegrations });
+    isValidResult(r) && r.success === false && typeof r.fallbackMessage === "string"
+      ? pass("check_availability throws: graceful fallback")
+      : fail("check_availability throws: bad fallback", JSON.stringify(r));
+  }
+
+  // ── capture_lead: missing phone → fail ────────────────────────────────────
+  {
+    const mockCrm = { upsertContact: async () => ({ id: "c1" }), addTags: async () => {} };
+    const r = await executeAction({ action: "capture_lead", data: { name: "Alice" }, integrations: { crm: mockCrm } });
+    isValidResult(r) && r.success === false
+      ? pass("capture_lead no phone: returns fail")
+      : fail("capture_lead no phone: bad shape", JSON.stringify(r));
+  }
+
+  // ── capture_lead: success path ────────────────────────────────────────────
+  {
+    let savedPhone = null;
+    let savedTags  = null;
+    const mockCrm = {
+      upsertContact: async (phone, data) => { savedPhone = phone; return { id: "CRM-99" }; },
+      addTags:       async (phone, tags) => { savedTags = tags; },
+    };
+    const r = await executeAction({
+      action: "capture_lead",
+      data:   { phone: "+15550001234", name: "Bob", tags: ["high_intent"], intent: "booking" },
+      integrations: { crm: mockCrm },
+    });
+    isValidResult(r) && r.success === true && r.result.contactId === "CRM-99"
+      ? pass("capture_lead success: contactId returned")
+      : fail("capture_lead success: bad result", JSON.stringify(r));
+    savedPhone === "+15550001234"
+      ? pass("capture_lead success: correct phone passed to CRM")
+      : fail("capture_lead success: phone mismatch", savedPhone);
+    Array.isArray(savedTags) && savedTags.includes("high_intent")
+      ? pass("capture_lead success: tags saved")
+      : fail("capture_lead success: tags not saved", JSON.stringify(savedTags));
+  }
+
+  // ── capture_lead: CRM throws → fallback ───────────────────────────────────
+  {
+    const mockCrm = { upsertContact: async () => { throw new Error("DB down"); } };
+    const r = await executeAction({
+      action: "capture_lead",
+      data:   { phone: "+15550001234" },
+      integrations: { crm: mockCrm },
+    });
+    isValidResult(r) && r.success === false
+      ? pass("capture_lead CRM throws: graceful fallback")
+      : fail("capture_lead CRM throws: bad fallback", JSON.stringify(r));
+  }
+
+  // ── update_contact: opted_out not overwritten ─────────────────────────────
+  {
+    let savedData = null;
+    const mockCrm = { upsertContact: async (phone, data) => { savedData = data; return {}; } };
+    await executeAction({
+      action: "update_contact",
+      data:   { phone: "+15550001234", name: "Carol", opted_out: true },
+      integrations: { crm: mockCrm },
+    });
+    !("opted_out" in (savedData ?? {}))
+      ? pass("update_contact: opted_out stripped from update payload")
+      : fail("update_contact: opted_out was NOT stripped", JSON.stringify(savedData));
+  }
+
+  // ── update_contact: no phone → fail ──────────────────────────────────────
+  {
+    const r = await executeAction({ action: "update_contact", data: { name: "Dan" }, integrations: { crm: {} } });
+    isValidResult(r) && r.success === false
+      ? pass("update_contact no phone: returns fail")
+      : fail("update_contact no phone: bad shape", JSON.stringify(r));
+  }
+
+  // ── send_followup: missing phone/body → fail ──────────────────────────────
+  {
+    const mock = { messaging: { scheduleMessage: async () => ({ id: "sm1" }) } };
+    const r = await executeAction({ action: "send_followup", data: { phone: "+15550001234" }, integrations: mock });
+    isValidResult(r) && r.success === false
+      ? pass("send_followup no body: returns fail")
+      : fail("send_followup no body: bad shape", JSON.stringify(r));
+  }
+
+  // ── send_followup: success path ───────────────────────────────────────────
+  {
+    let scheduled = null;
+    const mock = {
+      messaging: {
+        scheduleMessage: async (opts) => { scheduled = opts; return { id: "sm-42" }; },
+      },
+    };
+    const r = await executeAction({
+      action: "send_followup",
+      data: { phone: "+15550001234", body: "Hey, following up!", send_at: "2026-04-20T09:00:00Z" },
+      integrations: mock,
+    });
+    isValidResult(r) && r.success === true && r.result.messageId === "sm-42"
+      ? pass("send_followup success: messageId returned")
+      : fail("send_followup success: bad result", JSON.stringify(r));
+    scheduled?.phone === "+15550001234" && scheduled?.body === "Hey, following up!"
+      ? pass("send_followup success: correct data passed to scheduler")
+      : fail("send_followup success: scheduler data mismatch", JSON.stringify(scheduled));
+  }
+
+  // ── send_followup: no messaging integration → fail ────────────────────────
+  {
+    const r = await executeAction({ action: "send_followup", data: { phone: "+15550001234", body: "hi" }, integrations: {} });
+    isValidResult(r) && r.success === false
+      ? pass("send_followup no integration: returns fail")
+      : fail("send_followup no integration: bad shape", JSON.stringify(r));
+  }
+
+  // ── send_campaign: no message → fail ─────────────────────────────────────
+  {
+    const mock = { crm: { sendCampaign: async () => ({ id: "c1", status: "queued" }) } };
+    const r = await executeAction({ action: "send_campaign", data: { segment: "all_leads" }, integrations: mock });
+    isValidResult(r) && r.success === false
+      ? pass("send_campaign no message: returns fail")
+      : fail("send_campaign no message: bad shape", JSON.stringify(r));
+  }
+
+  // ── send_campaign: success path ───────────────────────────────────────────
+  {
+    const mock = { crm: { sendCampaign: async () => ({ id: "CAMP-7", status: "queued" }) } };
+    const r = await executeAction({
+      action: "send_campaign",
+      data: { segment: "engaged_leads", message: "Special offer this weekend!", name: "Spring promo" },
+      integrations: mock,
+    });
+    isValidResult(r) && r.success === true && r.result.campaignId === "CAMP-7"
+      ? pass("send_campaign success: campaignId returned")
+      : fail("send_campaign success: bad result", JSON.stringify(r));
+    r.result.status === "queued"
+      ? pass("send_campaign success: status=queued")
+      : fail("send_campaign success: status", r.result.status);
+  }
+
+  // ── generate_report: no database integration → fail ───────────────────────
+  {
+    const r = await executeAction({ action: "generate_report", integrations: {} });
+    isValidResult(r) && r.success === false
+      ? pass("generate_report no DB: returns fail")
+      : fail("generate_report no DB: bad shape", JSON.stringify(r));
+  }
+
+  // ── generate_report: mocked DB → structured result ────────────────────────
+  {
+    const mockDb = {
+      supabase: {
+        from: (table) => ({
+          select: () => ({
+            eq:    ()  => ({ count: "exact", head: true }) && {
+              eq: () => Promise.resolve({ count: table === "confirmations_sent" ? 12 : table === "leads" ? 34 : 5, error: null }),
+            },
+            ilike: () => ({
+              order: () => ({
+                limit: () => Promise.resolve({ data: [{ summary: "REA: 2hr open" }], error: null }),
+              }),
+            }),
+          }),
+        }),
+      },
+    };
+
+    // Use a simpler deterministic mock
+    const structuredMock = {
+      supabase: {
+        from: (table) => {
+          const base = {
+            select: (_fields, opts) => ({
+              eq: (_f, _v) => {
+                if (opts?.count === "exact") {
+                  return { eq: () => Promise.resolve({ count: table === "confirmations_sent" ? 12 : table === "leads" ? 34 : 5, error: null }) };
+                }
+                return { ilike: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [{ summary: "REA: 2hr open" }], error: null }) }) }) };
+              },
+            }),
+          };
+          return base;
+        },
+      },
+    };
+
+    const r = await executeAction({
+      action: "generate_report",
+      client: { id: "csr_rea" },
+      integrations: { database: structuredMock },
+    });
+    // generate_report may partially succeed (some sub-queries may fail with mock)
+    isValidResult(r)
+      ? pass("generate_report mock DB: returns valid result shape")
+      : fail("generate_report mock DB: bad shape", JSON.stringify(r));
+
+    if (r.success) {
+      "generatedAt" in r.result
+        ? pass("generate_report: generatedAt present")
+        : fail("generate_report: generatedAt missing", JSON.stringify(r.result));
+      "clientId" in r.result
+        ? pass("generate_report: clientId present")
+        : fail("generate_report: clientId missing");
+    }
+  }
+
+  // ── escalate_to_human: returns fallbackMessage ────────────────────────────
+  {
+    const client = { handoffPhone: "(970) 439-1707", botName: "Summit" };
+    const r = await executeAction({ action: "escalate_to_human", client });
+    isValidResult(r) && r.success === true
+      ? pass("escalate_to_human: success=true")
+      : fail("escalate_to_human: bad shape", JSON.stringify(r));
+    typeof r.fallbackMessage === "string" && r.fallbackMessage.includes("970")
+      ? pass(`escalate_to_human: fallbackMessage contains phone: "${r.fallbackMessage}"`)
+      : fail("escalate_to_human: fallbackMessage missing phone", r.fallbackMessage);
+    r.result.escalated === true
+      ? pass("escalate_to_human: result.escalated=true")
+      : fail("escalate_to_human: escalated flag missing");
+  }
+
+  // ── escalate_to_human: no phone → still returns message ───────────────────
+  {
+    const r = await executeAction({ action: "escalate_to_human", client: {} });
+    isValidResult(r) && r.success === true && typeof r.fallbackMessage === "string"
+      ? pass("escalate_to_human no phone: still returns message")
+      : fail("escalate_to_human no phone: bad fallback", JSON.stringify(r));
+  }
+
+  // ── Missing integrations: all actions fail gracefully ─────────────────────
+  const actionsRequiringIntegrations = [
+    { action: "create_booking",    data: { date: "2026-04-20", serviceType: "snowmobile" } },
+    { action: "check_availability",data: {} },
+    { action: "capture_lead",      data: { phone: "+15550001234" } },
+    { action: "update_contact",    data: { phone: "+15550001234", name: "Test" } },
+    { action: "send_followup",     data: { phone: "+15550001234", body: "hi" } },
+    { action: "send_campaign",     data: { segment: "all_leads", message: "hi" } },
+    { action: "generate_report",   data: {} },
+  ];
+  for (const { action, data } of actionsRequiringIntegrations) {
+    const r = await executeAction({ action, data, integrations: {} });
+    isValidResult(r) && r.success === false && typeof r.fallbackMessage === "string"
+      ? pass(`${action} missing integrations: graceful fail + fallbackMessage`)
+      : fail(`${action} missing integrations: bad result`, JSON.stringify(r));
+  }
+
+  // ── buildIntegrations: returns valid shape ─────────────────────────────────
+  {
+    const integrations = buildIntegrations({ supabase: null, crmSupabase: null, twilioClient: null, client: null });
+    typeof integrations === "object" &&
+    "booking" in integrations && "crm" in integrations &&
+    "messaging" in integrations && "database" in integrations
+      ? pass("buildIntegrations(): returns correct shape")
+      : fail("buildIntegrations(): missing keys", Object.keys(integrations).join(", "));
+
+    typeof integrations.booking?.getBookingLink === "function"
+      ? pass("buildIntegrations: booking.getBookingLink is function")
+      : fail("buildIntegrations: booking.getBookingLink missing");
+
+    // null supabase → crm, messaging, database all null
+    integrations.crm === null
+      ? pass("buildIntegrations(null supabase): crm=null")
+      : fail("buildIntegrations: crm not null with no supabase", typeof integrations.crm);
+    integrations.messaging === null
+      ? pass("buildIntegrations(null supabase): messaging=null")
+      : fail("buildIntegrations: messaging not null with no supabase", typeof integrations.messaging);
+    integrations.database === null
+      ? pass("buildIntegrations(null supabase): database=null")
+      : fail("buildIntegrations: database not null with no supabase", typeof integrations.database);
+  }
+
+  // ── buildIntegrations: booking.getBookingLink resolves URLs ───────────────
+  {
+    const client = {
+      bookingUrls: {
+        csr_browse_all:   "https://fh.com/csr/browse",
+        rea_2hr_tour:     "https://fh.com/rea/2hr",
+        snowmobile_guide: "https://fh.com/sled",
+      },
+    };
+    const integrations = buildIntegrations({ client });
+
+    // Generic → browse-all preferred
+    const browseLink = integrations.booking.getBookingLink(null, client);
+    browseLink?.includes("browse")
+      ? pass(`buildIntegrations getBookingLink(null): browse-all → ${browseLink}`)
+      : fail("buildIntegrations getBookingLink(null): expected browse URL", browseLink);
+
+    // Service-specific match
+    const sledLink = integrations.booking.getBookingLink("snowmobile", client);
+    typeof sledLink === "string" && sledLink.length > 0
+      ? pass(`buildIntegrations getBookingLink("snowmobile"): ${sledLink}`)
+      : fail("buildIntegrations getBookingLink snowmobile: no URL returned", sledLink);
   }
 }
 
