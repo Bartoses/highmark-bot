@@ -84,6 +84,13 @@ import {
   extractPageTitle,
   buildCrawlerContext,
 } from "./crawler.js";
+import {
+  detectIntent as agentDetectIntent,
+  detectContext,
+  selectAgent,
+  buildSystemPrompt as agentBuildSystemPrompt,
+  parseAgentResponse,
+} from "./agentCore.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -3001,6 +3008,7 @@ async function main() {
   await test67(); // Revenue Engine (Phase 10): selectAudience missed_leads, interpolateMessage, portal leads/update/audience-preview handlers
   await test68(); // Web Chat (Phase 11): webFromNumber, webToNumber, getWebConversation, saveWebConversation, getWebClientConfig, /web/config + /web/chat routes
   await test69(); // Booking Link Resolution Engine: extractBookingContext, matchConfigLink, normalizeClientLinks, resolveBookingLink
+  await test70(); // Agent Core Foundation: detectIntent, detectContext, selectAgent, buildSystemPrompt, parseAgentResponse
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -9823,6 +9831,337 @@ async function test69() {
     result?.url?.includes("2hr")
       ? pass("test69: matchConfigLink — entity specified → specific link wins over browse-all")
       : fail("test69: matchConfigLink entity vs browse-all", `expected 2hr URL, got ${result?.url}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 70: Agent Core Foundation (agentCore.js)
+// detectIntent, detectContext, selectAgent, buildSystemPrompt, parseAgentResponse
+// ─────────────────────────────────────────────────────────────────────────────
+async function test70() {
+  console.log("\nTEST 70: Agent Core Foundation");
+
+  // ── detectIntent: booking phrases ──────────────────────────────────────────
+  const bookingPhrases = [
+    "I want to book a tour for Saturday",
+    "Can I reserve two spots?",
+    "book for this weekend",
+    "I'd like to sign up for the snowmobile tour",
+    "check availability for tomorrow",
+    "want to ride this Friday",
+  ];
+  for (const phrase of bookingPhrases) {
+    const result = agentDetectIntent(phrase);
+    result === "booking"
+      ? pass(`detectIntent booking: "${phrase}"`)
+      : fail(`detectIntent booking: "${phrase}"`, `got "${result}"`);
+  }
+
+  // ── detectIntent: complaint phrases ────────────────────────────────────────
+  const complaintPhrases = [
+    "this isn't working",
+    "I want a refund",
+    "that was terrible service",
+    "I'm very upset about this",
+    "worst experience ever",
+    "not working at all",
+  ];
+  for (const phrase of complaintPhrases) {
+    const result = agentDetectIntent(phrase);
+    result === "complaint"
+      ? pass(`detectIntent complaint: "${phrase}"`)
+      : fail(`detectIntent complaint: "${phrase}"`, `got "${result}"`);
+  }
+
+  // ── detectIntent: schedule ─────────────────────────────────────────────────
+  const schedulePhrases = [
+    "what's tomorrow look like",
+    "when are you open",
+    "what time do you open",
+    "what's on the schedule this week",
+    "next available slot",
+  ];
+  for (const phrase of schedulePhrases) {
+    const result = agentDetectIntent(phrase);
+    result === "schedule"
+      ? pass(`detectIntent schedule: "${phrase}"`)
+      : fail(`detectIntent schedule: "${phrase}"`, `got "${result}"`);
+  }
+
+  // ── detectIntent: report ───────────────────────────────────────────────────
+  const reportPhrases = [
+    "give me stats",
+    "show me the analytics",
+    "what are the numbers",
+    "how many bookings this week",
+    "give me a summary",
+  ];
+  for (const phrase of reportPhrases) {
+    const result = agentDetectIntent(phrase);
+    result === "report"
+      ? pass(`detectIntent report: "${phrase}"`)
+      : fail(`detectIntent report: "${phrase}"`, `got "${result}"`);
+  }
+
+  // ── detectIntent: promotion ────────────────────────────────────────────────
+  const promotionPhrases = [
+    "any deals?",
+    "do you have discounts",
+    "any promos running",
+    "running any specials",
+    "any deals available",
+  ];
+  for (const phrase of promotionPhrases) {
+    const result = agentDetectIntent(phrase);
+    result === "promotion"
+      ? pass(`detectIntent promotion: "${phrase}"`)
+      : fail(`detectIntent promotion: "${phrase}"`, `got "${result}"`);
+  }
+
+  // ── detectIntent: strategy ─────────────────────────────────────────────────
+  const strategyPhrases = [
+    "how can I grow?",
+    "what's the best strategy here",
+    "how do we scale this",
+    "any advice on improving conversions",
+    "what should we focus on",
+  ];
+  for (const phrase of strategyPhrases) {
+    const result = agentDetectIntent(phrase);
+    result === "strategy"
+      ? pass(`detectIntent strategy: "${phrase}"`)
+      : fail(`detectIntent strategy: "${phrase}"`, `got "${result}"`);
+  }
+
+  // ── detectIntent: fallback → question ──────────────────────────────────────
+  const fallbackPhrases = [
+    "",
+    "asdfghjkl",
+    "🏔",
+  ];
+  for (const phrase of fallbackPhrases) {
+    const result = agentDetectIntent(phrase);
+    result === "question"
+      ? pass(`detectIntent fallback→question: "${phrase}"`)
+      : fail(`detectIntent fallback→question: "${phrase}"`, `got "${result}"`);
+  }
+
+  // ── detectIntent: null/undefined safety ────────────────────────────────────
+  [null, undefined, 42, {}].forEach((val) => {
+    const result = agentDetectIntent(val);
+    result === "question"
+      ? pass(`detectIntent safe for non-string: ${JSON.stringify(val)}`)
+      : fail(`detectIntent safe for non-string: ${JSON.stringify(val)}`, `got "${result}"`);
+  });
+
+  // ── detectContext: date parsing ────────────────────────────────────────────
+  {
+    const ctx = detectContext("book for tomorrow");
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const expected = tomorrow.toISOString().slice(0, 10);
+    ctx.date === expected
+      ? pass(`detectContext date: "tomorrow" → ${ctx.date}`)
+      : fail(`detectContext date: "tomorrow"`, `got "${ctx.date}", expected "${expected}"`);
+  }
+  {
+    const ctx = detectContext("I want to go today");
+    const today = new Date().toISOString().slice(0, 10);
+    ctx.date === today
+      ? pass(`detectContext date: "today" → ${ctx.date}`)
+      : fail(`detectContext date: "today"`, `got "${ctx.date}", expected "${today}"`);
+  }
+  {
+    const ctx = detectContext("what about Saturday");
+    typeof ctx.date === "string" && ctx.date.length === 10
+      ? pass(`detectContext date: "Saturday" → ${ctx.date}`)
+      : fail(`detectContext date: "Saturday"`, `got "${ctx.date}"`);
+  }
+  {
+    const ctx = detectContext("nothing useful here");
+    ctx.date === null
+      ? pass("detectContext date: no date → null")
+      : fail("detectContext date: no date → null", `got "${ctx.date}"`);
+  }
+
+  // ── detectContext: group size ──────────────────────────────────────────────
+  const groupCases = [
+    { msg: "booking for 2 people",     expected: 2  },
+    { msg: "for 5 guests",             expected: 5  },
+    { msg: "party of 3",               expected: 3  },
+    { msg: "group of 8",               expected: 8  },
+    { msg: "just me",                  expected: null },
+  ];
+  for (const { msg, expected } of groupCases) {
+    const ctx = detectContext(msg);
+    ctx.groupSize === expected
+      ? pass(`detectContext groupSize: "${msg}" → ${ctx.groupSize}`)
+      : fail(`detectContext groupSize: "${msg}"`, `got ${ctx.groupSize}, expected ${expected}`);
+  }
+
+  // ── detectContext: service type ────────────────────────────────────────────
+  const serviceCases = [
+    { msg: "I want a snowmobile tour", expected: "snowmobile" },
+    { msg: "RZR rental",               expected: "rzr"        },
+    { msg: "looking for a rental",     expected: "rental"     },
+    { msg: "guided tour please",       expected: "tour"       },
+    { msg: "random message",           expected: null         },
+  ];
+  for (const { msg, expected } of serviceCases) {
+    const ctx = detectContext(msg);
+    ctx.serviceType === expected
+      ? pass(`detectContext serviceType: "${msg}" → ${ctx.serviceType}`)
+      : fail(`detectContext serviceType: "${msg}"`, `got "${ctx.serviceType}", expected "${expected}"`);
+  }
+
+  // ── detectContext: urgency ─────────────────────────────────────────────────
+  const urgencyCases = [
+    { msg: "I need this now",            expected: "high"   },
+    { msg: "asap please",                expected: "high"   },
+    { msg: "book for today",             expected: "high"   },
+    { msg: "looking for this weekend",   expected: "medium" },
+    { msg: "sometime next month maybe",  expected: "low"    },
+  ];
+  for (const { msg, expected } of urgencyCases) {
+    const ctx = detectContext(msg);
+    ctx.urgency === expected
+      ? pass(`detectContext urgency: "${msg}" → ${ctx.urgency}`)
+      : fail(`detectContext urgency: "${msg}"`, `got "${ctx.urgency}", expected "${expected}"`);
+  }
+
+  // ── detectContext: safety ──────────────────────────────────────────────────
+  [null, undefined, "", 42].forEach((val) => {
+    const ctx = detectContext(val);
+    typeof ctx === "object" && ctx !== null && "date" in ctx
+      ? pass(`detectContext safe for: ${JSON.stringify(val)}`)
+      : fail(`detectContext safe for: ${JSON.stringify(val)}`, "bad return value");
+  });
+
+  // ── selectAgent: intent → agent mapping ───────────────────────────────────
+  const agentCases = [
+    { intent: "booking",   expected: "sales"      },
+    { intent: "lead",      expected: "crm"        },
+    { intent: "question",  expected: "support"    },
+    { intent: "support",   expected: "support"    },
+    { intent: "complaint", expected: "support"    },
+    { intent: "schedule",  expected: "operations" },
+    { intent: "report",    expected: "operations" },
+    { intent: "promotion", expected: "marketing"  },
+    { intent: "strategy",  expected: "strategy"   },
+  ];
+  for (const { intent, expected } of agentCases) {
+    const result = selectAgent(intent);
+    result === expected
+      ? pass(`selectAgent: "${intent}" → "${result}"`)
+      : fail(`selectAgent: "${intent}"`, `got "${result}", expected "${expected}"`);
+  }
+
+  // ── selectAgent: unknown intent falls back to support ─────────────────────
+  ["", "unknown", null, undefined].forEach((val) => {
+    const result = selectAgent(val);
+    result === "support"
+      ? pass(`selectAgent fallback: ${JSON.stringify(val)} → "support"`)
+      : fail(`selectAgent fallback: ${JSON.stringify(val)}`, `got "${result}"`);
+  });
+
+  // ── buildSystemPrompt: full composition ───────────────────────────────────
+  {
+    const prompt = agentBuildSystemPrompt({
+      globalPrompt:     "You are a helpful assistant.",
+      clientProfile:    { name: "Test Client", mode: "fareharbor" },
+      agentPrompt:      "You handle bookings.",
+      knowledgeContext: "Tours available: 2hr, 4hr.",
+    });
+    ["GLOBAL PROMPT", "CLIENT PROFILE", "AGENT ROLE", "KNOWLEDGE CONTEXT",
+     "Test Client", "fareharbor", "You handle bookings", "Tours available"].forEach((token) => {
+      prompt.includes(token)
+        ? pass(`buildSystemPrompt includes "${token}"`)
+        : fail(`buildSystemPrompt missing "${token}"`, prompt.slice(0, 100));
+    });
+  }
+
+  // ── buildSystemPrompt: null/undefined inputs handled ──────────────────────
+  {
+    const prompt = agentBuildSystemPrompt({ globalPrompt: null, clientProfile: undefined, agentPrompt: null, knowledgeContext: null });
+    typeof prompt === "string"
+      ? pass("buildSystemPrompt: all-null input returns string")
+      : fail("buildSystemPrompt: all-null input", `got type ${typeof prompt}`);
+  }
+  {
+    const prompt = agentBuildSystemPrompt();
+    typeof prompt === "string"
+      ? pass("buildSystemPrompt: no args returns string")
+      : fail("buildSystemPrompt: no args", `got type ${typeof prompt}`);
+  }
+
+  // ── buildSystemPrompt: string clientProfile ────────────────────────────────
+  {
+    const prompt = agentBuildSystemPrompt({ clientProfile: "Client Name: Acme Co" });
+    prompt.includes("Acme Co")
+      ? pass("buildSystemPrompt: string clientProfile preserved")
+      : fail("buildSystemPrompt: string clientProfile", prompt.slice(0, 100));
+  }
+
+  // ── parseAgentResponse: valid JSON string ─────────────────────────────────
+  {
+    const raw = JSON.stringify({ agent: "sales", intent: "booking", action: "send_link", data: { tour: "2hr" }, reply: "Here is your link!" });
+    const parsed = parseAgentResponse(raw);
+    parsed.agent === "sales" && parsed.intent === "booking" && parsed.reply === "Here is your link!" && parsed.data?.tour === "2hr"
+      ? pass("parseAgentResponse: valid JSON string")
+      : fail("parseAgentResponse: valid JSON string", JSON.stringify(parsed));
+  }
+
+  // ── parseAgentResponse: JSON in markdown fences ───────────────────────────
+  {
+    const raw = "```json\n" + JSON.stringify({ agent: "crm", intent: "lead", action: "save", data: {}, reply: "Got it!" }) + "\n```";
+    const parsed = parseAgentResponse(raw);
+    parsed.agent === "crm" && parsed.reply === "Got it!"
+      ? pass("parseAgentResponse: markdown-fenced JSON")
+      : fail("parseAgentResponse: markdown-fenced JSON", JSON.stringify(parsed));
+  }
+
+  // ── parseAgentResponse: plain text fallback ───────────────────────────────
+  {
+    const raw = "Sure, let me help you with that booking.";
+    const parsed = parseAgentResponse(raw);
+    parsed.reply === raw && parsed.agent === null && parsed.intent === null && typeof parsed.data === "object"
+      ? pass("parseAgentResponse: plain text → reply fallback")
+      : fail("parseAgentResponse: plain text fallback", JSON.stringify(parsed));
+  }
+
+  // ── parseAgentResponse: invalid JSON string ───────────────────────────────
+  {
+    const raw = "{ this is not valid JSON !!";
+    const parsed = parseAgentResponse(raw);
+    typeof parsed === "object" && "reply" in parsed && typeof parsed.data === "object"
+      ? pass("parseAgentResponse: invalid JSON → safe fallback")
+      : fail("parseAgentResponse: invalid JSON fallback", JSON.stringify(parsed));
+  }
+
+  // ── parseAgentResponse: object input ──────────────────────────────────────
+  {
+    const obj = { agent: "support", intent: "question", action: null, data: { foo: "bar" }, reply: "Hello!" };
+    const parsed = parseAgentResponse(obj);
+    parsed.agent === "support" && parsed.data?.foo === "bar" && parsed.reply === "Hello!"
+      ? pass("parseAgentResponse: object input")
+      : fail("parseAgentResponse: object input", JSON.stringify(parsed));
+  }
+
+  // ── parseAgentResponse: null/undefined/edge cases ─────────────────────────
+  [null, undefined, 42, []].forEach((val) => {
+    const parsed = parseAgentResponse(val);
+    typeof parsed === "object" && parsed !== null && "reply" in parsed
+      ? pass(`parseAgentResponse safe for: ${JSON.stringify(val)}`)
+      : fail(`parseAgentResponse safe for: ${JSON.stringify(val)}`, "bad return shape");
+  });
+
+  // ── parseAgentResponse: missing fields default correctly ──────────────────
+  {
+    const parsed = parseAgentResponse(JSON.stringify({ reply: "Only a reply." }));
+    parsed.agent === null && parsed.intent === null && parsed.action === null &&
+    typeof parsed.data === "object" && parsed.reply === "Only a reply."
+      ? pass("parseAgentResponse: partial JSON → missing fields default to null/{}")
+      : fail("parseAgentResponse: partial JSON defaults", JSON.stringify(parsed));
   }
 }
 
