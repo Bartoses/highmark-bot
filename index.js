@@ -40,7 +40,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handleDeleteCustomIntegration, handleTestCustomIntegration,
   handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight,
   handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus,
-  handlePortalAudiencePreview } from "./adminPortal.js";
+  handlePortalAudiencePreview,
+  handlePortalEmbedConfig, handlePortalUpdateEmbedConfig } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
@@ -2148,19 +2149,38 @@ app.get("/embed.js", (_req, res) => {
   res.sendFile(path.join(__uiDir, "embed.js"));
 });
 
-// Public config endpoint: returns non-secret client config for the widget
+// Public config endpoint: returns non-secret client config for the widget.
+// Phase 11.2: fetches embed_config row so widget gets full customization.
+// CORS preflight for embed widget (runs on third-party sites)
+app.options("/web/config/:clientId", (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET");
+  res.end();
+});
+app.options("/web/chat", (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "POST");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.end();
+});
+
 app.get("/web/config/:clientId", ipLimiter, async (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
   const { clientId } = req.params;
   let client = resolveClientById(clientId);
   if (!client) return res.status(404).json({ error: "Client not found" });
+  try { client = await getRuntimeClientConfig(client, supabase); } catch { /* use static */ }
+  let embedConfig = null;
   try {
-    client = await getRuntimeClientConfig(client, supabase);
-  } catch { /* use static config */ }
-  return res.json(getWebClientConfig(client));
+    const { data } = await supabase.from("embed_config").select("*").eq("client_id", clientId).maybeSingle();
+    embedConfig = data ?? null;
+  } catch { /* no embed_config table yet — use defaults */ }
+  return res.json(getWebClientConfig(client, embedConfig));
 });
 
 // Web chat message handler: same bot logic as SMS, JSON transport
 app.post("/web/chat", ipLimiter, async (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
   const { clientId, sessionId, message } = req.body ?? {};
   if (!clientId || !sessionId || !message?.trim()) {
     return res.status(400).json({ error: "clientId, sessionId, and message are required" });
@@ -2402,6 +2422,9 @@ app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePor
 app.patch("/portal/api/bot-config",   requirePortalAuth, (req, res) => handlePortalUpdateBotConfig(req, res, supabase));
 app.get( "/portal/api/booking-config",  requirePortalAuth, (req, res) => handlePortalBookingConfig(req, res, supabase));
 app.patch("/portal/api/booking-config", requirePortalAuth, (req, res) => handlePortalUpdateBookingConfig(req, res, supabase));
+// Phase 11.2 — Widget Embed Builder
+app.get(  "/portal/api/embed-config",  requirePortalAuth, (req, res) => handlePortalEmbedConfig(req, res, supabase));
+app.patch("/portal/api/embed-config",  requirePortalAuth, (req, res) => handlePortalUpdateEmbedConfig(req, res, supabase));
 // Onboarding (Phase 3 — AI Auto-Config) — internal_admin only
 app.post("/portal/api/onboarding/analyze",          requirePortalAuth, (req, res) => handleOnboardingAnalyze(req, res, supabase, anthropic));
 app.get( "/portal/api/onboarding/drafts/:id",       requirePortalAuth, (req, res) => handleOnboardingGetDraft(req, res, supabase));

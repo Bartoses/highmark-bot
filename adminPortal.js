@@ -1712,3 +1712,84 @@ export async function handleUpdateRewriteStatus(req, res, supabase) {
     return res.status(500).json({ error: err.message });
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMBED CONFIG — Phase 11.2: Widget Embed Builder
+// GET  /portal/api/embed-config  → load config (defaults if no row yet)
+// PATCH /portal/api/embed-config → upsert config
+// ─────────────────────────────────────────────────────────────────────────────
+
+const EMBED_DEFAULTS = {
+  primary_color:   "#2563eb",
+  button_color:    "#2563eb",
+  text_color:      "#ffffff",
+  button_text:     "Chat with us",
+  size:            "medium",
+  border_radius:   "16",
+  logo_url:        null,
+  welcome_message: null,
+  delay_seconds:   0,
+  auto_open:       false,
+  position:        "bottom_right",
+};
+
+const EMBED_ALLOWED_FIELDS = Object.keys(EMBED_DEFAULTS);
+
+export async function handlePortalEmbedConfig(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  try {
+    const { data, error } = await supabase
+      .from("embed_config")
+      .select("*")
+      .eq("client_id", clientId)
+      .maybeSingle();
+
+    if (error) {
+      // Table not yet created — return defaults so the portal still renders
+      if (error.code === "42P01" || error.message?.includes("does not exist")) {
+        return res.json({ ...EMBED_DEFAULTS, clientId, _tableNotReady: true });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ ...EMBED_DEFAULTS, ...(data ?? {}), clientId });
+  } catch (err) {
+    return res.json({ ...EMBED_DEFAULTS, clientId, _tableNotReady: true });
+  }
+}
+
+export async function handlePortalUpdateEmbedConfig(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  const updates = { client_id: clientId, updated_at: new Date().toISOString() };
+  for (const field of EMBED_ALLOWED_FIELDS) {
+    if (req.body[field] !== undefined) updates[field] = req.body[field];
+  }
+
+  if (Object.keys(updates).length <= 2) {
+    return res.status(400).json({ error: "No updatable fields provided" });
+  }
+
+  try {
+    const { error } = await supabase
+      .from("embed_config")
+      .upsert(updates, { onConflict: "client_id" });
+
+    if (error) {
+      if (error.code === "42P01" || error.message?.includes("does not exist")) {
+        return res.status(503).json({ error: "embed_config table not set up yet — run db1_embed_config.sql in Supabase to enable saving." });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ ok: true, clientId, updated: Object.keys(updates).filter(k => k !== "client_id" && k !== "updated_at") });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}

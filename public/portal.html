@@ -3853,7 +3853,18 @@ async function loadEmbedConfig() {
     apiFetch('/settings'),
     apiFetch('/bot-config'),
   ]);
-  if (!ec) return;
+
+  // Show setup notice if table not created yet (saving will fail, but preview still works)
+  const msgEl = document.getElementById('embedMsg');
+  if (ec?._tableNotReady) {
+    msgEl.className = 'error-msg';
+    msgEl.innerHTML = '⚠️ <strong>embed_config table not found.</strong> Run <code style="background:rgba(0,0,0,.2);padding:1px 5px;border-radius:3px;">db1_embed_config.sql</code> in Supabase to enable saving. Preview and embed code still work.';
+    msgEl.style.display = 'block';
+  } else if (msgEl) {
+    msgEl.style.display = 'none';
+  }
+
+  const cfg = ec ?? {}; // Use empty object if null — populate from defaults below
 
   // Store shared identity for preview rendering
   _embedBotName    = settings?.botName     || botCfg?.bot_name    || 'Summit';
@@ -3865,20 +3876,20 @@ async function loadEmbedConfig() {
     ? `Defaults to bot greeting: "${_embedOpenerText.slice(0, 80)}…"`
     : `Hi! I'm ${_embedBotName}, your guide. How can I help?`;
 
-  document.getElementById('ec-primary-color').value     = ec.primary_color   || '#2563eb';
-  document.getElementById('ec-primary-color-hex').value = ec.primary_color   || '#2563eb';
-  document.getElementById('ec-button-color').value      = ec.button_color    || '#2563eb';
-  document.getElementById('ec-button-color-hex').value  = ec.button_color    || '#2563eb';
-  document.getElementById('ec-text-color').value        = ec.text_color      || '#ffffff';
-  document.getElementById('ec-text-color-hex').value    = ec.text_color      || '#ffffff';
-  document.getElementById('ec-size').value              = ec.size            || 'medium';
-  document.getElementById('ec-border-radius').value     = ec.border_radius   ?? 16;
-  document.getElementById('ec-logo-url').value          = ec.logo_url        || '';
-  document.getElementById('ec-button-text').value       = ec.button_text     || 'Chat with us';
-  document.getElementById('ec-welcome-message').value   = ec.welcome_message || '';
-  document.getElementById('ec-position').value          = ec.position        || 'bottom_right';
-  document.getElementById('ec-delay-seconds').value     = ec.delay_seconds   ?? 0;
-  document.getElementById('ec-auto-open').checked       = !!ec.auto_open;
+  document.getElementById('ec-primary-color').value     = cfg.primary_color   || '#2563eb';
+  document.getElementById('ec-primary-color-hex').value = cfg.primary_color   || '#2563eb';
+  document.getElementById('ec-button-color').value      = cfg.button_color    || '#2563eb';
+  document.getElementById('ec-button-color-hex').value  = cfg.button_color    || '#2563eb';
+  document.getElementById('ec-text-color').value        = cfg.text_color      || '#ffffff';
+  document.getElementById('ec-text-color-hex').value    = cfg.text_color      || '#ffffff';
+  document.getElementById('ec-size').value              = cfg.size            || 'medium';
+  document.getElementById('ec-border-radius').value     = cfg.border_radius   ?? 16;
+  document.getElementById('ec-logo-url').value          = cfg.logo_url        || '';
+  document.getElementById('ec-button-text').value       = cfg.button_text     || 'Chat with us';
+  document.getElementById('ec-welcome-message').value   = cfg.welcome_message || '';
+  document.getElementById('ec-position').value          = cfg.position        || 'bottom_right';
+  document.getElementById('ec-delay-seconds').value     = cfg.delay_seconds   ?? 0;
+  document.getElementById('ec-auto-open').checked       = !!cfg.auto_open;
   updateEmbedPreview();
 }
 
