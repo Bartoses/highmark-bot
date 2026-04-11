@@ -67,7 +67,7 @@ import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, upda
   buildNextSteps, findRecentDraftForUrl } from "./onboardingConfig.js";
 import { getMessagingConfig } from "./bookingConfirmations.js";
 import { computeReadiness, VALID_BOOKING_MODES } from "./adminClients.js";
-import { metaFromBookingKey } from "./clientConfig.js";
+import { metaFromBookingKey, safeJsonParse, truncateText, getClientProfile, getClientKnowledge } from "./clientConfig.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { isYesIntent, isNoIntent, detectPath, detectVertical, detectQuestionIntent, detectSubtype } from "./demoFlow.js";
 import { DEFAULTS, SECTION_KEYS, loadSiteContent, updateSiteSection, getSiteSection, invalidateSiteContentCache } from "./siteContent.js";
@@ -3021,6 +3021,7 @@ async function main() {
   await test69(); // Booking Link Resolution Engine: extractBookingContext, matchConfigLink, normalizeClientLinks, resolveBookingLink
   await test70(); // Agent Core Foundation: detectIntent, detectContext, selectAgent, buildSystemPrompt, parseAgentResponse
   await test71(); // Prompt System: GLOBAL_PROMPT, agent prompts, getAgentPrompt, buildSystemPrompt integration
+  await test72(); // Client Config System: getClientProfile, getClientKnowledge, safeJsonParse, truncateText
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -10347,6 +10348,276 @@ async function test71() {
       : fail("All prompts: concatenation produced unexpected result");
   } catch (e) {
     fail("All prompts: concatenation threw", e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 72: Client Config System (Phase 3)
+// getClientProfile, getClientKnowledge, safeJsonParse, truncateText
+// ─────────────────────────────────────────────────────────────────────────────
+async function test72() {
+  console.log("\nTEST 72: Client Config System (getClientProfile, getClientKnowledge, helpers)");
+
+  // ── safeJsonParse ──────────────────────────────────────────────────────────
+  {
+    const result = safeJsonParse('{"key":"val"}');
+    result?.key === "val"
+      ? pass("safeJsonParse: valid JSON string → parsed object")
+      : fail("safeJsonParse: valid JSON string", JSON.stringify(result));
+  }
+  {
+    const obj = { already: "parsed" };
+    const result = safeJsonParse(obj);
+    result === obj
+      ? pass("safeJsonParse: already-object → returned as-is")
+      : fail("safeJsonParse: already-object", JSON.stringify(result));
+  }
+  {
+    const result = safeJsonParse("not json {{");
+    result === null
+      ? pass("safeJsonParse: invalid JSON → null fallback")
+      : fail("safeJsonParse: invalid JSON", JSON.stringify(result));
+  }
+  {
+    const result = safeJsonParse("bad json", []);
+    Array.isArray(result) && result.length === 0
+      ? pass("safeJsonParse: invalid JSON → custom fallback []")
+      : fail("safeJsonParse: custom fallback", JSON.stringify(result));
+  }
+  [null, undefined].forEach((val) => {
+    const result = safeJsonParse(val);
+    result === null
+      ? pass(`safeJsonParse: ${JSON.stringify(val)} → null`)
+      : fail(`safeJsonParse: ${JSON.stringify(val)}`, JSON.stringify(result));
+  });
+
+  // ── truncateText ───────────────────────────────────────────────────────────
+  {
+    const short = "Short text.";
+    truncateText(short, 400) === short
+      ? pass("truncateText: text within limit → unchanged")
+      : fail("truncateText: text within limit");
+  }
+  {
+    const long = "The quick brown fox jumped over the lazy dog near the river bank on a sunny afternoon.";
+    const result = truncateText(long, 30);
+    typeof result === "string" && result.length <= 30 && result.length > 0
+      ? pass(`truncateText: long text capped at 30 chars → "${result}"`)
+      : fail("truncateText: long text", `got "${result}" (len ${result?.length})`);
+  }
+  {
+    // Should not cut mid-word
+    const text = "Hello world this is a test sentence";
+    const result = truncateText(text, 15);
+    !result.endsWith("-") && result === result.trim()
+      ? pass(`truncateText: no mid-word cut → "${result}"`)
+      : fail("truncateText: mid-word cut detected", `got "${result}"`);
+  }
+  [null, undefined, "", 42].forEach((val) => {
+    const result = truncateText(val, 100);
+    result === ""
+      ? pass(`truncateText: safe for ${JSON.stringify(val)} → ""`)
+      : fail(`truncateText: ${JSON.stringify(val)}`, `got "${result}"`);
+  });
+
+  // ── getClientProfile: known static client (no DB) ─────────────────────────
+  {
+    const profile = await getClientProfile("csr_rea", null);
+    typeof profile === "object" && profile !== null
+      ? pass("getClientProfile('csr_rea', null): returns object")
+      : fail("getClientProfile('csr_rea', null): not an object", typeof profile);
+
+    profile.id === "csr_rea"
+      ? pass("getClientProfile csr_rea: id correct")
+      : fail("getClientProfile csr_rea: id", `got "${profile.id}"`);
+
+    typeof profile.name === "string" && profile.name.length > 0
+      ? pass(`getClientProfile csr_rea: name="${profile.name}"`)
+      : fail("getClientProfile csr_rea: name missing", JSON.stringify(profile.name));
+
+    Array.isArray(profile.services)
+      ? pass("getClientProfile csr_rea: services is array")
+      : fail("getClientProfile csr_rea: services not array", typeof profile.services);
+
+    typeof profile.contact === "object" && "phone" in profile.contact && "email" in profile.contact
+      ? pass("getClientProfile csr_rea: contact shape correct")
+      : fail("getClientProfile csr_rea: contact shape", JSON.stringify(profile.contact));
+
+    typeof profile.features === "object" &&
+    ["bookings", "crm", "campaigns", "reporting"].every((k) => k in profile.features)
+      ? pass("getClientProfile csr_rea: features shape correct")
+      : fail("getClientProfile csr_rea: features shape", JSON.stringify(profile.features));
+
+    ["id", "name", "industry", "tone", "services", "bookingLinks", "locations", "contact", "features"].forEach((field) => {
+      field in profile
+        ? pass(`getClientProfile csr_rea: field "${field}" present`)
+        : fail(`getClientProfile csr_rea: field "${field}" missing`);
+    });
+  }
+
+  // ── getClientProfile: second static client (multi-tenant check) ───────────
+  {
+    const profile = await getClientProfile("lone_pine", null);
+    profile.id === "lone_pine"
+      ? pass("getClientProfile('lone_pine', null): id correct")
+      : fail("getClientProfile lone_pine: id", `got "${profile.id}"`);
+
+    typeof profile.name === "string" && profile.name.includes("Lone Pine")
+      ? pass(`getClientProfile lone_pine: name="${profile.name}"`)
+      : fail("getClientProfile lone_pine: name", profile.name);
+
+    // Profiles must be independent — no data leakage
+    const csrProfile = await getClientProfile("csr_rea", null);
+    profile.name !== csrProfile.name
+      ? pass("getClientProfile: two clients return distinct names")
+      : fail("getClientProfile: name collision (data leakage?)", profile.name);
+
+    profile.id !== csrProfile.id
+      ? pass("getClientProfile: two clients return distinct ids")
+      : fail("getClientProfile: id collision");
+  }
+
+  // ── getClientProfile: unknown clientId → fallback ─────────────────────────
+  {
+    const profile = await getClientProfile("nonexistent_xyz", null);
+    typeof profile === "object" && profile !== null
+      ? pass("getClientProfile unknown id: returns object (not null/throw)")
+      : fail("getClientProfile unknown id: returned non-object", typeof profile);
+
+    profile.id === "nonexistent_xyz"
+      ? pass("getClientProfile unknown id: fallback preserves id")
+      : fail("getClientProfile unknown id: id", `got "${profile.id}"`);
+
+    profile.name === "Unknown Business"
+      ? pass("getClientProfile unknown id: fallback name is 'Unknown Business'")
+      : fail("getClientProfile unknown id: fallback name", `got "${profile.name}"`);
+
+    profile.features?.bookings === false && profile.features?.crm === false
+      ? pass("getClientProfile unknown id: fallback features all false")
+      : fail("getClientProfile unknown id: fallback features", JSON.stringify(profile.features));
+  }
+
+  // ── getClientProfile: null/undefined clientId → fallback ──────────────────
+  for (const val of [null, undefined, ""]) {
+    const profile = await getClientProfile(val, null);
+    typeof profile === "object" && profile !== null && "features" in profile
+      ? pass(`getClientProfile(${JSON.stringify(val)}): returns safe fallback`)
+      : fail(`getClientProfile(${JSON.stringify(val)}): unsafe return`, typeof profile);
+  }
+
+  // ── getClientKnowledge: no supabase → empty string ────────────────────────
+  {
+    const kb = await getClientKnowledge("csr_rea", null);
+    kb === ""
+      ? pass("getClientKnowledge(null supabase): returns ''")
+      : fail("getClientKnowledge(null supabase): expected ''", `got "${kb}"`);
+  }
+
+  // ── getClientKnowledge: no clientId → empty string ────────────────────────
+  {
+    const kb = await getClientKnowledge(null, null);
+    kb === ""
+      ? pass("getClientKnowledge(null clientId): returns ''")
+      : fail("getClientKnowledge(null clientId): expected ''", `got "${kb}"`);
+  }
+
+  // ── getClientKnowledge: DB available — live path ──────────────────────────
+  if (supabase) {
+    // Fetch real KB for csr_rea (may be empty in test env, that's OK)
+    const kb = await getClientKnowledge("csr_rea", supabase);
+    typeof kb === "string"
+      ? pass(`getClientKnowledge(csr_rea, supabase): returns string (len=${kb.length})`)
+      : fail("getClientKnowledge(csr_rea, supabase): not a string", typeof kb);
+
+    kb.length <= 400
+      ? pass(`getClientKnowledge(csr_rea, supabase): length ≤ 400 (got ${kb.length})`)
+      : fail("getClientKnowledge(csr_rea, supabase): exceeds 400 chars", `len=${kb.length}`);
+  }
+
+  // ── getClientKnowledge: mocked multi-row test via supabase stub ───────────
+  {
+    // Simulate what a supabase result looks like with multiple KB rows
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            order: () => Promise.resolve({
+              data: [
+                { key: "csr_rea_website_knowledge", summary: "CSR: unguided sled rentals available. Check website for hours." },
+                { key: "csr_fareharbor",             summary: "REA: 2hr + 3hr tours open this weekend." },
+                { key: "weather_steamboat",           summary: "Steamboat: 28°F, 6in new snow, good conditions." },
+              ],
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    };
+
+    const kb = await getClientKnowledge("csr_rea", mockSupabase);
+    typeof kb === "string" && kb.length > 0
+      ? pass(`getClientKnowledge mock multi-row: returns non-empty string`)
+      : fail("getClientKnowledge mock multi-row: empty or wrong type", typeof kb);
+
+    kb.length <= 400
+      ? pass(`getClientKnowledge mock multi-row: length ≤ 400 (got ${kb.length})`)
+      : fail("getClientKnowledge mock multi-row: exceeds 400 chars", `len=${kb.length}`);
+
+    kb.includes("CSR")
+      ? pass("getClientKnowledge mock multi-row: website knowledge present (high priority)")
+      : fail("getClientKnowledge mock multi-row: website knowledge missing", kb);
+  }
+
+  // ── getClientKnowledge: empty rows → empty string ─────────────────────────
+  {
+    const mockEmpty = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            order: () => Promise.resolve({ data: [], error: null }),
+          }),
+        }),
+      }),
+    };
+    const kb = await getClientKnowledge("csr_rea", mockEmpty);
+    kb === ""
+      ? pass("getClientKnowledge empty DB: returns ''")
+      : fail("getClientKnowledge empty DB: expected ''", `got "${kb}"`);
+  }
+
+  // ── getClientKnowledge: DB error → empty string ───────────────────────────
+  {
+    const mockError = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            order: () => Promise.resolve({ data: null, error: { message: "connection failed" } }),
+          }),
+        }),
+      }),
+    };
+    const kb = await getClientKnowledge("csr_rea", mockError);
+    kb === ""
+      ? pass("getClientKnowledge DB error: fails silently → ''")
+      : fail("getClientKnowledge DB error: expected ''", `got "${kb}"`);
+  }
+
+  // ── Integration: getClientProfile → buildSystemPrompt ────────────────────
+  {
+    const profile = await getClientProfile("csr_rea", null);
+    const composed = agentBuildSystemPrompt({
+      globalPrompt:     GLOBAL_PROMPT,
+      clientProfile:    profile,
+      agentPrompt:      SALES_AGENT_PROMPT,
+      knowledgeContext: "Tours available tomorrow.",
+    });
+    typeof composed === "string" && composed.length > 100
+      ? pass("Integration: getClientProfile → buildSystemPrompt: non-empty composed prompt")
+      : fail("Integration: getClientProfile → buildSystemPrompt: empty or short", composed?.slice(0, 60));
+
+    composed.includes(profile.name)
+      ? pass(`Integration: client name "${profile.name}" appears in composed prompt`)
+      : fail("Integration: client name missing from composed prompt", profile.name);
   }
 }
 

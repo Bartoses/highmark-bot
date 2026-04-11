@@ -299,6 +299,198 @@ export async function getRuntimeClientConfig(client, supabase) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MULTI-AGENT CLIENT PROFILE SYSTEM (Phase 3)
+//
+// getClientProfile(clientId, supabase?)  — normalized profile for agentCore/prompts
+// getClientKnowledge(clientId, supabase?) — concise KB string ≤ 400 chars
+//
+// These are additive — they do NOT replace getRuntimeClientConfig().
+// getRuntimeClientConfig() serves the SMS flow (per-request enrichment).
+// getClientProfile() serves the multi-agent layer (static, normalized shape).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Default profile returned when client is unknown or DB unavailable.
+const DEFAULT_PROFILE = (clientId) => ({
+  id:           clientId ?? "unknown",
+  name:         "Unknown Business",
+  industry:     "general",
+  tone:         "friendly",
+  services:     [],
+  bookingLinks: {},
+  locations:    [],
+  contact: {
+    phone: null,
+    email: null,
+  },
+  features: {
+    bookings:  false,
+    crm:       false,
+    campaigns: false,
+    reporting: false,
+  },
+});
+
+// Safely parse a JSON value (string or already-parsed object).
+// Returns fallback on any error.
+export function safeJsonParse(value, fallback = null) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+// Trim text to maxLength without cutting mid-word.
+export function truncateText(text, maxLength) {
+  if (!text || typeof text !== "string") return "";
+  if (text.length <= maxLength) return text;
+  const slice = text.slice(0, maxLength);
+  const lastSpace = slice.lastIndexOf(" ");
+  return (lastSpace > maxLength * 0.7 ? slice.slice(0, lastSpace) : slice).trimEnd();
+}
+
+// Build a normalized profile from any client object (static or DB-backed shape).
+function normalizeClientProfile(raw, clientId) {
+  if (!raw) return DEFAULT_PROFILE(clientId);
+  try {
+    return {
+      id:           raw.id       ?? clientId ?? "unknown",
+      name:         raw.name     ?? "Unknown Business",
+      industry:     raw.industry ?? "general",
+      tone:         raw.tone     ?? "friendly",
+      services:     Array.isArray(raw.services) ? raw.services : [],
+      // bookingLinks: normalize from array (portal shape) or object (static shape)
+      bookingLinks: Array.isArray(raw.bookingLinks)
+        ? Object.fromEntries(raw.bookingLinks.map((l) => [l.title ?? l.url, l.url]))
+        : (raw.bookingUrls ?? {}),
+      locations: Array.isArray(raw.locations)
+        ? raw.locations
+        : (raw.address ? [raw.address] : []),
+      contact: {
+        phone: raw.supportPhone ?? raw.contact_phone ?? null,
+        email: raw.supportEmail ?? raw.contact_email ?? null,
+      },
+      features: {
+        bookings:  raw.bookingMode != null && raw.bookingMode !== "informational",
+        crm:       raw.crmEnabled      ?? false,
+        campaigns: raw.campaignsEnabled ?? false,
+        reporting: true, // always available at platform level
+      },
+    };
+  } catch (e) {
+    console.error("[clientConfig] normalizeClientProfile error:", e.message);
+    return DEFAULT_PROFILE(clientId);
+  }
+}
+
+/**
+ * Load a normalized client profile for the multi-agent system.
+ *
+ * Data priority:
+ *   1. clients DB table (via supabase, if provided)
+ *   2. Local CLIENTS registry (clients.js static config)
+ *   3. DEFAULT_PROFILE fallback
+ *
+ * @param {string} clientId
+ * @param {object|null} supabase  — optional Supabase client (pass null to use local only)
+ * @returns {Promise<object>}
+ */
+export async function getClientProfile(clientId, supabase = null) {
+  try {
+    // Lazy import to avoid circular dep — clients.js imports nothing from clientConfig.js
+    const { getAllClients } = await import("./clients.js");
+
+    // Try DB first
+    if (supabase && clientId) {
+      try {
+        const { data, error } = await supabase
+          .from("clients")
+          .select("*")
+          .eq("id", clientId)
+          .maybeSingle();
+        if (!error && data) {
+          // DB row found — normalize and return
+          // Merge with static client so static-only fields (industry, services, etc.) survive
+          const staticClients = getAllClients();
+          const staticClient  = staticClients[clientId] ?? {};
+          const merged = { ...staticClient, ...data };
+          return normalizeClientProfile(merged, clientId);
+        }
+      } catch (dbErr) {
+        console.error(`[clientConfig] getClientProfile DB error for ${clientId}:`, dbErr.message);
+        // Fall through to local
+      }
+    }
+
+    // Local fallback — static CLIENTS registry
+    const staticClients = getAllClients();
+    const local = staticClients[clientId];
+    if (local) return normalizeClientProfile(local, clientId);
+
+    // Final fallback
+    console.warn(`[clientConfig] getClientProfile: client "${clientId}" not found — returning default`);
+    return DEFAULT_PROFILE(clientId);
+  } catch (e) {
+    console.error("[clientConfig] getClientProfile error:", e.message);
+    return DEFAULT_PROFILE(clientId);
+  }
+}
+
+/**
+ * Retrieve a concise knowledge summary for a client (≤ 400 chars).
+ *
+ * Pulls from the knowledge_base table rows keyed to this clientId.
+ * Combines summaries in priority order: website → FH availability → weather.
+ * Falls back to empty string on any failure.
+ *
+ * @param {string} clientId
+ * @param {object|null} supabase
+ * @returns {Promise<string>}
+ */
+export async function getClientKnowledge(clientId, supabase = null) {
+  const MAX_LEN = 400;
+  try {
+    if (!supabase || !clientId) return "";
+
+    // Fetch all KB rows for this client
+    const { data: rows, error } = await supabase
+      .from("knowledge_base")
+      .select("key, summary")
+      .eq("client_id", clientId)
+      .order("fetched_at", { ascending: false });
+
+    if (error || !rows || !rows.length) return "";
+
+    // Priority: website knowledge → FH/availability summaries → anything else
+    const ordered = [
+      ...rows.filter((r) => r.key.includes("website_knowledge")),
+      ...rows.filter((r) => r.key.includes("fareharbor")),
+      ...rows.filter((r) => r.key.includes("weather") || r.key.includes("snow")),
+      ...rows.filter(
+        (r) =>
+          !r.key.includes("website_knowledge") &&
+          !r.key.includes("fareharbor") &&
+          !r.key.includes("weather") &&
+          !r.key.includes("snow")
+      ),
+    ];
+
+    // Combine summaries, truncate at sentence boundary, cap at MAX_LEN
+    const combined = ordered
+      .map((r) => (r.summary ?? "").trim())
+      .filter(Boolean)
+      .join(" | ");
+
+    return truncateText(combined, MAX_LEN);
+  } catch (e) {
+    console.error(`[clientConfig] getClientKnowledge error for ${clientId}:`, e.message);
+    return "";
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS_HELP — human-readable descriptions for portal settings fields.
 // Not used by bot logic — available for future UI tooltip/help rendering.
 // ─────────────────────────────────────────────────────────────────────────────
