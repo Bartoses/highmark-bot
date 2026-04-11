@@ -80,7 +80,7 @@
     const w      = panelWidth();
     const bottom = BOTTOM_ATTR ?? config.bottomOffset ?? 20;
     return `
-    #hm-widget * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    #hm-widget * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: manipulation; }
     #hm-widget { position: fixed; ${pos}; bottom: ${bottom}px; z-index: 2147483647; display: flex; flex-direction: column; align-items: ${align}; pointer-events: none; }
     #hm-btn { pointer-events: auto; }
     #hm-panel:not(.hm-hidden) { pointer-events: auto; }
@@ -127,6 +127,12 @@
       }
       #hm-widget.hm-open #hm-btn { display: none !important; }
       #hm-widget:not(.hm-open) #hm-btn { pointer-events: auto; }
+      /* Prevent iOS auto-zoom on input focus (requires font-size >= 16px) */
+      #hm-widget #hm-input { font-size: 16px !important; }
+      /* Keep footer above keyboard — use padding-bottom with env() for notch phones */
+      #hm-widget.hm-open #hm-footer {
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+      }
     }
     #hm-header {
       background: var(--hm-primary); color: var(--hm-text);
