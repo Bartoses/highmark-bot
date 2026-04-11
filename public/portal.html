@@ -3921,7 +3921,7 @@ async function saveEmbedConfig() {
   const r = await apiFetch('/embed-config', { method: 'PATCH', body: JSON.stringify(body) });
   if (!r || r.error) {
     msgEl.className = 'error-msg';
-    msgEl.textContent = r?.error ?? 'Save failed';
+    msgEl.textContent = r?.error ?? _lastApiError ?? 'Save failed';
     msgEl.style.display = 'block';
     return;
   }
