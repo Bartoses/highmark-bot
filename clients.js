@@ -319,6 +319,7 @@ function dbRowToClient(row) {
     waitlistEnabled:          row.waitlist_enabled            ?? true,
     leadCaptureEnabled:       row.lead_capture_enabled        ?? false,
     leadNotificationPhone:    row.lead_notification_phone     ?? null,
+    ownerPhone:               row.owner_phone                 ?? null,
     fareharborCompanies:      row.fareharbor_companies        ?? [],
     scrapeUrls:    row.scrape_urls    ?? [],
     snotelStations: row.snotel_stations ?? [],
