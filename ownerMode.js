@@ -177,3 +177,94 @@ export function isOwnerActionAllowed(action) {
     return false;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PENDING ACTION STORE
+// In-memory, keyed by owner phone. Stores confirmation-required actions (e.g.
+// campaign sends) until the owner replies YES or NO, or the TTL expires.
+// No DB needed — these are transient, single-session confirmations.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _pendingActions = new Map(); // phone → { action, data, expiresAt }
+const PENDING_TTL_MS  = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Store a pending action for the owner to confirm.
+ * @param {string} phone   — E.164 owner phone
+ * @param {string} action  — action name (e.g. "execute_campaign")
+ * @param {object} data    — action payload
+ */
+export function storePendingAction(phone, action, data = {}) {
+  try {
+    _pendingActions.set(phone, {
+      action,
+      data,
+      expiresAt: Date.now() + PENDING_TTL_MS,
+    });
+  } catch { /* never throws */ }
+}
+
+/**
+ * Get a pending action for a phone number (null if none or expired).
+ * @param {string} phone
+ * @returns {{ action: string, data: object } | null}
+ */
+export function getPendingAction(phone) {
+  try {
+    const entry = _pendingActions.get(phone);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      _pendingActions.delete(phone);
+      return null;
+    }
+    return { action: entry.action, data: entry.data };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Clear a pending action for a phone number.
+ * @param {string} phone
+ */
+export function clearPendingAction(phone) {
+  try {
+    _pendingActions.delete(phone);
+  } catch { /* never throws */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// YES / NO DETECTION
+// Used in the confirmation gate to detect owner intent without a Claude call.
+// Conservative regexes — only match unambiguous single-word confirmations to
+// avoid treating conversational messages as confirmation responses.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AFFIRMATIVE_RE = /^\s*(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|confirm|send it|send|go|y)\s*[.!]?\s*$/i;
+const NEGATIVE_RE    = /^\s*(no|nope|cancel|nevermind|never mind|stop|don't|dont|nah|n)\s*[.!]?\s*$/i;
+
+/**
+ * Returns true if the message is a clear affirmative confirmation.
+ * @param {string} msg
+ * @returns {boolean}
+ */
+export function isAffirmative(msg) {
+  try {
+    return AFFIRMATIVE_RE.test(String(msg ?? "").trim());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns true if the message is a clear negative / cancellation.
+ * @param {string} msg
+ * @returns {boolean}
+ */
+export function isNegative(msg) {
+  try {
+    return NEGATIVE_RE.test(String(msg ?? "").trim());
+  } catch {
+    return false;
+  }
+}

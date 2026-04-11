@@ -36,6 +36,11 @@ import {
   buildOwnerInstruction,
   routeOwnerAgent,
   isOwnerActionAllowed,
+  storePendingAction,
+  getPendingAction,
+  clearPendingAction,
+  isAffirmative,
+  isNegative,
 } from "./ownerMode.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -146,6 +151,38 @@ export async function runOrchestrator(params) {
 
     console.log(`[ORCHESTRATOR] msg="${msg.slice(0, 40)}…" intent=${intent} agent=${agent} ownerMode=${ownerMode} urgency=${context.urgency}`);
 
+    // ── Owner confirmation gate (runs before Claude to avoid API cost) ────────
+    // If the owner has a pending action awaiting YES/NO, intercept before Claude.
+    if (ownerMode && fromNumber) {
+      const pending = getPendingAction(fromNumber);
+      if (pending) {
+        if (isAffirmative(msg)) {
+          clearPendingAction(fromNumber);
+          console.log(`[ORCHESTRATOR] owner confirmed action=${pending.action}`);
+          const integrations = buildIntegrations({ supabase, crmSupabase, twilioClient, client });
+          const confirmResult = await executeAction({
+            action:  pending.action,
+            data:    pending.data,
+            context,
+            client,
+            integrations,
+          });
+          console.log(`[ORCHESTRATOR] confirmed action=${pending.action} success=${confirmResult.success}`);
+          const confirmReply = confirmResult.ownerReply
+            ?? confirmResult.fallbackMessage
+            ?? (confirmResult.success ? "Done." : "Something went wrong. Try again.");
+          return { reply: confirmReply, parsed: {}, actionResult: confirmResult, agent, intent, context, ownerMode };
+        } else if (isNegative(msg)) {
+          clearPendingAction(fromNumber);
+          console.log(`[ORCHESTRATOR] owner cancelled action=${pending.action}`);
+          return { reply: "Cancelled.", parsed: {}, actionResult: null, agent, intent, context, ownerMode };
+        }
+        // Ambiguous reply — clear the pending action and let Claude handle it normally
+        console.log(`[ORCHESTRATOR] ambiguous reply with pending action=${pending.action}, clearing`);
+        clearPendingAction(fromNumber);
+      }
+    }
+
     // ── Step 4-5: Build layered system prompt ────────────────────────────────
     // Pull per-client KB knowledge (400 chars max) — prefer passed-in context
     let kbContext = knowledgeContext || "";
@@ -239,11 +276,23 @@ export async function runOrchestrator(params) {
             parsed.reply = actionResult.fallbackMessage;
           }
         }
+
+        // Owner BI: store pending action if confirmation is required
+        if (ownerMode && actionResult.requiresConfirmation && actionResult.result?.pendingAction && fromNumber) {
+          storePendingAction(fromNumber, actionResult.result.pendingAction, actionResult.result.pendingData ?? {});
+          console.log(`[ORCHESTRATOR] stored pending action=${actionResult.result.pendingAction} for ${fromNumber}`);
+        }
       }
     }
 
     // ── Step 9: Extract final reply ───────────────────────────────────────────
     let reply = parsed.reply;
+
+    // Owner BI override: if the action returned a real data reply, use it instead of Claude's text
+    if (ownerMode && actionResult?.ownerReply) {
+      reply = actionResult.ownerReply;
+      console.log(`[ORCHESTRATOR] ownerReply override, len=${reply.length}`);
+    }
 
     // Safety: if reply is empty or missing, use fallback
     if (!reply || typeof reply !== "string" || reply.trim().length === 0) {

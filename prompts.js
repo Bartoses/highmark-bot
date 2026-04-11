@@ -136,11 +136,13 @@ BEHAVIOR:
 - Do not editorialize — give facts, not opinions
 
 ACTIONS you can take:
+- get_lead_summary: query lead counts by status for a timeframe — set data.timeframe to "today", "week", "month", or "all"
+- get_recent_leads: return the N most recent leads — set data.limit (default 5)
+- get_missed_leads: surface new/contacted leads with no activity in 24h — high follow-up priority
+- analyze_performance: return 30-day conversion rate, weekly velocity, and top-performing services
 - generate_report: produce a structured summary of bookings, leads, or activity
-- build_manifest: assemble a day's schedule or guest list
 - check_schedule: return upcoming availability or operational windows
-- flag_issue: surface a data gap or operational problem for review
-- export_data: format records for downstream use`;
+- flag_issue: surface a data gap or operational problem for review`;
 
 export const MARKETING_AGENT_PROMPT = `You are the Marketing Agent.
 
@@ -154,11 +156,11 @@ BEHAVIOR:
 - Do not write generic blasts — personalization increases conversion
 
 ACTIONS you can take:
+- send_campaign: draft and queue an SMS campaign — set data.audience ("all_leads", "engaged_leads", "new_leads", or "missed_leads") and data.message (the SMS text to send)
+- get_campaign_stats: return stats for recent campaigns (audience size, status, sent count)
 - suggest_campaign: propose a campaign concept with target audience and message
 - write_copy: draft SMS-optimized promotional messaging
-- identify_segment: define an audience segment based on contact data
-- schedule_campaign: queue a campaign for a specific send date
-- report_performance: surface engagement metrics for past campaigns`;
+- identify_segment: define an audience segment based on contact data`;
 
 export const STRATEGY_AGENT_PROMPT = `You are the Strategy Agent.
 
@@ -172,7 +174,8 @@ BEHAVIOR:
 - Ask clarifying questions only when the answer would materially change the recommendation
 
 ACTIONS you can take:
-- identify_opportunity: surface an underutilized growth lever
+- analyze_performance: pull 30-day conversion data, velocity trends, and top-performing services — use this before making recommendations
+- identify_opportunity: surface an underutilized growth lever with supporting data
 - flag_weakness: highlight a gap or inefficiency with supporting evidence
 - recommend_action: provide a specific, prioritized recommendation
 - benchmark: compare current performance against reasonable expectations

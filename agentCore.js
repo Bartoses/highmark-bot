@@ -54,6 +54,9 @@ const INTENT_PATTERNS = [
       /\b(stats|statistics|report|reports|analytics|data|numbers|metrics|performance)\b/i,
       /\b(how (many|much|often)|total|count|breakdown|summary|overview)\b/i,
       /\b(give me (a |the )?(stats|numbers|data|report|summary|overview))\b/i,
+      /\b(who (didn.?t|hasn.?t|have.?n.?t) (book|booked|responded|replied))\b/i,
+      /\b(missed leads?|leads? (summary|overview|status|pipeline)|follow.?up queue)\b/i,
+      /\b(new leads?|recent leads?|lead count|how many leads?|any (new|recent) leads?)\b/i,
     ],
   },
   {
@@ -62,6 +65,9 @@ const INTENT_PATTERNS = [
       /\b(deal|deals|discount|discounts|promo|promotion|coupon|offer|sale|special)\b/i,
       /\b(any deals|any (discounts?|promos?|specials?|offers?)|running (any|a) (deal|promo|special))\b/i,
       /\b(save|savings|lower (price|rate|cost)|cheaper|best price|price (drop|cut))\b/i,
+      /\b(send (a |an )?(campaign|promo|message|text|blast|outreach) (to|out))\b/i,
+      /\b(campaign (to|for)|text (all|my) (leads?|contacts?|customers?))\b/i,
+      /\b(blast|outreach|reach out to (all|my) leads?)\b/i,
     ],
   },
   {
