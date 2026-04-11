@@ -91,6 +91,17 @@ import {
   buildSystemPrompt as agentBuildSystemPrompt,
   parseAgentResponse,
 } from "./agentCore.js";
+import {
+  GLOBAL_PROMPT,
+  SALES_AGENT_PROMPT,
+  SUPPORT_AGENT_PROMPT,
+  CRM_AGENT_PROMPT,
+  OPERATIONS_AGENT_PROMPT,
+  MARKETING_AGENT_PROMPT,
+  STRATEGY_AGENT_PROMPT,
+  AGENT_PROMPTS,
+  getAgentPrompt,
+} from "./prompts.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -3009,6 +3020,7 @@ async function main() {
   await test68(); // Web Chat (Phase 11): webFromNumber, webToNumber, getWebConversation, saveWebConversation, getWebClientConfig, /web/config + /web/chat routes
   await test69(); // Booking Link Resolution Engine: extractBookingContext, matchConfigLink, normalizeClientLinks, resolveBookingLink
   await test70(); // Agent Core Foundation: detectIntent, detectContext, selectAgent, buildSystemPrompt, parseAgentResponse
+  await test71(); // Prompt System: GLOBAL_PROMPT, agent prompts, getAgentPrompt, buildSystemPrompt integration
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -10162,6 +10174,179 @@ async function test70() {
     typeof parsed.data === "object" && parsed.reply === "Only a reply."
       ? pass("parseAgentResponse: partial JSON → missing fields default to null/{}")
       : fail("parseAgentResponse: partial JSON defaults", JSON.stringify(parsed));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST 71: Prompt System (prompts.js)
+// GLOBAL_PROMPT, agent prompts, getAgentPrompt, buildSystemPrompt integration
+// ─────────────────────────────────────────────────────────────────────────────
+async function test71() {
+  console.log("\nTEST 71: Prompt System (prompts.js)");
+
+  // ── GLOBAL_PROMPT: exists, non-empty, meets minimum length ────────────────
+  typeof GLOBAL_PROMPT === "string" && GLOBAL_PROMPT.length > 100
+    ? pass("GLOBAL_PROMPT: exists and length > 100")
+    : fail("GLOBAL_PROMPT: missing or too short", `type=${typeof GLOBAL_PROMPT} len=${GLOBAL_PROMPT?.length}`);
+
+  // ── GLOBAL_PROMPT: contains required sections ─────────────────────────────
+  const globalTokens = [
+    "Highmark",
+    "CAPABILITIES",
+    "ACTION-FIRST",
+    "RESPONSE FORMAT",
+    "STYLE RULES",
+    "agent",
+    "intent",
+    "action",
+    "reply",
+    "JSON",
+  ];
+  for (const token of globalTokens) {
+    GLOBAL_PROMPT.includes(token)
+      ? pass(`GLOBAL_PROMPT contains "${token}"`)
+      : fail(`GLOBAL_PROMPT missing "${token}"`);
+  }
+
+  // ── GLOBAL_PROMPT: enforces JSON output shape ─────────────────────────────
+  const jsonFields = ["\"agent\"", "\"intent\"", "\"action\"", "\"data\"", "\"reply\""];
+  for (const field of jsonFields) {
+    GLOBAL_PROMPT.includes(field)
+      ? pass(`GLOBAL_PROMPT: JSON shape includes field ${field}`)
+      : fail(`GLOBAL_PROMPT: JSON shape missing field ${field}`);
+  }
+
+  // ── All agent prompts: exist, are strings, length > 100 ───────────────────
+  const agentPromptMap = {
+    SALES_AGENT_PROMPT,
+    SUPPORT_AGENT_PROMPT,
+    CRM_AGENT_PROMPT,
+    OPERATIONS_AGENT_PROMPT,
+    MARKETING_AGENT_PROMPT,
+    STRATEGY_AGENT_PROMPT,
+  };
+  for (const [name, prompt] of Object.entries(agentPromptMap)) {
+    typeof prompt === "string" && prompt.length > 100
+      ? pass(`${name}: exists and length > 100 (${prompt.length} chars)`)
+      : fail(`${name}: missing or too short`, `type=${typeof prompt} len=${prompt?.length}`);
+  }
+
+  // ── No agent prompt is undefined ──────────────────────────────────────────
+  for (const [name, prompt] of Object.entries(agentPromptMap)) {
+    prompt !== undefined && prompt !== null
+      ? pass(`${name}: defined (not undefined/null)`)
+      : fail(`${name}: is undefined or null`);
+  }
+
+  // ── Each agent prompt contains a ROLE section ─────────────────────────────
+  for (const [name, prompt] of Object.entries(agentPromptMap)) {
+    prompt.includes("ROLE:")
+      ? pass(`${name}: contains ROLE section`)
+      : fail(`${name}: missing ROLE section`);
+  }
+
+  // ── Each agent prompt contains a BEHAVIOR section ─────────────────────────
+  for (const [name, prompt] of Object.entries(agentPromptMap)) {
+    prompt.includes("BEHAVIOR:")
+      ? pass(`${name}: contains BEHAVIOR section`)
+      : fail(`${name}: missing BEHAVIOR section`);
+  }
+
+  // ── Each agent prompt contains ACTIONS section ────────────────────────────
+  for (const [name, prompt] of Object.entries(agentPromptMap)) {
+    prompt.includes("ACTIONS")
+      ? pass(`${name}: contains ACTIONS section`)
+      : fail(`${name}: missing ACTIONS section`);
+  }
+
+  // ── No hardcoded client names in any agent prompt ─────────────────────────
+  const forbiddenNames = ["Colorado Sled Rentals", "Rabbit Ears", "csr_rea", "Lone Pine", "Steamboat"];
+  for (const [name, prompt] of Object.entries(agentPromptMap)) {
+    const found = forbiddenNames.filter((n) => prompt.includes(n));
+    found.length === 0
+      ? pass(`${name}: no hardcoded client names`)
+      : fail(`${name}: contains hardcoded client name(s): ${found.join(", ")}`);
+  }
+  // GLOBAL_PROMPT too
+  const globalForbidden = forbiddenNames.filter((n) => GLOBAL_PROMPT.includes(n));
+  globalForbidden.length === 0
+    ? pass("GLOBAL_PROMPT: no hardcoded client names")
+    : fail(`GLOBAL_PROMPT: contains hardcoded client name(s): ${globalForbidden.join(", ")}`);
+
+  // ── AGENT_PROMPTS map: all 6 roles present ────────────────────────────────
+  const expectedRoles = ["sales", "support", "crm", "operations", "marketing", "strategy"];
+  for (const role of expectedRoles) {
+    typeof AGENT_PROMPTS[role] === "string" && AGENT_PROMPTS[role].length > 0
+      ? pass(`AGENT_PROMPTS["${role}"]: present and non-empty`)
+      : fail(`AGENT_PROMPTS["${role}"]: missing or empty`);
+  }
+
+  // ── getAgentPrompt: correct lookup per role ───────────────────────────────
+  for (const role of expectedRoles) {
+    const result = getAgentPrompt(role);
+    result === AGENT_PROMPTS[role]
+      ? pass(`getAgentPrompt("${role}"): returns correct prompt`)
+      : fail(`getAgentPrompt("${role}"): returned wrong prompt`);
+  }
+
+  // ── getAgentPrompt: unknown role falls back to SUPPORT ────────────────────
+  ["", "unknown", "wizard", null, undefined].forEach((val) => {
+    const result = getAgentPrompt(val);
+    result === SUPPORT_AGENT_PROMPT
+      ? pass(`getAgentPrompt(${JSON.stringify(val)}): falls back to SUPPORT_AGENT_PROMPT`)
+      : fail(`getAgentPrompt(${JSON.stringify(val)}): expected SUPPORT fallback`, result?.slice(0, 40));
+  });
+
+  // ── buildSystemPrompt integration: full composition ───────────────────────
+  {
+    const composed = agentBuildSystemPrompt({
+      globalPrompt:     GLOBAL_PROMPT,
+      clientProfile:    { name: "Acme Adventures", mode: "fareharbor", services: ["snowmobile", "rzr"] },
+      agentPrompt:      SALES_AGENT_PROMPT,
+      knowledgeContext: "Tours available. Next open slot: tomorrow 9am.",
+    });
+
+    typeof composed === "string" && composed.length > 0
+      ? pass("buildSystemPrompt + prompts: returns non-empty string")
+      : fail("buildSystemPrompt + prompts: empty output");
+
+    ["GLOBAL PROMPT", "CLIENT PROFILE", "AGENT ROLE", "KNOWLEDGE CONTEXT"].forEach((section) => {
+      composed.includes(section)
+        ? pass(`buildSystemPrompt + prompts: contains section "${section}"`)
+        : fail(`buildSystemPrompt + prompts: missing section "${section}"`);
+    });
+
+    // Verify key content from each layer is present
+    const contentChecks = [
+      ["Highmark",               "GLOBAL_PROMPT content"],
+      ["Acme Adventures",        "clientProfile content"],
+      ["Sales Agent",            "SALES_AGENT_PROMPT content"],
+      ["Tours available",        "knowledgeContext content"],
+    ];
+    for (const [token, label] of contentChecks) {
+      composed.includes(token)
+        ? pass(`buildSystemPrompt + prompts: ${label} present ("${token}")`)
+        : fail(`buildSystemPrompt + prompts: ${label} missing ("${token}")`);
+    }
+  }
+
+  // ── Prompt string-safety: no template literals left unresolved ────────────
+  const allPrompts = [GLOBAL_PROMPT, ...Object.values(agentPromptMap)];
+  for (const [i, prompt] of allPrompts.entries()) {
+    const name = i === 0 ? "GLOBAL_PROMPT" : Object.keys(agentPromptMap)[i - 1];
+    !prompt.includes("${")
+      ? pass(`${name}: no unresolved template literals`)
+      : fail(`${name}: contains unresolved \${...} template literal`);
+  }
+
+  // ── Prompts are safe to concatenate ───────────────────────────────────────
+  try {
+    const cat = [GLOBAL_PROMPT, ...Object.values(agentPromptMap)].join("\n\n---\n\n");
+    typeof cat === "string" && cat.length > 500
+      ? pass("All prompts: safely concatenatable")
+      : fail("All prompts: concatenation produced unexpected result");
+  } catch (e) {
+    fail("All prompts: concatenation threw", e.message);
   }
 }
 
