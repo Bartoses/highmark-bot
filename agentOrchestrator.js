@@ -289,9 +289,16 @@ export async function runOrchestrator(params) {
     let reply = parsed.reply;
 
     // Owner BI override: if the action returned a real data reply, use it instead of Claude's text
-    if (ownerMode && actionResult?.ownerReply) {
-      reply = actionResult.ownerReply;
-      console.log(`[ORCHESTRATOR] ownerReply override, len=${reply.length}`);
+    if (ownerMode) {
+      console.log(`[ORCHESTRATOR] owner post-action: action=${parsed.action} actionResult.success=${actionResult?.success} hasOwnerReply=${!!actionResult?.ownerReply} ownerReplyLen=${actionResult?.ownerReply?.length ?? 0}`);
+      if (actionResult?.ownerReply) {
+        reply = actionResult.ownerReply;
+        console.log(`[ORCHESTRATOR] ownerReply override applied, len=${reply.length}`);
+      } else if (actionResult && !actionResult.success && actionResult.fallbackMessage) {
+        // Action failed — use fallback instead of Claude's confused text
+        reply = actionResult.fallbackMessage;
+        console.log(`[ORCHESTRATOR] owner action fail — using fallback: ${actionResult.fallbackMessage}`);
+      }
     }
 
     // Safety: if reply is empty or missing, use fallback

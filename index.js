@@ -1953,13 +1953,16 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
       // Combine availability context with plan, conversation guidance, and response mode
       const convInstruction = buildConversationInstruction(effectiveIntent, client);
-      let extraInstruction = [
+      // Owner mode: skip all guest-facing response plan instructions — they conflict with operator behavior.
+      // Owner gets a clean context so the agent prompts and action results are not polluted by
+      // booking nudges, lead capture directives, or sentiment escalation logic.
+      let extraInstruction = isOwner ? null : ([
         availCtx          ? `Live availability data: ${availCtx}` : null,
         planInstruction   || null,
         convInstruction   || null,
         truthInstruction  || null,
         modeInstruction   || null,
-      ].filter(Boolean).join("\n\n") || null;
+      ].filter(Boolean).join("\n\n") || null);
 
       // 480 chars (3 texts) — never cut off mid-thought
       const replyMax = 480;
