@@ -259,6 +259,8 @@ tr:hover td { background: var(--panel2); }
   .settings-grid .field-group[style*="grid-column"] { grid-column: auto !important; }
   /* Onboarding URL row: stack button below input */
   .ob-url-row { flex-direction: column; align-items: stretch; }
+  /* Embed builder: single column on mobile */
+  #embedLayout { grid-template-columns: 1fr !important; }
   .ob-url-row .btn { width: 100%; justify-content: center; }
   /* Confidence badges: wrap and shrink */
   #ob-pages-badge, .ob-conf-badge { margin-bottom: 4px; }
@@ -330,6 +332,9 @@ tr:hover td { background: var(--panel2); }
       </div>
       <div class="nav-item" data-section="booking-config">
         <span class="nav-icon">📅</span> Booking Config
+      </div>
+      <div class="nav-item" data-section="website-embed">
+        <span class="nav-icon">🖼</span> Website Embed
       </div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
@@ -534,6 +539,132 @@ tr:hover td { background: var(--panel2); }
         </div>
         <div id="bookingConfigContent"><div class="loading">Loading…</div></div>
       </div><!-- /sec-booking-config -->
+
+      <!-- WEBSITE EMBED -->
+      <div class="section" id="sec-website-embed">
+        <div class="section-header">
+          <span class="section-title">Website Embed</span>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-ghost btn-sm" onclick="loadEmbedConfig()">↻ Reset</button>
+            <button class="btn btn-primary btn-sm" onclick="saveEmbedConfig()">Save changes</button>
+          </div>
+        </div>
+        <div id="embedMsg" style="display:none;margin-bottom:14px;"></div>
+
+        <div style="display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start;" id="embedLayout">
+
+          <!-- Left: Controls -->
+          <div>
+            <!-- Appearance -->
+            <div class="card" style="margin-bottom:16px;">
+              <div class="card-title">Appearance</div>
+              <div class="two-col" style="margin-bottom:14px;">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Primary Color <span class="form-hint" style="display:inline;">(header, chat bubbles)</span></label>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="color" id="ec-primary-color" value="#2563eb" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-primary-color-hex').value=this.value;updateEmbedPreview()">
+                    <input type="text" id="ec-primary-color-hex" class="form-input" style="flex:1;" value="#2563eb" oninput="syncColorFromHex('ec-primary-color','ec-primary-color-hex')">
+                  </div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Button Color <span class="form-hint" style="display:inline;">(launcher button)</span></label>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="color" id="ec-button-color" value="#2563eb" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-button-color-hex').value=this.value;updateEmbedPreview()">
+                    <input type="text" id="ec-button-color-hex" class="form-input" style="flex:1;" value="#2563eb" oninput="syncColorFromHex('ec-button-color','ec-button-color-hex')">
+                  </div>
+                </div>
+              </div>
+              <div class="two-col" style="margin-bottom:14px;">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Text Color <span class="form-hint" style="display:inline;">(on colored surfaces)</span></label>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="color" id="ec-text-color" value="#ffffff" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-text-color-hex').value=this.value;updateEmbedPreview()">
+                    <input type="text" id="ec-text-color-hex" class="form-input" style="flex:1;" value="#ffffff" oninput="syncColorFromHex('ec-text-color','ec-text-color-hex')">
+                  </div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Widget Size</label>
+                  <select id="ec-size" class="form-input" onchange="updateEmbedPreview()">
+                    <option value="small">Small (300px)</option>
+                    <option value="medium" selected>Medium (360px)</option>
+                    <option value="large">Large (420px)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Border Radius <span class="form-hint" style="display:inline;">(px)</span></label>
+                  <input type="number" id="ec-border-radius" class="form-input" value="16" min="0" max="32" oninput="updateEmbedPreview()">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Logo URL <span class="form-hint" style="display:inline;">(optional)</span></label>
+                  <input type="url" id="ec-logo-url" class="form-input" placeholder="https://…/logo.png" oninput="updateEmbedPreview()">
+                </div>
+              </div>
+            </div>
+
+            <!-- Button & Text -->
+            <div class="card" style="margin-bottom:16px;">
+              <div class="card-title">Button &amp; Text</div>
+              <div class="form-group">
+                <label>Button Text</label>
+                <input type="text" id="ec-button-text" class="form-input" value="Chat with us" maxlength="32" oninput="updateEmbedPreview()">
+                <div class="form-hint">Shown on the launcher button. Keep it short.</div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label>Welcome Message <span class="form-hint" style="display:inline;">(optional)</span></label>
+                <textarea id="ec-welcome-message" class="form-input" rows="3" placeholder="Hi! I'm Summit, your guide to tours and adventures. How can I help?" oninput="updateEmbedPreview()"></textarea>
+                <div class="form-hint">First message shown when a visitor opens the chat. Leave blank to use the bot's default greeting.</div>
+              </div>
+            </div>
+
+            <!-- Behavior -->
+            <div class="card" style="margin-bottom:16px;">
+              <div class="card-title">Behavior</div>
+              <div class="two-col" style="margin-bottom:14px;">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Position</label>
+                  <select id="ec-position" class="form-input" onchange="updateEmbedPreview()">
+                    <option value="bottom_right" selected>Bottom right</option>
+                    <option value="bottom_left">Bottom left</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Delay Before Showing <span class="form-hint" style="display:inline;">(seconds)</span></label>
+                  <input type="number" id="ec-delay-seconds" class="form-input" value="0" min="0" max="60" oninput="updateEmbedPreview()">
+                </div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                  <input type="checkbox" id="ec-auto-open" onchange="updateEmbedPreview()" style="width:16px;height:16px;accent-color:var(--accent);">
+                  <span>Auto-open widget on page load (after delay)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Embed Code -->
+            <div class="card">
+              <div class="card-title">Install Code</div>
+              <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Paste this snippet before the closing <code style="background:var(--panel2);padding:1px 5px;border-radius:4px;">&lt;/body&gt;</code> tag on your website.</p>
+              <div style="position:relative;">
+                <pre id="ec-embed-code" style="background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:14px 16px;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
+                <button class="btn btn-ghost btn-sm" onclick="copyEmbedCode()" style="position:absolute;top:8px;right:8px;" id="ec-copy-btn">Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Live Preview -->
+          <div style="position:sticky;top:0;">
+            <div class="card">
+              <div class="card-title">Live Preview</div>
+              <div id="ec-preview" style="position:relative;min-height:500px;background:#f0f4f8;border-radius:8px;overflow:hidden;">
+                <!-- Preview widget rendered here by JS -->
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div><!-- /sec-website-embed -->
 
       <!-- ONBOARDING — New Client (internal_admin only) -->
       <div class="section admin-only" id="sec-onboarding">
@@ -756,6 +887,10 @@ tr:hover td { background: var(--panel2); }
             </div>
             <div class="more-link-item" onclick="switchSection('booking-config')">
               <span>📅</span> Booking Config
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item" onclick="switchSection('website-embed')">
+              <span>🖼</span> Website Embed
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item client-admin-only" onclick="switchSection('users')">
@@ -1249,6 +1384,7 @@ const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
   analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
   integrations: 'Integrations', messaging: 'Messaging', 'bot-config': 'Bot Config', 'booking-config': 'Booking Config',
+  'website-embed': 'Website Embed',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
 };
 function switchSection(name) {
@@ -1277,6 +1413,7 @@ function switchSection(name) {
   if (name === 'messaging')       loadMessaging();
   if (name === 'bot-config')      loadBotConfig();
   if (name === 'booking-config')  loadBookingConfig();
+  if (name === 'website-embed')   loadEmbedConfig();
   if (name === 'onboarding')      resetOnboarding();
 }
 
@@ -3692,6 +3829,167 @@ async function saveBookingConfig() {
   if (btn) { btn.disabled = false; btn.textContent = 'Save Booking Config'; }
   if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
   showToast('Booking config saved');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WEBSITE EMBED — Config Builder (Phase 11.2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function loadEmbedConfig() {
+  const data = await apiFetch('/embed-config');
+  if (!data) return;
+  const ec = data;
+  document.getElementById('ec-primary-color').value     = ec.primary_color   || '#2563eb';
+  document.getElementById('ec-primary-color-hex').value = ec.primary_color   || '#2563eb';
+  document.getElementById('ec-button-color').value      = ec.button_color    || '#2563eb';
+  document.getElementById('ec-button-color-hex').value  = ec.button_color    || '#2563eb';
+  document.getElementById('ec-text-color').value        = ec.text_color      || '#ffffff';
+  document.getElementById('ec-text-color-hex').value    = ec.text_color      || '#ffffff';
+  document.getElementById('ec-size').value              = ec.size            || 'medium';
+  document.getElementById('ec-border-radius').value     = ec.border_radius   ?? 16;
+  document.getElementById('ec-logo-url').value          = ec.logo_url        || '';
+  document.getElementById('ec-button-text').value       = ec.button_text     || 'Chat with us';
+  document.getElementById('ec-welcome-message').value   = ec.welcome_message || '';
+  document.getElementById('ec-position').value          = ec.position        || 'bottom_right';
+  document.getElementById('ec-delay-seconds').value     = ec.delay_seconds   ?? 0;
+  document.getElementById('ec-auto-open').checked       = !!ec.auto_open;
+  updateEmbedPreview();
+}
+
+async function saveEmbedConfig() {
+  const msgEl = document.getElementById('embedMsg');
+  msgEl.style.display = 'none';
+
+  const body = {
+    primary_color:   document.getElementById('ec-primary-color').value,
+    button_color:    document.getElementById('ec-button-color').value,
+    text_color:      document.getElementById('ec-text-color').value,
+    size:            document.getElementById('ec-size').value,
+    border_radius:   document.getElementById('ec-border-radius').value,
+    logo_url:        document.getElementById('ec-logo-url').value || null,
+    button_text:     document.getElementById('ec-button-text').value || 'Chat with us',
+    welcome_message: document.getElementById('ec-welcome-message').value || null,
+    position:        document.getElementById('ec-position').value,
+    delay_seconds:   parseInt(document.getElementById('ec-delay-seconds').value, 10) || 0,
+    auto_open:       document.getElementById('ec-auto-open').checked,
+  };
+
+  const r = await apiFetch('/embed-config', { method: 'PATCH', body: JSON.stringify(body) });
+  if (!r || r.error) {
+    msgEl.className = 'error-msg';
+    msgEl.textContent = r?.error ?? 'Save failed';
+    msgEl.style.display = 'block';
+    return;
+  }
+  msgEl.className = 'success-msg';
+  msgEl.textContent = 'Widget config saved.';
+  msgEl.style.display = 'block';
+  setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
+}
+
+function syncColorFromHex(colorId, hexId) {
+  const hex = document.getElementById(hexId)?.value?.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+    const picker = document.getElementById(colorId);
+    if (picker) picker.value = hex;
+    updateEmbedPreview();
+  }
+}
+
+function getEmbedFormValues() {
+  return {
+    primaryColor:   document.getElementById('ec-primary-color')?.value   || '#2563eb',
+    buttonColor:    document.getElementById('ec-button-color')?.value    || '#2563eb',
+    textColor:      document.getElementById('ec-text-color')?.value      || '#ffffff',
+    size:           document.getElementById('ec-size')?.value            || 'medium',
+    borderRadius:   parseInt(document.getElementById('ec-border-radius')?.value, 10) || 16,
+    logoUrl:        document.getElementById('ec-logo-url')?.value        || '',
+    buttonText:     document.getElementById('ec-button-text')?.value     || 'Chat with us',
+    welcomeMsg:     document.getElementById('ec-welcome-message')?.value || '',
+    position:       document.getElementById('ec-position')?.value        || 'bottom_right',
+    delaySeconds:   parseInt(document.getElementById('ec-delay-seconds')?.value, 10) || 0,
+    autoOpen:       document.getElementById('ec-auto-open')?.checked     || false,
+  };
+}
+
+function updateEmbedPreview() {
+  const v = getEmbedFormValues();
+  const previewEl = document.getElementById('ec-preview');
+  if (!previewEl) return;
+
+  const panelW = v.size === 'small' ? '300px' : v.size === 'large' ? '420px' : '360px';
+  const posRight = v.position !== 'bottom_left';
+  const br = v.borderRadius;
+
+  const logoHtml = v.logoUrl
+    ? `<img src="${escHtml(v.logoUrl)}" alt="logo" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;">`
+    : `<div style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">🏔</div>`;
+
+  const greetMsg = v.welcomeMsg || 'Hi! How can I help you today?';
+
+  previewEl.innerHTML = `
+    <div style="position:absolute;bottom:16px;${posRight ? 'right:16px' : 'left:16px'};display:flex;flex-direction:column;align-items:${posRight ? 'flex-end' : 'flex-start'};gap:10px;width:${panelW};max-width:calc(100% - 32px);">
+      <!-- Chat panel -->
+      <div style="width:100%;background:#fff;border-radius:${br}px;box-shadow:0 4px 24px rgba(0,0,0,.15);overflow:hidden;">
+        <!-- Header -->
+        <div style="background:${v.primaryColor};padding:12px 14px;display:flex;align-items:center;gap:10px;">
+          ${logoHtml}
+          <div style="flex:1;">
+            <div style="font-size:13px;font-weight:600;color:${v.textColor};">Summit</div>
+            <div style="font-size:10px;opacity:.8;color:${v.textColor};">Usually replies instantly</div>
+          </div>
+          <div style="color:${v.textColor};opacity:.7;font-size:16px;cursor:default;">✕</div>
+        </div>
+        <!-- Messages area -->
+        <div style="background:#f8f9fb;padding:12px;min-height:120px;">
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;border-bottom-left-radius:3px;padding:9px 12px;font-size:12px;color:#111;display:inline-block;max-width:85%;line-height:1.5;">${escHtml(greetMsg)}</div>
+        </div>
+        <!-- Input -->
+        <div style="background:#fff;border-top:1px solid #e5e7eb;padding:9px 10px;display:flex;gap:8px;align-items:center;">
+          <div style="flex:1;border:1px solid #d1d5db;border-radius:20px;padding:7px 12px;font-size:12px;color:#9ca3af;">Type a message…</div>
+          <div style="background:${v.primaryColor};border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;">
+            <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:${v.textColor};"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          </div>
+        </div>
+        <!-- Branding -->
+        <div style="text-align:center;padding:4px 0 7px;font-size:10px;color:#adb5bd;">Powered by Highmark</div>
+      </div>
+      <!-- Launcher button -->
+      <button style="background:${v.buttonColor};color:${v.textColor};border:none;border-radius:100px;padding:0 16px;height:48px;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2);">
+        <span style="font-size:18px;">💬</span>
+        <span>${escHtml(v.buttonText)}</span>
+      </button>
+    </div>
+  `;
+
+  // Update embed code
+  updateEmbedCode();
+}
+
+function updateEmbedCode() {
+  const codeEl = document.getElementById('ec-embed-code');
+  if (!codeEl) return;
+  const clientId = me?.clientId || 'YOUR_CLIENT_ID';
+  const origin = window.location.origin;
+  codeEl.textContent = `<!-- Highmark Chat Widget -->\n<script src="${origin}/embed.js"\n  data-client="${clientId}">\n<\/script>`;
+}
+
+function copyEmbedCode() {
+  const codeEl = document.getElementById('ec-embed-code');
+  const btn = document.getElementById('ec-copy-btn');
+  if (!codeEl) return;
+  navigator.clipboard.writeText(codeEl.textContent).then(() => {
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 2000); }
+  }).catch(() => {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = codeEl.textContent;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 2000); }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
