@@ -56,6 +56,7 @@ import { detectCancellationIntent, detectRescheduleIntent, handleCancellationMes
 import { sendMessageWeb, createWebSession, getWebClientConfig } from "./webChat.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 import { getOrchestratorReply, runOrchestrator } from "./agentOrchestrator.js";
+import { detectOwner } from "./ownerMode.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1370,6 +1371,12 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   //      Falls back safely if DB is unavailable or tables don't exist yet.
   client = await getRuntimeClientConfig(client, supabase);
 
+  // 5.7. Detect owner phone — must run after getRuntimeClientConfig so ownerPhone is populated.
+  //      Owner messages skip guest-routing branches (opener, returning, booking steps) and go
+  //      directly to the orchestrator's internal operator mode.
+  const isOwner = detectOwner(fromNumber, client);
+  if (isOwner) console.log(`[OWNER] Inbound from owner phone ${fromNumber} — activating internal mode`);
+
   // 6. Demo mode — deterministic guided sales demo, no AI/API calls
   //    Triggered when bookingMode==="demo" OR isDemo flag (protects against DB overriding bookingMode).
   if (client.bookingMode === "demo" || client.isDemo) {
@@ -1604,8 +1611,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       }
     }
 
-    // FIRST MESSAGE
-    else if (isNew) {
+    // FIRST MESSAGE — skip for owner phones; they go to orchestrator directly
+    else if (isNew && !isOwner) {
       // Check if confirmed guest (pre-seeded by booking confirmation)
       if (convo.sessionType === "confirmed_guest" && convo.bookingData?.activity) {
         replyText = enforceLength(
@@ -1622,13 +1629,14 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       }
     }
 
-    // RETURNING AFTER 24H — light re-intro
-    else if (returning && convo.bookingStep === null && !convo.handoff) {
+    // RETURNING AFTER 24H — light re-intro (skip for owners)
+    else if (returning && convo.bookingStep === null && !convo.handoff && !isOwner) {
       replyText = enforceLength(`Hey, ${client.botName} again — welcome back! What can I help with?`);
     }
 
-    // WAITLIST TRIGGER — "notify me" / "let me know" proactive opt-in (any client)
+    // WAITLIST TRIGGER — "notify me" / "let me know" proactive opt-in (any client, not owner)
     else if (
+      !isOwner &&
       /let me know|notify me|heads.?up when|alert me when|when.+open.*book|when.+available/i.test(rawBody) &&
       !convo.waitlistPending &&
       client.waitlistEnabled !== false
@@ -1645,6 +1653,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     // but waitlistPending was never set (no structured trigger fired).
     // Condition: guest sent a clear YES + not mid-booking + last bot message had reach-out language.
     else if (
+      !isOwner &&
       /^(yes|yeah|yep|sure|ok|okay|please|y)\b/i.test(rawBody.trim()) &&
       convo.bookingStep === null &&
       client.waitlistEnabled !== false &&
@@ -1661,8 +1670,9 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
 
     // PROACTIVE LEAD CAPTURE — fires when buying signals are strong and timing is right.
     // Sets waitlistPending so the pre-flight above handles the YES/NO on the next turn.
-    // Does NOT fire for: booking intents, handoff, conditions, or when expertise must come first.
+    // Does NOT fire for: booking intents, handoff, conditions, expertise-first, or owner.
     else if (
+      !isOwner &&
       shouldAttemptLeadCapture(convo, buyingSignals, client) &&
       !needsExpertiseFirst(intent, buyingSignals, convo) &&
       intent !== "booking" && intent !== "handoff" && intent !== "conditions"
