@@ -105,6 +105,29 @@
       transition: opacity .2s, transform .2s;
     }
     #hm-panel.hm-hidden { opacity: 0; pointer-events: none; transform: translateY(12px); }
+
+    /* ── Mobile: full-screen bottom sheet ───────────────────────────────────── */
+    @media (max-width: 640px) {
+      #hm-widget.hm-open {
+        left: 0 !important; right: 0 !important; bottom: 0 !important;
+        top: 0 !important; align-items: stretch !important;
+        justify-content: flex-end; background: rgba(0,0,0,.45);
+        pointer-events: auto;
+      }
+      #hm-widget.hm-open #hm-panel {
+        width: 100% !important; max-width: 100% !important;
+        border-radius: 20px 20px 0 0 !important;
+        margin: 0 !important;
+        height: 85svh; max-height: 85svh;
+        box-shadow: 0 -4px 32px rgba(0,0,0,.2);
+        transform: none !important; opacity: 1 !important;
+      }
+      #hm-widget.hm-open #hm-messages {
+        max-height: none !important; min-height: 0 !important; flex: 1 !important;
+      }
+      #hm-widget.hm-open #hm-btn { display: none !important; }
+      #hm-widget:not(.hm-open) #hm-btn { pointer-events: auto; }
+    }
     #hm-header {
       background: var(--hm-primary); color: var(--hm-text);
       padding: 14px 16px; display: flex; align-items: center; gap: 10px;
@@ -186,6 +209,9 @@
     root.id = "hm-widget";
     root.innerHTML = `
       <div id="hm-panel" class="hm-hidden">
+        <div id="hm-drag-handle" style="display:none;justify-content:center;padding:10px 0 4px;cursor:pointer;background:#fff;border-radius:20px 20px 0 0;" onclick="document.getElementById('hm-close-btn').click()">
+          <div style="width:36px;height:4px;border-radius:2px;background:#d1d5db;"></div>
+        </div>
         <div id="hm-header">
           ${avatarHtml}
           <div class="hm-title">
@@ -279,6 +305,10 @@
   function bindEvents() {
     document.getElementById("hm-btn").addEventListener("click", togglePanel);
     document.getElementById("hm-close-btn").addEventListener("click", closePanel);
+    // Tap the backdrop (dark overlay on mobile) to close
+    document.getElementById("hm-widget").addEventListener("click", (e) => {
+      if (e.target === document.getElementById("hm-widget")) closePanel();
+    });
     document.getElementById("hm-send").addEventListener("click", sendMessage);
 
     const input = document.getElementById("hm-input");
@@ -294,8 +324,15 @@
   function openPanel() {
     isOpen = true;
     localStorage.setItem(OPEN_KEY, "1");
-    document.getElementById("hm-panel")?.classList.remove("hm-hidden");
-    document.getElementById("hm-input")?.focus();
+    const panel  = document.getElementById("hm-panel");
+    const widget = document.getElementById("hm-widget");
+    if (panel)  panel.classList.remove("hm-hidden");
+    const isMob = window.innerWidth <= 640;
+    if (widget && isMob) widget.classList.add("hm-open");
+    const handle = document.getElementById("hm-drag-handle");
+    if (handle) handle.style.display = isMob ? "flex" : "none";
+    // Small delay on mobile so the panel is visible before keyboard opens
+    setTimeout(() => document.getElementById("hm-input")?.focus(), window.innerWidth <= 640 ? 200 : 0);
     if (messages.length === 0) sendGreeting();
   }
 
@@ -303,6 +340,7 @@
     isOpen = false;
     localStorage.removeItem(OPEN_KEY);
     document.getElementById("hm-panel")?.classList.add("hm-hidden");
+    document.getElementById("hm-widget")?.classList.remove("hm-open");
   }
 
   function togglePanel() { isOpen ? closePanel() : openPanel(); }
