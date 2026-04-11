@@ -76,7 +76,9 @@
     const w = panelWidth();
     return `
     #hm-widget * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    #hm-widget { position: fixed; ${pos}; bottom: 20px; z-index: 2147483647; display: flex; flex-direction: column; align-items: ${align}; }
+    #hm-widget { position: fixed; ${pos}; bottom: 20px; z-index: 2147483647; display: flex; flex-direction: column; align-items: ${align}; pointer-events: none; }
+    #hm-btn { pointer-events: auto; }
+    #hm-panel:not(.hm-hidden) { pointer-events: auto; }
     #hm-btn {
       height: 52px; min-width: 52px; padding: 0 18px;
       border-radius: 100px; border: none; cursor: pointer;
