@@ -2119,6 +2119,11 @@ async function loadSettings() {
         <div class="form-group"><label>Website URL</label><input type="url" id="set_website_url" value="${d.websiteUrl ?? ''}">
           <div class="form-hint">Used as the default scrape source for the knowledge base</div></div>
       </div>
+      <div class="form-group" style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border);">
+        <label>Owner / internal mode phone</label>
+        <input type="text" id="set_owner_phone" value="${d.ownerPhone ?? ''}" placeholder="+12223334444" style="max-width:220px;">
+        <div class="form-hint">When this number texts your bot, it responds in <strong style="color:var(--text);">internal mode</strong> — business reports, lead summaries, and campaign ideas instead of guest replies. Leave blank to disable.</div>
+      </div>
     </div>
 
     <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);">
@@ -2295,6 +2300,7 @@ async function loadSettings() {
       support_phone:           document.getElementById('set_support_phone').value.trim() || null,
       lead_notification_phone: document.getElementById('set_lead_notification_phone').value.trim() || null,
       support_email:           document.getElementById('set_support_email').value.trim() || null,
+      owner_phone:             document.getElementById('set_owner_phone').value.trim() || null,
       website_url:             document.getElementById('set_website_url').value.trim() || null,
       booking_mode:            document.getElementById('set_booking_mode').value,
       booking_link:            document.getElementById('set_booking_link').value.trim() || null,
