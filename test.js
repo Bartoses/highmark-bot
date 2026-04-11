@@ -105,6 +105,7 @@ import {
 import { executeAction, buildIntegrations } from "./actionEngine.js";
 import { runOrchestrator, getOrchestratorReply } from "./agentOrchestrator.js";
 import { detectOwner, buildOwnerInstruction, routeOwnerAgent, isOwnerActionAllowed } from "./ownerMode.js";
+import { handleIncomingMessage, buildChannelInstruction, isChannelEnabled } from "./messageHandler.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -3028,6 +3029,7 @@ async function main() {
   await test73(); // Action Engine: executeAction, all actions, fallbacks, missing integrations
   await test74(); // Agent Orchestrator: runOrchestrator, parseAgentResponse, action execution, fallbacks
   await test75(); // Owner Mode: detectOwner, buildOwnerInstruction, routeOwnerAgent, isOwnerActionAllowed, orchestrator integration
+  await test76(); // Channel Abstraction Layer: handleIncomingMessage, buildChannelInstruction, isChannelEnabled, retry logic
 
   // Integration tests (spawn server)
   console.log("\n[Server] Starting test server on port", TEST_PORT, "...");
@@ -11636,6 +11638,285 @@ async function test75() {
     blockedResult.actionResult?.success === false
       ? pass("runOrchestrator: blocked action → actionResult.success=false")
       : fail("runOrchestrator: blocked action success wrong", JSON.stringify(blockedResult.actionResult));
+  }
+}
+
+async function test76() {
+  console.log("\nTEST 76: Channel Abstraction Layer (handleIncomingMessage, buildChannelInstruction, isChannelEnabled)");
+
+  // ── Shared mock helpers ───────────────────────────────────────────────────
+  function mockAnthropic(text) {
+    return { messages: { create: async () => ({ content: [{ text }] }) } };
+  }
+  const baseClient = {
+    id: "chan_test", name: "Channel Test Co", industry: "outdoor", tone: "warm",
+    bookingMode: "informational", services: ["tours"],
+    supportPhone: "(970) 555-0000", handoffPhone: "(970) 555-0001",
+    bookingUrls: {}, bookingLinks: [],
+  };
+  const baseConvo = { messages: [] };
+
+  // ── buildChannelInstruction: SMS ──────────────────────────────────────────
+  {
+    const instr = buildChannelInstruction("sms", baseClient);
+    typeof instr === "string" && instr.length > 0
+      ? pass("buildChannelInstruction('sms'): returns non-empty string")
+      : fail("buildChannelInstruction('sms'): empty or wrong type");
+
+    instr.toUpperCase().includes("SMS")
+      ? pass("buildChannelInstruction('sms'): mentions SMS")
+      : fail("buildChannelInstruction('sms'): missing SMS mention");
+
+    instr.toLowerCase().includes("320")
+      ? pass("buildChannelInstruction('sms'): includes 320-char limit")
+      : fail("buildChannelInstruction('sms'): missing 320 hint");
+  }
+
+  // ── buildChannelInstruction: web ──────────────────────────────────────────
+  {
+    const instr = buildChannelInstruction("web", baseClient);
+    typeof instr === "string" && instr.length > 0
+      ? pass("buildChannelInstruction('web'): returns non-empty string")
+      : fail("buildChannelInstruction('web'): empty or wrong type");
+
+    /phone/i.test(instr)
+      ? pass("buildChannelInstruction('web'): mentions phone restriction")
+      : fail("buildChannelInstruction('web'): missing phone restriction");
+
+    /email/i.test(instr)
+      ? pass("buildChannelInstruction('web'): asks for email instead")
+      : fail("buildChannelInstruction('web'): missing email mention");
+  }
+
+  // ── buildChannelInstruction: test ─────────────────────────────────────────
+  {
+    const instr = buildChannelInstruction("test", baseClient);
+    typeof instr === "string" && instr.length > 0
+      ? pass("buildChannelInstruction('test'): returns non-empty string")
+      : fail("buildChannelInstruction('test'): empty or wrong type");
+  }
+
+  // ── buildChannelInstruction: unknown → SMS default ────────────────────────
+  {
+    const instr = buildChannelInstruction("unknown_channel", baseClient);
+    typeof instr === "string"
+      ? pass("buildChannelInstruction('unknown'): no throw, returns string")
+      : fail("buildChannelInstruction('unknown'): threw or wrong type");
+  }
+
+  // ── buildChannelInstruction: null client → no throw ───────────────────────
+  try {
+    const instr = buildChannelInstruction("sms", null);
+    typeof instr === "string"
+      ? pass("buildChannelInstruction(null client): safe fallback")
+      : fail("buildChannelInstruction(null client): wrong type", typeof instr);
+  } catch (e) {
+    fail("buildChannelInstruction(null client): threw exception", e.message);
+  }
+
+  // ── isChannelEnabled: defaults ────────────────────────────────────────────
+  const enableCases = [
+    ["sms",  {},                             true,  "sms: no flag → enabled"],
+    ["web",  {},                             true,  "web: no flag → enabled"],
+    ["test", {},                             true,  "test: no flag → enabled"],
+    ["sms",  { enableSms: true },            true,  "sms: explicitly true → enabled"],
+    ["sms",  { enableSms: false },           false, "sms: explicitly false → disabled"],
+    ["web",  { enableWebchat: false },       false, "web: enableWebchat=false → disabled"],
+    ["web",  { enableWebchat: true },        true,  "web: enableWebchat=true → enabled"],
+    ["test", { enableTestConsole: false },   false, "test: enableTestConsole=false → disabled"],
+    ["sms",  null,                           true,  "sms: null client → enabled (fail-open)"],
+    ["web",  undefined,                      true,  "web: undefined client → enabled (fail-open)"],
+  ];
+  for (const [channel, client, expected, label] of enableCases) {
+    try {
+      const result = isChannelEnabled(channel, client);
+      result === expected
+        ? pass(`isChannelEnabled: ${label}`)
+        : fail(`isChannelEnabled: ${label}`, `got ${result}, expected ${expected}`);
+    } catch (e) {
+      fail(`isChannelEnabled(${channel}): threw exception`, e.message);
+    }
+  }
+
+  // ── handleIncomingMessage: returns correct shape ──────────────────────────
+  {
+    const result = await handleIncomingMessage({
+      message:   "hello",
+      from:      "+15550001234",
+      channel:   "sms",
+      client:    baseClient,
+      convo:     baseConvo,
+      anthropic: mockAnthropic(JSON.stringify({ agent: "support", intent: "question", action: null, data: {}, reply: "Hi there!" })),
+    });
+
+    typeof result === "object" && result !== null
+      ? pass("handleIncomingMessage: returns object")
+      : fail("handleIncomingMessage: not an object");
+
+    typeof result.reply === "string" && result.reply.length > 0
+      ? pass(`handleIncomingMessage: reply="${result.reply}"`)
+      : fail("handleIncomingMessage: reply empty or wrong type");
+
+    ["intent","agent","action","context","ownerMode","channel","clientId"].forEach((key) => {
+      key in (result.debug ?? {})
+        ? pass(`handleIncomingMessage: debug.${key} present`)
+        : fail(`handleIncomingMessage: debug.${key} missing`);
+    });
+
+    result.debug.channel === "sms"
+      ? pass("handleIncomingMessage: debug.channel='sms'")
+      : fail("handleIncomingMessage: debug.channel wrong", result.debug.channel);
+
+    result.debug.clientId === "chan_test"
+      ? pass("handleIncomingMessage: debug.clientId matches client.id")
+      : fail("handleIncomingMessage: debug.clientId wrong", result.debug.clientId);
+  }
+
+  // ── handleIncomingMessage: web channel sets channel='web' ─────────────────
+  {
+    const result = await handleIncomingMessage({
+      message:   "can I book online?",
+      from:      "+15550001234",
+      channel:   "web",
+      client:    baseClient,
+      convo:     baseConvo,
+      anthropic: mockAnthropic(JSON.stringify({ agent: "sales", intent: "booking", action: null, data: {}, reply: "Sure!" })),
+    });
+    result.debug?.channel === "web"
+      ? pass("handleIncomingMessage(web): debug.channel='web'")
+      : fail("handleIncomingMessage(web): debug.channel wrong", result.debug?.channel);
+  }
+
+  // ── handleIncomingMessage: test channel ───────────────────────────────────
+  {
+    const result = await handleIncomingMessage({
+      message:   "hello",
+      channel:   "test",
+      client:    baseClient,
+      convo:     baseConvo,
+      anthropic: mockAnthropic(JSON.stringify({ agent: "support", intent: "question", action: null, data: {}, reply: "Test reply." })),
+    });
+    result.debug?.channel === "test"
+      ? pass("handleIncomingMessage(test): debug.channel='test'")
+      : fail("handleIncomingMessage(test): debug.channel wrong", result.debug?.channel);
+  }
+
+  // ── handleIncomingMessage: unknown channel defaults to sms ────────────────
+  {
+    const result = await handleIncomingMessage({
+      message:   "hello",
+      channel:   "carrier_pigeon",
+      client:    baseClient,
+      convo:     baseConvo,
+      anthropic: mockAnthropic(JSON.stringify({ agent: "support", intent: "question", action: null, data: {}, reply: "Cluck." })),
+    });
+    result.debug?.channel === "sms"
+      ? pass("handleIncomingMessage(unknown channel): defaults to 'sms'")
+      : fail("handleIncomingMessage(unknown channel): unexpected channel", result.debug?.channel);
+  }
+
+  // ── handleIncomingMessage: null/missing params → no throw ─────────────────
+  for (const val of [null, undefined, {}]) {
+    try {
+      const result = await handleIncomingMessage(val);
+      typeof result === "object" && "reply" in result
+        ? pass(`handleIncomingMessage(${JSON.stringify(val)}): safe return`)
+        : fail(`handleIncomingMessage(${JSON.stringify(val)}): bad return shape`);
+    } catch (e) {
+      fail(`handleIncomingMessage(${JSON.stringify(val)}): threw`, e.message);
+    }
+  }
+
+  // ── handleIncomingMessage: API failure → fallback reply ───────────────────
+  {
+    const badAnthropic = { messages: { create: async () => { throw new Error("503 overload"); } } };
+    const result = await handleIncomingMessage({
+      message:   "hello",
+      channel:   "sms",
+      client:    baseClient,
+      convo:     baseConvo,
+      anthropic: badAnthropic,
+    });
+    typeof result.reply === "string" && result.reply.length > 0
+      ? pass("handleIncomingMessage API failure: fallback reply returned")
+      : fail("handleIncomingMessage API failure: no reply", typeof result.reply);
+
+    typeof result.debug === "object"
+      ? pass("handleIncomingMessage API failure: debug object always present")
+      : fail("handleIncomingMessage API failure: debug missing");
+  }
+
+  // ── Retry logic: first attempt fails, second succeeds ─────────────────────
+  {
+    let callCount = 0;
+    const retryAnthropic = {
+      messages: {
+        create: async () => {
+          callCount++;
+          if (callCount === 1) throw new Error("transient API error");
+          return { content: [{ text: JSON.stringify({ agent: "support", intent: "question", action: null, data: {}, reply: "Retry worked!" }) }] };
+        },
+      },
+    };
+    const result = await handleIncomingMessage({
+      message:   "hello",
+      channel:   "sms",
+      client:    baseClient,
+      convo:     baseConvo,
+      anthropic: retryAnthropic,
+    });
+    callCount === 2
+      ? pass("retry logic: Claude called exactly 2 times (1 fail + 1 success)")
+      : fail("retry logic: unexpected call count", String(callCount));
+
+    result.reply === "Retry worked!"
+      ? pass("retry logic: second attempt reply returned correctly")
+      : fail("retry logic: reply wrong after retry", result.reply);
+  }
+
+  // ── handleIncomingMessage: extraInstruction merged with channel instruction ─
+  {
+    let capturedSystem = null;
+    const spyAnthropic = {
+      messages: {
+        create: async ({ system }) => {
+          capturedSystem = system;
+          return { content: [{ text: JSON.stringify({ agent: "support", intent: "question", action: null, data: {}, reply: "Captured!" }) }] };
+        },
+      },
+    };
+    await handleIncomingMessage({
+      message:          "hello",
+      channel:          "web",
+      client:           baseClient,
+      convo:            baseConvo,
+      anthropic:        spyAnthropic,
+      extraInstruction: "CUSTOM_INSTRUCTION_MARKER",
+    });
+    typeof capturedSystem === "string" && capturedSystem.includes("CUSTOM_INSTRUCTION_MARKER")
+      ? pass("handleIncomingMessage: extraInstruction merged into system prompt")
+      : fail("handleIncomingMessage: extraInstruction not found in system", capturedSystem?.slice(0, 100));
+
+    typeof capturedSystem === "string" && /web|email/i.test(capturedSystem)
+      ? pass("handleIncomingMessage: channel instruction also merged into system prompt")
+      : fail("handleIncomingMessage: channel instruction missing from system");
+  }
+
+  // ── Multi-channel: same message → same intent regardless of channel ────────
+  {
+    const channels = ["sms", "web", "test"];
+    for (const ch of channels) {
+      const result = await handleIncomingMessage({
+        message:   "I want to book a tour",
+        channel:   ch,
+        client:    baseClient,
+        convo:     baseConvo,
+        anthropic: mockAnthropic(JSON.stringify({ agent: "sales", intent: "booking", action: null, data: {}, reply: "On it." })),
+      });
+      result.debug?.intent === "booking"
+        ? pass(`handleIncomingMessage(${ch}): booking intent consistent across channels`)
+        : fail(`handleIncomingMessage(${ch}): intent wrong`, result.debug?.intent);
+    }
   }
 }
 

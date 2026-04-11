@@ -55,7 +55,7 @@ import { resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
 import { detectCancellationIntent, detectRescheduleIntent, handleCancellationMessage, handleRescheduleMessage } from "./messagingEngine.js";
 import { sendMessageWeb, createWebSession, getWebClientConfig } from "./webChat.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
-import { getOrchestratorReply } from "./agentOrchestrator.js";
+import { getOrchestratorReply, runOrchestrator } from "./agentOrchestrator.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1489,6 +1489,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   updateConversationStage(convo, buyingSignals, intent, sentiment);
 
   let replyText;
+  let orchestratorDebug = null; // Phase 7: populated when AGENT_ORCHESTRATOR_ENABLED=true
 
   try {
     // NAME CAPTURE pre-flight — guest said YES on a prior turn; we asked for their name.
@@ -1957,11 +1958,25 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       // Falls back to existing getClaudeReply() path when disabled (default).
       // Enable via: AGENT_ORCHESTRATOR_ENABLED=true in Railway env vars.
       if (process.env.AGENT_ORCHESTRATOR_ENABLED === "true") {
-        replyText = await getOrchestratorReply(
-          convo, client, anthropic, rawBody,
-          fullKnowledgeCtx, extraInstruction,
-          { supabase, crmSupabase, twilioClient, fromNumber }
-        );
+        const orchResult = await runOrchestrator({
+          message:          rawBody,
+          convo,
+          client,
+          anthropic,
+          fromNumber,
+          supabase,
+          crmSupabase,
+          twilioClient,
+          knowledgeContext: fullKnowledgeCtx,
+          extraInstruction,
+        });
+        replyText = orchResult.reply;
+        orchestratorDebug = {
+          agent:     orchResult.agent,
+          action:    orchResult.parsed?.action ?? null,
+          context:   orchResult.context,
+          ownerMode: orchResult.ownerMode,
+        };
       } else {
         replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, extraInstruction, replyMax);
       }
@@ -1976,11 +1991,25 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
         ].filter(Boolean).join("\n\n");
         // Regenerate through same path (orchestrator or classic)
         if (process.env.AGENT_ORCHESTRATOR_ENABLED === "true") {
-          replyText = await getOrchestratorReply(
-            convo, client, anthropic, rawBody,
-            fullKnowledgeCtx, correction,
-            { supabase, crmSupabase, twilioClient, fromNumber }
-          );
+          const regenResult = await runOrchestrator({
+            message:          rawBody,
+            convo,
+            client,
+            anthropic,
+            fromNumber,
+            supabase,
+            crmSupabase,
+            twilioClient,
+            knowledgeContext: fullKnowledgeCtx,
+            extraInstruction: correction,
+          });
+          replyText       = regenResult.reply;
+          orchestratorDebug = {
+            agent:     regenResult.agent,
+            action:    regenResult.parsed?.action ?? null,
+            context:   regenResult.context,
+            ownerMode: regenResult.ownerMode,
+          };
         } else {
           replyText = await getClaudeReply(convo, client, season, fullKnowledgeCtx, correction, replyMax);
         }
@@ -2041,6 +2070,12 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           buyingSignalStrength:  buyingSignals.strength,
           buyingSignals:         buyingSignals.signals,
           recommendationGiven:   convo.commercialState?.recommendationGiven ?? false,
+          // Phase 7: orchestrator debug fields (null when orchestrator disabled)
+          agent:     orchestratorDebug?.agent     ?? null,
+          action:    orchestratorDebug?.action    ?? null,
+          context:   orchestratorDebug?.context   ?? null,
+          ownerMode: orchestratorDebug?.ownerMode ?? false,
+          channel:   "sms",
         },
       });
     }
@@ -2125,11 +2160,28 @@ app.post("/web/chat", ipLimiter, async (req, res) => {
     client = await getRuntimeClientConfig(client, supabase);
   } catch { /* use static config */ }
 
+  // Channel toggle: if client explicitly disables web chat, reject gracefully
+  if (client.enableWebchat === false) {
+    return res.status(403).json({ error: "Web chat is not enabled for this client." });
+  }
+
   // Ensure session row exists (fire-and-forget)
   createWebSession(supabase, clientId, sessionId).catch(() => {});
 
   try {
     const result = await sendMessageWeb(supabase, anthropic, client, sessionId, message.trim());
+    // Phase 7: include channel in debug output so widget can surface it
+    if (result && !result.debug) {
+      result.debug = {
+        channel:   "web",
+        clientId,
+        intent:    null,
+        agent:     null,
+        action:    null,
+        context:   null,
+        ownerMode: false,
+      };
+    }
     return res.json(result);
   } catch (err) {
     console.error("[WEB_CHAT] sendMessageWeb error:", err.message);
@@ -2172,6 +2224,8 @@ app.get("/internal/scenarios", requireUiAccess, (_req, res) => {
     { id: "demo",        label: "DEMO trigger",              steps: ["DEMO"] },
     { id: "summitdemo",  label: "SUMMITDEMO trigger",        steps: ["SUMMITDEMO"] },
     { id: "stop",        label: "STOP opt-out",              steps: ["hey", "STOP"] },
+    { id: "owner_report",  label: "Owner: report query",     steps: ["give me this week's booking stats"] },
+    { id: "owner_campaign",label: "Owner: campaign prompt",  steps: ["send a promo to all customers"] },
   ]);
 });
 

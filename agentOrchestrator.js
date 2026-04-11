@@ -183,12 +183,27 @@ export async function runOrchestrator(params) {
       ? `${systemPrompt}\n\nDETECTED CONTEXT: ${contextHint}`
       : systemPrompt;
 
-    const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
-      max_tokens: MAX_TOKENS,
-      system:     systemFinal,
-      messages:   history,
-    });
+    // ── Claude API call with one retry on transient failure ──────────────────
+    let response;
+    let lastApiError;
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      try {
+        response = await anthropic.messages.create({
+          model:      "claude-sonnet-4-6",
+          max_tokens: MAX_TOKENS,
+          system:     systemFinal,
+          messages:   history,
+        });
+        break; // success — exit retry loop
+      } catch (apiErr) {
+        lastApiError = apiErr;
+        if (attempt === 0) {
+          console.warn(`[ORCHESTRATOR] Claude API error (attempt 1/${2}), retrying in 600ms: ${apiErr.message}`);
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      }
+    }
+    if (!response) throw lastApiError; // both attempts failed → caught by outer try/catch
 
     const rawText = response?.content?.[0]?.text ?? "";
 

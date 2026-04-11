@@ -528,6 +528,21 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         </div>
       </div>
 
+      <!-- Agent debug panel (populated when AGENT_ORCHESTRATOR_ENABLED) -->
+      <div class="panel-section" id="agent-debug-panel">
+        <div class="section-label">Agent debug</div>
+        <div class="state-grid">
+          <div class="state-cell"><div class="sc-label">agent</div><div class="sc-val accent" id="d-agent">—</div></div>
+          <div class="state-cell"><div class="sc-label">action</div><div class="sc-val" id="d-action">—</div></div>
+          <div class="state-cell"><div class="sc-label">owner mode</div><div class="sc-val" id="d-owner">—</div></div>
+          <div class="state-cell"><div class="sc-label">urgency</div><div class="sc-val" id="d-urgency">—</div></div>
+        </div>
+        <div style="margin-top:6px">
+          <div class="sc-label" style="margin-bottom:3px">context</div>
+          <pre class="payload-pre" id="d-context" style="max-height:60px">{ }</pre>
+        </div>
+      </div>
+
       <!-- Demo value panel (shown when active client is demo mode) -->
       <div class="panel-section" id="demo-value-panel">
         <div class="section-label">Demo metrics</div>
@@ -975,6 +990,29 @@ function updateInspector(meta) {
   setStateCell("s-sentiment",meta.sentiment ?? "—", "sentiment");
   setStateCell("s-step",     meta.bookingStep != null ? String(meta.bookingStep) : "—", "step");
   setStateCell("s-handoff",  meta.handoff    != null ? String(meta.handoff) : "—", "handoff");
+
+  // Agent debug panel — only populate when orchestrator fields are present
+  if (meta.agent || meta.action != null || meta.ownerMode != null) {
+    setVal("d-agent",   meta.agent    ?? "—");
+    setVal("d-action",  meta.action   ?? "—");
+    setVal("d-owner",   meta.ownerMode != null ? String(meta.ownerMode) : "—");
+    setVal("d-urgency", meta.context?.urgency ?? "—");
+    const ctxEl = document.getElementById("d-context");
+    if (ctxEl) ctxEl.textContent = JSON.stringify(meta.context ?? {}, null, 2);
+
+    // Color coding
+    const agentEl = document.getElementById("d-agent");
+    if (agentEl) {
+      agentEl.className = "sc-val";
+      if (meta.agent === "sales")      agentEl.classList.add("accent");
+      else if (meta.agent === "operations" || meta.agent === "strategy") agentEl.classList.add("warn");
+    }
+    const ownerEl = document.getElementById("d-owner");
+    if (ownerEl) {
+      ownerEl.className = "sc-val";
+      if (meta.ownerMode === true) ownerEl.classList.add("warn");
+    }
+  }
 }
 
 function updateInspectorFromSession(session, meta) {
@@ -992,6 +1030,13 @@ function clearInspector() {
     const el = document.getElementById(id);
     if (el) { el.textContent = "—"; el.className = "sc-val"; }
   });
+  // Clear agent debug panel
+  ["d-agent","d-action","d-owner","d-urgency"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = "—"; el.className = "sc-val"; if (id === "d-agent") el.classList.add("accent"); }
+  });
+  const ctxEl = document.getElementById("d-context");
+  if (ctxEl) ctxEl.textContent = "{ }";
 }
 
 function setStateCell(id, val, type) {
@@ -1098,8 +1143,11 @@ function appendBotMsg(text, meta = {}) {
   const metaTags = [
     meta.intent    ? `<span class="tag intent">${escHtml(meta.intent)}</span>` : "",
     meta.sentiment ? `<span class="tag sentiment">${escHtml(meta.sentiment)}</span>` : "",
+    meta.agent     ? `<span class="tag" style="color:#34d399;border-color:#0a3020;background:#050f0a">${escHtml(meta.agent)}</span>` : "",
+    meta.action    ? `<span class="tag" style="color:#fb923c;border-color:#3a1a0a;background:#150a05">${escHtml(meta.action)}</span>` : "",
     meta.bookingStep != null ? `<span class="tag step">step ${meta.bookingStep}</span>` : "",
     meta.handoff ? `<span class="tag handoff">handoff</span>` : "",
+    meta.ownerMode ? `<span class="tag" style="color:#f59e0b;border-color:#3a2a0a;background:#150f05">owner</span>` : "",
   ].filter(Boolean).join("");
 
   row.innerHTML = `
