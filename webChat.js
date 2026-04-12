@@ -36,6 +36,7 @@ import { getKnowledgeContext } from "./knowledgeBase.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 import { trackWebEvent } from "./webEvents.js";
+import { linkPhoneToSession, extractPhoneFromMessage, buildSmsBridgeMessage } from "./crossChannel.js";
 
 // True if the text contains any http/https URL
 function containsUrl(text) {
@@ -391,7 +392,29 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
   // ── Passive lead capture: parse name/email mentioned naturally ─────────────
   passiveLeadCapture(supabase, client, convo, sessionId, message, pageUrl).catch(() => {});
 
-  return { reply: replyText };
+  // ── Phase 11.8: Cross-channel phone detection — web→SMS identity linking ───
+  // When a visitor mentions their phone number, link their session to that phone
+  // so the conversation can continue via SMS. Returns bridgePhone so the caller
+  // (index.js) can send the SMS bridge without needing Twilio here.
+  let bridgePhone = null;
+  const detectedPhone = extractPhoneFromMessage(message);
+  if (detectedPhone && !convo.bookingData?._phoneBridgeSent) {
+    const identity = await linkPhoneToSession(supabase, client.id, detectedPhone, sessionId).catch(() => null);
+    if (identity) {
+      // Build bridge context from recent conversation
+      const lastBotMsg   = convo.messages.filter(m => m.role === "assistant").slice(-1)[0]?.content ?? null;
+      const allContent   = convo.messages.map(m => m.content).join(" ");
+      const urlMatch     = allContent.match(/https?:\/\/\S+/);
+      const bookingUrl   = urlMatch ? urlMatch[0] : null;
+      bridgePhone = { phone: detectedPhone, message: buildSmsBridgeMessage(lastBotMsg, bookingUrl) };
+      // Mark so we don't send a second bridge text in the same conversation
+      convo.bookingData = { ...(convo.bookingData ?? {}), _phoneBridgeSent: true };
+      await saveWebConversation(supabase, from, to, convo, client.id);
+      console.log(`[CROSS_CHANNEL] Web→SMS bridge queued: session=${sessionId} phone=${detectedPhone}`);
+    }
+  }
+
+  return { reply: replyText, bridgePhone };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

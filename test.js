@@ -107,6 +107,14 @@ import { runOrchestrator, getOrchestratorReply } from "./agentOrchestrator.js";
 import { detectOwner, buildOwnerInstruction, routeOwnerAgent, isOwnerActionAllowed } from "./ownerMode.js";
 import { handleIncomingMessage, buildChannelInstruction, isChannelEnabled } from "./messageHandler.js";
 import { detectPageType, buildChannelInstruction as buildChannelInstructionEngine } from "./messageEngine.js";
+import {
+  buildCrossChannelSummary,
+  extractPhoneFromMessage,
+  buildSmsBridgeMessage,
+  linkPhoneToSession,
+  getIdentityByPhone,
+  getIdentityBySession,
+} from "./crossChannel.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -12086,6 +12094,163 @@ async function testConversionLayer() {
 }
 
 await testConversionLayer();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11.8 — Cross-Channel Continuity
+// ─────────────────────────────────────────────────────────────────────────────
+async function testCrossChannel() {
+
+  // ── buildCrossChannelSummary ─────────────────────────────────────────────
+  {
+    const msgs = [
+      { role: "user",      content: "Do you have snowmobile tours?" },
+      { role: "assistant", content: "Yes! We offer guided snowmobile tours daily." },
+      { role: "user",      content: "How much does it cost?" },
+      { role: "assistant", content: "Tours start at $150 per person." },
+    ];
+    const summary = buildCrossChannelSummary(msgs, 4);
+    typeof summary === "string" && summary.includes("Guest:") && summary.includes("Bot:")
+      ? pass("crossChannel: buildCrossChannelSummary → includes Guest/Bot labels")
+      : fail("crossChannel: buildCrossChannelSummary bad format", summary);
+
+    summary.includes("snowmobile")
+      ? pass("crossChannel: buildCrossChannelSummary → includes message content")
+      : fail("crossChannel: buildCrossChannelSummary content missing", summary);
+  }
+
+  // ── buildCrossChannelSummary — empty input ───────────────────────────────
+  {
+    const r1 = buildCrossChannelSummary([]);
+    const r2 = buildCrossChannelSummary(null);
+    r1 === null
+      ? pass("crossChannel: buildCrossChannelSummary([] → null)")
+      : fail("crossChannel: buildCrossChannelSummary([]) should be null", r1);
+    r2 === null
+      ? pass("crossChannel: buildCrossChannelSummary(null) → null")
+      : fail("crossChannel: buildCrossChannelSummary(null) should be null", r2);
+  }
+
+  // ── buildCrossChannelSummary — respects maxMessages ──────────────────────
+  {
+    const msgs = Array.from({ length: 10 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `Message ${i + 1}`,
+    }));
+    const summary = buildCrossChannelSummary(msgs, 4);
+    const lineCount = summary.split("\n").length;
+    lineCount === 4
+      ? pass("crossChannel: buildCrossChannelSummary respects maxMessages=4")
+      : fail(`crossChannel: buildCrossChannelSummary lineCount=${lineCount} expected 4`, summary);
+  }
+
+  // ── extractPhoneFromMessage ──────────────────────────────────────────────
+  {
+    const cases = [
+      { input: "my number is (555) 867-5309",         expectPhone: true,  label: "parentheses format" },
+      { input: "text me at 555-867-5309",              expectPhone: true,  label: "dashes format" },
+      { input: "call 15558675309",                     expectPhone: true,  label: "11-digit with 1" },
+      { input: "+15558675309",                         expectPhone: true,  label: "E.164 format" },
+      { input: "no phone in this message",             expectPhone: false, label: "no phone" },
+      { input: "my zip is 80487 and it's beautiful",   expectPhone: false, label: "zip code not a phone" },
+      { input: "",                                     expectPhone: false, label: "empty string" },
+    ];
+
+    for (const { input, expectPhone, label } of cases) {
+      const result = extractPhoneFromMessage(input);
+      const got    = result !== null;
+      got === expectPhone
+        ? pass(`crossChannel: extractPhoneFromMessage — ${label}`)
+        : fail(`crossChannel: extractPhoneFromMessage — ${label}`, `expected=${expectPhone} got=${result}`);
+    }
+  }
+
+  // ── buildSmsBridgeMessage ────────────────────────────────────────────────
+  {
+    const msg = buildSmsBridgeMessage(
+      "Tours start at $150 per person.",
+      "https://example.com/book/snowmobile",
+    );
+    typeof msg === "string" && msg.includes("Continuing from our chat")
+      ? pass("crossChannel: buildSmsBridgeMessage — includes opener")
+      : fail("crossChannel: buildSmsBridgeMessage — opener missing", msg);
+    msg.includes("https://example.com/book/snowmobile")
+      ? pass("crossChannel: buildSmsBridgeMessage — booking URL included")
+      : fail("crossChannel: buildSmsBridgeMessage — URL missing", msg);
+    msg.includes("Tours start at $150")
+      ? pass("crossChannel: buildSmsBridgeMessage — bot message content included")
+      : fail("crossChannel: buildSmsBridgeMessage — content missing", msg);
+  }
+
+  // ── buildSmsBridgeMessage — no booking URL ──────────────────────────────
+  {
+    const msg = buildSmsBridgeMessage("We have tours available!", null);
+    typeof msg === "string" && msg.includes("Continuing from our chat")
+      ? pass("crossChannel: buildSmsBridgeMessage — works without booking URL")
+      : fail("crossChannel: buildSmsBridgeMessage (no URL) failed", msg);
+    !msg.includes("null")
+      ? pass("crossChannel: buildSmsBridgeMessage — null URL not rendered")
+      : fail("crossChannel: buildSmsBridgeMessage — null URL leaked into message", msg);
+  }
+
+  // ── linkPhoneToSession — mock supabase ───────────────────────────────────
+  {
+    // Simulate a successful insert
+    const rows = [];
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }),
+        }),
+        insert: (row) => ({
+          select: () => ({
+            single: async () => {
+              const newRow = { id: "mock-id", ...row, session_ids: row.session_ids };
+              rows.push(newRow);
+              return { data: newRow };
+            },
+          }),
+        }),
+      }),
+    };
+
+    const result = await linkPhoneToSession(mockSupabase, "csr_rea", "+15558675309", "session-abc");
+    result && result.session_ids?.includes("session-abc")
+      ? pass("crossChannel: linkPhoneToSession — session linked in new identity")
+      : fail("crossChannel: linkPhoneToSession — session not in result", JSON.stringify(result));
+  }
+
+  // ── linkPhoneToSession — null safety ─────────────────────────────────────
+  {
+    const r1 = await linkPhoneToSession(null, "csr_rea", "+15558675309", "session-abc");
+    const r2 = await linkPhoneToSession({}, "csr_rea", null, "session-abc");
+    const r3 = await linkPhoneToSession({}, "csr_rea", "+15558675309", null);
+    r1 === null && r2 === null && r3 === null
+      ? pass("crossChannel: linkPhoneToSession — null safety (missing args → null)")
+      : fail("crossChannel: linkPhoneToSession — null safety failed", JSON.stringify([r1, r2, r3]));
+  }
+
+  // ── getIdentityByPhone — null safety ─────────────────────────────────────
+  {
+    const r1 = await getIdentityByPhone(null, "csr_rea", "+15558675309");
+    const r2 = await getIdentityByPhone({}, "csr_rea", "not-a-phone");
+    r1 === null
+      ? pass("crossChannel: getIdentityByPhone — null supabase → null")
+      : fail("crossChannel: getIdentityByPhone null supabase", r1);
+    r2 === null
+      ? pass("crossChannel: getIdentityByPhone — invalid phone → null")
+      : fail("crossChannel: getIdentityByPhone invalid phone", r2);
+  }
+
+  // ── getIdentityBySession — null safety ───────────────────────────────────
+  {
+    const r1 = await getIdentityBySession(null, "csr_rea", "session-abc");
+    r1 === null
+      ? pass("crossChannel: getIdentityBySession — null supabase → null")
+      : fail("crossChannel: getIdentityBySession null supabase", r1);
+  }
+}
+
+await testCrossChannel();
 
 main().catch((e) => {
   console.error("Test runner crashed:", e.message);

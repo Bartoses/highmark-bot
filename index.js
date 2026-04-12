@@ -56,6 +56,7 @@ import { selectResponseMode, buildResponseModeInstruction } from "./responseMode
 import { resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
 import { detectCancellationIntent, detectRescheduleIntent, handleCancellationMessage, handleRescheduleMessage } from "./messagingEngine.js";
 import { sendMessageWeb, createWebSession, getWebClientConfig } from "./webChat.js";
+import { getIdentityByPhone, loadCrossChannelContext, buildCrossChannelSummary } from "./crossChannel.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 import { getOrchestratorReply, runOrchestrator } from "./agentOrchestrator.js";
 import { detectOwner } from "./ownerMode.js";
@@ -1438,6 +1439,21 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   // Mark UI console sessions as test so they're filterable in the DB
   if (isNew && isUiReq(req)) convo.sessionType = "test";
 
+  // Phase 11.8: SMS→Web — for new or short conversations, check if this phone
+  // has a linked web session and inject that context into the system prompt.
+  // Graceful: failure never delays the SMS response.
+  let xchContext = null;
+  if (!isOwner && (isNew || convo.messages.length < 4)) {
+    const identity = await getIdentityByPhone(supabase, client.id, fromNumber).catch(() => null);
+    if (identity?.session_ids?.length) {
+      const webMessages = await loadCrossChannelContext(supabase, client.id, identity.session_ids).catch(() => null);
+      if (webMessages?.length) {
+        xchContext = buildCrossChannelSummary(webMessages, 6);
+        console.log(`[CROSS_CHANNEL] SMS→Web context loaded for ${fromNumber} (${webMessages.length} web msgs)`);
+      }
+    }
+  }
+
   // 7-9. Classify
   const season       = getCurrentSeason();
   const intent       = detectIntent(rawBody);
@@ -1948,6 +1964,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
       // Owner gets a clean context so the agent prompts and action results are not polluted by
       // booking nudges, lead capture directives, or sentiment escalation logic.
       let extraInstruction = isOwner ? null : ([
+        xchContext        ? `CROSS-CHANNEL CONTEXT: This guest previously chatted via the website. Recent web conversation:\n${xchContext}\nContinue naturally — do not mention channel switching unless they bring it up.` : null,
         availCtx          ? `Live availability data: ${availCtx}` : null,
         planInstruction   || null,
         convInstruction   || null,
@@ -2196,6 +2213,19 @@ app.post("/web/chat", ipLimiter, async (req, res) => {
       pageHint: pageHint ?? null,
       pageUrl:  pageUrl  ?? null,
     });
+
+    // Phase 11.8: Web→SMS bridge — send context SMS if visitor provided a phone number
+    if (result?.bridgePhone && process.env.TEST_MODE !== "true") {
+      const smsFrom = client.inboundPhones?.[0];
+      if (smsFrom && twilioClient) {
+        twilioClient.messages.create({
+          body: result.bridgePhone.message,
+          from: smsFrom,
+          to:   result.bridgePhone.phone,
+        }).catch((err) => console.error("[CROSS_CHANNEL] Web→SMS bridge Twilio error:", err.message));
+      }
+    }
+
     // Phase 7: include channel in debug output so widget can surface it
     if (result && !result.debug) {
       result.debug = {
