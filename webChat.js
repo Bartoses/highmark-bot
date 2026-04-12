@@ -79,6 +79,7 @@ export async function getWebConversation(supabase, sessionId, clientId) {
         leadCaptureAttempted:   bd._leadCaptureAttempted   ?? false,
         leadCapturePendingName: bd._leadCapturePendingName ?? false,
         commercialState:        bd._commercialState        ?? { recommendationGiven: false, leadCaptureAttempts: 0 },
+        conversionState:        bd._conversionState        ?? { last_intent: null, last_cta_type: null, urgency_used: false },
       },
     };
   }
@@ -98,6 +99,7 @@ export async function getWebConversation(supabase, sessionId, clientId) {
       leadCaptureAttempted:  false,
       leadCapturePendingName: false,
       commercialState:       { recommendationGiven: false, leadCaptureAttempts: 0 },
+      conversionState:       { last_intent: null, last_cta_type: null, urgency_used: false },
     },
   };
 }
@@ -112,6 +114,7 @@ export async function saveWebConversation(supabase, from, to, convo, clientId) {
     _leadCaptureAttempted:  convo.leadCaptureAttempted  ?? false,
     _leadCapturePendingName: convo.leadCapturePendingName ?? false,
     _commercialState:       convo.commercialState       ?? { recommendationGiven: false, leadCaptureAttempts: 0 },
+    _conversionState:       convo.conversionState       ?? { last_intent: null, last_cta_type: null, urgency_used: false },
   };
   await supabase.from("conversations").upsert(
     {
@@ -281,6 +284,7 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
   convo.messages.push({ role: "user", content: message, timestamp: new Date().toISOString(), intent, sentiment });
 
   let replyText;
+  let resolvedLink = null; // hoisted so conversionState update can reference it
 
   // ── Handoff ────────────────────────────────────────────────────────────────
   if (
@@ -301,7 +305,7 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
 
     // Pre-resolve booking link when booking intent detected or message is booking-related.
     // Injecting the real URL into the instruction prevents Claude from hallucinating links.
-    let resolvedLink = null;
+    // (resolvedLink is declared above so conversionState update can reference it)
     const isBookingRelated = intent === "booking" ||
       /book|reserve|booking link|how do i book|where.*book|send.*link/i.test(message);
     if (isBookingRelated) {
@@ -335,8 +339,14 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     // Auto-detect page type from URL when data-page isn't explicitly set
     const pageType = detectPageType(pageUrl);
 
+    // Message count used for urgency gating (Phase 11.7)
+    const messageCount = convo.messages.filter(m => m.role === "user").length;
+
     // Channel-aware instruction for Claude — built by the shared messageEngine utility
-    const webInstruction = buildChannelInstruction("web", { resolvedLink, plan, pageHint, pageType });
+    const webInstruction = buildChannelInstruction("web", {
+      resolvedLink, plan, pageHint, pageType,
+      intent, conversionState: convo.conversionState, messageCount,
+    });
 
     replyText = await callClaudeForChannel(anthropic, convo, client, season, knowledgeCtx, webInstruction, "web");
 
@@ -356,6 +366,21 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     }
     // Length enforcement already applied inside callClaudeForChannel (480 chars for web).
     // URL-containing replies are never truncated.
+  }
+
+  // ── Update conversion state (Phase 11.7) ───────────────────────────────────
+  {
+    const prev = convo.conversionState ?? {};
+    const ctaType = (intent === "booking" && resolvedLink?.url) ? "strong"
+      : intent === "booking" ? "soft"
+      : intent === "question" || intent === "smalltalk" ? "soft_early"
+      : prev.last_cta_type ?? null;
+    const messageCount = convo.messages.filter(m => m.role === "user").length;
+    convo.conversionState = {
+      last_intent:   intent,
+      last_cta_type: ctaType,
+      urgency_used:  prev.urgency_used || (intent === "booking" && messageCount >= 3),
+    };
   }
 
   // ── Persist ────────────────────────────────────────────────────────────────

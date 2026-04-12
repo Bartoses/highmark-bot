@@ -106,7 +106,7 @@ import { executeAction, buildIntegrations } from "./actionEngine.js";
 import { runOrchestrator, getOrchestratorReply } from "./agentOrchestrator.js";
 import { detectOwner, buildOwnerInstruction, routeOwnerAgent, isOwnerActionAllowed } from "./ownerMode.js";
 import { handleIncomingMessage, buildChannelInstruction, isChannelEnabled } from "./messageHandler.js";
-import { detectPageType } from "./messageEngine.js";
+import { detectPageType, buildChannelInstruction as buildChannelInstructionEngine } from "./messageEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -11951,6 +11951,141 @@ async function testDetectPageType() {
 }
 
 await testDetectPageType();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11.7 — Advanced Conversion Layer
+// Tests buildChannelInstruction (messageEngine) for CTA + urgency logic.
+// ─────────────────────────────────────────────────────────────────────────────
+async function testConversionLayer() {
+  // 1. booking intent + resolved link → strong CTA phrase injected
+  {
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "booking",
+      resolvedLink: { url: "https://example.com/book" },
+      messageCount: 2,
+    });
+    instr.includes("CTA:")
+      ? pass("conversionLayer: booking + link → strong CTA in instruction")
+      : fail("conversionLayer: booking + link → no strong CTA", instr.slice(0, 200));
+  }
+
+  // 2. booking intent + no link → soft CTA injected
+  {
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "booking",
+      resolvedLink: null,
+      messageCount: 2,
+    });
+    instr.toLowerCase().includes("soft cta")
+      ? pass("conversionLayer: booking, no link → soft CTA injected")
+      : fail("conversionLayer: booking, no link → soft CTA missing", instr.slice(0, 200));
+  }
+
+  // 3. urgency hint present when booking intent + messageCount >= 3
+  {
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "booking",
+      messageCount: 4,
+      conversionState: { urgency_used: false },
+    });
+    instr.toLowerCase().includes("urgency hint")
+      ? pass("conversionLayer: booking + high message count → urgency hint injected")
+      : fail("conversionLayer: urgency hint missing for high message count", instr.slice(0, 200));
+  }
+
+  // 4. urgency suppressed when messageCount < 3
+  {
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "booking",
+      messageCount: 1,
+      conversionState: { urgency_used: false },
+    });
+    !instr.toLowerCase().includes("urgency hint")
+      ? pass("conversionLayer: low message count → no urgency hint")
+      : fail("conversionLayer: urgency shown too early (messageCount=1)", instr.slice(0, 200));
+  }
+
+  // 5. urgency suppressed when already used this session
+  {
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "booking",
+      messageCount: 6,
+      conversionState: { urgency_used: true },
+    });
+    !instr.toLowerCase().includes("urgency hint")
+      ? pass("conversionLayer: urgency suppressed after first use")
+      : fail("conversionLayer: urgency shown twice (urgency_used=true)", instr.slice(0, 200));
+  }
+
+  // 6. smalltalk intent → no urgency injected
+  {
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "smalltalk",
+      messageCount: 6,
+      conversionState: { urgency_used: false },
+    });
+    !instr.toLowerCase().includes("urgency hint")
+      ? pass("conversionLayer: smalltalk → no urgency hint")
+      : fail("conversionLayer: urgency injected for smalltalk", instr.slice(0, 200));
+  }
+
+  // 7. plan microClose takes precedence — no SOFT CTA stacked on top
+  {
+    const plan = { mustRecommend: false, shouldSoftClose: true, microClose: "Want help getting set up?" };
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "booking",
+      resolvedLink: null,
+      plan,
+      messageCount: 3,
+    });
+    instr.includes("Want help getting set up?")
+      ? pass("conversionLayer: plan microClose preserved when present")
+      : fail("conversionLayer: plan microClose missing from instruction", instr.slice(0, 200));
+    !instr.toLowerCase().includes("soft cta")
+      ? pass("conversionLayer: no SOFT CTA stacked over plan microClose")
+      : fail("conversionLayer: SOFT CTA added on top of microClose", instr.slice(0, 200));
+  }
+
+  // 8. page-specific CTA when RZR page + booking + link
+  {
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "booking",
+      resolvedLink: { url: "https://example.com/rzr-book" },
+      pageHint: "rzr",
+      messageCount: 2,
+    });
+    instr.toLowerCase().includes("rzr")
+      ? pass("conversionLayer: rzr page + booking → rzr-specific CTA framing")
+      : fail("conversionLayer: rzr CTA missing RZR reference", instr.slice(0, 200));
+  }
+
+  // 9. SMS channel → no CTA or urgency injected (SMS uses its own micro-close)
+  {
+    const instr = buildChannelInstructionEngine("sms", {
+      intent: "booking",
+      messageCount: 6,
+      conversionState: { urgency_used: false },
+    });
+    !instr.toLowerCase().includes("urgency") && !instr.toLowerCase().includes("soft cta")
+      ? pass("conversionLayer: SMS channel → no web CTA/urgency injected")
+      : fail("conversionLayer: CTA/urgency leaked into SMS instruction", instr.slice(0, 200));
+  }
+
+  // 10. early-stage soft CTA on known page (question intent, no prior CTA)
+  {
+    const instr = buildChannelInstructionEngine("web", {
+      intent: "question",
+      pageType: "snowmobile",
+      messageCount: 3,
+      conversionState: { last_cta_type: null },
+    });
+    instr.toLowerCase().includes("soft cta")
+      ? pass("conversionLayer: question + known page + no prior CTA → early-stage soft CTA")
+      : fail("conversionLayer: early-stage soft CTA missing for question on snowmobile page", instr.slice(0, 200));
+  }
+}
+
+await testConversionLayer();
 
 main().catch((e) => {
   console.error("Test runner crashed:", e.message);

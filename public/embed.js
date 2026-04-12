@@ -39,6 +39,9 @@
   // sessionStorage (tab-scoped): prevents proactive triggers from re-firing after
   // the user has already been greeted this session.
   const PROACTIVE_KEY  = `hm_proactive_${CLIENT_ID}`;
+  // Phase 11.7: follow-up re-engagement — fire once per session after inactivity
+  const FOLLOW_UP_KEY      = `hm_followup_${CLIENT_ID}`;
+  const FOLLOW_UP_DELAY_MS = 75000; // 75 seconds of silence triggers re-engagement
 
   function getSessionId() {
     let id = localStorage.getItem(STORAGE_KEY);
@@ -60,10 +63,11 @@
   }
 
   // ── State ───────────────────────────────────────────────────────────────────
-  let sessionId = getSessionId();
-  let messages  = loadHistory();
-  let isOpen    = false; // set after config loaded
-  let isTyping  = false;
+  let sessionId     = getSessionId();
+  let messages      = loadHistory();
+  let isOpen        = false; // set after config loaded
+  let isTyping      = false;
+  let followUpTimer = null;  // Phase 11.7: re-engagement timer handle
   let config    = {
     name:         "Chat",
     botName:      "Summit",
@@ -401,6 +405,36 @@
     document.addEventListener("mouseleave", handler);
   }
 
+  // ── Follow-up re-engagement (Phase 11.7) ────────────────────────────────────
+  // After the bot replies, start a one-shot timer. If the visitor goes quiet for
+  // FOLLOW_UP_DELAY_MS, inject a single soft re-engagement message as a bot bubble.
+  // Only fires once per session (sessionStorage guard) and only if chat is open.
+
+  function scheduleFollowUp() {
+    clearFollowUpTimer();
+    if (sessionStorage.getItem(FOLLOW_UP_KEY)) return; // already sent this session
+    followUpTimer = setTimeout(() => {
+      if (sessionStorage.getItem(FOLLOW_UP_KEY)) return;
+      if (!isOpen) return; // don't fire if visitor closed the chat
+      sessionStorage.setItem(FOLLOW_UP_KEY, "1");
+      followUpTimer = null;
+      const phrases = [
+        "Still looking? Happy to help you lock something in.",
+        "Want me to check availability for you?",
+        "Let me know if you'd like help picking the best option!",
+      ];
+      const msg = phrases[Math.floor(Date.now() / 1000) % phrases.length];
+      messages.push({ role: "assistant", content: msg });
+      saveHistory(messages);
+      appendMessageEl("assistant", msg);
+      scrollBottom();
+    }, FOLLOW_UP_DELAY_MS);
+  }
+
+  function clearFollowUpTimer() {
+    if (followUpTimer) { clearTimeout(followUpTimer); followUpTimer = null; }
+  }
+
   function openPanel() {
     isOpen = true;
     localStorage.setItem(OPEN_KEY, "1");
@@ -451,6 +485,8 @@
     input.value = "";
     input.style.height = "auto";
 
+    clearFollowUpTimer(); // cancel pending re-engagement when user is actively chatting
+
     messages.push({ role: "user", content: text });
     saveHistory(messages);
     appendMessageEl("user", text);
@@ -488,6 +524,9 @@
       saveHistory(messages);
       appendMessageEl("assistant", reply);
       scrollBottom();
+
+      // Schedule re-engagement after first real exchange (not just the opener)
+      if (messages.length > 2) scheduleFollowUp();
 
     } catch {
       removeTypingIndicator();

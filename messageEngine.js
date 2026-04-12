@@ -94,6 +94,26 @@ export function detectPageType(pageUrl) {
   return null; // unrecognized path — skip injection to avoid noise
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11.7: CTA framing phrases — keyed by effective page type.
+// Used to persuasively frame booking links when intent === "booking" (web only).
+// ─────────────────────────────────────────────────────────────────────────────
+const STRONG_CTA_PHRASES = {
+  rzr:        "Frame it naturally, e.g. 'Best move is to grab a RZR spot here — takes 2 minutes:'",
+  snowmobile: "Frame it naturally, e.g. 'You can lock in a snowmobile tour here:'",
+  tours:      "Frame it naturally, e.g. 'Easiest way is to lock it in here:'",
+  bike:       "Frame it naturally, e.g. 'You can grab a bike spot here:'",
+  homepage:   "Frame it naturally, e.g. 'Best move is to lock it in here:'",
+  default:    "Frame it naturally, e.g. 'Best move is to lock it in here:' or 'You can grab a spot here:'",
+};
+
+// Subtle, general urgency hints. Rotated by message count. Never invent specific slot counts.
+const URGENCY_HINTS = [
+  "Weekends fill up fast this time of year.",
+  "Spots can go quick — earlier bookings tend to get the best time slots.",
+  "Morning departures fill up first, especially on weekends.",
+];
+
 // Page type → concise Claude guidance (what to lead with on ambiguous first messages)
 const PAGE_TYPE_GUIDANCE = {
   rzr:         "The visitor is on the RZR / off-road page. Lead with RZR rental options, terrain suggestions, or availability. Assume off-road interest unless they indicate otherwise.",
@@ -106,12 +126,15 @@ const PAGE_TYPE_GUIDANCE = {
 // ─────────────────────────────────────────────────────────────────────────────
 // buildChannelInstruction — channel-aware instruction block for the system prompt
 //
-// opts.pageHint   — explicit label from data-page attribute ("rzr", "tours", …)
-// opts.pageType   — auto-detected type from detectPageType(pageUrl); used when pageHint is null
-// opts.resolvedLink — { url } from resolveBookingLink(), or null
-// opts.plan         — response plan from buildResponsePlan(), or null
+// opts.pageHint       — explicit label from data-page attribute ("rzr", "tours", …)
+// opts.pageType       — auto-detected type from detectPageType(pageUrl); used when pageHint is null
+// opts.resolvedLink   — { url } from resolveBookingLink(), or null
+// opts.plan           — response plan from buildResponsePlan(), or null
+// opts.intent         — classified intent for this turn ("booking", "question", …) [Phase 11.7]
+// opts.conversionState— { last_intent, last_cta_type, urgency_used } from booking_data [Phase 11.7]
+// opts.messageCount   — number of user messages so far (for urgency gating) [Phase 11.7]
 // ─────────────────────────────────────────────────────────────────────────────
-export function buildChannelInstruction(channel, { resolvedLink = null, plan = null, pageHint = null, pageType = null } = {}) {
+export function buildChannelInstruction(channel, { resolvedLink = null, plan = null, pageHint = null, pageType = null, intent = null, conversionState = null, messageCount = 0 } = {}) {
   const parts = [];
 
   if (channel === "web") {
@@ -153,6 +176,42 @@ export function buildChannelInstruction(channel, { resolvedLink = null, plan = n
 
   if (plan?.shouldSoftClose && plan?.microClose) {
     parts.push(`Soft close opportunity: ${plan.microClose}`);
+  }
+
+  // ── Phase 11.7: Dynamic CTA + urgency (web channel only) ─────────────────
+  // SMS uses its own micro-close system (getMicroClose / buildResponsePlan).
+  if (channel === "web" && intent) {
+    const effectivePage = pageHint
+      ? String(pageHint).toLowerCase().replace(/[^a-z0-9]/g, "")
+      : (pageType ?? null);
+    const hasMicroClose = plan?.shouldSoftClose && plan?.microClose;
+
+    if (intent === "booking") {
+      if (resolvedLink?.url) {
+        // Strong CTA — link is already injected; add persuasive framing around it
+        const phrase = STRONG_CTA_PHRASES[effectivePage] ?? STRONG_CTA_PHRASES.default;
+        parts.push(`CTA: ${phrase}`);
+      } else if (!hasMicroClose) {
+        // Soft CTA — no link yet; invite the visitor to take the next step
+        parts.push(
+          `SOFT CTA: End with one natural offer, e.g. "Want me to check availability for you?" or "I can help you pick the best option." Keep it to one short line.`,
+        );
+      }
+      // Urgency: only after a few exchanges and only once per session
+      if (messageCount >= 3 && !conversionState?.urgency_used) {
+        const hint = URGENCY_HINTS[messageCount % URGENCY_HINTS.length];
+        parts.push(
+          `URGENCY HINT: You may naturally weave in this one line if it fits the flow: "${hint}" — keep it general, never fabricate specific availability numbers.`,
+        );
+      }
+    } else if ((intent === "question" || intent === "smalltalk") && !hasMicroClose && !conversionState?.last_cta_type) {
+      // Early-stage soft CTA — only when page context is known and we haven't sent one yet
+      if (effectivePage && effectivePage !== "homepage" && messageCount >= 2) {
+        parts.push(
+          `SOFT CTA: If it feels natural at the end, offer to help them take the next step (e.g. check availability, pick the best option). One short line only.`,
+        );
+      }
+    }
   }
 
   return parts.filter(Boolean).join("\n");
