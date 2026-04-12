@@ -72,6 +72,7 @@ import { metaFromBookingKey, safeJsonParse, truncateText, getClientProfile, getC
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { isYesIntent, isNoIntent, detectPath, detectVertical, detectQuestionIntent, detectSubtype } from "./demoFlow.js";
 import { DEFAULTS, SECTION_KEYS, loadSiteContent, updateSiteSection, getSiteSection, invalidateSiteContentCache } from "./siteContent.js";
+import { computeConversionRate } from "./webEvents.js";
 import { getConversationConfig, buildMainMenu, routeMenuSelection, buildConversationInstruction, DEFAULT_MENU_OPTIONS } from "./conversationEngine.js";
 import { normalizePhone, isValidPhone, formatPhoneForDisplay } from "./phoneUtils.js";
 import { isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction } from "./livetruth.js";
@@ -3066,6 +3067,7 @@ async function main() {
     await test64integration(); // Phase 7: optimization route auth guards
     await test65integration(); // Phase 8: rewrite route auth guards
     await testMonetizationHttp(); // Phase 11.9: /demo route
+    await testAnalyticsHttp();    // Phase 11.10: /portal/api/performance
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -3384,6 +3386,7 @@ async function test35() {
     handlePortalUpdateCampaign,
     handlePortalSendCampaign,
     handlePortalAnalytics,
+    handlePortalPerformance,
     handlePortalSettings,
     handlePortalUpdateSettings,
     handleCreatePortalUser,
@@ -3503,6 +3506,7 @@ async function test35() {
     handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead,
     handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign,
     handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics,
+    handlePortalPerformance,
     handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers,
     handlePortalCreateClient, handlePortalUpdateClient,
   ];
@@ -3510,11 +3514,12 @@ async function test35() {
     "handlePortalMe", "handlePortalDashboard", "handlePortalLeads", "handlePortalUpdateLead",
     "handlePortalCampaigns", "handlePortalCreateCampaign", "handlePortalGetCampaign",
     "handlePortalUpdateCampaign", "handlePortalSendCampaign", "handlePortalAnalytics",
+    "handlePortalPerformance",
     "handlePortalSettings", "handlePortalUpdateSettings", "handleCreatePortalUser", "handleListPortalUsers",
     "handlePortalCreateClient", "handlePortalUpdateClient",
   ];
   handlers.every((h, i) => typeof h === "function")
-    ? pass("test35: all 16 portal handler functions are exported from adminPortal.js")
+    ? pass("test35: all 17 portal handler functions are exported from adminPortal.js")
     : fail("test35: missing handler export", handlerNames.filter((n, i) => typeof handlers[i] !== "function"));
 
   // ── handlePortalSettings: 503 when no supabase — actually handlePortalLeads ─
@@ -3597,6 +3602,7 @@ async function test35() {
     ["GET",   "/portal/api/leads"],
     ["GET",   "/portal/api/campaigns"],
     ["GET",   "/portal/api/analytics"],
+    ["GET",   "/portal/api/performance"],
     ["GET",   "/portal/api/settings"],
     ["GET",   "/portal/api/clients"],
     ["POST",  "/portal/api/clients"],
@@ -12332,6 +12338,61 @@ async function testMonetizationHttp() {
 }
 
 await testMonetization();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11.10 — Analytics + Dashboard (pure function tests)
+// ─────────────────────────────────────────────────────────────────────────────
+async function testAnalytics() {
+
+  // ── computeConversionRate ────────────────────────────────────────────────
+  {
+    const cases = [
+      { chats: 100, leads: 20,  expected: 20,   label: "20/100 → 20%" },
+      { chats: 100, leads: 33,  expected: 33,   label: "33/100 → 33%" },
+      { chats: 3,   leads: 1,   expected: 33.3, label: "1/3 → 33.3%" },
+      { chats: 0,   leads: 5,   expected: 0,    label: "zero chatStarts → 0" },
+      { chats: 10,  leads: 0,   expected: 0,    label: "zero leads → 0" },
+      { chats: null,leads: 5,   expected: 0,    label: "null chatStarts → 0" },
+      { chats: 10,  leads: null,expected: 0,    label: "null leads → 0" },
+      { chats: 10,  leads: -1,  expected: 0,    label: "negative leads → 0" },
+    ];
+    for (const { chats, leads, expected, label } of cases) {
+      const result = computeConversionRate(chats, leads);
+      result === expected
+        ? pass(`analytics: computeConversionRate — ${label}`)
+        : fail(`analytics: computeConversionRate — ${label}`, `expected=${expected} got=${result}`);
+    }
+  }
+
+  // ── computeConversionRate is exported ───────────────────────────────────
+  {
+    typeof computeConversionRate === "function"
+      ? pass("analytics: computeConversionRate is exported from webEvents.js")
+      : fail("analytics: computeConversionRate not exported", typeof computeConversionRate);
+  }
+}
+
+await testAnalytics();
+
+// HTTP tests for /portal/api/performance — must run after server starts (called from main)
+async function testAnalyticsHttp() {
+  // ── /portal/api/performance requires auth ───────────────────────────────
+  {
+    const r = await httpGet("/portal/api/performance");
+    r.status === 401
+      ? pass("analytics: GET /portal/api/performance — 401 without auth")
+      : fail("analytics: GET /portal/api/performance — expected 401", r.status);
+  }
+
+  // ── /portal/api/performance — route is registered ───────────────────────
+  {
+    // 401 (not 404) confirms the route exists and auth middleware is applied
+    const r = await httpGet("/portal/api/performance?days=7");
+    r.status !== 404
+      ? pass("analytics: GET /portal/api/performance?days=7 — route registered (not 404)")
+      : fail("analytics: GET /portal/api/performance — route not registered (404)", r.status);
+  }
+}
 
 main().catch((e) => {
   console.error("Test runner crashed:", e.message);

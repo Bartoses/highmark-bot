@@ -36,7 +36,7 @@ import {
 } from "./apiIntegrations.js";
 import { runOptimizationAnalysis, getOptimizationInsights, dismissInsight } from "./optimizationEngine.js";
 import { runRewriteGeneration, getRewriteSuggestions, updateRewriteStatus } from "./rewriteEngine.js";
-import { getAttributionData } from "./webEvents.js";
+import { getAttributionData, getPerformanceData } from "./webEvents.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
@@ -1825,6 +1825,29 @@ export async function handlePortalUpdateEmbedConfig(req, res, supabase) {
     }
 
     return res.json({ ok: true, clientId, updated: Object.keys(updates).filter(k => k !== "client_id" && k !== "updated_at") });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// handlePortalPerformance — GET /portal/api/performance
+// Phase 11.10: primary analytics metrics for the Analytics tab.
+// Returns chatStarts, leadsWeb, bookingClicks, conversionRate, channelBreakdown,
+// topPages, insights.
+// Query params: ?days=7 (default 7; supports 1 | 7 | 30 | 90)
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handlePortalPerformance(req, res, supabase, resolveClientId) {
+  if (!supabase) return res.status(503).json({ error: "Database unavailable." });
+  const clientId = await resolveClientId(req);
+  if (!clientId) return res.status(400).json({ error: "Client not found." });
+
+  const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+
+  try {
+    const data = await getPerformanceData(supabase, clientId, days);
+    if (!data) return res.status(503).json({ error: "Performance data unavailable." });
+    return res.json({ ...data, clientId });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

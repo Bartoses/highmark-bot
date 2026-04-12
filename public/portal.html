@@ -435,8 +435,9 @@ tr:hover td { background: var(--panel2); }
         <div class="section-header">
           <span class="section-title">Analytics</span>
           <select id="analyticsPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
+            <option value="7" selected>Last 7 days</option>
+            <option value="1">Today</option>
             <option value="30">Last 30 days</option>
-            <option value="7">Last 7 days</option>
             <option value="90">Last 90 days</option>
           </select>
         </div>
@@ -1918,52 +1919,128 @@ async function loadAttribution() {
 async function loadAnalytics() {
   document.getElementById('analyticsContent').innerHTML = '<div class="loading">Loading…</div>';
   const days = document.getElementById('analyticsPeriod').value;
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   const clientParam = me?.isAdmin ? `&client_id=${me.clientId ?? ''}` : '';
-  const d = await apiFetch(`/analytics?since=${since}${clientParam}`);
-  if (!d) { document.getElementById('analyticsContent').innerHTML = '<div class="error-msg">Failed to load analytics.</div>'; return; }
 
-  const lf = d.leadFunnel; const ev = d.events; const cs = d.campaigns;
+  // Load performance data (primary) and legacy analytics (secondary) in parallel
+  const [perf, d] = await Promise.all([
+    apiFetch(`/performance?days=${days}${clientParam}`),
+    apiFetch(`/analytics?since=${new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()}${clientParam}`),
+  ]);
+
+  if (!perf && !d) {
+    document.getElementById('analyticsContent').innerHTML = '<div class="error-msg">Failed to load analytics.</div>';
+    return;
+  }
+
+  const p = perf ?? {};
+  const lf = d?.leadFunnel ?? { new: 0, contacted: 0, engaged: 0, converted: 0 };
+  const ev = d?.events ?? {};
+  const cs = d?.campaigns ?? { total: 0, sent: 0, draft: 0 };
+  const convRate = p.conversionRate ?? 0;
+  const chWeb = p.channelBreakdown?.web ?? { chats: 0, leads: 0, bookings: 0 };
+  const chSms = p.channelBreakdown?.sms ?? { chats: 0, leads: 0, bookings: 0 };
+  const topPages = p.topPages ?? [];
+  const insights = p.insights ?? [];
+  const periodLabel = days == 1 ? 'Today' : `Last ${days} days`;
+
   document.getElementById('analyticsContent').innerHTML = `
-    <div class="two-col">
+    <!-- Hero metrics -->
+    <div class="stats-grid" style="margin-bottom:20px;">
+      <div class="stat-card" style="border-left:3px solid var(--accent)">
+        <div class="val">${p.chatStarts ?? 0}</div><div class="lbl">Chats Started</div>
+      </div>
+      <div class="stat-card" style="border-left:3px solid #22c55e">
+        <div class="val">${p.leadsWeb ?? 0}</div><div class="lbl">Leads Captured</div>
+      </div>
+      <div class="stat-card" style="border-left:3px solid #f59e0b">
+        <div class="val">${p.bookingClicks ?? 0}</div><div class="lbl">Booking Clicks</div>
+      </div>
+      <div class="stat-card" style="border-left:3px solid #a78bfa">
+        <div class="val">${convRate}%</div><div class="lbl">Conversion Rate</div>
+      </div>
+    </div>
+
+    ${insights.length > 0 ? `
+    <div class="card" style="margin-bottom:20px;border-left:3px solid var(--accent)">
+      <div class="card-title" style="margin-bottom:10px;">Insights — ${periodLabel}</div>
+      <ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;">
+        ${insights.map(i => `<li style="color:var(--text2);font-size:13px;">${i}</li>`).join('')}
+      </ul>
+    </div>` : ''}
+
+    <!-- Channel breakdown + lead funnel -->
+    <div class="two-col" style="margin-bottom:20px;">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px;">By Channel</div>
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+          <thead><tr style="color:var(--text3);font-size:11px;text-transform:uppercase;">
+            <th style="text-align:left;padding:4px 0;">Channel</th>
+            <th style="text-align:right;padding:4px 8px;">Chats</th>
+            <th style="text-align:right;padding:4px 8px;">Leads</th>
+            <th style="text-align:right;padding:4px 0;">Bookings</th>
+          </tr></thead>
+          <tbody>
+            <tr><td style="padding:6px 0;">Web</td>
+              <td style="text-align:right;padding:6px 8px;"><strong>${chWeb.chats}</strong></td>
+              <td style="text-align:right;padding:6px 8px;">${chWeb.leads}</td>
+              <td style="text-align:right;padding:6px 0;">${chWeb.bookings}</td></tr>
+            <tr><td style="padding:6px 0;">SMS</td>
+              <td style="text-align:right;padding:6px 8px;"><strong>${chSms.chats}</strong></td>
+              <td style="text-align:right;padding:6px 8px;">${chSms.leads}</td>
+              <td style="text-align:right;padding:6px 0;">${chSms.bookings}</td></tr>
+          </tbody>
+        </table>
+      </div>
       <div class="card">
         <div class="card-title">Lead Funnel</div>
-        <div class="stats-grid" style="margin-bottom:0">
+        <div class="stats-grid" style="margin-bottom:0;grid-template-columns:repeat(2,1fr);">
           <div class="stat-card"><div class="val">${lf.new}</div><div class="lbl">New</div></div>
           <div class="stat-card"><div class="val">${lf.contacted}</div><div class="lbl">Contacted</div></div>
           <div class="stat-card"><div class="val">${lf.engaged}</div><div class="lbl">Engaged</div></div>
           <div class="stat-card"><div class="val">${lf.converted}</div><div class="lbl">Converted</div></div>
         </div>
       </div>
+    </div>
+
+    <!-- Top pages -->
+    ${topPages.length > 0 ? `
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title" style="margin-bottom:12px;">Top Pages</div>
+      <div class="tbl-wrap"><table>
+        <thead><tr>
+          <th>Page</th><th style="text-align:right;">Chats</th>
+          <th style="text-align:right;">Leads</th><th style="text-align:right;">Bookings</th>
+        </tr></thead>
+        <tbody>${topPages.map(pg => `<tr>
+          <td style="font-size:12px;">${pg.label}</td>
+          <td style="text-align:right;"><strong>${pg.chats}</strong></td>
+          <td style="text-align:right;">${pg.leads}</td>
+          <td style="text-align:right;">${pg.bookings}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>` : ''}
+
+    <!-- Campaigns + demo events (secondary) -->
+    <div class="two-col">
       <div class="card">
         <div class="card-title">Campaigns</div>
-        <div class="stats-grid" style="margin-bottom:0">
+        <div class="stats-grid" style="margin-bottom:0;grid-template-columns:repeat(3,1fr);">
           <div class="stat-card"><div class="val">${cs.total}</div><div class="lbl">Total</div></div>
           <div class="stat-card"><div class="val">${cs.sent}</div><div class="lbl">Sent</div></div>
           <div class="stat-card"><div class="val">${cs.draft}</div><div class="lbl">Draft</div></div>
         </div>
       </div>
+      ${Object.keys(ev).length > 0 ? `
+      <div class="card">
+        <div class="card-title">Demo Events</div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Event</th><th>Count</th></tr></thead>
+          <tbody>${Object.entries(ev).sort((a,b) => b[1]-a[1]).slice(0,6).map(([k,v]) => `<tr>
+            <td style="font-size:12px;">${k.replace(/_/g,' ')}</td><td><strong>${v}</strong></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>` : '<div class="card"><div class="empty-state" style="font-size:13px;">No demo events this period.</div></div>'}
     </div>
-    ${Object.keys(ev).length > 0 ? `
-    <div class="card">
-      <div class="card-title">Demo Events (${days}d)</div>
-      <div class="tbl-wrap"><table>
-        <thead><tr><th>Event</th><th>Count</th></tr></thead>
-        <tbody>${Object.entries(ev).sort((a,b) => b[1]-a[1]).map(([k,v]) => `<tr><td>${k.replace(/_/g,' ')}</td><td><strong>${v}</strong></td></tr>`).join('')}</tbody>
-      </table></div>
-    </div>` : '<div class="card"><div class="empty-state">No demo events in this period.</div></div>'}
-    ${d.recentEvents.length > 0 ? `
-    <div class="card">
-      <div class="card-title">Recent Events</div>
-      <div class="tbl-wrap"><table>
-        <thead><tr><th>Event</th><th>Source</th><th>Date</th></tr></thead>
-        <tbody>${d.recentEvents.slice(0,15).map(e => `<tr>
-          <td>${e.event_name.replace(/_/g,' ')}</td>
-          <td class="text-muted">${e.source ?? '—'}</td>
-          <td class="text-muted text-xs">${fmt(e.created_at)}</td>
-        </tr>`).join('')}</tbody>
-      </table></div>
-    </div>` : ''}
   `;
 }
 

@@ -42,7 +42,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus,
   handlePortalAudiencePreview,
   handlePortalEmbedConfig, handlePortalUpdateEmbedConfig,
-  handlePortalAttribution } from "./adminPortal.js";
+  handlePortalAttribution,
+  handlePortalPerformance } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
@@ -2448,8 +2449,10 @@ app.patch("/portal/api/booking-config", requirePortalAuth, (req, res) => handleP
 // Phase 11.2 — Widget Embed Builder
 app.get(  "/portal/api/embed-config",  requirePortalAuth, (req, res) => handlePortalEmbedConfig(req, res, supabase));
 app.patch("/portal/api/embed-config",  requirePortalAuth, (req, res) => handlePortalUpdateEmbedConfig(req, res, supabase));
-// Phase 11.5: attribution — top pages + event counts
+/// Phase 11.5: attribution — top pages + event counts
 app.get("/portal/api/attribution",     requirePortalAuth, (req, res) => handlePortalAttribution(req, res, supabase, resolvePortalClientId));
+// Phase 11.10: primary analytics metrics (chats, leads, bookings, conversion rate)
+app.get("/portal/api/performance",     requirePortalAuth, (req, res) => handlePortalPerformance(req, res, supabase, resolvePortalClientId));
 // Onboarding (Phase 3 — AI Auto-Config) — internal_admin only
 app.post("/portal/api/onboarding/analyze",          requirePortalAuth, (req, res) => handleOnboardingAnalyze(req, res, supabase, anthropic));
 app.get( "/portal/api/onboarding/drafts/:id",       requirePortalAuth, (req, res) => handleOnboardingGetDraft(req, res, supabase));
