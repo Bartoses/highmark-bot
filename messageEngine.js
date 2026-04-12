@@ -73,7 +73,11 @@ export async function callClaudeForChannel(
 // opts.resolvedLink   — { url } from resolveBookingLink(), or null
 // opts.plan           — response plan from buildResponsePlan(), or null
 // ─────────────────────────────────────────────────────────────────────────────
-export function buildChannelInstruction(channel, { resolvedLink = null, plan = null } = {}) {
+// opts.pageHint   — string from data-page attribute on the embed script tag, or null.
+//                   Examples: "rzr", "tours", "snowmobile", "home"
+//                   Tells Claude what section of the website the visitor is on so it can
+//                   tailor the opening response without the visitor having to explain.
+export function buildChannelInstruction(channel, { resolvedLink = null, plan = null, pageHint = null } = {}) {
   const parts = [];
 
   if (channel === "web") {
@@ -85,6 +89,17 @@ export function buildChannelInstruction(channel, { resolvedLink = null, plan = n
     parts.push(
       "CHANNEL: SMS. You already have the guest's phone number — NEVER ask for it.",
     );
+  }
+
+  if (pageHint) {
+    // Sanitize: only pass through simple alphanumeric + space values
+    const safe = String(pageHint).replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 60).trim();
+    if (safe) {
+      parts.push(
+        `PAGE CONTEXT: The visitor is browsing the "${safe}" section of the website. ` +
+        `Lead with that topic if their message is ambiguous — don't ask them to clarify what they're interested in.`,
+      );
+    }
   }
 
   if (resolvedLink?.url) {

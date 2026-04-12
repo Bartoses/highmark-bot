@@ -2170,7 +2170,7 @@ app.get("/web/config/:clientId", ipLimiter, async (req, res) => {
 // Web chat message handler: same bot logic as SMS, JSON transport
 app.post("/web/chat", ipLimiter, async (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
-  const { clientId, sessionId, message } = req.body ?? {};
+  const { clientId, sessionId, message, pageHint } = req.body ?? {};
   if (!clientId || !sessionId || !message?.trim()) {
     return res.status(400).json({ error: "clientId, sessionId, and message are required" });
   }
@@ -2191,7 +2191,7 @@ app.post("/web/chat", ipLimiter, async (req, res) => {
   createWebSession(supabase, clientId, sessionId).catch(() => {});
 
   try {
-    const result = await sendMessageWeb(supabase, anthropic, client, sessionId, message.trim());
+    const result = await sendMessageWeb(supabase, anthropic, client, sessionId, message.trim(), pageHint ?? null);
     // Phase 7: include channel in debug output so widget can surface it
     if (result && !result.debug) {
       result.debug = {

@@ -15,6 +15,15 @@
   // data-bottom overrides the config's bottomOffset — useful when the host site
   // has a sticky nav/button the widget would cover (e.g. data-bottom="80")
   const BOTTOM_ATTR = parseInt(script?.getAttribute("data-bottom"), 10) || null;
+  // data-page: optional page context sent to Claude (e.g. "rzr", "tours", "rental")
+  //   <script data-client="csr_rea" data-page="rzr" ...>
+  const PAGE_HINT   = script?.getAttribute("data-page") || null;
+  // data-scroll-trigger: open widget when user scrolls past X% of page (0 = disabled)
+  //   <script data-client="csr_rea" data-scroll-trigger="50" ...>
+  const SCROLL_PCT  = parseInt(script?.getAttribute("data-scroll-trigger"), 10) || 0;
+  // data-exit-intent: open widget when mouse exits viewport on desktop
+  //   <script data-client="csr_rea" data-exit-intent="true" ...>
+  const EXIT_INTENT = script?.getAttribute("data-exit-intent") === "true";
 
   if (!CLIENT_ID || !BASE_URL) {
     console.warn("[Highmark] Missing data-client or could not determine base URL.");
@@ -22,9 +31,12 @@
   }
 
   // ── Persistence keys ────────────────────────────────────────────────────────
-  const STORAGE_KEY = `hm_session_${CLIENT_ID}`;
-  const HISTORY_KEY = `hm_history_${CLIENT_ID}`;
-  const OPEN_KEY    = `hm_open_${CLIENT_ID}`;
+  const STORAGE_KEY    = `hm_session_${CLIENT_ID}`;
+  const HISTORY_KEY    = `hm_history_${CLIENT_ID}`;
+  const OPEN_KEY       = `hm_open_${CLIENT_ID}`;
+  // sessionStorage (tab-scoped): prevents proactive triggers from re-firing after
+  // the user has already been greeted this session.
+  const PROACTIVE_KEY  = `hm_proactive_${CLIENT_ID}`;
 
   function getSessionId() {
     let id = localStorage.getItem(STORAGE_KEY);
@@ -252,6 +264,8 @@
     }
     renderMessages();
     bindEvents();
+    bindScrollTrigger();
+    bindExitIntent();
 
     // Restore open state
     if (localStorage.getItem(OPEN_KEY) === "1") {
@@ -334,6 +348,57 @@
     });
   }
 
+  // ── Proactive triggers ───────────────────────────────────────────────────────
+  // Guards: only fire once per browser session, and never if user already chatted.
+
+  function canTrigger() {
+    // Already interacted this session → don't interrupt
+    if (sessionStorage.getItem(PROACTIVE_KEY) === "1") return false;
+    if (messages.length > 0) return false; // has chat history
+    if (isOpen) return false;              // already open
+    return true;
+  }
+
+  function fireTrigger() {
+    if (!canTrigger()) return;
+    sessionStorage.setItem(PROACTIVE_KEY, "1");
+    openPanel();
+  }
+
+  // Scroll trigger: fires once when user scrolls past SCROLL_PCT% of the page.
+  // Passive listener for performance. Cleans itself up after firing.
+  function bindScrollTrigger() {
+    if (!SCROLL_PCT || SCROLL_PCT <= 0 || SCROLL_PCT > 100) return;
+    const handler = () => {
+      const doc      = document.documentElement;
+      const scrolled = (window.scrollY + window.innerHeight) / (doc.scrollHeight || 1);
+      if (scrolled * 100 >= SCROLL_PCT) {
+        window.removeEventListener("scroll", handler);
+        fireTrigger();
+      }
+    };
+    window.addEventListener("scroll", handler, { passive: true });
+  }
+
+  // Exit intent: fires when mouse exits viewport through the top edge (desktop only).
+  // Debounced to 200ms to prevent accidental triggers from fast cursor movement.
+  // Mobile devices don't emit mouseleave events — no-op there.
+  function bindExitIntent() {
+    if (!EXIT_INTENT) return;
+    if ("ontouchstart" in window) return; // skip on touch devices
+    let timer;
+    const handler = (e) => {
+      // e.clientY < 0 means the cursor left through the top of the viewport
+      if (e.clientY >= 0) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        document.removeEventListener("mouseleave", handler);
+        fireTrigger();
+      }, 200);
+    };
+    document.addEventListener("mouseleave", handler);
+  }
+
   function openPanel() {
     isOpen = true;
     localStorage.setItem(OPEN_KEY, "1");
@@ -402,7 +467,7 @@
       const r = await fetch(`${BASE_URL}/web/chat`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ clientId: CLIENT_ID, sessionId, message: text }),
+        body:    JSON.stringify({ clientId: CLIENT_ID, sessionId, message: text, pageHint: PAGE_HINT }),
       });
 
       removeTypingIndicator();

@@ -215,7 +215,7 @@ export function getWebClientConfig(client, embedConfig = null) {
 //
 // Returns { reply: string, isNew?: boolean }
 // ─────────────────────────────────────────────────────────────────────────────
-export async function sendMessageWeb(supabase, anthropic, client, sessionId, message) {
+export async function sendMessageWeb(supabase, anthropic, client, sessionId, message, pageHint = null) {
   // ── RESETNOW — clear conversation, return opener ──────────────────────────
   if (message.toUpperCase().trim() === "RESETNOW") {
     const from = webFromNumber(sessionId);
@@ -319,7 +319,7 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     }
 
     // Channel-aware instruction for Claude — built by the shared messageEngine utility
-    const webInstruction = buildChannelInstruction("web", { resolvedLink, plan });
+    const webInstruction = buildChannelInstruction("web", { resolvedLink, plan, pageHint });
 
     replyText = await callClaudeForChannel(anthropic, convo, client, season, knowledgeCtx, webInstruction, "web");
 
