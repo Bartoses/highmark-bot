@@ -36,6 +36,7 @@ import {
 } from "./apiIntegrations.js";
 import { runOptimizationAnalysis, getOptimizationInsights, dismissInsight } from "./optimizationEngine.js";
 import { runRewriteGeneration, getRewriteSuggestions, updateRewriteStatus } from "./rewriteEngine.js";
+import { getAttributionData } from "./webEvents.js";
 
 const VALID_SOURCE_TYPES = ["website", "faq", "booking", "policies", "blog"];
 
@@ -1791,6 +1792,28 @@ export async function handlePortalUpdateEmbedConfig(req, res, supabase) {
     }
 
     return res.json({ ok: true, clientId, updated: Object.keys(updates).filter(k => k !== "client_id" && k !== "updated_at") });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// handlePortalAttribution — GET /portal/api/attribution
+// Phase 11.5: visitor tracking + page-level attribution data.
+// Returns top pages, summary counts, and plain-language insights.
+// Query params: ?days=30 (default 30, supports 7 | 30 | 90)
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handlePortalAttribution(req, res, supabase, resolveClientId) {
+  if (!supabase) return res.status(503).json({ error: "Database unavailable." });
+  const clientId = await resolveClientId(req);
+  if (!clientId) return res.status(400).json({ error: "Client not found." });
+
+  const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 30));
+
+  try {
+    const data = await getAttributionData(supabase, clientId, days);
+    if (!data) return res.status(503).json({ error: "Attribution data unavailable." });
+    return res.json({ ...data, days, clientId });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

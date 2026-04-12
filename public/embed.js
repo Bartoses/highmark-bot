@@ -18,6 +18,8 @@
   // data-page: optional page context sent to Claude (e.g. "rzr", "tours", "rental")
   //   <script data-client="csr_rea" data-page="rzr" ...>
   const PAGE_HINT   = script?.getAttribute("data-page") || null;
+  // Capture current page URL for attribution (strip query params + hash to avoid PII in tracking)
+  const PAGE_URL    = (window.location.origin + window.location.pathname) || null;
   // data-scroll-trigger: open widget when user scrolls past X% of page (0 = disabled)
   //   <script data-client="csr_rea" data-scroll-trigger="50" ...>
   const SCROLL_PCT  = parseInt(script?.getAttribute("data-scroll-trigger"), 10) || 0;
@@ -467,7 +469,7 @@
       const r = await fetch(`${BASE_URL}/web/chat`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ clientId: CLIENT_ID, sessionId, message: text, pageHint: PAGE_HINT }),
+        body:    JSON.stringify({ clientId: CLIENT_ID, sessionId, message: text, pageHint: PAGE_HINT, pageUrl: PAGE_URL }),
       });
 
       removeTypingIndicator();

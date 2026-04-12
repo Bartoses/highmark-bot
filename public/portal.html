@@ -336,6 +336,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="website-embed">
         <span class="nav-icon">🖼</span> Website Embed
       </div>
+      <div class="nav-item" data-section="attribution">
+        <span class="nav-icon">📊</span> Attribution
+      </div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
@@ -683,6 +686,19 @@ tr:hover td { background: var(--panel2); }
 
         </div>
       </div><!-- /sec-website-embed -->
+
+      <!-- ATTRIBUTION — Phase 11.5 -->
+      <div class="section" id="sec-attribution">
+        <div class="section-header">
+          <span class="section-title">Attribution</span>
+          <select id="attributionPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
+            <option value="30">Last 30 days</option>
+            <option value="7">Last 7 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+        </div>
+        <div id="attributionContent"><div class="loading">Loading…</div></div>
+      </div><!-- /sec-attribution -->
 
       <!-- ONBOARDING — New Client (internal_admin only) -->
       <div class="section admin-only" id="sec-onboarding">
@@ -1351,6 +1367,7 @@ async function init() {
   document.getElementById('signOutBtn').addEventListener('click', signOut);
   document.getElementById('moreSignOutBtn').addEventListener('click', signOut);
   document.getElementById('analyticsPeriod').addEventListener('change', loadAnalytics);
+  document.getElementById('attributionPeriod').addEventListener('change', loadAttribution);
 
   // Show admin-only elements (internal_admin — Highmark staff only)
   if (me.isAdmin) {
@@ -1403,6 +1420,7 @@ const sectionTitles = {
   analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
   integrations: 'Integrations', messaging: 'Messaging', 'bot-config': 'Bot Config', 'booking-config': 'Booking Config',
   'website-embed': 'Website Embed',
+  attribution: 'Attribution',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
 };
 function switchSection(name) {
@@ -1432,6 +1450,7 @@ function switchSection(name) {
   if (name === 'bot-config')      loadBotConfig();
   if (name === 'booking-config')  loadBookingConfig();
   if (name === 'website-embed')   loadEmbedConfig();
+  if (name === 'attribution')     loadAttribution();
   if (name === 'onboarding')      resetOnboarding();
 }
 
@@ -1784,6 +1803,72 @@ async function sendCampaign() {
   if (!r) { alert('Failed to send campaign. Check the console.'); return; }
   document.getElementById('campaignDetailModal').classList.remove('open');
   loadCampaigns();
+}
+
+// ── ATTRIBUTION ────────────────────────────────────────────────────────────
+async function loadAttribution() {
+  const el = document.getElementById('attributionContent');
+  el.innerHTML = '<div class="loading">Loading…</div>';
+  const days = document.getElementById('attributionPeriod').value;
+  const data = await apiFetch(`/attribution?days=${days}`);
+  if (!data) {
+    el.innerHTML = '<div class="empty">Attribution data unavailable.</div>'; return;
+  }
+  const { topPages = [], summary = {}, insights = [] } = data;
+
+  const summaryHtml = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:20px;">
+      ${[
+        ['Conversations', summary.totalChats ?? 0],
+        ['Messages',      summary.totalMessages ?? 0],
+        ['Leads',         summary.totalLeads ?? 0],
+        ['Booking Clicks',summary.totalBookings ?? 0],
+      ].map(([label, val]) => `
+        <div style="background:var(--panel);border:1px solid var(--border2);border-radius:10px;padding:14px 16px;">
+          <div style="font-size:22px;font-weight:700;color:var(--accent);">${val}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:3px;">${label}</div>
+        </div>`).join('')}
+    </div>`;
+
+  const insightsHtml = insights.length ? `
+    <div style="margin-bottom:18px;">
+      ${insights.map(i => `<div style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--text);margin-bottom:8px;">💡 ${escHtml(i)}</div>`).join('')}
+    </div>` : '';
+
+  let pagesHtml = '';
+  if (topPages.length === 0) {
+    pagesHtml = '<div class="empty">No page data yet — embed the chat widget on your site to start tracking.</div>';
+  } else {
+    const rows = topPages.map(p => {
+      let label = p.pageUrl ?? '(no page)';
+      try { const u = new URL(p.pageUrl ?? ''); label = u.pathname === '/' ? 'Homepage' : u.pathname; } catch {}
+      return `<tr>
+        <td title="${escHtml(p.pageUrl ?? '')}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(label)}</td>
+        <td style="text-align:center;">${p.chats}</td>
+        <td style="text-align:center;">${p.messages}</td>
+        <td style="text-align:center;color:var(--accent);font-weight:600;">${p.leads}</td>
+        <td style="text-align:center;color:#f59e0b;font-weight:600;">${p.bookings}</td>
+      </tr>`;
+    }).join('');
+    pagesHtml = `
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em;">Top Pages</div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border2);color:var(--text2);">
+              <th style="text-align:left;padding:8px 0;font-weight:500;">Page</th>
+              <th style="text-align:center;padding:8px;font-weight:500;">Chats</th>
+              <th style="text-align:center;padding:8px;font-weight:500;">Messages</th>
+              <th style="text-align:center;padding:8px;font-weight:500;">Leads</th>
+              <th style="text-align:center;padding:8px;font-weight:500;">Bookings</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  el.innerHTML = summaryHtml + insightsHtml + pagesHtml;
 }
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────────

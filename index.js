@@ -41,7 +41,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight,
   handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus,
   handlePortalAudiencePreview,
-  handlePortalEmbedConfig, handlePortalUpdateEmbedConfig } from "./adminPortal.js";
+  handlePortalEmbedConfig, handlePortalUpdateEmbedConfig,
+  handlePortalAttribution } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
@@ -2170,7 +2171,7 @@ app.get("/web/config/:clientId", ipLimiter, async (req, res) => {
 // Web chat message handler: same bot logic as SMS, JSON transport
 app.post("/web/chat", ipLimiter, async (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
-  const { clientId, sessionId, message, pageHint } = req.body ?? {};
+  const { clientId, sessionId, message, pageHint, pageUrl } = req.body ?? {};
   if (!clientId || !sessionId || !message?.trim()) {
     return res.status(400).json({ error: "clientId, sessionId, and message are required" });
   }
@@ -2191,7 +2192,10 @@ app.post("/web/chat", ipLimiter, async (req, res) => {
   createWebSession(supabase, clientId, sessionId).catch(() => {});
 
   try {
-    const result = await sendMessageWeb(supabase, anthropic, client, sessionId, message.trim(), pageHint ?? null);
+    const result = await sendMessageWeb(supabase, anthropic, client, sessionId, message.trim(), {
+      pageHint: pageHint ?? null,
+      pageUrl:  pageUrl  ?? null,
+    });
     // Phase 7: include channel in debug output so widget can surface it
     if (result && !result.debug) {
       result.debug = {
@@ -2414,6 +2418,8 @@ app.patch("/portal/api/booking-config", requirePortalAuth, (req, res) => handleP
 // Phase 11.2 — Widget Embed Builder
 app.get(  "/portal/api/embed-config",  requirePortalAuth, (req, res) => handlePortalEmbedConfig(req, res, supabase));
 app.patch("/portal/api/embed-config",  requirePortalAuth, (req, res) => handlePortalUpdateEmbedConfig(req, res, supabase));
+// Phase 11.5: attribution — top pages + event counts
+app.get("/portal/api/attribution",     requirePortalAuth, (req, res) => handlePortalAttribution(req, res, supabase, resolvePortalClientId));
 // Onboarding (Phase 3 — AI Auto-Config) — internal_admin only
 app.post("/portal/api/onboarding/analyze",          requirePortalAuth, (req, res) => handleOnboardingAnalyze(req, res, supabase, anthropic));
 app.get( "/portal/api/onboarding/drafts/:id",       requirePortalAuth, (req, res) => handleOnboardingGetDraft(req, res, supabase));

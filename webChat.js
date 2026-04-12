@@ -35,6 +35,7 @@ import { callClaudeForChannel, buildChannelInstruction } from "./messageEngine.j
 import { getKnowledgeContext } from "./knowledgeBase.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
+import { trackWebEvent } from "./webEvents.js";
 
 // True if the text contains any http/https URL
 function containsUrl(text) {
@@ -215,7 +216,7 @@ export function getWebClientConfig(client, embedConfig = null) {
 //
 // Returns { reply: string, isNew?: boolean }
 // ─────────────────────────────────────────────────────────────────────────────
-export async function sendMessageWeb(supabase, anthropic, client, sessionId, message, pageHint = null) {
+export async function sendMessageWeb(supabase, anthropic, client, sessionId, message, { pageHint = null, pageUrl = null } = {}) {
   // ── RESETNOW — clear conversation, return opener ──────────────────────────
   if (message.toUpperCase().trim() === "RESETNOW") {
     const from = webFromNumber(sessionId);
@@ -253,8 +254,13 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     convo.messages.push({ role: "assistant", content: opener,  timestamp: new Date().toISOString() });
     await saveWebConversation(supabase, from, to, convo, client.id);
     touchWebSession(supabase, sessionId).catch(() => {});
+    // Attribution: first message in session
+    trackWebEvent(supabase, { clientId: client.id, sessionId, eventType: "chat_started", pageUrl }).catch(() => {});
     return { reply: opener, isNew: true };
   }
+
+  // Attribution: every user message after the first
+  trackWebEvent(supabase, { clientId: client.id, sessionId, eventType: "message_sent", pageUrl }).catch(() => {});
 
   // ── Subsequent messages: classify + route through bot logic ─────────────────
   const season    = getCurrentSeason();
@@ -318,6 +324,14 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       }).catch(() => null);
     }
 
+    // Attribution: booking link was surfaced in this reply
+    if (resolvedLink?.url) {
+      trackWebEvent(supabase, {
+        clientId: client.id, sessionId, eventType: "booking_clicked", pageUrl,
+        metadata: { url: resolvedLink.url },
+      }).catch(() => {});
+    }
+
     // Channel-aware instruction for Claude — built by the shared messageEngine utility
     const webInstruction = buildChannelInstruction("web", { resolvedLink, plan, pageHint });
 
@@ -347,7 +361,7 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
   touchWebSession(supabase, sessionId).catch(() => {});
 
   // ── Passive lead capture: parse name/email mentioned naturally ─────────────
-  passiveLeadCapture(supabase, client, convo, sessionId, message).catch(() => {});
+  passiveLeadCapture(supabase, client, convo, sessionId, message, pageUrl).catch(() => {});
 
   return { reply: replyText };
 }
@@ -356,7 +370,7 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
 // passiveLeadCapture — fire-and-forget: look for name/email in visitor messages
 // Only saves once per session (checks leadCaptureAttempted flag).
 // ─────────────────────────────────────────────────────────────────────────────
-async function passiveLeadCapture(supabase, client, convo, sessionId, message) {
+async function passiveLeadCapture(supabase, client, convo, sessionId, message, pageUrl = null) {
   if (convo.leadCaptureAttempted) return;
 
   const emailMatch = message.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
@@ -383,6 +397,7 @@ async function passiveLeadCapture(supabase, client, convo, sessionId, message) {
     if (lead) {
       linkSessionToLead(supabase, sessionId, lead.id).catch(() => {});
       notifyBusinessOfLead(client, lead).catch(() => {});
+      trackWebEvent(supabase, { clientId: client.id, sessionId, eventType: "lead_captured", pageUrl }).catch(() => {});
       console.log(`[WEB_CHAT] Passive lead captured: session=${sessionId} name=${name} email=${email}`);
     }
   } catch (err) {
