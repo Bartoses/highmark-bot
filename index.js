@@ -2532,6 +2532,58 @@ app.get("/sms-consent", (_req, res) => res.sendFile(path.join(__uiDir, "sms-cons
 
 // HEALTH CHECK — Railway uses this to confirm the app is up
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// LIVE DEMO PAGE — Phase 11.9
+// Minimal landing page with the embed widget pre-loaded.
+// ?client=CLIENT_ID (defaults to "highmark_demo")
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/demo", (req, res) => {
+  const clientId = String(req.query.client ?? "highmark_demo").replace(/[^a-zA-Z0-9_-]/g, "");
+  const client   = resolveClientById(clientId) ?? { name: "Highmark Demo", botName: "Summit" };
+  const origin   = process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : `${req.protocol}://${req.get("host")}`;
+
+  res.setHeader("Content-Type", "text/html");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Try ${escHtml(client.botName ?? "Summit")} — Live Demo</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f0f4f8;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+.hero{text-align:center;max-width:480px}
+h1{font-size:28px;font-weight:700;color:#111;margin-bottom:12px;line-height:1.3}
+p{font-size:15px;color:#6b7280;line-height:1.7;margin-bottom:8px}
+.hint{margin-top:28px;font-size:13px;color:#9ca3af}
+.hint span{display:inline-block;animation:bounce 1.2s ease-in-out infinite}
+@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
+.badge{display:inline-block;background:#10b981;color:#fff;font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px;margin-bottom:16px;letter-spacing:.03em}
+</style>
+</head>
+<body>
+<div class="hero">
+  <div class="badge">LIVE DEMO</div>
+  <h1>👋 Say hi to ${escHtml(client.botName ?? "Summit")}</h1>
+  <p>Your AI-powered guest assistant — ask about tours, availability, pricing, or anything else.</p>
+  <p style="font-size:13px;color:#9ca3af">No account needed. This is the real thing.</p>
+  <div class="hint">Click the chat button to get started <span>↘</span></div>
+</div>
+<script src="${origin}/embed.js"
+  data-client="${escHtml(clientId)}"
+  data-url="${origin}"
+  data-exit-intent="true">
+</script>
+</body>
+</html>`);
+});
+
+function escHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[c]);
+}
+
 app.get("/", (req, res) => {
   if (req.headers.accept?.includes("text/html")) return res.redirect("/home");
   const toPhone    = process.env.TWILIO_PHONE_NUMBER || "+18668906657";

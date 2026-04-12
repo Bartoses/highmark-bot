@@ -47,7 +47,8 @@ import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSetti
   handleUpdateCustomIntegration, handleDeleteCustomIntegration,
   handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight,
   handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus,
-  handlePortalLeads, handlePortalUpdateLead, handlePortalAudiencePreview } from "./adminPortal.js";
+  handlePortalLeads, handlePortalUpdateLead, handlePortalAudiencePreview,
+  computeEstimatedRevenue } from "./adminPortal.js";
 import {
   createIntegration, inferSchema, sanitizeForPortal, getCustomApiContext,
 } from "./apiIntegrations.js";
@@ -3064,6 +3065,7 @@ async function main() {
     await test63integration(); // Phase 6: custom API route auth guards
     await test64integration(); // Phase 7: optimization route auth guards
     await test65integration(); // Phase 8: rewrite route auth guards
+    await testMonetizationHttp(); // Phase 11.9: /demo route
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -12251,6 +12253,85 @@ async function testCrossChannel() {
 }
 
 await testCrossChannel();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11.9 — Monetization + Selling Features
+// ─────────────────────────────────────────────────────────────────────────────
+async function testMonetization() {
+
+  // ── computeEstimatedRevenue ──────────────────────────────────────────────
+  {
+    const cases = [
+      { leads: 0,   avg: 175, expected: 0,     label: "zero leads → $0" },
+      { leads: 1,   avg: 175, expected: 175,   label: "1 lead × $175 → $175" },
+      { leads: 3,   avg: 150, expected: 450,   label: "3 leads × $150 → $450" },
+      { leads: 10,  avg: 200, expected: 2000,  label: "10 leads × $200 → $2000" },
+      { leads: -1,  avg: 175, expected: 0,     label: "negative leads → clamped to $0" },
+      { leads: 5,   avg: 0,   expected: 0,     label: "avg=0 → $0" },
+      { leads: null,avg: 175, expected: 0,     label: "null leads → $0" },
+    ];
+    for (const { leads, avg, expected, label } of cases) {
+      const result = computeEstimatedRevenue(leads, avg);
+      result === expected
+        ? pass(`monetization: computeEstimatedRevenue — ${label}`)
+        : fail(`monetization: computeEstimatedRevenue — ${label}`, `expected=${expected} got=${result}`);
+    }
+  }
+
+  // ── computeEstimatedRevenue is exported ──────────────────────────────────
+  {
+    typeof computeEstimatedRevenue === "function"
+      ? pass("monetization: computeEstimatedRevenue is exported from adminPortal.js")
+      : fail("monetization: computeEstimatedRevenue not exported", typeof computeEstimatedRevenue);
+  }
+}
+
+// HTTP tests for /demo route — must run after server starts (called from main)
+async function testMonetizationHttp() {
+  // ── /demo route — returns HTML with embed script ─────────────────────────
+  {
+    const r = await httpGet("/demo");
+    r.status === 200
+      ? pass("monetization: GET /demo → 200")
+      : fail("monetization: GET /demo → wrong status", r.status);
+    const text = await r.text();
+    text.includes("embed.js")
+      ? pass("monetization: /demo → embed.js script tag present")
+      : fail("monetization: /demo → embed.js missing", text.slice(0, 200));
+    text.includes("data-client")
+      ? pass("monetization: /demo → data-client attribute present")
+      : fail("monetization: /demo → data-client missing", text.slice(0, 200));
+    text.includes("LIVE DEMO")
+      ? pass("monetization: /demo → LIVE DEMO badge present")
+      : fail("monetization: /demo → LIVE DEMO badge missing", text.slice(0, 200));
+  }
+
+  // ── /demo?client param — custom client ──────────────────────────────────
+  {
+    const r = await httpGet("/demo?client=csr_rea");
+    r.status === 200
+      ? pass("monetization: GET /demo?client=csr_rea → 200")
+      : fail("monetization: GET /demo?client=csr_rea → wrong status", r.status);
+    const text = await r.text();
+    text.includes("csr_rea")
+      ? pass("monetization: /demo?client=csr_rea → client ID in page")
+      : fail("monetization: /demo?client=csr_rea → client ID missing", text.slice(0, 300));
+  }
+
+  // ── /demo — XSS safety (sanitized client param) ─────────────────────────
+  {
+    const r = await httpGet("/demo?client=%3Cscript%3Ealert(1)%3C/script%3E");
+    r.status === 200
+      ? pass("monetization: /demo — XSS input returns 200 (not crash)")
+      : fail("monetization: /demo — XSS input crashed server", r.status);
+    const text = await r.text();
+    !text.includes("<script>alert")
+      ? pass("monetization: /demo — XSS payload sanitized from output")
+      : fail("monetization: /demo — XSS payload in response", text.slice(0, 200));
+  }
+}
+
+await testMonetization();
 
 main().catch((e) => {
   console.error("Test runner crashed:", e.message);

@@ -666,11 +666,33 @@ tr:hover td { background: var(--panel2); }
             <!-- Embed Code -->
             <div class="card">
               <div class="card-title">Install Code</div>
-              <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Paste this snippet before the closing <code style="background:var(--panel2);padding:1px 5px;border-radius:4px;">&lt;/body&gt;</code> tag on your website.</p>
+              <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Paste this snippet before the closing <code style="background:var(--panel2);padding:1px 5px;border-radius:4px;">&lt;/body&gt;</code> tag on your website to activate your AI assistant.</p>
               <div style="position:relative;">
                 <pre id="ec-embed-code" style="background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:14px 16px;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
                 <button class="btn btn-ghost btn-sm" onclick="copyEmbedCode()" style="position:absolute;top:8px;right:8px;" id="ec-copy-btn">Copy</button>
               </div>
+            </div>
+
+            <!-- Phase 11.9: Platform Install Guides -->
+            <div class="card" style="margin-top:16px;">
+              <div class="card-title">Quick Install Guides</div>
+              <p style="font-size:12px;color:var(--text2);margin-bottom:14px;">Pick your platform for step-by-step instructions.</p>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+                <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('shopify')">Shopify</button>
+                <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('wordpress')">WordPress</button>
+                <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('wix')">Wix</button>
+                <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('html')">Plain HTML</button>
+              </div>
+              <div id="installGuideContent" style="display:none;background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:16px;">
+                <!-- Guide steps rendered by showInstallGuide() -->
+              </div>
+            </div>
+
+            <!-- Phase 11.9: Try it Live -->
+            <div class="card" style="margin-top:16px;background:linear-gradient(135deg,rgba(37,99,235,.06),rgba(16,185,129,.06));border-color:rgba(37,99,235,.18);">
+              <div class="card-title">Try it Live</div>
+              <p style="font-size:12px;color:var(--text2);margin-bottom:14px;">See exactly how your chat widget behaves for visitors — no install required.</p>
+              <button class="btn btn-primary btn-sm" onclick="openLiveDemo()">Open Live Demo ↗</button>
             </div>
           </div>
 
@@ -1531,7 +1553,28 @@ async function loadDashboard() {
     return;
   }
   const l = d.leads;
+  const roi = d.roi ?? { webLeadsCaptured: 0, bookingClicks: 0, estimatedRevenue: 0, avgBookingValue: 175 };
+  const fmtRev = roi.estimatedRevenue > 0 ? `+$${roi.estimatedRevenue.toLocaleString()}` : '$0';
   document.getElementById('dashContent').innerHTML = `
+    <!-- Phase 11.9: Value Impact Banner -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:6px;">
+      <div class="stat-card" style="background:linear-gradient(135deg,#10b981,#059669);border:none;cursor:default;">
+        <div class="val" style="color:#fff">+${roi.webLeadsCaptured}</div>
+        <div class="lbl" style="color:rgba(255,255,255,.85)">Leads captured via chat</div>
+      </div>
+      <div class="stat-card" style="background:linear-gradient(135deg,#3b82f6,#2563eb);border:none;cursor:default;">
+        <div class="val" style="color:#fff">+${roi.bookingClicks}</div>
+        <div class="lbl" style="color:rgba(255,255,255,.85)">Booking link clicks</div>
+      </div>
+      <div class="stat-card" style="background:linear-gradient(135deg,#f59e0b,#d97706);border:none;cursor:default;">
+        <div class="val" style="color:#fff">${fmtRev}</div>
+        <div class="lbl" style="color:rgba(255,255,255,.85)">Potential revenue</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:18px;text-align:right;">
+      Last 30 days · Est. $${roi.avgBookingValue}/booking
+      <span class="row-action" onclick="switchSection('website-embed')" style="margin-left:8px;">Install widget →</span>
+    </div>
     <div class="stats-grid">
       <div class="stat-card"><div class="val">${l.total}</div><div class="lbl">Total Leads</div></div>
       <div class="stat-card"><div class="val">${l.new}</div><div class="lbl">New</div></div>
@@ -4136,6 +4179,60 @@ function copyEmbedCode() {
     document.body.removeChild(ta);
     if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 2000); }
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11.9: Install Guides + Live Demo
+// ─────────────────────────────────────────────────────────────────────────────
+
+const INSTALL_GUIDES = {
+  shopify: {
+    steps: [
+      'In your Shopify admin, go to <strong>Online Store → Themes</strong>',
+      'Click <strong>Actions → Edit code</strong> on your active theme',
+      'Open <strong>Layout → theme.liquid</strong>',
+      'Paste the embed code just before the closing <code>&lt;/body&gt;</code> tag',
+      'Click <strong>Save</strong> — the chat widget is live immediately',
+    ],
+  },
+  wordpress: {
+    steps: [
+      'Install the free <strong>Insert Headers and Footers</strong> plugin (by WPCode)',
+      'Go to <strong>Settings → Insert Headers and Footers</strong>',
+      'Paste the embed code into the <strong>Footer Scripts</strong> box',
+      'Click <strong>Save</strong> — the widget activates on every page',
+    ],
+  },
+  wix: {
+    steps: [
+      'Open the <strong>Wix Editor</strong> for your site',
+      'Click <strong>Add (+) → Embed → Custom Code</strong>',
+      'Paste the embed code and set placement to <strong>Body — end</strong>',
+      'Click <strong>Apply</strong> then <strong>Publish</strong>',
+    ],
+  },
+  html: {
+    steps: [
+      'Open your website\'s HTML file (or template)',
+      'Paste the embed code just before the closing <code>&lt;/body&gt;</code> tag',
+      'Save and upload — the chat widget is live',
+    ],
+  },
+};
+
+function showInstallGuide(platform) {
+  const g = INSTALL_GUIDES[platform];
+  const el = document.getElementById('installGuideContent');
+  if (!g || !el) return;
+  el.style.display = 'block';
+  el.innerHTML = `<ol style="padding-left:20px;color:var(--text2);font-size:13px;line-height:2.2;">${
+    g.steps.map(s => `<li>${s}</li>`).join('')
+  }</ol><p style="margin-top:10px;font-size:12px;color:var(--text3);">Copy the embed code above, then follow the steps.</p>`;
+}
+
+function openLiveDemo() {
+  const clientId = me?.clientId ?? 'highmark_demo';
+  window.open(`/demo?client=${encodeURIComponent(clientId)}`, '_blank', 'noopener');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -192,6 +192,25 @@ export async function handlePortalDashboard(req, res, supabase) {
     }
   } catch { /* non-fatal */ }
 
+  // Phase 11.9: ROI summary from web_events (last 30 days, non-blocking)
+  let webLeadsCaptured = 0;
+  let bookingClicks    = 0;
+  try {
+    const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: webEvts } = await supabase
+      .from("web_events")
+      .select("event_type")
+      .eq("client_id", clientId)
+      .gte("created_at", since30);
+    for (const e of (webEvts ?? [])) {
+      if (e.event_type === "lead_captured")   webLeadsCaptured++;
+      if (e.event_type === "booking_clicked") bookingClicks++;
+    }
+  } catch { /* non-fatal — web_events table may not exist yet */ }
+
+  const avgBookingValue  = clients[clientId]?.avgBookingValue ?? 175;
+  const estimatedRevenue = computeEstimatedRevenue(webLeadsCaptured, avgBookingValue);
+
   return res.json({
     clientId,
     clientName,
@@ -208,7 +227,21 @@ export async function handlePortalDashboard(req, res, supabase) {
       demoLeadsCaptured,
       period: "30d",
     },
+    roi: {
+      webLeadsCaptured,
+      bookingClicks,
+      estimatedRevenue,
+      avgBookingValue,
+      period: "30d",
+    },
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeEstimatedRevenue — exported for testing
+// ─────────────────────────────────────────────────────────────────────────────
+export function computeEstimatedRevenue(leadCount, avgBookingValue) {
+  return Math.max(0, (leadCount ?? 0) * (avgBookingValue ?? 175));
 }
 
 // ── GET /portal/api/leads ─────────────────────────────────────────────────────
