@@ -58,6 +58,7 @@ import { sendMessageWeb, createWebSession, getWebClientConfig } from "./webChat.
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 import { getOrchestratorReply, runOrchestrator } from "./agentOrchestrator.js";
 import { detectOwner } from "./ownerMode.js";
+import { callClaudeForChannel } from "./messageEngine.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1257,6 +1258,7 @@ async function saveConversation(fromNumber, toNumber, convo, clientId) {
       waitlist_pending:       convo.waitlistPending,
       waitlist_context:       convo.waitlistContext,
       client_id:              clientId ?? process.env.CLIENT_ID ?? "csr_rea",
+      channel:                "sms",
       updated_at:             new Date().toISOString(),
     },
     { onConflict: "from_number,to_number" }
@@ -1264,25 +1266,12 @@ async function saveConversation(fromNumber, toNumber, convo, clientId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CLAUDE CALL
+// CLAUDE CALL — Phase 11.4: delegates to callClaudeForChannel (messageEngine.js)
+// Kept as a thin wrapper so all existing call sites in the SMS handler stay
+// unchanged. New channels call callClaudeForChannel directly.
 // ─────────────────────────────────────────────────────────────────────────────
 async function getClaudeReply(convo, client, season, knowledgeContext, extraInstruction, maxLength = 320) {
-  const messages = convo.messages.map(({ role, content }) => ({ role, content }));
-  const system   = extraInstruction
-    ? `${buildSystemPrompt(client, season, knowledgeContext)}\n\nCURRENT CONTEXT: ${extraInstruction}`
-    : buildSystemPrompt(client, season, knowledgeContext);
-
-  const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-6",
-    max_tokens: 450,
-    system,
-    messages,
-  });
-
-  const text = response.content[0].text;
-  // Never truncate replies containing URLs — the link must arrive intact
-  if (/https?:\/\//.test(text)) return text;
-  return enforceLength(text, maxLength);
+  return callClaudeForChannel(anthropic, convo, client, season, knowledgeContext, extraInstruction, "sms", maxLength);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

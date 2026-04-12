@@ -22,7 +22,6 @@
 import {
   detectIntent,
   detectSentiment,
-  buildSystemPrompt,
   getSeasonalOpener,
   getCurrentSeason,
   enforceLength,
@@ -32,6 +31,7 @@ import {
   containsPhoneAsk,
   ensureUrlInResponse,
 } from "./index.js";
+import { callClaudeForChannel, buildChannelInstruction } from "./messageEngine.js";
 import { getKnowledgeContext } from "./knowledgeBase.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
@@ -125,6 +125,7 @@ export async function saveWebConversation(supabase, from, to, convo, clientId) {
       lead_step:              convo.leadStep,
       lead_data:              convo.leadData,
       client_id:              clientId,
+      channel:                "web",
       updated_at:             new Date().toISOString(),
     },
     { onConflict: "from_number,to_number" }
@@ -183,8 +184,11 @@ export async function linkSessionToLead(supabase, sessionId, leadId) {
 // static client fields and sensible defaults when no row exists yet.
 // ─────────────────────────────────────────────────────────────────────────────
 export function getWebClientConfig(client, embedConfig = null) {
-  const ec  = embedConfig ?? {};
-  const pos = (ec.position ?? client.widgetPosition ?? "bottom_right") === "bottom_left" ? "left" : "right";
+  const ec     = embedConfig ?? {};
+  const rawPos = ec.position ?? client.widgetPosition ?? "bottom_right";
+  // Handle both formats: embed_config uses "bottom_left"/"bottom_right",
+  // static client may use "left"/"right" directly.
+  const pos = (rawPos === "bottom_left" || rawPos === "left") ? "left" : "right";
   return {
     clientId:       client.id,
     name:           client.name,
@@ -314,24 +318,17 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       }).catch(() => null);
     }
 
-    // Web-specific instructions injected into the system prompt context
-    const webInstruction = [
-      "CHANNEL: This is a web chat widget (not SMS). The visitor has NOT provided a phone number.",
-      "Do NOT ask for a phone number. If you need contact info, ask for their name and email instead.",
-      resolvedLink
-        ? `BOOKING LINK: Include this exact URL in your response (do not modify it): ${resolvedLink.url}`
-        : "",
-      plan.mustRecommend ? "Answer their question FIRST before any lead capture." : "",
-      plan.shouldSoftClose && plan.microClose ? `Soft close opportunity: ${plan.microClose}` : "",
-    ].filter(Boolean).join("\n");
+    // Channel-aware instruction for Claude — built by the shared messageEngine utility
+    const webInstruction = buildChannelInstruction("web", { resolvedLink, plan });
 
-    replyText = await callClaude(anthropic, convo, client, season, knowledgeCtx, webInstruction);
+    replyText = await callClaudeForChannel(anthropic, convo, client, season, knowledgeCtx, webInstruction, "web");
 
     // Regenerate once if Claude asked for phone anyway
     if (containsPhoneAsk(replyText)) {
-      replyText = await callClaude(
+      replyText = await callClaudeForChannel(
         anthropic, convo, client, season, knowledgeCtx,
-        "IMPORTANT: Do NOT ask for a phone number — this is web chat. If you need contact info, ask for email."
+        "IMPORTANT: Do NOT ask for a phone number — this is web chat. If you need contact info, ask for email.",
+        "web"
       );
     }
 
@@ -340,8 +337,8 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       replyText = ensureUrlInResponse(replyText, resolvedLink.url);
       console.log(`[WEB_CHAT] Safety-net link appended: ${resolvedLink.url}`);
     }
-
-    replyText = enforceLength(replyText, 480);
+    // Length enforcement already applied inside callClaudeForChannel (480 chars for web).
+    // URL-containing replies are never truncated.
   }
 
   // ── Persist ────────────────────────────────────────────────────────────────
@@ -393,24 +390,4 @@ async function passiveLeadCapture(supabase, client, convo, sessionId, message) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// callClaude — shared Claude call (same model + token budget as SMS)
-// ─────────────────────────────────────────────────────────────────────────────
-async function callClaude(anthropic, convo, client, season, knowledgeCtx, extraInstruction) {
-  const messages = convo.messages
-    .filter(m => m.role === "user" || m.role === "assistant")
-    .map(({ role, content }) => ({ role, content }));
-
-  const system = extraInstruction
-    ? `${buildSystemPrompt(client, season, knowledgeCtx)}\n\nCURRENT CONTEXT: ${extraInstruction}`
-    : buildSystemPrompt(client, season, knowledgeCtx);
-
-  const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-6",
-    max_tokens: 550,
-    system,
-    messages,
-  });
-
-  return response.content[0].text;
-}
+// callClaude() removed in Phase 11.4 — replaced by callClaudeForChannel() from messageEngine.js
