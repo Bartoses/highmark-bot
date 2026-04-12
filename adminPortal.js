@@ -1724,6 +1724,7 @@ const EMBED_DEFAULTS = {
   button_color:    "#2563eb",
   text_color:      "#ffffff",
   button_text:     "Chat with us",
+  show_icon:       true,
   size:            "medium",
   border_radius:   "16",
   logo_url:        null,

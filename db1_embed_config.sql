@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS embed_config (
   auto_open       boolean     DEFAULT false,
   position        text        DEFAULT 'bottom_right',  -- bottom_right | bottom_left
   bottom_offset   integer     DEFAULT 20,              -- px from bottom edge (increase to clear sticky navs)
+  show_icon       boolean     DEFAULT true,            -- show 💬 bubble on launcher button
   updated_at      timestamptz DEFAULT now()
 );
 

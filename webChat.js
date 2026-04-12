@@ -195,6 +195,7 @@ export function getWebClientConfig(client, embedConfig = null) {
     buttonColor:    ec.button_color   ?? ec.primary_color ?? client.widgetColor ?? "#2563eb",
     textColor:      ec.text_color     ?? "#ffffff",
     buttonText:     ec.button_text    ?? "Chat with us",
+    showIcon:       ec.show_icon      ?? true,
     size:           ec.size           ?? "medium",
     borderRadius:   ec.border_radius  ?? "16",
     logoUrl:        ec.logo_url       ?? null,

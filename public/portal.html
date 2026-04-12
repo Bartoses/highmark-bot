@@ -614,9 +614,15 @@ tr:hover td { background: var(--panel2); }
             <div class="card" style="margin-bottom:16px;">
               <div class="card-title">Button &amp; Text</div>
               <div class="form-group">
-                <label>Button Text</label>
-                <input type="text" id="ec-button-text" class="form-input" value="Chat with us" maxlength="32" oninput="updateEmbedPreview()">
-                <div class="form-hint">Shown on the launcher button. Keep it short.</div>
+                <label>Button Text <span class="form-hint" style="display:inline;">— supports emoji 👋</span></label>
+                <input type="text" id="ec-button-text" class="form-input" value="Chat with us" maxlength="40" oninput="updateEmbedPreview()" placeholder="Chat with us">
+                <div class="form-hint">Leave blank to show icon only (circular button). Emoji are supported.</div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                  <input type="checkbox" id="ec-show-icon" checked onchange="updateEmbedPreview()" style="width:16px;height:16px;accent-color:var(--accent);">
+                  <span>Show 💬 bubble icon on launcher button</span>
+                </label>
               </div>
               <div class="form-group" style="margin-bottom:0;">
                 <label>Welcome Message <span class="form-hint" style="display:inline;">(optional)</span></label>
@@ -3890,7 +3896,8 @@ async function loadEmbedConfig() {
   document.getElementById('ec-size').value              = cfg.size            || 'medium';
   document.getElementById('ec-border-radius').value     = cfg.border_radius   ?? 16;
   document.getElementById('ec-logo-url').value          = cfg.logo_url        || '';
-  document.getElementById('ec-button-text').value       = cfg.button_text     || 'Chat with us';
+  document.getElementById('ec-button-text').value       = cfg.button_text     ?? 'Chat with us';
+  document.getElementById('ec-show-icon').checked       = cfg.show_icon       ?? true;
   document.getElementById('ec-welcome-message').value   = cfg.welcome_message || '';
   document.getElementById('ec-position').value          = cfg.position        || 'bottom_right';
   document.getElementById('ec-delay-seconds').value     = cfg.delay_seconds   ?? 0;
@@ -3910,7 +3917,8 @@ async function saveEmbedConfig() {
     size:            document.getElementById('ec-size').value,
     border_radius:   document.getElementById('ec-border-radius').value,
     logo_url:        document.getElementById('ec-logo-url').value || null,
-    button_text:     document.getElementById('ec-button-text').value || 'Chat with us',
+    button_text:     document.getElementById('ec-button-text').value,   // allow empty string
+    show_icon:       document.getElementById('ec-show-icon').checked,
     welcome_message: document.getElementById('ec-welcome-message').value || null,
     position:        document.getElementById('ec-position').value,
     delay_seconds:   parseInt(document.getElementById('ec-delay-seconds').value, 10) || 0,
@@ -3948,7 +3956,8 @@ function getEmbedFormValues() {
     size:           document.getElementById('ec-size')?.value            || 'medium',
     borderRadius:   parseInt(document.getElementById('ec-border-radius')?.value, 10) || 16,
     logoUrl:        document.getElementById('ec-logo-url')?.value        || '',
-    buttonText:     document.getElementById('ec-button-text')?.value     || 'Chat with us',
+    buttonText:     document.getElementById('ec-button-text')?.value     ?? '',
+    showIcon:       document.getElementById('ec-show-icon')?.checked     ?? true,
     welcomeMsg:     document.getElementById('ec-welcome-message')?.value || '',
     position:       document.getElementById('ec-position')?.value        || 'bottom_right',
     delaySeconds:   parseInt(document.getElementById('ec-delay-seconds')?.value, 10) || 0,
@@ -4002,10 +4011,15 @@ function updateEmbedPreview() {
         <div style="text-align:center;padding:4px 0 7px;font-size:10px;color:#adb5bd;">Powered by Highmark</div>
       </div>
       <!-- Launcher button -->
-      <button style="background:${v.buttonColor};color:${v.textColor};border:none;border-radius:100px;padding:0 16px;height:48px;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2);">
-        <span style="font-size:18px;">💬</span>
-        <span>${escHtml(v.buttonText)}</span>
-      </button>
+      ${(function() {
+        const iconOnly = !v.buttonText?.trim();
+        const btnStyle = `background:${v.buttonColor};color:${v.textColor};border:none;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px;font-weight:600;` +
+          (iconOnly ? 'width:56px;height:56px;border-radius:50%;padding:0;' : 'height:56px;padding:0 20px;border-radius:100px;');
+        return `<button style="${btnStyle}">
+          ${v.showIcon ? '<span style="font-size:20px;line-height:1;">💬</span>' : ''}
+          ${v.buttonText ? `<span>${escHtml(v.buttonText)}</span>` : ''}
+        </button>`;
+      })()}
     </div>
   `;
 

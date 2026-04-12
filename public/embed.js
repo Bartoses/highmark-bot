@@ -58,6 +58,7 @@
     buttonColor:  "#2563eb",
     textColor:    "#ffffff",
     buttonText:   "Chat with us",
+    showIcon:     true,   // show 💬 bubble on the launcher button
     size:         "medium",
     borderRadius: "16",
     logoUrl:      null,
@@ -85,17 +86,19 @@
     #hm-btn { pointer-events: auto; }
     #hm-panel:not(.hm-hidden) { pointer-events: auto; }
     #hm-btn {
-      height: 52px; min-width: 52px; padding: 0 18px;
+      height: 56px; min-width: 56px; padding: 0 20px;
       border-radius: 100px; border: none; cursor: pointer;
       background: var(--hm-btn); color: var(--hm-btn-text);
-      font-size: 14px; font-weight: 600; letter-spacing: .01em;
-      display: flex; align-items: center; gap: 8px;
+      font-size: 15px; font-weight: 600; letter-spacing: .01em;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
       box-shadow: 0 4px 16px rgba(0,0,0,.22);
       transition: transform .18s, box-shadow .18s;
       white-space: nowrap;
     }
     #hm-btn:hover { transform: scale(1.04); box-shadow: 0 6px 20px rgba(0,0,0,.28); }
-    #hm-btn .hm-btn-icon { font-size: 20px; line-height: 1; flex-shrink: 0; }
+    #hm-btn .hm-btn-icon { font-size: 22px; line-height: 1; flex-shrink: 0; }
+    /* Icon-only mode: perfectly circular */
+    #hm-btn.hm-icon-only { width: 56px; padding: 0; border-radius: 50%; }
     #hm-panel {
       width: ${w}; max-width: calc(100vw - 24px);
       background: #fff; border-radius: ${br}px;
@@ -235,14 +238,18 @@
         </div>
         <div id="hm-branding"><a href="https://usehighmark.com" target="_blank" rel="noopener">Powered by Highmark</a></div>
       </div>
-      <button id="hm-btn" aria-label="${config.buttonText}">
-        <span class="hm-btn-icon">💬</span>
-        <span id="hm-btn-label">${config.buttonText}</span>
+      <button id="hm-btn" aria-label="${config.buttonText || 'Chat'}">
+        ${config.showIcon ? '<span class="hm-btn-icon">💬</span>' : ''}
+        ${config.buttonText ? `<span id="hm-btn-label">${config.buttonText}</span>` : ''}
       </button>
     `;
     document.body.appendChild(root);
 
     applyCSSVars(root);
+    // Icon-only when no text label (or text is blank)
+    if (!config.buttonText?.trim()) {
+      document.getElementById("hm-btn")?.classList.add("hm-icon-only");
+    }
     renderMessages();
     bindEvents();
 
