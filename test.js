@@ -106,6 +106,7 @@ import { executeAction, buildIntegrations } from "./actionEngine.js";
 import { runOrchestrator, getOrchestratorReply } from "./agentOrchestrator.js";
 import { detectOwner, buildOwnerInstruction, routeOwnerAgent, isOwnerActionAllowed } from "./ownerMode.js";
 import { handleIncomingMessage, buildChannelInstruction, isChannelEnabled } from "./messageHandler.js";
+import { detectPageType } from "./messageEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -11919,6 +11920,37 @@ async function test76() {
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// detectPageType — Phase 11.6 AI Page-Aware Personalization
+// ─────────────────────────────────────────────────────────────────────────────
+async function testDetectPageType() {
+  const cases = [
+    { url: "https://example.com/rzr-tours",          expected: "rzr",        label: "/rzr path → rzr" },
+    { url: "https://example.com/utv-rentals",         expected: "rzr",        label: "/utv path → rzr" },
+    { url: "https://example.com/polaris-adventures",  expected: "rzr",        label: "/polaris path → rzr" },
+    { url: "https://example.com/snowmobile-rentals",  expected: "snowmobile", label: "/snowmobile path → snowmobile" },
+    { url: "https://example.com/sled-tours",          expected: "snowmobile", label: "/sled path → snowmobile" },
+    { url: "https://example.com/guided-tours",        expected: "tours",      label: "/guided path → tours" },
+    { url: "https://example.com/adventure-packages",  expected: "tours",      label: "/adventure path → tours" },
+    { url: "https://example.com/mountain-bike",       expected: "bike",       label: "/mountain-bike path → bike" },
+    { url: "https://example.com/",                    expected: "homepage",   label: "root / → homepage" },
+    { url: "https://example.com",                     expected: "homepage",   label: "bare domain → homepage" },
+    { url: "https://example.com/contact-us",          expected: null,         label: "/contact-us → null (generic)" },
+    { url: "https://example.com/about",               expected: null,         label: "/about → null (generic)" },
+    { url: null,                                      expected: null,         label: "null url → null" },
+    { url: "not-a-url",                               expected: null,         label: "invalid url → null" },
+  ];
+
+  for (const { url, expected, label } of cases) {
+    const result = detectPageType(url);
+    result === expected
+      ? pass(`detectPageType: ${label}`)
+      : fail(`detectPageType: ${label}`, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(result)}`);
+  }
+}
+
+await testDetectPageType();
 
 main().catch((e) => {
   console.error("Test runner crashed:", e.message);

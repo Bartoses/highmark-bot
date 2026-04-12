@@ -31,7 +31,7 @@ import {
   containsPhoneAsk,
   ensureUrlInResponse,
 } from "./index.js";
-import { callClaudeForChannel, buildChannelInstruction } from "./messageEngine.js";
+import { callClaudeForChannel, buildChannelInstruction, detectPageType } from "./messageEngine.js";
 import { getKnowledgeContext } from "./knowledgeBase.js";
 import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
@@ -332,8 +332,11 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
       }).catch(() => {});
     }
 
+    // Auto-detect page type from URL when data-page isn't explicitly set
+    const pageType = detectPageType(pageUrl);
+
     // Channel-aware instruction for Claude — built by the shared messageEngine utility
-    const webInstruction = buildChannelInstruction("web", { resolvedLink, plan, pageHint });
+    const webInstruction = buildChannelInstruction("web", { resolvedLink, plan, pageHint, pageType });
 
     replyText = await callClaudeForChannel(anthropic, convo, client, season, knowledgeCtx, webInstruction, "web");
 

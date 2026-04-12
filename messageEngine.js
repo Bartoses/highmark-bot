@@ -73,11 +73,45 @@ export async function callClaudeForChannel(
 // opts.resolvedLink   — { url } from resolveBookingLink(), or null
 // opts.plan           — response plan from buildResponsePlan(), or null
 // ─────────────────────────────────────────────────────────────────────────────
-// opts.pageHint   — string from data-page attribute on the embed script tag, or null.
-//                   Examples: "rzr", "tours", "snowmobile", "home"
-//                   Tells Claude what section of the website the visitor is on so it can
-//                   tailor the opening response without the visitor having to explain.
-export function buildChannelInstruction(channel, { resolvedLink = null, plan = null, pageHint = null } = {}) {
+// ─────────────────────────────────────────────────────────────────────────────
+// detectPageType — infer page context from the URL path when data-page isn't set.
+//
+// Returns one of: "rzr" | "snowmobile" | "tours" | "bike" | "homepage" | null
+// Returns null for generic/unrecognized pages (no injection — avoids noise).
+//
+// Called by sendMessageWeb when pageHint is null but pageUrl is available.
+// ─────────────────────────────────────────────────────────────────────────────
+export function detectPageType(pageUrl) {
+  if (!pageUrl) return null;
+  try {
+    const path = new URL(pageUrl).pathname.toLowerCase();
+    if (/rzr|utv|off.?road|polaris/i.test(path))   return "rzr";
+    if (/snowmobile|sled|snow/i.test(path))          return "snowmobile";
+    if (/tour|guided|adventure/i.test(path))         return "tours";
+    if (/bike|mtb|mountain.?bike/i.test(path))       return "bike";
+    if (path === "/" || path === "")                  return "homepage";
+  } catch { /* invalid URL — fall through */ }
+  return null; // unrecognized path — skip injection to avoid noise
+}
+
+// Page type → concise Claude guidance (what to lead with on ambiguous first messages)
+const PAGE_TYPE_GUIDANCE = {
+  rzr:         "The visitor is on the RZR / off-road page. Lead with RZR rental options, terrain suggestions, or availability. Assume off-road interest unless they indicate otherwise.",
+  snowmobile:  "The visitor is on the snowmobile page. Lead with snowmobile tours or rentals, trail conditions, or guided vs. self-guided options. Assume snowmobile interest.",
+  tours:       "The visitor is on the tours page. Lead with guided tour options — highlight the experience, beginner friendliness, and ease of booking.",
+  bike:        "The visitor is on the bike / MTB page. Lead with bike-related services or tours relevant to this client.",
+  homepage:    "The visitor is on the homepage. They may be exploring — lead with the most popular option for the season, or ask a single light clarifying question.",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// buildChannelInstruction — channel-aware instruction block for the system prompt
+//
+// opts.pageHint   — explicit label from data-page attribute ("rzr", "tours", …)
+// opts.pageType   — auto-detected type from detectPageType(pageUrl); used when pageHint is null
+// opts.resolvedLink — { url } from resolveBookingLink(), or null
+// opts.plan         — response plan from buildResponsePlan(), or null
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildChannelInstruction(channel, { resolvedLink = null, plan = null, pageHint = null, pageType = null } = {}) {
   const parts = [];
 
   if (channel === "web") {
@@ -91,15 +125,20 @@ export function buildChannelInstruction(channel, { resolvedLink = null, plan = n
     );
   }
 
+  // Page context: explicit label (data-page) takes precedence over auto-detected type
   if (pageHint) {
     // Sanitize: only pass through simple alphanumeric + space values
     const safe = String(pageHint).replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 60).trim();
     if (safe) {
-      parts.push(
-        `PAGE CONTEXT: The visitor is browsing the "${safe}" section of the website. ` +
-        `Lead with that topic if their message is ambiguous — don't ask them to clarify what they're interested in.`,
+      const guidance = PAGE_TYPE_GUIDANCE[safe.toLowerCase()] ?? null;
+      parts.push(guidance
+        ? `PAGE CONTEXT: ${guidance}`
+        : `PAGE CONTEXT: The visitor is browsing the "${safe}" section of the website. Lead with that topic if their message is ambiguous — don't ask them to clarify what they're interested in.`
       );
     }
+  } else if (pageType && PAGE_TYPE_GUIDANCE[pageType]) {
+    // Auto-detected from URL — same guidance, no need to expose the detection mechanism to Claude
+    parts.push(`PAGE CONTEXT: ${PAGE_TYPE_GUIDANCE[pageType]}`);
   }
 
   if (resolvedLink?.url) {
