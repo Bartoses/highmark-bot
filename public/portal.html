@@ -458,7 +458,7 @@ tr:hover td { background: var(--panel2); }
           <div class="tab-btn active" data-atab="overview" onclick="switchAnalyticsTab('overview')">Overview</div>
           <div class="tab-btn" data-atab="traffic" onclick="switchAnalyticsTab('traffic')">Traffic Sources</div>
         </div>
-        <div class="tab-pane active" id="atab-overview">
+        <div class="tab-pane active" id="atab-overview" data-atab="overview">
           <div style="margin-bottom:16px;display:flex;justify-content:flex-end;">
             <select id="analyticsPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
               <option value="7" selected>Last 7 days</option>
@@ -469,7 +469,7 @@ tr:hover td { background: var(--panel2); }
           </div>
           <div id="analyticsContent"><div class="loading">Loading…</div></div>
         </div>
-        <div class="tab-pane" id="atab-traffic">
+        <div class="tab-pane" id="atab-traffic" data-atab="traffic">
           <div style="margin-bottom:16px;display:flex;justify-content:flex-end;">
             <select id="attributionPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
               <option value="30">Last 30 days</option>
@@ -513,25 +513,25 @@ tr:hover td { background: var(--panel2); }
           <div class="tab-btn" data-stab="embed" onclick="switchSettingsTab('embed')">Widget &amp; Embed</div>
         </div>
         <!-- General tab -->
-        <div class="tab-pane active" id="stab-general">
+        <div class="tab-pane active" id="stab-general" data-stab="general">
           <div id="settingsContent"><div class="loading">Loading…</div></div>
         </div>
         <!-- Bot tab -->
-        <div class="tab-pane" id="stab-bot">
+        <div class="tab-pane" id="stab-bot" data-stab="bot">
           <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
             <button class="btn btn-ghost btn-sm" onclick="loadBotConfig()">↻ Refresh</button>
           </div>
           <div id="botConfigContent"><div class="loading">Loading…</div></div>
         </div>
         <!-- Booking tab -->
-        <div class="tab-pane" id="stab-booking">
+        <div class="tab-pane" id="stab-booking" data-stab="booking">
           <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
             <button class="btn btn-ghost btn-sm" onclick="loadBookingConfig()">↻ Refresh</button>
           </div>
           <div id="bookingConfigContent"><div class="loading">Loading…</div></div>
         </div>
         <!-- Widget & Embed tab -->
-        <div class="tab-pane" id="stab-embed">
+        <div class="tab-pane" id="stab-embed" data-stab="embed">
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
             <button class="btn btn-ghost btn-sm" onclick="loadEmbedConfig()">↻ Reset</button>
             <button class="btn btn-primary btn-sm" onclick="saveEmbedConfig()">Save changes</button>
