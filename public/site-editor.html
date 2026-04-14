@@ -402,6 +402,10 @@ function tierCard(t, i) {
         <input type="text" class="tier-cta-style" value="${esc(t.cta_style||"ghost")}" placeholder="ghost or primary">
       </div>
     </div>
+    <div class="field-group" style="margin-top:8px">
+      <div class="field-label">CTA href <span style="font-weight:400;color:var(--muted)">(blank = SMS demo · use mailto: for contact)</span></div>
+      <input type="text" class="tier-cta-href" value="${esc(t.cta_href||"")}" placeholder="mailto:hello@example.com?subject=... or sms:+1...">
+    </div>
     <div class="toggle-row" style="margin-top:10px">
       <input type="checkbox" class="toggle tier-featured" ${t.featured ? "checked" : ""}>
       <label>Featured / recommended tier</label>
@@ -428,6 +432,7 @@ function collectTiers() {
       description: card.querySelector(".tier-desc").value,
       cta_text:    card.querySelector(".tier-cta-text").value,
       cta_style:   card.querySelector(".tier-cta-style").value,
+      cta_href:    card.querySelector(".tier-cta-href").value || undefined,
       featured:    card.querySelector(".tier-featured").checked,
       features,
     };
@@ -436,7 +441,7 @@ function collectTiers() {
 
 function addTier() {
   const tiers = collectTiers();
-  tiers.push({ id: "tier_" + Date.now(), name: "New Tier", price: 0, period: "billed monthly", description: "", featured: false, badge: null, cta_text: "Get started →", cta_style: "ghost", features: [] });
+  tiers.push({ id: "tier_" + Date.now(), name: "New Tier", price: 0, period: "billed monthly", description: "", featured: false, badge: null, cta_text: "Get started →", cta_style: "ghost", cta_href: "", features: [] });
   document.getElementById("pricing-tiers").innerHTML = tiers.map((t,i) => tierCard(t,i)).join("");
 }
 
