@@ -27,19 +27,18 @@ export const SECTION_KEYS = [
 export const DEFAULTS = {
   hero: {
     badge: "🏔 Live demo available now — no signup required",
-    headline: "Your customers text. <em>Highmark handles it.</em>",
+    headline: "Stop losing customers at 11pm.",
     subheadline:
-      "AI SMS concierge that answers questions, captures leads, drives bookings, and sends targeted campaigns — automatically, 24/7. For tour operators, rental companies, and service businesses.",
-    primary_cta_text: "📱 Text DEMO to (866) 890-6657",
-    secondary_cta_text: "See pricing ↓",
+      "Highmark answers every customer inquiry automatically — on SMS and your website — so you never miss a lead because you were on the mountain.",
+    primary_cta_text: "📱 See it live — text DEMO to (866) 890-6657",
+    secondary_cta_text: "See how it works ↓",
     demo_phone: "+18668906657",
     demo_display: "(866) 890-6657",
     demo_body: "DEMO",
     proof_items: [
-      "Live demo active now",
-      "No signup required",
-      "Most clients live in 1–3 days",
-      "Free tier available",
+      "SMS + web chat",
+      "Live in 1–3 days",
+      "Used by outdoor businesses across Colorado",
     ],
   },
 
@@ -56,9 +55,9 @@ export const DEFAULTS = {
       },
       {
         num: "2",
-        title: "Customers text you",
+        title: "Customers text or chat",
         body:
-          "They ask questions, request bookings, or submit leads. Highmark replies in seconds — 24/7, trained on your business.",
+          "They text your number or message your website — Highmark replies in seconds, 24/7, trained on your business.",
       },
       {
         num: "3",
@@ -94,6 +93,7 @@ export const DEFAULTS = {
         featured: false,
         badge: null,
         cta_text: "Text the demo →",
+        cta_href: "sms:+18668906657?body=DEMO",
         cta_style: "ghost",
         features: [
           { text: "Basic SMS Q&A chatbot", included: true },
@@ -117,6 +117,7 @@ export const DEFAULTS = {
         featured: true,
         badge: "Most Popular",
         cta_text: "Get started →",
+        cta_href: "mailto:hello@whiteoutsolutions.co?subject=Highmark%20Growth%20Plan",
         cta_style: "primary",
         features: [
           { text: "Everything in Free", included: true },
@@ -141,6 +142,7 @@ export const DEFAULTS = {
         featured: false,
         badge: null,
         cta_text: "Talk to us →",
+        cta_href: "mailto:hello@whiteoutsolutions.co?subject=Highmark%20Pro%20Plan",
         cta_style: "ghost",
         features: [
           { text: "Everything in Growth", included: true },
@@ -150,7 +152,7 @@ export const DEFAULTS = {
           { text: "Campaign messaging — unlimited sends", included: true },
           { text: "Audience targeting (new, engaged, all leads)", included: true },
           { text: "Priority support", included: true },
-          { text: "Analytics dashboard (coming soon)", included: true },
+          { text: "Analytics dashboard", included: true },
         ],
       },
     ],

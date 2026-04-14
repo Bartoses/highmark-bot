@@ -854,6 +854,7 @@
           esc(f.text) + "</li>";
       }).join("");
 
+      var ctaHref = t.cta_href ? esc(t.cta_href) : url;
       return '<div class="price-card' + (isFeatured ? " featured" : "") + '">' +
         (t.badge ? '<div class="price-badge">' + esc(t.badge) + "</div>" : "") +
         '<div class="price-tier">' + esc(t.name) + "</div>" +
@@ -861,7 +862,7 @@
         '<div class="price-period">' + esc(t.period || "") + "</div>" +
         '<div class="price-desc">' + esc(t.description || "") + "</div>" +
         '<ul class="price-features">' + features + "</ul>" +
-        '<a href="' + url + '" class="price-cta ' + esc(t.cta_style || "ghost") + '">' +
+        '<a href="' + ctaHref + '" class="price-cta ' + esc(t.cta_style || "ghost") + '">' +
         esc(t.cta_text || "Get started →") + "</a>" +
         "</div>";
     }).join("");
