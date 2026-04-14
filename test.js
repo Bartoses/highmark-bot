@@ -2426,6 +2426,24 @@ async function test30() {
   chk("1B: Growth plan mailto present",            html1b.includes("Growth%20Plan") || html1b.includes("Growth Plan"));
   chk("1B: SMS demo link present",                 html1b.includes("sms:+18668906657"));
 
+  // 1C — portal nav redirects
+  const rBotConfig     = await fetch(`http://localhost:${TEST_PORT}/portal/bot-config`,     { redirect: 'manual' });
+  const rBookingConfig = await fetch(`http://localhost:${TEST_PORT}/portal/booking-config`, { redirect: 'manual' });
+  const rWebsiteEmbed  = await fetch(`http://localhost:${TEST_PORT}/portal/website-embed`,  { redirect: 'manual' });
+  const rAttribution   = await fetch(`http://localhost:${TEST_PORT}/portal/attribution`,    { redirect: 'manual' });
+  chk("1C: /portal/bot-config → 302 to settings?tab=bot",
+    rBotConfig.status === 302 && rBotConfig.headers.get('location')?.includes('settings?tab=bot'));
+  chk("1C: /portal/booking-config → 302 to settings?tab=booking",
+    rBookingConfig.status === 302 && rBookingConfig.headers.get('location')?.includes('settings?tab=booking'));
+  chk("1C: /portal/website-embed → 302 to settings?tab=embed",
+    rWebsiteEmbed.status === 302 && rWebsiteEmbed.headers.get('location')?.includes('settings?tab=embed'));
+  chk("1C: /portal/attribution → 302 to analytics?tab=traffic",
+    rAttribution.status === 302 && rAttribution.headers.get('location')?.includes('analytics?tab=traffic'));
+
+  // 1C — portal conversations section
+  const rConversations = await fetch(`http://localhost:${TEST_PORT}/portal/conversations`);
+  chk("1C: /portal/conversations → 200 (serves portal SPA)", rConversations.status === 200);
+
   // /admin/site-editor accessible with key
   const editorResp = await fetch(`http://localhost:${TEST_PORT}/admin/site-editor?key=${KEY}`);
   chk("GET /admin/site-editor returns 200", editorResp.status === 200);

@@ -291,6 +291,22 @@ tr:hover td { background: var(--panel2); }
   cursor: pointer; user-select: all;
 }
 .invite-url-box:hover { border-color: var(--accent); }
+
+/* ── Sub-tabs ─────────────────────────────────────────────────────────────── */
+.tab-bar { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; }
+.tab-btn {
+  padding: 10px 16px; font-size: 12px; font-weight: 500; color: var(--text2); cursor: pointer;
+  border-bottom: 2px solid transparent; white-space: nowrap; transition: color .1s; margin-bottom: -1px;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+/* ── Page placeholder (Conversations etc.) ───────────────────────────────── */
+.page-placeholder { text-align: center; padding: 60px 20px; color: var(--text2); }
+.page-placeholder h2 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
+.page-placeholder p { font-size: 14px; line-height: 1.6; }
+.page-placeholder .muted { color: var(--text3); font-size: 13px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -302,6 +318,9 @@ tr:hover td { background: var(--panel2); }
     <div class="nav-section">
       <div class="nav-item active" data-section="dashboard">
         <span class="nav-icon">⊞</span> Dashboard
+      </div>
+      <div class="nav-item" data-section="conversations">
+        <span class="nav-icon">💬</span> Conversations
       </div>
       <div class="nav-item" data-section="leads">
         <span class="nav-icon">👤</span> Leads
@@ -321,24 +340,10 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="knowledge">
         <span class="nav-icon">📚</span> Knowledge
       </div>
-      <div class="nav-item" data-section="integrations">
-        <span class="nav-icon">🔌</span> Integrations
-      </div>
       <div class="nav-item" data-section="messaging">
-        <span class="nav-icon">💬</span> Messaging
+        <span class="nav-icon">📨</span> Messaging
       </div>
-      <div class="nav-item" data-section="bot-config">
-        <span class="nav-icon">🤖</span> Bot Config
-      </div>
-      <div class="nav-item" data-section="booking-config">
-        <span class="nav-icon">📅</span> Booking Config
-      </div>
-      <div class="nav-item" data-section="website-embed">
-        <span class="nav-icon">🖼</span> Website Embed
-      </div>
-      <div class="nav-item" data-section="attribution">
-        <span class="nav-icon">📊</span> Attribution
-      </div>
+      <div class="nav-section-label client-admin-only" style="padding:10px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Admin</div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
@@ -362,7 +367,7 @@ tr:hover td { background: var(--panel2); }
       <a class="nav-ext-link" href="/ui?key=highmark2026&client=highmark_demo" target="_blank">
         <span class="nav-icon">🖥</span> Test Console (Demo)
       </a>
-      <a class="nav-ext-link" href="https://www.usehighmark.com/home" target="_blank">
+      <a class="nav-ext-link" href="https://www.usehighmark.com/" target="_blank">
         <span class="nav-icon">🌐</span> Highmark website
       </a>
       <a class="nav-ext-link" href="/admin/site-editor?key=highmark2026" target="_blank">
@@ -391,6 +396,20 @@ tr:hover td { background: var(--panel2); }
       <div class="section active" id="sec-dashboard">
         <div id="dashContent"><div class="loading">Loading…</div></div>
       </div>
+
+      <!-- CONVERSATIONS -->
+      <div class="section" id="sec-conversations">
+        <div class="section-header">
+          <span class="section-title">Conversations</span>
+        </div>
+        <div id="conversationsContent">
+          <div class="page-placeholder">
+            <h2>Conversations</h2>
+            <p>Full SMS and web chat conversation history — building now.</p>
+            <p class="muted">This feature is coming in the next update.</p>
+          </div>
+        </div>
+      </div><!-- /sec-conversations -->
 
       <!-- LEADS -->
       <div class="section" id="sec-leads">
@@ -434,15 +453,33 @@ tr:hover td { background: var(--panel2); }
       <div class="section" id="sec-analytics">
         <div class="section-header">
           <span class="section-title">Analytics</span>
-          <select id="analyticsPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
-            <option value="7" selected>Last 7 days</option>
-            <option value="1">Today</option>
-            <option value="30">Last 30 days</option>
-            <option value="90">Last 90 days</option>
-          </select>
         </div>
-        <div id="analyticsContent"><div class="loading">Loading…</div></div>
-      </div>
+        <div class="tab-bar" id="analyticsTabBar">
+          <div class="tab-btn active" data-atab="overview" onclick="switchAnalyticsTab('overview')">Overview</div>
+          <div class="tab-btn" data-atab="traffic" onclick="switchAnalyticsTab('traffic')">Traffic Sources</div>
+        </div>
+        <div class="tab-pane active" id="atab-overview">
+          <div style="margin-bottom:16px;display:flex;justify-content:flex-end;">
+            <select id="analyticsPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
+              <option value="7" selected>Last 7 days</option>
+              <option value="1">Today</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </div>
+          <div id="analyticsContent"><div class="loading">Loading…</div></div>
+        </div>
+        <div class="tab-pane" id="atab-traffic">
+          <div style="margin-bottom:16px;display:flex;justify-content:flex-end;">
+            <select id="attributionPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
+              <option value="30">Last 30 days</option>
+              <option value="7">Last 7 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </div>
+          <div id="attributionContent"><div class="loading">Loading…</div></div>
+        </div>
+      </div><!-- /sec-analytics -->
 
       <!-- OPTIMIZATION -->
       <div class="section" id="sec-optimization">
@@ -464,13 +501,177 @@ tr:hover td { background: var(--panel2); }
         </div>
       </div>
 
-      <!-- SETTINGS -->
+      <!-- SETTINGS — 4 sub-tabs: General | Bot | Booking | Widget & Embed -->
       <div class="section" id="sec-settings">
         <div class="section-header">
           <span class="section-title">Settings</span>
         </div>
-        <div id="settingsContent"><div class="loading">Loading…</div></div>
-      </div>
+        <div class="tab-bar" id="settingsTabBar">
+          <div class="tab-btn active" data-stab="general" onclick="switchSettingsTab('general')">General</div>
+          <div class="tab-btn" data-stab="bot" onclick="switchSettingsTab('bot')">Bot</div>
+          <div class="tab-btn" data-stab="booking" onclick="switchSettingsTab('booking')">Booking</div>
+          <div class="tab-btn" data-stab="embed" onclick="switchSettingsTab('embed')">Widget &amp; Embed</div>
+        </div>
+        <!-- General tab -->
+        <div class="tab-pane active" id="stab-general">
+          <div id="settingsContent"><div class="loading">Loading…</div></div>
+        </div>
+        <!-- Bot tab -->
+        <div class="tab-pane" id="stab-bot">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+            <button class="btn btn-ghost btn-sm" onclick="loadBotConfig()">↻ Refresh</button>
+          </div>
+          <div id="botConfigContent"><div class="loading">Loading…</div></div>
+        </div>
+        <!-- Booking tab -->
+        <div class="tab-pane" id="stab-booking">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+            <button class="btn btn-ghost btn-sm" onclick="loadBookingConfig()">↻ Refresh</button>
+          </div>
+          <div id="bookingConfigContent"><div class="loading">Loading…</div></div>
+        </div>
+        <!-- Widget & Embed tab -->
+        <div class="tab-pane" id="stab-embed">
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
+            <button class="btn btn-ghost btn-sm" onclick="loadEmbedConfig()">↻ Reset</button>
+            <button class="btn btn-primary btn-sm" onclick="saveEmbedConfig()">Save changes</button>
+          </div>
+          <div id="embedMsg" style="display:none;margin-bottom:14px;"></div>
+          <div style="display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start;" id="embedLayout">
+            <!-- Left: Controls -->
+            <div>
+              <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--text2);">
+                <span style="color:var(--accent);font-weight:600;">Bot name &amp; greeting</span> are inherited from the
+                <span class="row-action" onclick="switchSettingsTab('general')" style="cursor:pointer;">General</span> and
+                <span class="row-action" onclick="switchSettingsTab('bot')" style="cursor:pointer;">Bot</span> tabs — configure them once there.
+              </div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-title">Appearance</div>
+                <div class="two-col" style="margin-bottom:14px;">
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Primary Color <span class="form-hint" style="display:inline;">(header, chat bubbles)</span></label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                      <input type="color" id="ec-primary-color" value="#2563eb" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-primary-color-hex').value=this.value;updateEmbedPreview()">
+                      <input type="text" id="ec-primary-color-hex" class="form-input" style="flex:1;" value="#2563eb" oninput="syncColorFromHex('ec-primary-color','ec-primary-color-hex')">
+                    </div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Button Color <span class="form-hint" style="display:inline;">(launcher button)</span></label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                      <input type="color" id="ec-button-color" value="#2563eb" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-button-color-hex').value=this.value;updateEmbedPreview()">
+                      <input type="text" id="ec-button-color-hex" class="form-input" style="flex:1;" value="#2563eb" oninput="syncColorFromHex('ec-button-color','ec-button-color-hex')">
+                    </div>
+                  </div>
+                </div>
+                <div class="two-col" style="margin-bottom:14px;">
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Text Color <span class="form-hint" style="display:inline;">(on colored surfaces)</span></label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                      <input type="color" id="ec-text-color" value="#ffffff" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-text-color-hex').value=this.value;updateEmbedPreview()">
+                      <input type="text" id="ec-text-color-hex" class="form-input" style="flex:1;" value="#ffffff" oninput="syncColorFromHex('ec-text-color','ec-text-color-hex')">
+                    </div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Widget Size</label>
+                    <select id="ec-size" class="form-input" onchange="updateEmbedPreview()">
+                      <option value="small">Small (300px)</option>
+                      <option value="medium" selected>Medium (360px)</option>
+                      <option value="large">Large (420px)</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="two-col">
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Border Radius <span class="form-hint" style="display:inline;">(px)</span></label>
+                    <input type="number" id="ec-border-radius" class="form-input" value="16" min="0" max="32" oninput="updateEmbedPreview()">
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Logo URL <span class="form-hint" style="display:inline;">(optional)</span></label>
+                    <input type="url" id="ec-logo-url" class="form-input" placeholder="https://…/logo.png" oninput="updateEmbedPreview()">
+                  </div>
+                </div>
+              </div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-title">Button &amp; Text</div>
+                <div class="form-group">
+                  <label>Button Text <span class="form-hint" style="display:inline;">— supports emoji 👋</span></label>
+                  <input type="text" id="ec-button-text" class="form-input" value="Chat with us" maxlength="40" oninput="updateEmbedPreview()" placeholder="Chat with us">
+                  <div class="form-hint">Leave blank to show icon only (circular button). Emoji are supported.</div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                    <input type="checkbox" id="ec-show-icon" checked onchange="updateEmbedPreview()" style="width:16px;height:16px;accent-color:var(--accent);">
+                    <span>Show 💬 bubble icon on launcher button</span>
+                  </label>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label>Welcome Message <span class="form-hint" style="display:inline;">(optional)</span></label>
+                  <textarea id="ec-welcome-message" class="form-input" rows="3" placeholder="Hi! I'm Summit, your guide to tours and adventures. How can I help?" oninput="updateEmbedPreview()"></textarea>
+                  <div class="form-hint">First message shown when a visitor opens the chat. Leave blank to use the bot's default greeting.</div>
+                </div>
+              </div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-title">Behavior</div>
+                <div class="two-col" style="margin-bottom:14px;">
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Position</label>
+                    <select id="ec-position" class="form-input" onchange="updateEmbedPreview()">
+                      <option value="bottom_right" selected>Bottom right</option>
+                      <option value="bottom_left">Bottom left</option>
+                    </select>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Delay Before Showing <span class="form-hint" style="display:inline;">(seconds)</span></label>
+                    <input type="number" id="ec-delay-seconds" class="form-input" value="0" min="0" max="60" oninput="updateEmbedPreview()">
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label>Bottom Offset <span class="form-hint" style="display:inline;">(px from bottom)</span></label>
+                    <input type="number" id="ec-bottom-offset" class="form-input" value="20" min="0" max="300" oninput="updateEmbedPreview()">
+                    <div class="form-hint">Increase if the widget overlaps a sticky nav or button bar.</div>
+                  </div>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                    <input type="checkbox" id="ec-auto-open" onchange="updateEmbedPreview()" style="width:16px;height:16px;accent-color:var(--accent);">
+                    <span>Auto-open widget on page load (after delay)</span>
+                  </label>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-title">Install Code</div>
+                <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Paste this snippet before the closing <code style="background:var(--panel2);padding:1px 5px;border-radius:4px;">&lt;/body&gt;</code> tag on your website to activate your AI assistant.</p>
+                <div style="position:relative;">
+                  <pre id="ec-embed-code" style="background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:14px 16px;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
+                  <button class="btn btn-ghost btn-sm" onclick="copyEmbedCode()" style="position:absolute;top:8px;right:8px;" id="ec-copy-btn">Copy</button>
+                </div>
+              </div>
+              <div class="card" style="margin-top:16px;">
+                <div class="card-title">Quick Install Guides</div>
+                <p style="font-size:12px;color:var(--text2);margin-bottom:14px;">Pick your platform for step-by-step instructions.</p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+                  <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('shopify')">Shopify</button>
+                  <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('wordpress')">WordPress</button>
+                  <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('wix')">Wix</button>
+                  <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('html')">Plain HTML</button>
+                </div>
+                <div id="installGuideContent" style="display:none;background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:16px;"></div>
+              </div>
+              <div class="card" style="margin-top:16px;background:linear-gradient(135deg,rgba(37,99,235,.06),rgba(16,185,129,.06));border-color:rgba(37,99,235,.18);">
+                <div class="card-title">Try it Live</div>
+                <p style="font-size:12px;color:var(--text2);margin-bottom:14px;">See exactly how your chat widget behaves for visitors — no install required.</p>
+                <button class="btn btn-primary btn-sm" onclick="openLiveDemo()">Open Live Demo ↗</button>
+              </div>
+            </div>
+            <!-- Right: Live Preview -->
+            <div style="position:sticky;top:0;">
+              <div class="card">
+                <div class="card-title">Live Preview</div>
+                <div id="ec-preview" style="position:relative;min-height:500px;background:#f0f4f8;border-radius:8px;overflow:hidden;"></div>
+              </div>
+            </div>
+          </div>
+        </div><!-- /stab-embed -->
+      </div><!-- /sec-settings -->
 
       <!-- USERS (admin only) -->
       <div class="section" id="sec-users">
@@ -526,202 +727,6 @@ tr:hover td { background: var(--panel2); }
         <div id="messagingContent"><div class="loading">Loading…</div></div>
       </div><!-- /sec-messaging -->
 
-      <!-- BOT CONFIG -->
-      <div class="section" id="sec-bot-config">
-        <div class="section-header">
-          <span class="section-title">Bot Config</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadBotConfig()">↻ Refresh</button>
-        </div>
-        <div id="botConfigContent"><div class="loading">Loading…</div></div>
-      </div><!-- /sec-bot-config -->
-
-      <!-- BOOKING CONFIG -->
-      <div class="section" id="sec-booking-config">
-        <div class="section-header">
-          <span class="section-title">Booking Config</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadBookingConfig()">↻ Refresh</button>
-        </div>
-        <div id="bookingConfigContent"><div class="loading">Loading…</div></div>
-      </div><!-- /sec-booking-config -->
-
-      <!-- WEBSITE EMBED -->
-      <div class="section" id="sec-website-embed">
-        <div class="section-header">
-          <span class="section-title">Website Embed</span>
-          <div style="display:flex;gap:8px;">
-            <button class="btn btn-ghost btn-sm" onclick="loadEmbedConfig()">↻ Reset</button>
-            <button class="btn btn-primary btn-sm" onclick="saveEmbedConfig()">Save changes</button>
-          </div>
-        </div>
-        <div id="embedMsg" style="display:none;margin-bottom:14px;"></div>
-
-        <div style="display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start;" id="embedLayout">
-
-          <!-- Left: Controls -->
-          <div>
-            <!-- Inherited identity notice -->
-            <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--text2);">
-              <span style="color:var(--accent);font-weight:600;">Bot name &amp; greeting</span> are inherited from
-              <span class="row-action" onclick="switchSection('settings')" style="cursor:pointer;">Settings</span> and
-              <span class="row-action" onclick="switchSection('bot-config')" style="cursor:pointer;">Bot Config</span> — configure them once there.
-            </div>
-
-            <!-- Appearance -->
-            <div class="card" style="margin-bottom:16px;">
-              <div class="card-title">Appearance</div>
-              <div class="two-col" style="margin-bottom:14px;">
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Primary Color <span class="form-hint" style="display:inline;">(header, chat bubbles)</span></label>
-                  <div style="display:flex;gap:8px;align-items:center;">
-                    <input type="color" id="ec-primary-color" value="#2563eb" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-primary-color-hex').value=this.value;updateEmbedPreview()">
-                    <input type="text" id="ec-primary-color-hex" class="form-input" style="flex:1;" value="#2563eb" oninput="syncColorFromHex('ec-primary-color','ec-primary-color-hex')">
-                  </div>
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Button Color <span class="form-hint" style="display:inline;">(launcher button)</span></label>
-                  <div style="display:flex;gap:8px;align-items:center;">
-                    <input type="color" id="ec-button-color" value="#2563eb" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-button-color-hex').value=this.value;updateEmbedPreview()">
-                    <input type="text" id="ec-button-color-hex" class="form-input" style="flex:1;" value="#2563eb" oninput="syncColorFromHex('ec-button-color','ec-button-color-hex')">
-                  </div>
-                </div>
-              </div>
-              <div class="two-col" style="margin-bottom:14px;">
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Text Color <span class="form-hint" style="display:inline;">(on colored surfaces)</span></label>
-                  <div style="display:flex;gap:8px;align-items:center;">
-                    <input type="color" id="ec-text-color" value="#ffffff" style="width:44px;height:36px;padding:2px;border:1px solid var(--border2);border-radius:6px;cursor:pointer;background:var(--bg);" oninput="document.getElementById('ec-text-color-hex').value=this.value;updateEmbedPreview()">
-                    <input type="text" id="ec-text-color-hex" class="form-input" style="flex:1;" value="#ffffff" oninput="syncColorFromHex('ec-text-color','ec-text-color-hex')">
-                  </div>
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Widget Size</label>
-                  <select id="ec-size" class="form-input" onchange="updateEmbedPreview()">
-                    <option value="small">Small (300px)</option>
-                    <option value="medium" selected>Medium (360px)</option>
-                    <option value="large">Large (420px)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="two-col">
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Border Radius <span class="form-hint" style="display:inline;">(px)</span></label>
-                  <input type="number" id="ec-border-radius" class="form-input" value="16" min="0" max="32" oninput="updateEmbedPreview()">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Logo URL <span class="form-hint" style="display:inline;">(optional)</span></label>
-                  <input type="url" id="ec-logo-url" class="form-input" placeholder="https://…/logo.png" oninput="updateEmbedPreview()">
-                </div>
-              </div>
-            </div>
-
-            <!-- Button & Text -->
-            <div class="card" style="margin-bottom:16px;">
-              <div class="card-title">Button &amp; Text</div>
-              <div class="form-group">
-                <label>Button Text <span class="form-hint" style="display:inline;">— supports emoji 👋</span></label>
-                <input type="text" id="ec-button-text" class="form-input" value="Chat with us" maxlength="40" oninput="updateEmbedPreview()" placeholder="Chat with us">
-                <div class="form-hint">Leave blank to show icon only (circular button). Emoji are supported.</div>
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-                  <input type="checkbox" id="ec-show-icon" checked onchange="updateEmbedPreview()" style="width:16px;height:16px;accent-color:var(--accent);">
-                  <span>Show 💬 bubble icon on launcher button</span>
-                </label>
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label>Welcome Message <span class="form-hint" style="display:inline;">(optional)</span></label>
-                <textarea id="ec-welcome-message" class="form-input" rows="3" placeholder="Hi! I'm Summit, your guide to tours and adventures. How can I help?" oninput="updateEmbedPreview()"></textarea>
-                <div class="form-hint">First message shown when a visitor opens the chat. Leave blank to use the bot's default greeting.</div>
-              </div>
-            </div>
-
-            <!-- Behavior -->
-            <div class="card" style="margin-bottom:16px;">
-              <div class="card-title">Behavior</div>
-              <div class="two-col" style="margin-bottom:14px;">
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Position</label>
-                  <select id="ec-position" class="form-input" onchange="updateEmbedPreview()">
-                    <option value="bottom_right" selected>Bottom right</option>
-                    <option value="bottom_left">Bottom left</option>
-                  </select>
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Delay Before Showing <span class="form-hint" style="display:inline;">(seconds)</span></label>
-                  <input type="number" id="ec-delay-seconds" class="form-input" value="0" min="0" max="60" oninput="updateEmbedPreview()">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label>Bottom Offset <span class="form-hint" style="display:inline;">(px from bottom)</span></label>
-                  <input type="number" id="ec-bottom-offset" class="form-input" value="20" min="0" max="300" oninput="updateEmbedPreview()">
-                  <div class="form-hint">Increase if the widget overlaps a sticky nav or button bar.</div>
-                </div>
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-                  <input type="checkbox" id="ec-auto-open" onchange="updateEmbedPreview()" style="width:16px;height:16px;accent-color:var(--accent);">
-                  <span>Auto-open widget on page load (after delay)</span>
-                </label>
-              </div>
-            </div>
-
-            <!-- Embed Code -->
-            <div class="card">
-              <div class="card-title">Install Code</div>
-              <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Paste this snippet before the closing <code style="background:var(--panel2);padding:1px 5px;border-radius:4px;">&lt;/body&gt;</code> tag on your website to activate your AI assistant.</p>
-              <div style="position:relative;">
-                <pre id="ec-embed-code" style="background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:14px 16px;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
-                <button class="btn btn-ghost btn-sm" onclick="copyEmbedCode()" style="position:absolute;top:8px;right:8px;" id="ec-copy-btn">Copy</button>
-              </div>
-            </div>
-
-            <!-- Phase 11.9: Platform Install Guides -->
-            <div class="card" style="margin-top:16px;">
-              <div class="card-title">Quick Install Guides</div>
-              <p style="font-size:12px;color:var(--text2);margin-bottom:14px;">Pick your platform for step-by-step instructions.</p>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
-                <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('shopify')">Shopify</button>
-                <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('wordpress')">WordPress</button>
-                <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('wix')">Wix</button>
-                <button class="btn btn-ghost btn-sm" onclick="showInstallGuide('html')">Plain HTML</button>
-              </div>
-              <div id="installGuideContent" style="display:none;background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:16px;">
-                <!-- Guide steps rendered by showInstallGuide() -->
-              </div>
-            </div>
-
-            <!-- Phase 11.9: Try it Live -->
-            <div class="card" style="margin-top:16px;background:linear-gradient(135deg,rgba(37,99,235,.06),rgba(16,185,129,.06));border-color:rgba(37,99,235,.18);">
-              <div class="card-title">Try it Live</div>
-              <p style="font-size:12px;color:var(--text2);margin-bottom:14px;">See exactly how your chat widget behaves for visitors — no install required.</p>
-              <button class="btn btn-primary btn-sm" onclick="openLiveDemo()">Open Live Demo ↗</button>
-            </div>
-          </div>
-
-          <!-- Right: Live Preview -->
-          <div style="position:sticky;top:0;">
-            <div class="card">
-              <div class="card-title">Live Preview</div>
-              <div id="ec-preview" style="position:relative;min-height:500px;background:#f0f4f8;border-radius:8px;overflow:hidden;">
-                <!-- Preview widget rendered here by JS -->
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </div><!-- /sec-website-embed -->
-
-      <!-- ATTRIBUTION — Phase 11.5 -->
-      <div class="section" id="sec-attribution">
-        <div class="section-header">
-          <span class="section-title">Attribution</span>
-          <select id="attributionPeriod" style="background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;">
-            <option value="30">Last 30 days</option>
-            <option value="7">Last 7 days</option>
-            <option value="90">Last 90 days</option>
-          </select>
-        </div>
-        <div id="attributionContent"><div class="loading">Loading…</div></div>
-      </div><!-- /sec-attribution -->
 
       <!-- ONBOARDING — New Client (internal_admin only) -->
       <div class="section admin-only" id="sec-onboarding">
@@ -918,6 +923,10 @@ tr:hover td { background: var(--panel2); }
         <div class="card" style="margin-bottom:12px;">
           <div class="card-title" style="margin-bottom:14px;">Settings &amp; Access</div>
           <div class="more-link-list">
+            <div class="more-link-item" onclick="switchSection('conversations')">
+              <span>💬</span> Conversations
+              <span class="more-link-arrow">›</span>
+            </div>
             <div class="more-link-item" onclick="switchSection('settings')">
               <span>⚙</span> Settings
               <span class="more-link-arrow">›</span>
@@ -936,18 +945,6 @@ tr:hover td { background: var(--panel2); }
             </div>
             <div class="more-link-item" onclick="switchSection('messaging')">
               <span>💬</span> Messaging
-              <span class="more-link-arrow">›</span>
-            </div>
-            <div class="more-link-item" onclick="switchSection('bot-config')">
-              <span>🤖</span> Bot Config
-              <span class="more-link-arrow">›</span>
-            </div>
-            <div class="more-link-item" onclick="switchSection('booking-config')">
-              <span>📅</span> Booking Config
-              <span class="more-link-arrow">›</span>
-            </div>
-            <div class="more-link-item" onclick="switchSection('website-embed')">
-              <span>🖼</span> Website Embed
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item client-admin-only" onclick="switchSection('users')">
@@ -1405,8 +1402,10 @@ async function init() {
 
   // Load initial section based on URL
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','knowledge','integrations','messaging','bot-config','booking-config','users','clients','onboarding'];
-  switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard');
+  const urlParams = new URLSearchParams(location.search);
+  const urlTab = urlParams.get('tab') || null;
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','conversations','knowledge','integrations','messaging','bot-config','booking-config','website-embed','attribution','users','clients','onboarding'];
+  switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard', urlTab);
 }
 
 function clearAllSessions() {
@@ -1439,14 +1438,18 @@ async function signOut() {
 
 // ── Section routing ────────────────────────────────────────────────────────
 const sectionTitles = {
-  dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns',
+  dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns', conversations: 'Conversations',
   analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
-  integrations: 'Integrations', messaging: 'Messaging', 'bot-config': 'Bot Config', 'booking-config': 'Booking Config',
-  'website-embed': 'Website Embed',
-  attribution: 'Attribution',
+  integrations: 'Integrations', messaging: 'Messaging',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
 };
-function switchSection(name) {
+function switchSection(name, tabParam) {
+  // Redirect old section names to their new tab locations
+  if (name === 'bot-config')     { switchSection('settings'); switchSettingsTab('bot');     return; }
+  if (name === 'booking-config') { switchSection('settings'); switchSettingsTab('booking'); return; }
+  if (name === 'website-embed')  { switchSection('settings'); switchSettingsTab('embed');   return; }
+  if (name === 'attribution')    { switchSection('analytics'); switchAnalyticsTab('traffic'); return; }
+
   if (name === 'users'       && !me?.isClientAdmin) name = 'dashboard';
   if (name === 'clients'     && !me?.isAdmin)       name = 'dashboard';
   if (name === 'onboarding'  && !me?.isAdmin)       name = 'dashboard';
@@ -1459,22 +1462,39 @@ function switchSection(name) {
   // 'more' is mobile-only UI — no server route exists for it
   if (name !== 'more') history.replaceState(null, '', `/portal/${name}`);
 
-  if (name === 'dashboard')  loadDashboard();
-  if (name === 'leads')      { leadsOffset = 0; loadLeads(); setupLeadsEvents(); }
-  if (name === 'campaigns')  { loadCampaigns(); setupCampaignEvents(); }
-  if (name === 'analytics')    loadAnalytics();
-  if (name === 'optimization') loadOptimization();
-  if (name === 'settings')   loadSettings();
-  if (name === 'users')      loadUsers();
-  if (name === 'clients')      loadClients();
-  if (name === 'knowledge')    loadKnowledge();
-  if (name === 'integrations') loadIntegrationsSection();
-  if (name === 'messaging')       loadMessaging();
-  if (name === 'bot-config')      loadBotConfig();
-  if (name === 'booking-config')  loadBookingConfig();
-  if (name === 'website-embed')   loadEmbedConfig();
-  if (name === 'attribution')     loadAttribution();
-  if (name === 'onboarding')      resetOnboarding();
+  if (name === 'dashboard')     loadDashboard();
+  if (name === 'leads')         { leadsOffset = 0; loadLeads(); setupLeadsEvents(); }
+  if (name === 'campaigns')     { loadCampaigns(); setupCampaignEvents(); }
+  if (name === 'analytics')     { loadAnalytics(); if (tabParam) switchAnalyticsTab(tabParam); }
+  if (name === 'optimization')  loadOptimization();
+  if (name === 'settings')      { loadSettings(); if (tabParam) switchSettingsTab(tabParam); }
+  if (name === 'conversations') loadConversations();
+  if (name === 'users')         loadUsers();
+  if (name === 'clients')       loadClients();
+  if (name === 'knowledge')     loadKnowledge();
+  if (name === 'integrations')  loadIntegrationsSection();
+  if (name === 'messaging')     loadMessaging();
+  if (name === 'onboarding')    resetOnboarding();
+}
+
+function switchSettingsTab(tab) {
+  document.querySelectorAll('#sec-settings .tab-btn[data-stab]').forEach(b => b.classList.toggle('active', b.dataset.stab === tab));
+  document.querySelectorAll('#sec-settings .tab-pane[data-stab]').forEach(p => p.classList.toggle('active', p.dataset.stab === tab));
+  if (tab === 'bot')     loadBotConfig();
+  if (tab === 'booking') loadBookingConfig();
+  if (tab === 'embed')   loadEmbedConfig();
+}
+
+function switchAnalyticsTab(tab) {
+  document.querySelectorAll('#sec-analytics .tab-btn[data-atab]').forEach(b => b.classList.toggle('active', b.dataset.atab === tab));
+  document.querySelectorAll('#sec-analytics .tab-pane[data-atab]').forEach(p => p.classList.toggle('active', p.dataset.atab === tab));
+  if (tab === 'traffic') loadAttribution();
+}
+
+function loadConversations() {
+  const el = document.getElementById('conversationsContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">Coming soon — conversation history will appear here.</div>';
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -1574,7 +1594,7 @@ async function loadDashboard() {
     </div>
     <div style="font-size:11px;color:var(--text3);margin-bottom:18px;text-align:right;">
       Last 30 days · Est. $${roi.avgBookingValue}/booking
-      <span class="row-action" onclick="switchSection('website-embed')" style="margin-left:8px;">Install widget →</span>
+      <span class="row-action" onclick="switchSection('settings');switchSettingsTab('embed')" style="margin-left:8px;">Install widget →</span>
     </div>
     <div class="stats-grid">
       <div class="stat-card"><div class="val">${l.total}</div><div class="lbl">Total Leads</div></div>
@@ -3952,7 +3972,7 @@ function renderBotConfigSection(cfg, editable) {
 }
 
 async function saveBotConfig() {
-  const btn = document.querySelector('#sec-bot-config .btn-primary');
+  const btn = document.querySelector('#stab-bot .btn-primary');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   const body = {};
@@ -4037,7 +4057,7 @@ function renderBookingConfigSection(cfg, editable) {
 }
 
 async function saveBookingConfig() {
-  const btn = document.querySelector('#sec-booking-config .btn-primary');
+  const btn = document.querySelector('#stab-booking .btn-primary');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   const body = {};

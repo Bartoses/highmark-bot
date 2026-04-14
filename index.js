@@ -2384,8 +2384,14 @@ app.get("/portal/config", (_req, res) => {
 // Portal static pages (no auth — frontend handles JWT redirect)
 app.get("/portal",           (_req, res) => res.redirect("/portal/login"));
 app.get("/portal/login",     (_req, res) => res.sendFile(path.join(__uiDir, "portal-login.html")));
+// Old section URLs redirect to their new tab locations
+app.get('/portal/bot-config',     (_req, res) => res.redirect(302, '/portal/settings?tab=bot'));
+app.get('/portal/booking-config', (_req, res) => res.redirect(302, '/portal/settings?tab=booking'));
+app.get('/portal/website-embed',  (_req, res) => res.redirect(302, '/portal/settings?tab=embed'));
+app.get('/portal/attribution',    (_req, res) => res.redirect(302, '/portal/analytics?tab=traffic'));
+
 // Catch-all for portal SPA sub-paths (dashboard, leads, campaigns, analytics,
-// settings, knowledge, integrations, messaging, users, clients, etc.)
+// settings, conversations, knowledge, integrations, messaging, users, clients, etc.)
 // login and invite have their own routes above and match first.
 app.get("/portal/:section", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
 
