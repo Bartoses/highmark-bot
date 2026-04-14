@@ -32,6 +32,10 @@ import { handleListScheduledMessages } from "./adminScheduledMessages.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
 import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
+import {
+  handleListConversations, handleConversationBadgeCount, handleGetConversation,
+  handlePauseConversation, handleResumeConversation, handleSendAgentMessage, handleSuggestReply,
+} from "./adminConversations.js";
 import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalCreateClient, handlePortalUpdateClient, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption, handlePortalCrawlPages, handlePortalIntegrations, handlePortalMessaging, handlePortalUpdateMessaging,
   handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
   handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
@@ -1208,6 +1212,7 @@ async function getConversation(fromNumber, toNumber) {
         leadData:              data.lead_data              ?? null,
         waitlistPending:       data.waitlist_pending       ?? false,
         waitlistContext:       data.waitlist_context       ?? null,
+        botPaused:              data.bot_paused             ?? false,
         stage:                  bd._stage                    ?? "new",
         leadCaptureAttempted:   bd._leadCaptureAttempted    ?? false,
         leadCapturePendingName: bd._leadCapturePendingName  ?? false,
@@ -1439,6 +1444,23 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   const { isNew, convo } = await getConversation(fromNumber, toNumber);
   // Mark UI console sessions as test so they're filterable in the DB
   if (isNew && isUiReq(req)) convo.sessionType = "test";
+
+  // 6.5. Bot-paused gate — agent has taken over this conversation.
+  //      Save the inbound message (so agent sees it) but send no reply.
+  if (convo.botPaused === true && !isOwner) {
+    convo.messages.push({
+      role:      "user",
+      content:   rawBody,
+      timestamp: new Date().toISOString(),
+      intent:    "guest_paused",
+    });
+    if (convo.messages.length > 10) convo.messages = convo.messages.slice(-10);
+    await saveConversation(fromNumber, toNumber, convo, client?.id);
+    console.log(`[BOT_PAUSED] Message from ${fromNumber} saved, no reply sent`);
+    if (isUiReq(req)) return res.json({ reply: "[bot paused — message saved for agent]" });
+    res.set("Content-Type", "text/xml");
+    return res.send("<Response></Response>");
+  }
 
   // Phase 11.8: SMS→Web — for new or short conversations, check if this phone
   // has a linked web session and inject that context into the system prompt.
@@ -2446,6 +2468,14 @@ app.post("/portal/api/optimization/dismiss/:id",requirePortalAuth, (req, res) =>
 app.get(  "/portal/api/rewrites",      requirePortalAuth, (req, res) => handleGetRewrites(req, res, supabase));
 app.post( "/portal/api/rewrites/run",  requirePortalAuth, (req, res) => handleRunRewrites(req, res, supabase, anthropic));
 app.patch("/portal/api/rewrites/:id",  requirePortalAuth, (req, res) => handleUpdateRewriteStatus(req, res, supabase));
+// Phase 2A — Conversations (badge-count MUST be before :id to avoid route collision)
+app.get(  "/portal/api/conversations/badge-count",  requirePortalAuth, (req, res) => handleConversationBadgeCount(req, res, supabase));
+app.get(  "/portal/api/conversations",              requirePortalAuth, (req, res) => handleListConversations(req, res, supabase));
+app.get(  "/portal/api/conversations/:id",          requirePortalAuth, (req, res) => handleGetConversation(req, res, supabase));
+app.post( "/portal/api/conversations/:id/pause",    requirePortalAuth, (req, res) => handlePauseConversation(req, res, supabase));
+app.post( "/portal/api/conversations/:id/resume",   requirePortalAuth, (req, res) => handleResumeConversation(req, res, supabase));
+app.post( "/portal/api/conversations/:id/send",     requirePortalAuth, (req, res) => handleSendAgentMessage(req, res, supabase, twilioClient));
+app.post( "/portal/api/conversations/:id/suggest",  requirePortalAuth, (req, res) => handleSuggestReply(req, res, supabase, anthropic));
 app.get( "/portal/api/messaging",      requirePortalAuth, (req, res) => handlePortalMessaging(req, res, supabase));
 app.patch("/portal/api/messaging",     requirePortalAuth, (req, res) => handlePortalUpdateMessaging(req, res, supabase));
 app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePortalBotConfig(req, res, supabase));

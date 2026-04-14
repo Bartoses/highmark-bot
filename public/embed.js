@@ -518,6 +518,17 @@
       }
 
       const data  = await r.json();
+
+      // Bot paused — agent has taken over, show a handoff message
+      if (data.paused) {
+        const handoffMsg = "Checking in with our team — we'll be right with you!";
+        messages.push({ role: "assistant", content: handoffMsg });
+        saveHistory(messages);
+        appendMessageEl("assistant", handoffMsg);
+        scrollBottom();
+        return;
+      }
+
       const reply = data.reply || "I'm here to help — what can I do for you?";
 
       messages.push({ role: "assistant", content: reply });

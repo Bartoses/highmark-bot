@@ -67,6 +67,7 @@ export async function getWebConversation(supabase, sessionId, clientId) {
     const bd = data.booking_data ?? {};
     return {
       isNew: false, from, to,
+      botPaused: data.bot_paused ?? false,
       convo: {
         messages:              data.messages               ?? [],
         bookingStep:           data.booking_step           ?? null,
@@ -248,7 +249,21 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
     return { reply: opener, reset: true };
   }
 
-  const { isNew, from, to, convo } = await getWebConversation(supabase, sessionId, client.id);
+  const { isNew, from, to, convo, botPaused } = await getWebConversation(supabase, sessionId, client.id);
+
+  // ── Bot-paused gate — agent has taken over, save message but return empty reply ──
+  if (botPaused === true) {
+    convo.messages.push({
+      role:        "user",
+      content:     message,
+      timestamp:   new Date().toISOString(),
+      intent:      "guest_paused",
+      sender_type: "guest",
+    });
+    await saveWebConversation(supabase, from, to, convo, client.id);
+    console.log(`[BOT_PAUSED_WEB] Session ${sessionId} paused — message saved, no reply`);
+    return { reply: "", paused: true };
+  }
 
   // ── First message: return the opener immediately ────────────────────────────
   if (isNew || convo.messages.length === 0) {

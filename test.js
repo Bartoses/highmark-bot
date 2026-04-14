@@ -3120,6 +3120,7 @@ async function main() {
     await test65integration(); // Phase 8: rewrite route auth guards
     await testMonetizationHttp(); // Phase 11.9: /demo route
     await testAnalyticsHttp();    // Phase 11.10: /portal/api/performance
+    await testConversations();    // Phase 2A: conversations API, detectChannel, maskPhone, bot_paused gate
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -12443,6 +12444,84 @@ async function testAnalyticsHttp() {
     r.status !== 404
       ? pass("analytics: GET /portal/api/performance?days=7 — route registered (not 404)")
       : fail("analytics: GET /portal/api/performance — route not registered (404)", r.status);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// testConversations — Phase 2A: conversations API + utilities + bot_paused gate
+// ─────────────────────────────────────────────────────────────────────────────
+async function testConversations() {
+  const { default: fetch } = await import("node-fetch");
+  const { detectChannel, maskPhone } = await import("./adminConversations.js");
+  const chk = (label, cond) => cond ? pass(label) : fail(label, `expected truthy, got ${cond}`);
+
+  // ── Channel detection ────────────────────────────────────────────────────
+  chk("conv: web: prefix → 'web'",       detectChannel("web:abc123-def4") === "web");
+  chk("conv: phone → 'sms'",             detectChannel("+15551234567") === "sms");
+  chk("conv: formatted phone → 'sms'",   detectChannel("+1 (555) 123-4567") === "sms");
+  chk("conv: undefined → 'sms'",         detectChannel(undefined) === "sms");
+
+  // ── Phone masking ────────────────────────────────────────────────────────
+  chk("conv: last 4 digits shown",        maskPhone("+15551234567").includes("4567"));
+  chk("conv: middle digits masked",       !maskPhone("+15551234567").includes("555"));
+  chk("conv: web session → Web visitor",  maskPhone("web:abcd-efgh-1234-5678").includes("Web visitor"));
+  chk("conv: web session shows last 4",   maskPhone("web:abcd-efgh-1234-5678").includes("5678"));
+  chk("conv: null phone → 'Unknown'",     maskPhone(null) === "Unknown");
+
+  // ── API routes (require auth — 401 confirms route is registered, not 404) ─
+  {
+    const r = await httpGet("/portal/api/conversations");
+    chk("conv: GET /conversations → 401 without auth (not 404)", r.status === 401);
+  }
+  {
+    const r = await httpGet("/portal/api/conversations/badge-count");
+    chk("conv: GET /conversations/badge-count → 401 (not 404)", r.status === 401);
+  }
+  {
+    const r = await httpGet("/portal/api/conversations/nonexistent-uuid");
+    chk("conv: GET /conversations/:id → 401 (not 404)", r.status === 401);
+  }
+  {
+    const r = await fetch(`${BASE_URL}/portal/api/conversations/nonexistent/pause`, { method: "POST" });
+    chk("conv: POST /conversations/:id/pause → 401 (not 404)", r.status === 401);
+  }
+  {
+    const r = await fetch(`${BASE_URL}/portal/api/conversations/nonexistent/resume`, { method: "POST" });
+    chk("conv: POST /conversations/:id/resume → 401 (not 404)", r.status === 401);
+  }
+  {
+    const r = await fetch(`${BASE_URL}/portal/api/conversations/nonexistent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "test" }),
+    });
+    chk("conv: POST /conversations/:id/send → 401 (not 404)", r.status === 401);
+  }
+  {
+    const r = await fetch(`${BASE_URL}/portal/api/conversations/nonexistent/suggest`, { method: "POST" });
+    chk("conv: POST /conversations/:id/suggest → 401 (not 404)", r.status === 401);
+  }
+
+  // ── Bot-paused SMS gate ──────────────────────────────────────────────────
+  // Start fresh, confirm normal reply
+  await resetConvo(TEST_PHONE);
+  const normalReply = await sendSms("Hello", TEST_PHONE);
+  chk("conv bot_paused: normal message gets a reply", normalReply.length > 0);
+
+  // ── Web chat bot_paused gate ─────────────────────────────────────────────
+  // A paused web session returns { reply: '', paused: true }
+  // (We use the /web/chat endpoint directly — no DB manipulation needed for the
+  //  route-registered check; a fresh session won't be paused so we just verify
+  //  the route responds correctly.)
+  {
+    const r = await fetch(`${BASE_URL}/web/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId: "highmark_demo", sessionId: "test-paused-check", message: "hi" }),
+    });
+    chk("conv: /web/chat responds 200", r.status === 200);
+    const body = await r.json();
+    chk("conv: /web/chat returns reply field", typeof body.reply === "string");
   }
 }
 
