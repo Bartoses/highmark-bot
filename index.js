@@ -2528,10 +2528,23 @@ app.post("/cron/scheduled-messages", async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC LANDING PAGE + COMPLIANCE PAGES — no auth required
 // ─────────────────────────────────────────────────────────────────────────────
-app.get("/home",        (_req, res) => res.sendFile(path.join(__uiDir, "home.html")));
+app.get("/home",        (_req, res) => res.redirect(301, "/"));
 app.get("/privacy",     (_req, res) => res.sendFile(path.join(__uiDir, "privacy.html")));
 app.get("/terms",       (_req, res) => res.sendFile(path.join(__uiDir, "terms.html")));
 app.get("/sms-consent", (_req, res) => res.sendFile(path.join(__uiDir, "sms-consent.html")));
+app.get("/sitemap.xml", (_req, res) => {
+  res.set("Content-Type", "application/xml");
+  res.sendFile(path.join(__uiDir, "sitemap.xml"));
+});
+app.get("/robots.txt",  (_req, res) => {
+  res.set("Content-Type", "text/plain");
+  res.send(`User-agent: *\nAllow: /\nDisallow: /portal/\nDisallow: /admin/\nDisallow: /api/\n\nSitemap: https://www.usehighmark.com/sitemap.xml\n`);
+});
+app.get("/og-image.png", (_req, res) => {
+  res.set("Content-Type", "image/png");
+  res.set("Cache-Control", "public, max-age=86400");
+  res.sendFile(path.join(__uiDir, "og-image.png"));
+});
 
 // HEALTH CHECK — Railway uses this to confirm the app is up
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2588,7 +2601,7 @@ function escHtml(str) {
 }
 
 app.get("/", (req, res) => {
-  if (req.headers.accept?.includes("text/html")) return res.redirect("/home");
+  if (req.headers.accept?.includes("text/html")) return res.sendFile(path.join(__uiDir, "home.html"));
   const toPhone    = process.env.TWILIO_PHONE_NUMBER || "+18668906657";
   const hcClient   = resolveClient(toPhone);
   res.json({

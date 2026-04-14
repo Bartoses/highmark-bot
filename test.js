@@ -2383,14 +2383,38 @@ async function test30() {
     chk("Reset hero.headline == default",  resetResp.body?.content?.headline === DEFAULTS.hero.headline);
   }
 
-  // /home route accessible
-  const homeResp = await fetch(`http://localhost:${TEST_PORT}/home`);
-  chk("GET /home returns 200", homeResp.status === 200);
-  const homeHtml = await homeResp.text();
-  chk("home.html includes data-cms attribute",     homeHtml.includes("data-cms="));
-  chk("home.html includes overlay script",         homeHtml.includes("/api/site-content"));
-  chk("home.html includes pricing CMS container",  homeHtml.includes(`data-cms-container="pricing.tiers"`));
-  chk("home.html includes faq CMS container",      homeHtml.includes(`data-cms-container="faq.items"`));
+  // /home redirects to /
+  const homeRedirectResp = await fetch(`http://localhost:${TEST_PORT}/home`, { redirect: "manual" });
+  chk("GET /home returns 301", homeRedirectResp.status === 301);
+  chk("GET /home redirects to /", homeRedirectResp.headers.get("location") === "/");
+
+  // / serves homepage with meta tags and structured data (browser request)
+  const rootHtml = await fetch(`http://localhost:${TEST_PORT}/`, { headers: { accept: "text/html,*/*" } }).then((r) => r.text());
+  chk("home.html includes data-cms attribute",         rootHtml.includes("data-cms="));
+  chk("home.html includes overlay script",             rootHtml.includes("/api/site-content"));
+  chk("home.html includes pricing CMS container",      rootHtml.includes(`data-cms-container="pricing.tiers"`));
+  chk("home.html includes faq CMS container",          rootHtml.includes(`data-cms-container="faq.items"`));
+  chk("home: og:title meta tag present",               rootHtml.includes("og:title"));
+  chk("home: og:description meta tag present",         rootHtml.includes("og:description"));
+  chk("home: twitter:card meta tag present",           rootHtml.includes("twitter:card"));
+  chk("home: FAQPage JSON-LD schema present",          rootHtml.includes("FAQPage"));
+  chk("home: SoftwareApplication JSON-LD present",     rootHtml.includes("SoftwareApplication"));
+  chk("home: canonical link tag present",              rootHtml.includes("canonical"));
+
+  // /sitemap.xml
+  const sitemapRes = await fetch(`http://localhost:${TEST_PORT}/sitemap.xml`);
+  chk("sitemap.xml returns 200", sitemapRes.status === 200);
+  const sitemapContentType = sitemapRes.headers.get("content-type") || "";
+  chk("sitemap has XML content type", sitemapContentType.includes("xml"));
+  const sitemapText = await sitemapRes.text();
+  chk("sitemap has urlset", sitemapText.includes("<urlset"));
+
+  // /robots.txt
+  const robotsRes = await fetch(`http://localhost:${TEST_PORT}/robots.txt`);
+  chk("robots.txt returns 200", robotsRes.status === 200);
+  const robotsText = await robotsRes.text();
+  chk("robots.txt includes Sitemap reference", robotsText.includes("Sitemap:"));
+  chk("robots.txt blocks portal", robotsText.includes("Disallow: /portal/"));
 
   // /admin/site-editor accessible with key
   const editorResp = await fetch(`http://localhost:${TEST_PORT}/admin/site-editor?key=${KEY}`);
