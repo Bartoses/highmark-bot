@@ -2386,7 +2386,7 @@ app.get("/portal",           (_req, res) => res.redirect("/portal/login"));
 app.get("/portal/login",     (_req, res) => res.sendFile(path.join(__uiDir, "portal-login.html")));
 // Old section URLs redirect to their new tab locations
 app.get('/portal/bot-config',     (_req, res) => res.redirect(302, '/portal/settings?tab=bot'));
-app.get('/portal/booking-config', (_req, res) => res.redirect(302, '/portal/settings?tab=booking'));
+app.get('/portal/booking-config', (_req, res) => res.redirect(302, '/portal/settings'));
 app.get('/portal/website-embed',  (_req, res) => res.redirect(302, '/portal/settings?tab=embed'));
 app.get('/portal/attribution',    (_req, res) => res.redirect(302, '/portal/analytics?tab=traffic'));
 

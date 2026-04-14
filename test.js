@@ -2433,8 +2433,8 @@ async function test30() {
   const rAttribution   = await fetch(`http://localhost:${TEST_PORT}/portal/attribution`,    { redirect: 'manual' });
   chk("1C: /portal/bot-config → 302 to settings?tab=bot",
     rBotConfig.status === 302 && rBotConfig.headers.get('location')?.includes('settings?tab=bot'));
-  chk("1C: /portal/booking-config → 302 to settings?tab=booking",
-    rBookingConfig.status === 302 && rBookingConfig.headers.get('location')?.includes('settings?tab=booking'));
+  chk("1C: /portal/booking-config → 302 to /portal/settings",
+    rBookingConfig.status === 302 && rBookingConfig.headers.get('location')?.includes('/portal/settings'));
   chk("1C: /portal/website-embed → 302 to settings?tab=embed",
     rWebsiteEmbed.status === 302 && rWebsiteEmbed.headers.get('location')?.includes('settings?tab=embed'));
   chk("1C: /portal/attribution → 302 to analytics?tab=traffic",

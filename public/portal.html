@@ -509,7 +509,6 @@ tr:hover td { background: var(--panel2); }
         <div class="tab-bar" id="settingsTabBar">
           <div class="tab-btn active" data-stab="general" onclick="switchSettingsTab('general')">General</div>
           <div class="tab-btn" data-stab="bot" onclick="switchSettingsTab('bot')">Bot</div>
-          <div class="tab-btn" data-stab="booking" onclick="switchSettingsTab('booking')">Booking</div>
           <div class="tab-btn" data-stab="embed" onclick="switchSettingsTab('embed')">Widget &amp; Embed</div>
         </div>
         <!-- General tab -->
@@ -522,13 +521,6 @@ tr:hover td { background: var(--panel2); }
             <button class="btn btn-ghost btn-sm" onclick="loadBotConfig()">↻ Refresh</button>
           </div>
           <div id="botConfigContent"><div class="loading">Loading…</div></div>
-        </div>
-        <!-- Booking tab -->
-        <div class="tab-pane" id="stab-booking" data-stab="booking">
-          <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
-            <button class="btn btn-ghost btn-sm" onclick="loadBookingConfig()">↻ Refresh</button>
-          </div>
-          <div id="bookingConfigContent"><div class="loading">Loading…</div></div>
         </div>
         <!-- Widget & Embed tab -->
         <div class="tab-pane" id="stab-embed" data-stab="embed">
@@ -1478,11 +1470,12 @@ function switchSection(name, tabParam) {
 }
 
 function switchSettingsTab(tab) {
+  // booking tab removed — redirect to general
+  if (tab === 'booking') tab = 'general';
   document.querySelectorAll('#sec-settings .tab-btn[data-stab]').forEach(b => b.classList.toggle('active', b.dataset.stab === tab));
   document.querySelectorAll('#sec-settings .tab-pane[data-stab]').forEach(p => p.classList.toggle('active', p.dataset.stab === tab));
-  if (tab === 'bot')     loadBotConfig();
-  if (tab === 'booking') loadBookingConfig();
-  if (tab === 'embed')   loadEmbedConfig();
+  if (tab === 'bot')   loadBotConfig();
+  if (tab === 'embed') loadEmbedConfig();
 }
 
 function switchAnalyticsTab(tab) {
@@ -2338,9 +2331,10 @@ let _settingsData = null; // cached settings for modal callbacks
 
 async function loadSettings() {
   document.getElementById('settingsContent').innerHTML = '<div class="loading">Loading…</div>';
-  const d = await apiFetch('/settings');
+  const [d, bkCfg] = await Promise.all([apiFetch('/settings'), apiFetch('/booking-config')]);
   if (!d) { document.getElementById('settingsContent').innerHTML = '<div class="error-msg">Failed to load settings.</div>'; return; }
   _settingsData = d;
+  const _callCtaText = bkCfg?.call_cta_text ?? '';
 
   // internal_admin always gets edit controls; client_admin only if backend marks client editable
   const canEdit = me?.isAdmin || (d.editable && me?.isClientAdmin);
@@ -2417,13 +2411,6 @@ async function loadSettings() {
   };
 
   if (!canEdit) {
-    const srcRows = (d.scrapeSources ?? []).map(s =>
-      `<tr><td>${s.label ?? s.url}</td><td class="text-muted text-xs">${s.source_type}</td><td><span class="pill ${s.active ? 'pill-green' : 'pill-gray'}">${s.active ? 'Active' : 'Off'}</span></td></tr>`
-    ).join('') || `<tr><td colspan="3" style="color:var(--text3);padding:8px 0;">No sources configured.</td></tr>`;
-    const bkRows = (d.bookingLinks ?? []).map(b =>
-      `<tr><td>${b.title ?? b.url}</td><td class="text-muted text-xs" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${b.url}</td><td><span class="pill ${b.active ? 'pill-green' : 'pill-gray'}">${b.active ? 'Active' : 'Off'}</span></td></tr>`
-    ).join('') || `<tr><td colspan="3" style="color:var(--text3);padding:8px 0;">No booking options configured.</td></tr>`;
-
     document.getElementById('settingsContent').innerHTML = `
       <div class="card">
         <div class="card-title">General</div>
@@ -2431,7 +2418,6 @@ async function loadSettings() {
         <table style="width:100%;border-collapse:collapse;">
           ${row('Business name', d.name)}
           ${row('Bot name', d.botName)}
-          ${row('Booking mode', BOOKING_MODE_LABELS[d.bookingMode] ?? d.bookingMode)}
           ${row('Support phone', d.supportPhone)}
           ${row('Support email', d.supportEmail)}
           ${row('Website', d.websiteUrl)}
@@ -2440,14 +2426,10 @@ async function loadSettings() {
       <div class="card" style="margin-top:16px;">
         <div class="card-title">Booking</div>
         <table style="width:100%;border-collapse:collapse;">
+          ${row('Booking mode', BOOKING_MODE_LABELS[d.bookingMode] ?? d.bookingMode)}
           ${row('Booking link', d.bookingLink)}
           ${tog('Human handoff', d.humanHandoffEnabled)}
         </table>
-        ${(d.bookingLinks ?? []).length > 0 ? `<div style="margin-top:12px;"><div class="card-title" style="margin-bottom:8px;">Booking Options</div>
-          <div class="tbl-wrap"><table>
-            <thead><tr><th>Title</th><th>URL</th><th>Status</th></tr></thead>
-            <tbody>${bkRows}</tbody>
-          </table></div></div>` : ''}
       </div>
       <div class="card" style="margin-top:16px;">
         <div class="card-title">Features</div>
@@ -2470,7 +2452,7 @@ async function loadSettings() {
     return;
   }
 
-  // Editable form — four subsections
+  // Editable form
   const modeOptions = Object.entries(BOOKING_MODE_LABELS).map(([val, lbl]) =>
     `<option value="${val}" ${d.bookingMode === val ? 'selected' : ''}>${lbl}</option>`
   ).join('');
@@ -2526,6 +2508,11 @@ async function loadSettings() {
       <div class="form-group" id="bookingLinkGroup">
         <label>Fallback booking link <span style="color:var(--text2);font-size:11px;">(shown when no specific options match)</span></label>
         <input type="url" id="set_booking_link" value="${d.bookingLink ?? ''}" placeholder="https://…">
+      </div>
+      <div class="form-group" id="callCtaGroup">
+        <label>Phone CTA text <span style="color:var(--text2);font-size:11px;">(call_only / hybrid modes)</span></label>
+        <input type="text" id="set_call_cta_text" value="${escHtml(_callCtaText)}" placeholder="e.g. Call us to book: (970) 555-1234">
+        <div class="form-hint">Custom text shown when the bot can't book directly. Shown only for call_only and hybrid modes.</div>
       </div>
       <div style="display:flex;align-items:center;gap:12px;">
         <input type="checkbox" id="set_human_handoff" ${d.humanHandoffEnabled ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
@@ -2707,7 +2694,15 @@ async function loadSettings() {
     };
     if (me?.isAdmin) body.client_id = me.clientId;
 
-    const r = await apiPatch('/settings', body);
+    // Save main settings + call_cta_text override in parallel
+    const callCtaEl = document.getElementById('set_call_cta_text');
+    const bkOverrideBody = { call_cta_text: callCtaEl?.value?.trim() || null };
+    if (me?.isAdmin) bkOverrideBody.client_id = me.clientId;
+
+    const [r] = await Promise.all([
+      apiPatch('/settings', body),
+      callCtaEl ? apiPatch('/booking-config', bkOverrideBody) : Promise.resolve(true),
+    ]);
     btn.disabled = false; btn.textContent = 'Save changes';
     if (!r) {
       const errText = _lastApiError ? `Save failed: ${_lastApiError}` : 'Failed to save settings. Try again.';
@@ -2724,8 +2719,11 @@ async function loadSettings() {
 function onBookingModeChange() {
   const mode = document.getElementById('set_booking_mode')?.value ?? '';
   const showBk = ['static_links', 'hybrid'].includes(mode);
+  const showCta = ['call_only', 'hybrid'].includes(mode);
   const bkSection = document.getElementById('bkSection');
+  const ctaGroup = document.getElementById('callCtaGroup');
   if (bkSection) bkSection.style.display = showBk ? '' : 'none';
+  if (ctaGroup) ctaGroup.style.display = showCta ? '' : 'none';
 }
 
 function renderScrapeSourcesTable(sources, canEdit) {
