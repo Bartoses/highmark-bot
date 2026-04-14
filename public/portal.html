@@ -139,7 +139,13 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .card-title { font-weight: 600; font-size: 13px; margin-bottom: 14px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; }
 
 /* ── Tables ──────────────────────────────────────────────────────────────── */
-.tbl-wrap { overflow-x: auto; }
+.tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* ── ROI banner grid (dashboard) ─────────────────────────────────────────── */
+.roi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 6px; }
+
+/* ── Conversations two-panel layout ──────────────────────────────────────── */
+#convBackBtn { display: none; }
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: middle; }
@@ -266,6 +272,31 @@ tr:hover td { background: var(--panel2); }
   #ob-pages-badge, .ob-conf-badge { margin-bottom: 4px; }
   /* Action buttons in onboarding: full width */
   #sec-onboarding .btn { width: 100%; justify-content: center; margin-bottom: 6px; }
+  /* Tables: cap width so they scroll rather than overflow the viewport */
+  .tbl-wrap { max-width: calc(100vw - 32px); }
+  /* ROI banner: 2 cols on mobile (3rd card full-width via auto-fill) */
+  .roi-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  /* Dashboard recent tables: stack vertically */
+  .dash-recent-grid { grid-template-columns: 1fr !important; }
+  /* Conversations: master-detail — show list by default, thread on demand */
+  #convLayout {
+    flex-direction: column !important;
+    min-height: auto !important;
+  }
+  #convListPanel {
+    width: 100% !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border);
+  }
+  /* Thread panel hidden until a conv is selected */
+  #convLayout:not(.thread-open) #convThreadPanel { display: none !important; }
+  #convLayout.thread-open #convListPanel { display: none !important; }
+  #convLayout.thread-open #convThreadPanel {
+    display: flex !important;
+    min-height: 75vh;
+  }
+  /* Back button shown on mobile when thread is open */
+  #convBackBtn { display: inline-flex !important; }
 }
 /* Admin-only nav items — hidden until confirmed in JS.
    Use !important to beat .section.active { display: block } (specificity 0,2,0) */
@@ -449,6 +480,7 @@ tr:hover td { background: var(--panel2); }
           <div id="convThreadPanel" style="flex:1;display:flex;flex-direction:column;min-width:0;">
             <!-- Thread header -->
             <div id="convThreadHeader" style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <button id="convBackBtn" class="btn btn-ghost btn-sm" onclick="convMobileBack()" style="margin-right:4px;">← Back</button>
               <div style="color:var(--text2);font-size:13px;">Select a conversation to view the thread</div>
             </div>
             <!-- Messages -->
@@ -971,8 +1003,8 @@ tr:hover td { background: var(--panel2); }
         <div class="card" style="margin-bottom:12px;">
           <div class="card-title" style="margin-bottom:14px;">Settings &amp; Access</div>
           <div class="more-link-list">
-            <div class="more-link-item" onclick="switchSection('conversations')">
-              <span>💬</span> Conversations
+            <div class="more-link-item" onclick="switchSection('campaigns')">
+              <span>📣</span> Campaigns
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item" onclick="switchSection('settings')">
@@ -1198,8 +1230,8 @@ tr:hover td { background: var(--panel2); }
 <!-- ── Mobile bottom nav ─────────────────────────────────────────────────────── -->
 <nav id="mobile-nav">
   <div class="mob-nav-item active" data-section="dashboard"><span class="mob-icon">⊞</span>Dashboard</div>
+  <div class="mob-nav-item" data-section="conversations"><span class="mob-icon">💬</span>Convos</div>
   <div class="mob-nav-item" data-section="leads"><span class="mob-icon">👤</span>Leads</div>
-  <div class="mob-nav-item" data-section="campaigns"><span class="mob-icon">📣</span>Campaigns</div>
   <div class="mob-nav-item" data-section="analytics"><span class="mob-icon">📊</span>Analytics</div>
   <div class="mob-nav-item" data-section="more"><span class="mob-icon">☰</span>More</div>
 </nav>
@@ -1639,15 +1671,23 @@ function convChangePage(p) {
   fetchConvList();
 }
 
+function convMobileBack() {
+  document.getElementById('convLayout')?.classList.remove('thread-open');
+  _convSelected = null;
+  document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
+}
+
 async function openConversation(id) {
   _convSelected = id;
+  // On mobile: switch to thread view
+  document.getElementById('convLayout')?.classList.add('thread-open');
   // Highlight selected item
   document.querySelectorAll('.conv-item').forEach(el =>
     el.classList.toggle('active', el.dataset.convId === id));
 
   const threadHeader = document.getElementById('convThreadHeader');
   const messagesEl   = document.getElementById('convMessages');
-  if (threadHeader) threadHeader.innerHTML = '<div style="color:var(--text2);font-size:13px;">Loading…</div>';
+  if (threadHeader) threadHeader.innerHTML = '<button id="convBackBtn" class="btn btn-ghost btn-sm" onclick="convMobileBack()" style="margin-right:4px;">← Back</button><div style="color:var(--text2);font-size:13px;">Loading…</div>';
   if (messagesEl)   messagesEl.innerHTML   = '';
 
   const data = await apiFetch(`/conversations/${id}`);
@@ -1663,6 +1703,7 @@ async function openConversation(id) {
 
   if (threadHeader) {
     threadHeader.innerHTML = `
+      <button id="convBackBtn" class="btn btn-ghost btn-sm" onclick="convMobileBack()" style="margin-right:4px;">← Back</button>
       <div style="flex:1;min-width:0;">
         <div style="font-weight:600;font-size:13px;">${escHtml(c.masked_label)}</div>
         <div style="display:flex;gap:6px;margin-top:3px;align-items:center;flex-wrap:wrap;">
@@ -1860,7 +1901,7 @@ async function loadDashboard() {
   const fmtRev = roi.estimatedRevenue > 0 ? `+$${roi.estimatedRevenue.toLocaleString()}` : '$0';
   document.getElementById('dashContent').innerHTML = `
     <!-- Phase 11.9: Value Impact Banner -->
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:6px;">
+    <div class="roi-grid">
       <div class="stat-card" style="background:linear-gradient(135deg,#10b981,#059669);border:none;cursor:default;">
         <div class="val" style="color:#fff">+${roi.webLeadsCaptured}</div>
         <div class="lbl" style="color:rgba(255,255,255,.85)">Leads captured via chat</div>
@@ -1884,7 +1925,7 @@ async function loadDashboard() {
       <div class="stat-card"><div class="val">${l.engaged}</div><div class="lbl">Engaged</div></div>
       <div class="stat-card"><div class="val">${l.converted}</div><div class="lbl">Converted</div></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <div class="two-col dash-recent-grid" style="display:grid;gap:16px;">
       <div class="card">
         <div class="card-title">Recent Leads</div>
         ${l.recent.length === 0 ? '<div class="empty-state">No leads yet</div>' : `
