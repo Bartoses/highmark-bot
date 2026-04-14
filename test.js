@@ -2416,6 +2416,16 @@ async function test30() {
   chk("robots.txt includes Sitemap reference", robotsText.includes("Sitemap:"));
   chk("robots.txt blocks portal", robotsText.includes("Disallow: /portal/"));
 
+  // 1B — hero, dual-channel copy, two-channels section, no coming soon, mailto CTAs
+  const html1b = await fetch(`http://localhost:${TEST_PORT}/`, { headers: { accept: "text/html,*/*" } }).then((r) => r.text());
+  chk("1B: updated hero headline present",         html1b.includes("Stop losing customers"));
+  chk("1B: dual channel mentioned in hero",        html1b.toLowerCase().includes("web chat") || html1b.toLowerCase().includes("website"));
+  chk("1B: two-channels section present",          html1b.includes("two-channels") || html1b.includes("Two channels"));
+  chk("1B: no coming soon labels on page",         !html1b.includes("coming soon") && !html1b.includes("Coming soon"));
+  chk("1B: at least 2 mailto CTAs",                (html1b.match(/mailto:/g) || []).length >= 2);
+  chk("1B: Growth plan mailto present",            html1b.includes("Growth%20Plan") || html1b.includes("Growth Plan"));
+  chk("1B: SMS demo link present",                 html1b.includes("sms:+18668906657"));
+
   // /admin/site-editor accessible with key
   const editorResp = await fetch(`http://localhost:${TEST_PORT}/admin/site-editor?key=${KEY}`);
   chk("GET /admin/site-editor returns 200", editorResp.status === 200);

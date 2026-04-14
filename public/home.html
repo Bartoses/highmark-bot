@@ -381,6 +381,29 @@
     details[open] summary::after { transform: rotate(45deg); }
     .faq-answer { padding: 0 22px 18px; font-size: .9rem; color: var(--muted); line-height: 1.6; }
 
+    /* ── TWO CHANNELS ── */
+    #two-channels { background: var(--bg); }
+    .channel-grid {
+      display: grid; grid-template-columns: repeat(2, 1fr);
+      gap: 20px; margin: 36px 0 28px;
+    }
+    .channel-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 32px 28px;
+      transition: border-color .15s, background .15s;
+    }
+    .channel-card:hover { border-color: rgba(34,197,94,.4); background: var(--card-hover); }
+    .channel-icon { font-size: 2rem; display: block; margin-bottom: 14px; }
+    .channel-card h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 10px; color: var(--green); }
+    .channel-card p { font-size: .9rem; color: var(--muted); line-height: 1.6; }
+    .channel-note {
+      text-align: center; font-size: .88rem; color: var(--muted);
+      border-top: 1px solid var(--border); padding-top: 20px;
+    }
+    @media (max-width: 800px) {
+      .channel-grid { grid-template-columns: 1fr; }
+    }
+
     /* ── FINAL CTA ── */
     .final-cta {
       text-align: center; padding: 96px 0;
@@ -432,19 +455,18 @@
 <section class="hero">
   <div class="container">
     <div class="hero-badge" data-cms="hero.badge">🏔 Live demo available now — no signup required</div>
-    <h1 data-cms="hero.headline">Your customers text.<br><em>Highmark handles it.</em></h1>
-    <p data-cms="hero.subheadline">AI SMS concierge that answers questions, captures leads, and drives bookings — automatically, 24/7. For tour operators, rental companies, and service businesses.</p>
+    <h1 data-cms="hero.headline">Stop losing customers at 11pm.</h1>
+    <p data-cms="hero.subheadline">Highmark answers every customer inquiry automatically — on SMS and your website — so you never miss a lead because you were on the mountain.</p>
     <div class="cta-group">
       <a href="sms:+18668906657?body=DEMO" class="btn-primary" data-cms="hero.primary_cta">
-        📱 Text DEMO to (866) 890-6657
+        📱 See it live — text DEMO to (866) 890-6657
       </a>
-      <a href="#pricing" class="btn-ghost" data-cms="hero.secondary_cta">See pricing ↓</a>
+      <a href="#how-it-works" class="btn-ghost" data-cms="hero.secondary_cta">See how it works ↓</a>
     </div>
     <div class="hero-proof" data-cms-container="hero.proof_items">
-      <div class="proof-item"><div class="proof-dot"></div> Live demo active now</div>
-      <div class="proof-item"><div class="proof-dot"></div> No signup required</div>
-      <div class="proof-item"><div class="proof-dot"></div> Most clients live in 1–3 days</div>
-      <div class="proof-item"><div class="proof-dot"></div> Free tier available</div>
+      <div class="proof-item"><div class="proof-dot"></div> SMS + web chat</div>
+      <div class="proof-item"><div class="proof-dot"></div> Live in 1–3 days</div>
+      <div class="proof-item"><div class="proof-dot"></div> Used by outdoor businesses across Colorado</div>
     </div>
   </div>
 </section>
@@ -470,7 +492,7 @@
 </div>
 
 <!-- ── HOW IT WORKS ── -->
-<section>
+<section id="how-it-works">
   <div class="container">
     <div class="section-label">How it works</div>
     <h2 data-cms="how_it_works.headline">Up and running in days, not weeks</h2>
@@ -483,8 +505,8 @@
       </div>
       <div class="how-card">
         <div class="how-num">2</div>
-        <h3>Customers text you</h3>
-        <p>They ask questions, request bookings, or submit leads. Highmark replies in seconds — 24/7, trained on your business.</p>
+        <h3>Customers text or chat</h3>
+        <p>They text your number or message your website — Highmark replies in seconds, 24/7, trained on your business.</p>
       </div>
       <div class="how-card">
         <div class="how-num">3</div>
@@ -492,6 +514,28 @@
         <p>Lead notifications hit your phone. Bookings confirm automatically. Your team only steps in when it truly matters.</p>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ── TWO CHANNELS, ONE BRAIN ── -->
+<section id="two-channels">
+  <div class="container">
+    <div class="section-label">Platform</div>
+    <h2>Two channels, one brain.</h2>
+    <p class="section-sub">Your customers reach you however they prefer. Highmark handles both.</p>
+    <div class="channel-grid">
+      <div class="channel-card">
+        <span class="channel-icon">📱</span>
+        <h3>SMS Concierge</h3>
+        <p>Customers text your dedicated number and get instant AI replies — availability, pricing, booking links, conditions. Feels like texting a knowledgeable local guide.</p>
+      </div>
+      <div class="channel-card">
+        <span class="channel-icon">💬</span>
+        <h3>Web Chat Widget</h3>
+        <p>One script tag on your website. Same bot, same knowledge. Visitors chat from any page — the widget surfaces booking links and captures leads automatically.</p>
+      </div>
+    </div>
+    <p class="channel-note">Same AI. Same knowledge base. Same booking links. Different channel.</p>
   </div>
 </section>
 
@@ -591,7 +635,7 @@
           <li><span class="cross">✗</span> Live booking integration</li>
           <li><span class="cross">✗</span> Campaign messaging</li>
         </ul>
-        <a href="sms:+18668906657?body=DEMO" class="price-cta primary">Get started →</a>
+        <a href="mailto:hello@whiteoutsolutions.co?subject=Highmark%20Growth%20Plan" class="price-cta primary">Get started →</a>
       </div>
 
       <!-- PRO -->
@@ -607,10 +651,10 @@
           <li class="active"><span class="check">✓</span> Booking confirmation texts</li>
           <li class="active"><span class="check">✓</span> 30-min follow-up automation</li>
           <li class="active"><span class="check">✓</span> Priority support</li>
-          <li class="active"><span class="check">✓</span> Campaign messaging <em style="color:var(--muted);font-size:.8em">(coming soon)</em></li>
-          <li class="active"><span class="check">✓</span> Analytics dashboard <em style="color:var(--muted);font-size:.8em">(coming soon)</em></li>
+          <li class="active"><span class="check">✓</span> Campaign messaging</li>
+          <li class="active"><span class="check">✓</span> Analytics dashboard</li>
         </ul>
-        <a href="sms:+18668906657?body=DEMO" class="price-cta ghost">Talk to us →</a>
+        <a href="mailto:hello@whiteoutsolutions.co?subject=Highmark%20Pro%20Plan" class="price-cta ghost">Talk to us →</a>
       </div>
 
     </div>
@@ -672,7 +716,7 @@
       <a href="sms:+18668906657?body=DEMO" class="btn-primary" data-cms="final_cta.primary_cta" data-cms-sms="hero.demo_phone">
         📱 Text DEMO to (866) 890-6657
       </a>
-      <a href="mailto:hello@whiteoutsolutions.co" class="btn-ghost" data-cms="final_cta.secondary_cta" data-cms-href="final_cta.secondary_cta_href">
+      <a href="mailto:hello@whiteoutsolutions.co?subject=Highmark%20Inquiry" class="btn-ghost" data-cms="final_cta.secondary_cta" data-cms-href="final_cta.secondary_cta_href">
         Talk to us →
       </a>
     </div>
