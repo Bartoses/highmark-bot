@@ -1926,7 +1926,7 @@ let _dashPeriod = '30d';
 async function loadDashboard(period) {
   if (period) _dashPeriod = period;
   const el = document.getElementById('dashContent');
-  el.innerHTML = '<div class="loading">Loading…</div>';
+  el.innerHTML = '<div class="loading">Loading\u2026</div>';
 
   const qs = '?period=' + _dashPeriod + (me?.isAdmin && me?.clientId ? '&client_id=' + me.clientId : '');
   const d = await apiFetch('/dashboard' + qs);
@@ -1936,89 +1936,103 @@ async function loadDashboard(period) {
   }
 
   const fmtNum = n => (n ?? 0).toLocaleString();
-  const fmtRev = d.est_revenue > 0 ? '$' + fmtNum(d.est_revenue) : '/bin/zsh';
+  const fmtRev = d.est_revenue > 0 ? ('$' + fmtNum(d.est_revenue)) : '$0';
 
   // Getting-started checklist
   const showChecklist = !d.checklist_dismissed && d.total_conversations < 5;
   const rawNum = d.twilio_number ?? '';
-  const digits = rawNum.replace(/^+1/, '').replace(/D/g,'');
+  const digits = rawNum.replace(/^\+1/, '').replace(/\D/g, '');
   const numStr = digits.length === 10
     ? '(' + digits.slice(0,3) + ') ' + digits.slice(3,6) + '-' + digits.slice(6)
     : rawNum;
-  const checklistHtml = showChecklist ? '<div class="dash-checklist" id="dashChecklist">' +
-    '<div class="dash-checklist-title"><span>Getting Started</span>' +
-    '<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;" onclick="dismissChecklist()">Dismiss ×</button></div>' +
-    '<div class="checklist-item done"><span>✅</span> Bot is live and ready</div>' +
-    '<div class="checklist-item"><span>○</span> Send a test text' +
-      (numStr ? ' to <strong>' + numStr + '</strong>' : ' to your bot number') +
-      (rawNum ? '<button class="btn btn-ghost btn-sm ci-link" style="margin-left:8px;" onclick="copyToClipboard('' + rawNum + '')">Copy</button>' : '') +
-    '</div>' +
-    '<div class="checklist-item"><span>○</span> Install the web widget on your website ' +
-      '<span class="ci-link" onclick="switchSection('settings');switchSettingsTab('embed')">→ Widget &amp; Embed</span></div>' +
-    '<div class="checklist-item"><span>○</span> Review your first lead ' +
-      '<span class="ci-link" onclick="switchSection('leads')">→ Leads tab</span></div>' +
-    '</div>' : '';
+  let checklistHtml = '';
+  if (showChecklist) {
+    checklistHtml =
+      '<div class="dash-checklist" id="dashChecklist">' +
+      '<div class="dash-checklist-title"><span>Getting Started</span>' +
+      '<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;" onclick="dismissChecklist()">Dismiss \u00d7</button></div>' +
+      '<div class="checklist-item done"><span>\u2705</span> Bot is live and ready</div>' +
+      '<div class="checklist-item"><span>\u25cb</span> Send a test text' +
+        (numStr ? ' to <strong>' + escHtml(numStr) + '</strong>' : ' to your bot number') +
+        (rawNum ? '<button class="btn btn-ghost btn-sm ci-link" style="margin-left:8px;" onclick="copyToClipboard(' + "'" + escHtml(rawNum) + "'" + ')">Copy</button>' : '') +
+      '</div>' +
+      '<div class="checklist-item"><span>\u25cb</span> Install the web widget on your website ' +
+        '<span class="ci-link" onclick="switchSection(\'settings\');switchSettingsTab(\'embed\')">\u2192 Widget &amp; Embed</span></div>' +
+      '<div class="checklist-item"><span>\u25cb</span> Review your first lead ' +
+        '<span class="ci-link" onclick="switchSection(\'leads\')">\u2192 Leads tab</span></div>' +
+      '</div>';
+  }
 
   // Hero
-  const heroHtml = d.total_conversations === 0
+  const totalC = d.total_conversations;
+  const heroHtml = totalC === 0
     ? '<div class="dash-hero"><div class="dash-hero-num">0 conversations</div><div class="dash-hero-sub">Send a test text or install the web widget to get started!</div></div>'
-    : '<div class="dash-hero">' +
-        '<div class="dash-hero-num">Highmark has handled ' + fmtNum(d.total_conversations) + ' conversation' + (d.total_conversations !== 1 ? 's' : '') + ' for you</div>' +
-        '<div class="dash-hero-sub">' + fmtNum(d.sms_count) + ' via SMS · ' + fmtNum(d.web_count) + ' via web chat</div>' +
-        '<div class="dash-hero-saved">That's approximately ' + d.time_saved_hours.toLocaleString() + ' hour' + (d.time_saved_hours !== 1 ? 's' : '') + ' your team didn't spend answering questions.</div>' +
-      '</div>';
+    : ('<div class="dash-hero">' +
+        '<div class="dash-hero-num">Highmark has handled ' + fmtNum(totalC) + ' conversation' + (totalC !== 1 ? 's' : '') + ' for you</div>' +
+        '<div class="dash-hero-sub">' + fmtNum(d.sms_count) + ' via SMS \u00b7 ' + fmtNum(d.web_count) + ' via web chat</div>' +
+        '<div class="dash-hero-saved">That\u2019s approximately ' + (d.time_saved_hours ?? 0).toLocaleString() + ' hour' + (d.time_saved_hours !== 1 ? 's' : '') + ' your team didn\u2019t spend answering questions.</div>' +
+      '</div>');
 
   // Period picker
-  const periods = [['7d','7 days'],['30d','30 days'],['90d','90 days'],['all','All time']];
+  const pLabels = {'7d':'7 days','30d':'30 days','90d':'90 days','all':'All time'};
   const periodBar = '<div class="dash-period-bar">' +
-    periods.map(([v,lbl]) => '<button class="dash-period-btn' + (_dashPeriod===v?' active':'') + '" onclick="loadDashboard('' + v + '')">'+lbl+'</button>').join('') +
-    '</div>';
+    Object.entries(pLabels).map(([v,lbl]) =>
+      '<button class="dash-period-btn' + (_dashPeriod === v ? ' active' : '') + '" onclick="loadDashboard(\'' + v + '\')">' + lbl + '</button>'
+    ).join('') + '</div>';
 
   // ROI cards
-  const periodLabel = {'7d':'Last 7 days','30d':'Last 30 days','90d':'Last 90 days','all':'All time'}[_dashPeriod];
-  const roiHtml = '<div class="roi-grid" style="margin-bottom:4px;">' +
-    '<div class="stat-card" style="background:linear-gradient(135deg,#10b981,#059669);border:none;cursor:default;">' +
-      '<div class="val" style="color:#fff">' + fmtNum(d.leads) + '</div><div class="lbl" style="color:rgba(255,255,255,.85)">Leads captured</div></div>' +
-    '<div class="stat-card" style="background:linear-gradient(135deg,#3b82f6,#2563eb);border:none;cursor:default;">' +
-      '<div class="val" style="color:#fff">' + fmtNum(d.booking_clicks) + '</div><div class="lbl" style="color:rgba(255,255,255,.85)">Booking clicks</div></div>' +
-    '<div class="stat-card" style="background:linear-gradient(135deg,#f59e0b,#d97706);border:none;cursor:default;">' +
-      '<div class="val" style="color:#fff"><span class="rev-tooltip">' + fmtRev + ' <span style="font-size:14px;vertical-align:super;">ⓘ</span>' +
-        '<span class="rev-tip">Estimated at $' + d.avg_booking_value + ' per booking click. Actual revenue varies.</span></span></div>' +
-      '<div class="lbl" style="color:rgba(255,255,255,.85)">Est. revenue</div></div>' +
+  const periodLabel = ({'7d':'Last 7 days','30d':'Last 30 days','90d':'Last 90 days','all':'All time'})[_dashPeriod] ?? '';
+  const roiHtml =
+    '<div class="roi-grid" style="margin-bottom:4px;">' +
+      '<div class="stat-card" style="background:linear-gradient(135deg,#10b981,#059669);border:none;cursor:default;">' +
+        '<div class="val" style="color:#fff">' + fmtNum(d.leads) + '</div>' +
+        '<div class="lbl" style="color:rgba(255,255,255,.85)">Leads captured</div></div>' +
+      '<div class="stat-card" style="background:linear-gradient(135deg,#3b82f6,#2563eb);border:none;cursor:default;">' +
+        '<div class="val" style="color:#fff">' + fmtNum(d.booking_clicks) + '</div>' +
+        '<div class="lbl" style="color:rgba(255,255,255,.85)">Booking clicks</div></div>' +
+      '<div class="stat-card" style="background:linear-gradient(135deg,#f59e0b,#d97706);border:none;cursor:default;">' +
+        '<div class="val" style="color:#fff"><span class="rev-tooltip">' + fmtRev +
+          ' <span style="font-size:14px;vertical-align:super;">\u24d8</span>' +
+          '<span class="rev-tip">Estimated at $' + (d.avg_booking_value ?? 175) + ' per booking click. Actual revenue varies.</span>' +
+        '</span></div>' +
+        '<div class="lbl" style="color:rgba(255,255,255,.85)">Est. revenue</div></div>' +
     '</div>' +
     '<div style="font-size:11px;color:var(--text3);margin-bottom:18px;text-align:right;">' + periodLabel + '</div>';
 
   // Lead funnel
-  const f = d.funnel;
-  const funnelHtml = '<div class="card">' +
-    '<div class="card-title">Lead Funnel <span style="font-size:10px;color:var(--text3);text-transform:none;letter-spacing:0;font-weight:400;">' + periodLabel + '</span></div>' +
-    (f.conversations === 0
-      ? '<div class="empty-state">No conversations yet in this period</div>'
-      : '<div class="dash-funnel">' +
-          '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.conversations) + '</div><div class="funnel-lbl">Convos</div></div>' +
-          '<div class="funnel-arrow"><span class="funnel-pct">' + f.leads_pct + '%</span><span style="font-size:16px;">→</span></div>' +
-          '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.leads) + '</div><div class="funnel-lbl">Leads</div></div>' +
-          '<div class="funnel-arrow"><span class="funnel-pct">' + f.engaged_pct + '%</span><span style="font-size:16px;">→</span></div>' +
-          '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.engaged) + '</div><div class="funnel-lbl">Engaged</div></div>' +
-          '<div class="funnel-arrow"><span class="funnel-pct">' + f.converted_pct + '%</span><span style="font-size:16px;">→</span></div>' +
-          '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.converted) + '</div><div class="funnel-lbl">Converted</div></div>' +
-        '</div>') +
+  const f = d.funnel ?? {};
+  const funnelHtml =
+    '<div class="card">' +
+      '<div class="card-title">Lead Funnel <span style="font-size:10px;color:var(--text3);text-transform:none;letter-spacing:0;font-weight:400;">' + periodLabel + '</span></div>' +
+      ((f.conversations ?? 0) === 0
+        ? '<div class="empty-state">No conversations yet in this period</div>'
+        : '<div class="dash-funnel">' +
+            '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.conversations) + '</div><div class="funnel-lbl">Convos</div></div>' +
+            '<div class="funnel-arrow"><span class="funnel-pct">' + (f.leads_pct ?? 0) + '%</span><span style="font-size:16px;">\u2192</span></div>' +
+            '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.leads) + '</div><div class="funnel-lbl">Leads</div></div>' +
+            '<div class="funnel-arrow"><span class="funnel-pct">' + (f.engaged_pct ?? 0) + '%</span><span style="font-size:16px;">\u2192</span></div>' +
+            '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.engaged) + '</div><div class="funnel-lbl">Engaged</div></div>' +
+            '<div class="funnel-arrow"><span class="funnel-pct">' + (f.converted_pct ?? 0) + '%</span><span style="font-size:16px;">\u2192</span></div>' +
+            '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.converted) + '</div><div class="funnel-lbl">Converted</div></div>' +
+          '</div>') +
     '</div>';
 
   // Activity feed
-  const actIcon = { new_conversation:'💬', lead_captured:'👤', booking_click:'📅', handoff:'⚡' };
+  const actIcon = {new_conversation:'💬',lead_captured:'👤',booking_click:'📅',handoff:'⚡'};
   const chanIcon = ch => ch === 'web' ? '🌐' : '📱';
-  const activityHtml = '<div class="card">' +
-    '<div class="card-title">Recent Activity</div>' +
-    (d.activity.length === 0
-      ? '<div class="empty-state">No recent activity — your bot is ready!</div>'
-      : d.activity.map(a =>
-          '<div class="activity-item">' +
-            '<span class="activity-icon">' + (actIcon[a.type] ?? chanIcon(a.channel)) + '</span>' +
-            '<span class="activity-label">' + chanIcon(a.channel) + ' ' + escHtml(a.label) + '</span>' +
-            '<span class="activity-ts">' + a.relative + '</span>' +
-          '</div>'
-        ).join('')) +
+  const acts = d.activity ?? [];
+  const activityHtml =
+    '<div class="card">' +
+      '<div class="card-title">Recent Activity</div>' +
+      (acts.length === 0
+        ? '<div class="empty-state">No recent activity \u2014 your bot is ready!</div>'
+        : acts.map(a =>
+            '<div class="activity-item">' +
+              '<span class="activity-icon">' + (actIcon[a.type] ?? chanIcon(a.channel)) + '</span>' +
+              '<span class="activity-label">' + chanIcon(a.channel) + ' ' + escHtml(a.label ?? '') + '</span>' +
+              '<span class="activity-ts">' + (a.relative ?? '') + '</span>' +
+            '</div>'
+          ).join('')) +
     '</div>';
 
   el.innerHTML = checklistHtml + heroHtml + periodBar + roiHtml + funnelHtml + activityHtml;
@@ -2030,11 +2044,10 @@ async function dismissChecklist() {
 }
 
 function copyToClipboard(text) {
+  const t = document.getElementById('topbarTitle');
+  const orig = t?.textContent ?? '';
   navigator.clipboard?.writeText(text).then(() => {
-    const t = document.getElementById('topbarTitle');
-    const orig = t.textContent;
-    t.textContent = 'Copied!';
-    setTimeout(() => { t.textContent = orig; }, 1200);
+    if (t) { t.textContent = 'Copied!'; setTimeout(() => { t.textContent = orig; }, 1200); }
   }).catch(() => {});
 }
 // ── LEADS ──────────────────────────────────────────────────────────────────
