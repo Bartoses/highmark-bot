@@ -47,7 +47,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handlePortalAudiencePreview,
   handlePortalEmbedConfig, handlePortalUpdateEmbedConfig,
   handlePortalAttribution,
-  handlePortalPerformance } from "./adminPortal.js";
+  handlePortalPerformance,
+  handleDismissChecklist } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
@@ -2427,7 +2428,8 @@ app.get(  "/portal/api/me",                  requirePortalAuth, (req, res) => ha
 app.get(  "/portal/api/clients",             requirePortalAuth, (req, res) => handlePortalClients(req, res));
 app.post( "/portal/api/clients",             requirePortalAuth, (req, res) => handlePortalCreateClient(req, res, supabase));
 app.patch("/portal/api/clients/:id",         requirePortalAuth, (req, res) => handlePortalUpdateClient(req, res, supabase));
-app.get(  "/portal/api/dashboard",           requirePortalAuth, (req, res) => handlePortalDashboard(req, res, supabase));
+app.get(  "/portal/api/dashboard",                        requirePortalAuth, (req, res) => handlePortalDashboard(req, res, supabase));
+app.post( "/portal/api/dashboard/dismiss-checklist",     requirePortalAuth, (req, res) => handleDismissChecklist(req, res, supabase));
 app.get(  "/portal/api/leads",               requirePortalAuth, (req, res) => handlePortalLeads(req, res, supabase));
 app.patch("/portal/api/leads/:id",           requirePortalAuth, (req, res) => handlePortalUpdateLead(req, res, supabase));
 app.get(  "/portal/api/campaigns",                  requirePortalAuth, (req, res) => handlePortalCampaigns(req, res, supabase));

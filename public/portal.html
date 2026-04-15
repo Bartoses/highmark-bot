@@ -364,6 +364,39 @@ tr:hover td { background: var(--panel2); }
 .msg-badges { display:flex; gap:4px; margin-top:3px; flex-wrap:wrap; }
 .msg-row.assistant .msg-badges { justify-content:flex-end; }
 .msg-badge { font-size:10px; padding:1px 5px; border-radius:6px; background:var(--panel2); color:var(--text2); border:1px solid var(--border); }
+
+/* ── Dashboard v2 ────────────────────────────────────────────────────────── */
+.dash-hero { background:linear-gradient(135deg,var(--panel),var(--panel2)); border:1px solid var(--border); border-radius:var(--radius); padding:24px; margin-bottom:16px; }
+.dash-hero-num { font-size:36px; font-weight:800; color:var(--text); line-height:1.1; }
+.dash-hero-sub  { font-size:13px; color:var(--text2); margin-top:4px; }
+.dash-hero-saved { font-size:12px; color:var(--accent); margin-top:6px; font-style:italic; }
+.dash-period-bar { display:flex; gap:6px; margin-bottom:16px; }
+.dash-period-btn { padding:4px 12px; border-radius:12px; border:1px solid var(--border2); background:none; color:var(--text2); font-size:11px; cursor:pointer; transition:all .1s; }
+.dash-period-btn:hover  { border-color:var(--accent); color:var(--text); }
+.dash-period-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+/* Funnel */
+.dash-funnel { display:flex; align-items:center; gap:0; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:4px; }
+.funnel-stage { text-align:center; min-width:72px; flex-shrink:0; }
+.funnel-num   { font-size:22px; font-weight:700; color:var(--text); }
+.funnel-lbl   { font-size:10px; color:var(--text2); text-transform:uppercase; letter-spacing:.04em; margin-top:2px; }
+.funnel-arrow { display:flex; flex-direction:column; align-items:center; gap:2px; margin:0 8px; color:var(--text3); flex-shrink:0; }
+.funnel-pct   { font-size:11px; font-weight:700; color:var(--accent); background:rgba(16,185,129,.1); border-radius:8px; padding:1px 6px; }
+/* Activity feed */
+.activity-item { display:flex; align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); }
+.activity-item:last-child { border-bottom:none; }
+.activity-icon { font-size:16px; width:24px; text-align:center; flex-shrink:0; margin-top:1px; }
+.activity-label { font-size:12px; color:var(--text); flex:1; }
+.activity-ts    { font-size:11px; color:var(--text3); white-space:nowrap; }
+/* Checklist */
+.dash-checklist { background:rgba(59,130,246,.06); border:1px solid rgba(59,130,246,.2); border-radius:var(--radius); padding:16px 20px; margin-bottom:16px; }
+.dash-checklist-title { font-size:12px; font-weight:700; color:#93c5fd; text-transform:uppercase; letter-spacing:.05em; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; }
+.checklist-item { display:flex; align-items:center; gap:8px; padding:5px 0; font-size:13px; color:var(--text2); }
+.checklist-item.done { color:var(--text3); text-decoration:line-through; }
+.checklist-item .ci-link { color:var(--accent); cursor:pointer; text-decoration:underline; font-size:12px; margin-left:4px; }
+/* Revenue tooltip */
+.rev-tooltip { position:relative; display:inline-block; cursor:help; }
+.rev-tooltip .rev-tip { visibility:hidden; opacity:0; background:#1e293b; color:var(--text2); font-size:11px; border-radius:6px; padding:6px 10px; position:absolute; bottom:120%; left:50%; transform:translateX(-50%); white-space:nowrap; border:1px solid var(--border); transition:opacity .15s; z-index:10; width:220px; white-space:normal; text-align:center; }
+.rev-tooltip:hover .rev-tip { visibility:visible; opacity:1; }
 </style>
 </head>
 <body>
@@ -1888,80 +1921,122 @@ function clientQs() {
 }
 
 // ── DASHBOARD ──────────────────────────────────────────────────────────────
-async function loadDashboard() {
-  document.getElementById('dashContent').innerHTML = '<div class="loading">Loading…</div>';
-  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
-  const d = await apiFetch(`/dashboard${clientParam}`);
+let _dashPeriod = '30d';
+
+async function loadDashboard(period) {
+  if (period) _dashPeriod = period;
+  const el = document.getElementById('dashContent');
+  el.innerHTML = '<div class="loading">Loading…</div>';
+
+  const qs = '?period=' + _dashPeriod + (me?.isAdmin && me?.clientId ? '&client_id=' + me.clientId : '');
+  const d = await apiFetch('/dashboard' + qs);
   if (!d) {
-    document.getElementById('dashContent').innerHTML = '<div class="error-msg">Failed to load dashboard. Make sure a client is selected.</div>';
+    el.innerHTML = '<div class="error-msg">Failed to load dashboard. Make sure a client is selected.</div>';
     return;
   }
-  const l = d.leads;
-  const roi = d.roi ?? { webLeadsCaptured: 0, bookingClicks: 0, estimatedRevenue: 0, avgBookingValue: 175 };
-  const fmtRev = roi.estimatedRevenue > 0 ? `+$${roi.estimatedRevenue.toLocaleString()}` : '$0';
-  document.getElementById('dashContent').innerHTML = `
-    <!-- Phase 11.9: Value Impact Banner -->
-    <div class="roi-grid">
-      <div class="stat-card" style="background:linear-gradient(135deg,#10b981,#059669);border:none;cursor:default;">
-        <div class="val" style="color:#fff">+${roi.webLeadsCaptured}</div>
-        <div class="lbl" style="color:rgba(255,255,255,.85)">Leads captured via chat</div>
-      </div>
-      <div class="stat-card" style="background:linear-gradient(135deg,#3b82f6,#2563eb);border:none;cursor:default;">
-        <div class="val" style="color:#fff">+${roi.bookingClicks}</div>
-        <div class="lbl" style="color:rgba(255,255,255,.85)">Booking link clicks</div>
-      </div>
-      <div class="stat-card" style="background:linear-gradient(135deg,#f59e0b,#d97706);border:none;cursor:default;">
-        <div class="val" style="color:#fff">${fmtRev}</div>
-        <div class="lbl" style="color:rgba(255,255,255,.85)">Potential revenue</div>
-      </div>
-    </div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:18px;text-align:right;">
-      Last 30 days · Est. $${roi.avgBookingValue}/booking
-      <span class="row-action" onclick="switchSection('settings');switchSettingsTab('embed')" style="margin-left:8px;">Install widget →</span>
-    </div>
-    <div class="stats-grid">
-      <div class="stat-card"><div class="val">${l.total}</div><div class="lbl">Total Leads</div></div>
-      <div class="stat-card"><div class="val">${l.new}</div><div class="lbl">New</div></div>
-      <div class="stat-card"><div class="val">${l.engaged}</div><div class="lbl">Engaged</div></div>
-      <div class="stat-card"><div class="val">${l.converted}</div><div class="lbl">Converted</div></div>
-    </div>
-    <div class="two-col dash-recent-grid" style="display:grid;gap:16px;">
-      <div class="card">
-        <div class="card-title">Recent Leads</div>
-        ${l.recent.length === 0 ? '<div class="empty-state">No leads yet</div>' : `
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>Name</th><th>Status</th><th>Date</th></tr></thead>
-          <tbody>${l.recent.map(r => `<tr>
-            <td>${r.contact_name ?? r.contact_phone ?? '—'}</td>
-            <td>${pill(r.status)}</td>
-            <td class="text-muted text-xs">${fmt(r.created_at)}</td>
-          </tr>`).join('')}</tbody>
-        </table></div>`}
-      </div>
-      <div class="card">
-        <div class="card-title">Recent Campaigns</div>
-        ${d.campaigns.recent.length === 0 ? '<div class="empty-state">No campaigns yet</div>' : `
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>Name</th><th>Status</th><th>Sent</th></tr></thead>
-          <tbody>${d.campaigns.recent.map(c => `<tr>
-            <td>${c.name}</td>
-            <td>${pill(c.status)}</td>
-            <td class="text-muted text-xs">${c.metadata?.enqueued ?? '—'}</td>
-          </tr>`).join('')}</tbody>
-        </table></div>`}
-      </div>
-    </div>
-    ${d.analytics.demoStarts > 0 ? `
-    <div class="card" style="margin-top:16px">
-      <div class="card-title">Demo Activity (30 days)</div>
-      <div class="stats-grid" style="margin-bottom:0">
-        <div class="stat-card"><div class="val">${d.analytics.demoStarts}</div><div class="lbl">Demo starts</div></div>
-        <div class="stat-card"><div class="val">${d.analytics.demoLeadsCaptured}</div><div class="lbl">Leads captured</div></div>
-      </div>
-    </div>` : ''}
-  `;
+
+  const fmtNum = n => (n ?? 0).toLocaleString();
+  const fmtRev = d.est_revenue > 0 ? '$' + fmtNum(d.est_revenue) : '/bin/zsh';
+
+  // Getting-started checklist
+  const showChecklist = !d.checklist_dismissed && d.total_conversations < 5;
+  const rawNum = d.twilio_number ?? '';
+  const digits = rawNum.replace(/^+1/, '').replace(/D/g,'');
+  const numStr = digits.length === 10
+    ? '(' + digits.slice(0,3) + ') ' + digits.slice(3,6) + '-' + digits.slice(6)
+    : rawNum;
+  const checklistHtml = showChecklist ? '<div class="dash-checklist" id="dashChecklist">' +
+    '<div class="dash-checklist-title"><span>Getting Started</span>' +
+    '<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;" onclick="dismissChecklist()">Dismiss ×</button></div>' +
+    '<div class="checklist-item done"><span>✅</span> Bot is live and ready</div>' +
+    '<div class="checklist-item"><span>○</span> Send a test text' +
+      (numStr ? ' to <strong>' + numStr + '</strong>' : ' to your bot number') +
+      (rawNum ? '<button class="btn btn-ghost btn-sm ci-link" style="margin-left:8px;" onclick="copyToClipboard('' + rawNum + '')">Copy</button>' : '') +
+    '</div>' +
+    '<div class="checklist-item"><span>○</span> Install the web widget on your website ' +
+      '<span class="ci-link" onclick="switchSection('settings');switchSettingsTab('embed')">→ Widget &amp; Embed</span></div>' +
+    '<div class="checklist-item"><span>○</span> Review your first lead ' +
+      '<span class="ci-link" onclick="switchSection('leads')">→ Leads tab</span></div>' +
+    '</div>' : '';
+
+  // Hero
+  const heroHtml = d.total_conversations === 0
+    ? '<div class="dash-hero"><div class="dash-hero-num">0 conversations</div><div class="dash-hero-sub">Send a test text or install the web widget to get started!</div></div>'
+    : '<div class="dash-hero">' +
+        '<div class="dash-hero-num">Highmark has handled ' + fmtNum(d.total_conversations) + ' conversation' + (d.total_conversations !== 1 ? 's' : '') + ' for you</div>' +
+        '<div class="dash-hero-sub">' + fmtNum(d.sms_count) + ' via SMS · ' + fmtNum(d.web_count) + ' via web chat</div>' +
+        '<div class="dash-hero-saved">That's approximately ' + d.time_saved_hours.toLocaleString() + ' hour' + (d.time_saved_hours !== 1 ? 's' : '') + ' your team didn't spend answering questions.</div>' +
+      '</div>';
+
+  // Period picker
+  const periods = [['7d','7 days'],['30d','30 days'],['90d','90 days'],['all','All time']];
+  const periodBar = '<div class="dash-period-bar">' +
+    periods.map(([v,lbl]) => '<button class="dash-period-btn' + (_dashPeriod===v?' active':'') + '" onclick="loadDashboard('' + v + '')">'+lbl+'</button>').join('') +
+    '</div>';
+
+  // ROI cards
+  const periodLabel = {'7d':'Last 7 days','30d':'Last 30 days','90d':'Last 90 days','all':'All time'}[_dashPeriod];
+  const roiHtml = '<div class="roi-grid" style="margin-bottom:4px;">' +
+    '<div class="stat-card" style="background:linear-gradient(135deg,#10b981,#059669);border:none;cursor:default;">' +
+      '<div class="val" style="color:#fff">' + fmtNum(d.leads) + '</div><div class="lbl" style="color:rgba(255,255,255,.85)">Leads captured</div></div>' +
+    '<div class="stat-card" style="background:linear-gradient(135deg,#3b82f6,#2563eb);border:none;cursor:default;">' +
+      '<div class="val" style="color:#fff">' + fmtNum(d.booking_clicks) + '</div><div class="lbl" style="color:rgba(255,255,255,.85)">Booking clicks</div></div>' +
+    '<div class="stat-card" style="background:linear-gradient(135deg,#f59e0b,#d97706);border:none;cursor:default;">' +
+      '<div class="val" style="color:#fff"><span class="rev-tooltip">' + fmtRev + ' <span style="font-size:14px;vertical-align:super;">ⓘ</span>' +
+        '<span class="rev-tip">Estimated at $' + d.avg_booking_value + ' per booking click. Actual revenue varies.</span></span></div>' +
+      '<div class="lbl" style="color:rgba(255,255,255,.85)">Est. revenue</div></div>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text3);margin-bottom:18px;text-align:right;">' + periodLabel + '</div>';
+
+  // Lead funnel
+  const f = d.funnel;
+  const funnelHtml = '<div class="card">' +
+    '<div class="card-title">Lead Funnel <span style="font-size:10px;color:var(--text3);text-transform:none;letter-spacing:0;font-weight:400;">' + periodLabel + '</span></div>' +
+    (f.conversations === 0
+      ? '<div class="empty-state">No conversations yet in this period</div>'
+      : '<div class="dash-funnel">' +
+          '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.conversations) + '</div><div class="funnel-lbl">Convos</div></div>' +
+          '<div class="funnel-arrow"><span class="funnel-pct">' + f.leads_pct + '%</span><span style="font-size:16px;">→</span></div>' +
+          '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.leads) + '</div><div class="funnel-lbl">Leads</div></div>' +
+          '<div class="funnel-arrow"><span class="funnel-pct">' + f.engaged_pct + '%</span><span style="font-size:16px;">→</span></div>' +
+          '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.engaged) + '</div><div class="funnel-lbl">Engaged</div></div>' +
+          '<div class="funnel-arrow"><span class="funnel-pct">' + f.converted_pct + '%</span><span style="font-size:16px;">→</span></div>' +
+          '<div class="funnel-stage"><div class="funnel-num">' + fmtNum(f.converted) + '</div><div class="funnel-lbl">Converted</div></div>' +
+        '</div>') +
+    '</div>';
+
+  // Activity feed
+  const actIcon = { new_conversation:'💬', lead_captured:'👤', booking_click:'📅', handoff:'⚡' };
+  const chanIcon = ch => ch === 'web' ? '🌐' : '📱';
+  const activityHtml = '<div class="card">' +
+    '<div class="card-title">Recent Activity</div>' +
+    (d.activity.length === 0
+      ? '<div class="empty-state">No recent activity — your bot is ready!</div>'
+      : d.activity.map(a =>
+          '<div class="activity-item">' +
+            '<span class="activity-icon">' + (actIcon[a.type] ?? chanIcon(a.channel)) + '</span>' +
+            '<span class="activity-label">' + chanIcon(a.channel) + ' ' + escHtml(a.label) + '</span>' +
+            '<span class="activity-ts">' + a.relative + '</span>' +
+          '</div>'
+        ).join('')) +
+    '</div>';
+
+  el.innerHTML = checklistHtml + heroHtml + periodBar + roiHtml + funnelHtml + activityHtml;
 }
 
+async function dismissChecklist() {
+  document.getElementById('dashChecklist')?.remove();
+  await apiFetch('/dashboard/dismiss-checklist', { method: 'POST' });
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard?.writeText(text).then(() => {
+    const t = document.getElementById('topbarTitle');
+    const orig = t.textContent;
+    t.textContent = 'Copied!';
+    setTimeout(() => { t.textContent = orig; }, 1200);
+  }).catch(() => {});
+}
 // ── LEADS ──────────────────────────────────────────────────────────────────
 let leadsEventsSet = false;
 let leadsSearchTimer = null;

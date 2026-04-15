@@ -145,100 +145,211 @@ export async function handlePortalMe(req, res) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function periodToSince(period) {
+  if (!period || period === "all") return null;
+  const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+export function calcTimeSaved(totalConversations) {
+  // Each conversation saves ~4 minutes of staff time
+  return Math.round((totalConversations * 4) / 60 * 10) / 10;
+}
+
+function relativeTime(ts) {
+  if (!ts) return "";
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 0)               return "just now";
+  if (diff < 60_000)          return "just now";
+  if (diff < 3_600_000)       return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000)      return `${Math.round(diff / 3_600_000)}h ago`;
+  const days = Math.round(diff / 86_400_000);
+  return days === 1 ? "1d ago" : `${days}d ago`;
+}
+
 // ── GET /portal/api/dashboard ─────────────────────────────────────────────────
+// Query params: period=7d|30d|90d|all (default 30d)
 export async function handlePortalDashboard(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id is required" });
 
-  const clients    = getAllClients();
-  const clientName = clients[clientId]?.name ?? clientId;
+  const period = ["7d","30d","90d","all"].includes(req.query.period) ? req.query.period : "30d";
+  const since  = periodToSince(period);
 
-  // Lead summary (last 200 for counts + recent 5)
-  const { data: leads } = await supabase
-    .from("leads")
-    .select("id, status, contact_name, contact_phone, lead_type, created_at")
-    .eq("client_id", clientId)
-    .order("created_at", { ascending: false })
-    .limit(200);
+  const clients      = getAllClients();
+  const clientRow    = clients[clientId];
+  const clientName   = clientRow?.name ?? clientId;
+  const avgBkgValue  = clientRow?.avgBookingValue ?? 175;
+  const twilioNumber = clientRow?.inboundPhones?.[0] ?? null;
 
-  const leadCounts = { new: 0, contacted: 0, engaged: 0, converted: 0, scheduled: 0, total: 0 };
-  for (const l of (leads ?? [])) {
-    leadCounts.total++;
-    if (leadCounts[l.status] !== undefined) leadCounts[l.status]++;
+  // ── Run all queries in parallel ──────────────────────────────────────────
+  const [
+    smsR, webR, periodConvR,
+    periodLeadsR, bookingClkR,
+    actConvR, actLeadsR, actWebR,
+    checklistR,
+  ] = await Promise.allSettled([
+    // All-time SMS conversations
+    supabase.from("conversations").select("*", { count: "exact", head: true })
+      .eq("client_id", clientId).neq("session_type", "test")
+      .not("from_number", "like", "web:%"),
+
+    // All-time web conversations
+    supabase.from("conversations").select("*", { count: "exact", head: true })
+      .eq("client_id", clientId).neq("session_type", "test")
+      .like("from_number", "web:%"),
+
+    // Period-filtered conversations
+    (() => {
+      let q = supabase.from("conversations").select("*", { count: "exact", head: true })
+        .eq("client_id", clientId).neq("session_type", "test");
+      if (since) q = q.gte("updated_at", since);
+      return q;
+    })(),
+
+    // Period-filtered leads (all, for funnel counts)
+    (() => {
+      let q = supabase.from("leads").select("status")
+        .eq("client_id", clientId).limit(1000);
+      if (since) q = q.gte("created_at", since);
+      return q;
+    })(),
+
+    // Period-filtered booking clicks
+    (() => {
+      let q = supabase.from("web_events").select("*", { count: "exact", head: true })
+        .eq("client_id", clientId).eq("event_type", "booking_clicked");
+      if (since) q = q.gte("created_at", since);
+      return q;
+    })(),
+
+    // Activity: recent conversations
+    supabase.from("conversations")
+      .select("id, from_number, handoff, updated_at")
+      .eq("client_id", clientId).neq("session_type", "test")
+      .order("updated_at", { ascending: false }).limit(20),
+
+    // Activity: recent leads
+    supabase.from("leads").select("id, status, created_at")
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false }).limit(10),
+
+    // Activity: recent web events
+    supabase.from("web_events").select("id, event_type, page_url, created_at")
+      .eq("client_id", clientId)
+      .in("event_type", ["booking_clicked", "lead_captured"])
+      .order("created_at", { ascending: false }).limit(10),
+
+    // Checklist dismissed (non-fatal if column missing)
+    supabase.from("clients").select("dashboard_checklist_dismissed")
+      .eq("id", clientId).maybeSingle(),
+  ]);
+
+  // ── Totals ───────────────────────────────────────────────────────────────
+  const smsCount     = smsR.status === "fulfilled"      ? (smsR.value.count       ?? 0) : 0;
+  const webCount     = webR.status === "fulfilled"      ? (webR.value.count       ?? 0) : 0;
+  const totalConvos  = smsCount + webCount;
+  const periodConvos = periodConvR.status === "fulfilled" ? (periodConvR.value.count ?? 0) : 0;
+  const bookingClicks = bookingClkR.status === "fulfilled" ? (bookingClkR.value.count ?? 0) : 0;
+  const timeSavedHours = calcTimeSaved(totalConvos);
+  const estRevenue   = bookingClicks * avgBkgValue;
+
+  // ── Lead funnel ───────────────────────────────────────────────────────────
+  const leadsData     = periodLeadsR.status === "fulfilled" ? (periodLeadsR.value.data ?? []) : [];
+  const leadsTotal    = leadsData.length;
+  const leadsEngaged  = leadsData.filter(l => ["engaged","converted","closed","scheduled"].includes(l.status)).length;
+  const leadsConverted = leadsData.filter(l => l.status === "converted").length;
+
+  const leadsPct     = periodConvos > 0 ? Math.min(100, Math.round(leadsTotal    / periodConvos * 100)) : 0;
+  const engagedPct   = leadsTotal   > 0 ? Math.min(100, Math.round(leadsEngaged  / leadsTotal   * 100)) : 0;
+  const convertedPct = leadsEngaged > 0 ? Math.min(100, Math.round(leadsConverted / leadsEngaged * 100)) : 0;
+
+  // ── Activity feed ─────────────────────────────────────────────────────────
+  const actItems = [];
+  const convRows = actConvR.status  === "fulfilled" ? (actConvR.value.data  ?? []) : [];
+  const leadRows = actLeadsR.status === "fulfilled" ? (actLeadsR.value.data ?? []) : [];
+  const webRows  = actWebR.status   === "fulfilled" ? (actWebR.value.data   ?? []) : [];
+
+  for (const c of convRows) {
+    const channel = c.from_number?.startsWith("web:") ? "web" : "sms";
+    const ts      = c.updated_at ?? "";
+    if (c.handoff) {
+      actItems.push({ type: "handoff", channel, label: "Handoff — guest needs agent follow-up", ts, relative: relativeTime(ts) });
+    } else {
+      actItems.push({ type: "new_conversation", channel, label: `New ${channel === "web" ? "web chat" : "SMS"} conversation`, ts, relative: relativeTime(ts) });
+    }
   }
-
-  // Campaign summary (recent 5)
-  const { data: campaigns } = await supabase
-    .from("campaigns")
-    .select("id, name, status, created_at, metadata")
-    .eq("client_id", clientId)
-    .order("created_at", { ascending: false })
-    .limit(5);
-
-  // Demo analytics (last 30 days, non-blocking)
-  let demoStarts = 0;
-  let demoLeadsCaptured = 0;
-  try {
-    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: events } = await supabase
-      .from("demo_events")
-      .select("event_name")
-      .eq("client_id", clientId)
-      .gte("created_at", since);
-    for (const e of (events ?? [])) {
-      if (e.event_name === "demo_started")       demoStarts++;
-      if (e.event_name === "demo_lead_captured") demoLeadsCaptured++;
+  for (const l of leadRows) {
+    const ts = l.created_at ?? "";
+    actItems.push({ type: "lead_captured", channel: "sms", label: "Lead captured", ts, relative: relativeTime(ts) });
+  }
+  for (const e of webRows) {
+    const ts   = e.created_at ?? "";
+    const page = e.page_url   ? ` on ${e.page_url}` : "";
+    if (e.event_type === "booking_clicked") {
+      actItems.push({ type: "booking_click", channel: "web", label: `Booking link clicked${page}`, ts, relative: relativeTime(ts) });
+    } else {
+      actItems.push({ type: "lead_captured", channel: "web", label: "Lead captured via web chat", ts, relative: relativeTime(ts) });
     }
-  } catch { /* non-fatal */ }
+  }
+  actItems.sort((a, b) => (b.ts > a.ts ? 1 : b.ts < a.ts ? -1 : 0));
+  const activity = actItems.slice(0, 10);
 
-  // Phase 11.9: ROI summary from web_events (last 30 days, non-blocking)
-  let webLeadsCaptured = 0;
-  let bookingClicks    = 0;
-  try {
-    const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: webEvts } = await supabase
-      .from("web_events")
-      .select("event_type")
-      .eq("client_id", clientId)
-      .gte("created_at", since30);
-    for (const e of (webEvts ?? [])) {
-      if (e.event_type === "lead_captured")   webLeadsCaptured++;
-      if (e.event_type === "booking_clicked") bookingClicks++;
-    }
-  } catch { /* non-fatal — web_events table may not exist yet */ }
-
-  const avgBookingValue  = clients[clientId]?.avgBookingValue ?? 175;
-  const estimatedRevenue = computeEstimatedRevenue(webLeadsCaptured, avgBookingValue);
+  // ── Checklist ─────────────────────────────────────────────────────────────
+  const checklistDismissed = checklistR.status === "fulfilled"
+    ? (checklistR.value.data?.dashboard_checklist_dismissed ?? false)
+    : false;
 
   return res.json({
     clientId,
     clientName,
-    leads: {
-      ...leadCounts,
-      recent: (leads ?? []).slice(0, 5),
+    period,
+    twilio_number:        twilioNumber,
+    total_conversations:  totalConvos,
+    sms_count:            smsCount,
+    web_count:            webCount,
+    time_saved_hours:     timeSavedHours,
+    period_conversations: periodConvos,
+    leads:                leadsTotal,
+    booking_clicks:       bookingClicks,
+    est_revenue:          estRevenue,
+    avg_booking_value:    avgBkgValue,
+    funnel: {
+      conversations:  periodConvos,
+      leads:          leadsTotal,
+      engaged:        leadsEngaged,
+      converted:      leadsConverted,
+      leads_pct:      leadsPct,
+      engaged_pct:    engagedPct,
+      converted_pct:  convertedPct,
     },
-    campaigns: {
-      total:  (campaigns ?? []).length,
-      recent: campaigns ?? [],
-    },
-    analytics: {
-      demoStarts,
-      demoLeadsCaptured,
-      period: "30d",
-    },
-    roi: {
-      webLeadsCaptured,
-      bookingClicks,
-      estimatedRevenue,
-      avgBookingValue,
-      period: "30d",
-    },
+    activity,
+    checklist_dismissed: checklistDismissed,
   });
 }
 
+// ── POST /portal/api/dashboard/dismiss-checklist ──────────────────────────────
+export async function handleDismissChecklist(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  try {
+    await supabase.from("clients")
+      .update({ dashboard_checklist_dismissed: true })
+      .eq("id", clientId);
+  } catch (err) {
+    console.warn("[DASH] dismiss-checklist:", err.message);
+  }
+  return res.json({ success: true });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// computeEstimatedRevenue — exported for testing
+// computeEstimatedRevenue — exported for testing (legacy)
 // ─────────────────────────────────────────────────────────────────────────────
 export function computeEstimatedRevenue(leadCount, avgBookingValue) {
   return Math.max(0, (leadCount ?? 0) * (avgBookingValue ?? 175));
