@@ -377,21 +377,149 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .notice { font-size: 11px; color: var(--text3); line-height: 1.5; }
 .notice.ok { color: var(--accent); }
 .notice.warn { color: var(--warn); }
+
+/* ── Safe mode banner ─────────────────────────────────────────────────────── */
+#safe-mode-banner {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 16px; font-size: 12px; font-weight: 600; flex-shrink: 0;
+}
+.banner-safe { background: #052e16; border-bottom: 2px solid #16a34a; color: #86efac; }
+.banner-live { background: #450a0a; border-bottom: 2px solid #dc2626; color: #fca5a5; }
+#safe-mode-banner .ban-btn {
+  padding: 3px 10px; border-radius: 4px; border: 1px solid currentColor;
+  background: transparent; color: inherit; font-size: 11px; cursor: pointer;
+  font-family: var(--font);
+}
+
+/* ── Demo script panel ────────────────────────────────────────────────────── */
+#demo-script-panel {
+  display: none; border-bottom: 1px solid var(--border);
+  background: var(--panel); padding: 14px 16px;
+}
+#demo-script-panel.open { display: block; }
+.dsp-head { font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: .07em; text-transform: uppercase; margin-bottom: 10px; }
+.dsp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.dsp-step { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+.dsp-step-n   { font-size: 10px; font-weight: 700; color: var(--accent); font-family: var(--mono); letter-spacing: .05em; margin-bottom: 3px; }
+.dsp-step-t   { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.dsp-step-s   { font-size: 11px; color: var(--text2); margin-bottom: 6px; }
+.dsp-step-tip { font-size: 10px; color: var(--text3); font-style: italic; margin-top: 4px; }
+.dsp-fill { padding: 4px 10px; background: transparent; border: 1px solid var(--accent); color: var(--accent); border-radius: 4px; font-size: 11px; cursor: pointer; transition: all .12s; }
+.dsp-fill:hover { background: rgba(16,185,129,.12); }
+.dsp-fire { padding: 4px 10px; background: transparent; border: 1px solid var(--warn); color: var(--warn); border-radius: 4px; font-size: 11px; cursor: pointer; transition: all .12s; }
+.dsp-fire:hover { background: rgba(245,158,11,.12); }
+.dsp-tip-line { font-size: 11px; color: var(--text3); margin-top: 10px; }
+
+/* ── Session state bar (above chat thread) ────────────────────────────────── */
+#state-bar {
+  display: flex; align-items: center; gap: 6px; padding: 5px 14px;
+  border-bottom: 1px solid var(--border); background: var(--panel);
+  font-size: 11px; flex-shrink: 0; flex-wrap: wrap; min-height: 30px;
+}
+#state-bar .sb-lbl { color: var(--text3); font-size: 10px; margin-right: 2px; }
+.sb-badge {
+  padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600;
+  background: var(--panel2); border: 1px solid var(--border2);
+  font-family: var(--mono); color: var(--text2);
+}
+.sb-intent-booking       { color:#22c55e; border-color:#15532a !important; background:#0a2a14 !important; }
+.sb-intent-conditions    { color:#14b8a6; border-color:#0d4a42 !important; background:#052520 !important; }
+.sb-intent-informational { color:#3b82f6; border-color:#1e3a5f !important; background:#0f1e30 !important; }
+.sb-intent-handoff       { color:#ef4444; border-color:#4a1a1a !important; background:#250d0d !important; }
+.sb-intent-smalltalk     { color:#6b7280; border-color:#2a2a2a !important; background:#111    !important; }
+.sb-intent-recommendation{ color:#a855f7; border-color:#3d1a60 !important; background:#1e0d30 !important; }
+.sb-intent-lookup        { color:#6366f1; border-color:#1e1e60 !important; background:#0d0d30 !important; }
+.sb-sentiment-positive   { color:#22c55e; border-color:#15532a !important; background:#0a2a14 !important; }
+.sb-sentiment-neutral    { color:#6b7280; border-color:#2a2a2a !important; background:#111    !important; }
+.sb-sentiment-frustrated { color:#ef4444; border-color:#4a1a1a !important; background:#250d0d !important; }
+.sb-stage { color:#60a5fa; border-color:#1e3a5f !important; background:#0f1e30 !important; }
+.sb-channel { color: var(--text3); font-size: 10px; font-family: var(--mono); }
+#state-bar .sb-div { color: var(--border2); user-select: none; }
+
+/* ── System event message ─────────────────────────────────────────────────── */
+.msg-row.system { align-self: center; max-width: 92%; width: 92%; }
+.sys-event {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  font-size: 11px; font-style: italic; color: var(--text3); padding: 2px 0;
+}
+.sys-event::before, .sys-event::after { content:''; flex:1; height:1px; background: var(--border); }
+
+/* ── Header additions ─────────────────────────────────────────────────────── */
+.chan-select {
+  padding: 3px 7px; background: var(--panel2); border: 1px solid var(--border2);
+  color: var(--text2); border-radius: 4px; font-size: 11px; cursor: pointer; outline: none;
+}
+.chan-select:focus { border-color: var(--accent); }
+.dsp-toggle {
+  padding: 4px 10px; background: transparent; border: 1px solid var(--border2);
+  color: var(--text2); border-radius: 4px; font-size: 11px; cursor: pointer; transition: all .1s;
+  font-family: var(--font);
+}
+.dsp-toggle:hover, .dsp-toggle.active { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
+
+<!-- ── Safe mode banner ────────────────────────────────────────────────────── -->
+<div id="safe-mode-banner" class="banner-safe">
+  <span>✓ Safe Mode — No real Twilio messages sent</span>
+  <button class="ban-btn" onclick="toggleMode()">Disable</button>
+</div>
 
 <!-- ── Header ─────────────────────────────────────────────────────────────── -->
 <div id="header">
   <div class="logo">HIGHMARK <span>TEST CONSOLE</span></div>
   <div class="right">
     <span class="info-chip" id="header-info">loading...</span>
+    <select class="chan-select" id="channel-select" onchange="channelChanged(this.value)" title="Channel">
+      <option value="sms">📱 SMS</option>
+      <option value="web">🌐 Web Chat</option>
+    </select>
+    <button class="dsp-toggle" id="dsp-toggle-btn" onclick="toggleDemoScript()">📋 Demo Script</button>
     <div class="mode-badge safe" id="mode-toggle" onclick="toggleMode()">
       <div class="dot"></div>
       <span id="mode-label">SAFE MODE</span>
     </div>
     <button id="mobile-menu-btn" onclick="toggleMobileDrawer()">☰ Menu</button>
   </div>
+</div>
+
+<!-- ── Demo script panel ──────────────────────────────────────────────────── -->
+<div id="demo-script-panel">
+  <div class="dsp-head">📋 Demo Script</div>
+  <div class="dsp-grid">
+
+    <div class="dsp-step">
+      <div class="dsp-step-n">STEP 1 — Snow &amp; Conditions</div>
+      <div class="dsp-step-t">Live snow &amp; weather data</div>
+      <div class="dsp-step-s">Shows real-time SNOTEL + weather from 4 stations.</div>
+      <button class="dsp-fill" onclick="fillDemoStep(&quot;How's the snow up there right now?&quot;)">→ Fill: "How's the snow up there right now?"</button>
+    </div>
+
+    <div class="dsp-step">
+      <div class="dsp-step-n">STEP 2 — Booking Inquiry</div>
+      <div class="dsp-step-t">Live availability + numbered menu</div>
+      <div class="dsp-step-s">Shows real-time FH availability and tour options.</div>
+      <button class="dsp-fill" onclick="fillDemoStep(&quot;I want to book a snowmobile tour for 2 people this Saturday&quot;)">→ Fill: "I want to book for 2 people this Saturday"</button>
+      <div class="dsp-step-tip">💡 After bot replies, type "1" to pick first tour option.</div>
+    </div>
+
+    <div class="dsp-step">
+      <div class="dsp-step-n">STEP 3 — Booking Confirmation</div>
+      <div class="dsp-step-t">FareHarbor webhook automation</div>
+      <div class="dsp-step-s">Simulates the hands-free confirmation text guests receive.</div>
+      <button class="dsp-fire" onclick="fireDemoStep('confirmation')">→ Fire booking confirmation</button>
+    </div>
+
+    <div class="dsp-step">
+      <div class="dsp-step-n">STEP 4 — Follow-up Re-engagement</div>
+      <div class="dsp-step-t">Automatic 30-min follow-up</div>
+      <div class="dsp-step-s">Shows the post-booking follow-up SMS sequence.</div>
+      <button class="dsp-fire" onclick="fireDemoStep('followup')">→ Fire follow-up scenario</button>
+    </div>
+
+  </div>
+  <div class="dsp-tip-line">💡 This demo works for both SMS and Web Chat channels — use the channel switcher above.</div>
 </div>
 
 <!-- ── Mobile drawer (scenarios + simulate, shown on small screens) ─────── -->
@@ -497,6 +625,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
   <!-- ── Center: chat ─────────────────────────────────────────────────────── -->
   <div id="center">
+    <!-- Session state bar -->
+    <div id="state-bar">
+      <span class="sb-lbl">Waiting for first message…</span>
+    </div>
     <div id="chat-thread">
       <div class="empty-state" id="empty-state">
         <div class="empty-icon">🏔</div>
@@ -620,6 +752,8 @@ function uiHeaders(extra = {}) {
 // ─── State ────────────────────────────────────────────────────────────────────
 const State = {
   safeMode:      true,
+  channel:       "sms",           // "sms" | "web"
+  webSessionId:  genSessionId(),  // unique per page load / reset
   fromPhone:     "+15550000099",
   toPhone:       "+18668906657",
   clientName:    "Colorado Sled Rentals",
@@ -629,6 +763,7 @@ const State = {
   running:       false,
   transcript:    [],
   lastMeta:      null,
+  currentStage:  null,
   demoLeadsThisSession: 0,
   currentPayloads: { sms: {}, fh: {}, session: {} },
   booking: {
@@ -713,6 +848,8 @@ function buildSmsPayload(body) {
 }
 
 async function sendToBot(body) {
+  if (State.channel === "web") return sendToWeb(body);
+
   const payload = buildSmsPayload(body);
   State.currentPayloads.sms = payload;
   updatePayload("sms");
@@ -723,6 +860,38 @@ async function sendToBot(body) {
   });
   const data = await res.json();
   return data; // { reply, meta? }
+}
+
+async function sendToWeb(body) {
+  const client = State.clients.find(c => c.toPhone === State.toPhone);
+  if (!client) throw new Error("No client selected for web chat");
+  const res = await fetch("/web/chat", {
+    method:  "POST",
+    headers: uiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify({
+      clientId:  client.id,
+      sessionId: State.webSessionId,
+      message:   body,
+    }),
+  });
+  const data = await res.json();
+  // Normalize web response to same shape as SMS: { reply, meta }
+  const debug = data.debug ?? {};
+  return {
+    reply: data.reply ?? data.error ?? "(no reply)",
+    meta:  {
+      intent:      debug.intent      ?? null,
+      sentiment:   debug.sentiment   ?? null,
+      bookingStep: debug.bookingStep ?? null,
+      handoff:     debug.handoff     ?? false,
+      stage:       debug.stage       ?? null,
+      agent:       debug.agent       ?? null,
+      action:      debug.action      ?? null,
+      ownerMode:   debug.ownerMode   ?? false,
+      context:     debug.context     ?? null,
+      channel:     "web",
+    },
+  };
 }
 
 async function resetSession() {
@@ -795,11 +964,14 @@ async function resetChat() {
   await resetSession();
   State.transcript          = [];
   State.lastMeta            = null;
+  State.currentStage        = null;
   State.demoLeadsThisSession = 0;
   State.lastDemoStep        = null;
+  State.webSessionId        = genSessionId();  // new session for web chat
   clearChat();
   clearInspector();
   clearTranscript();
+  clearStateBar();
   updatePayload("sms");
   // Refresh demo panel visibility for current client
   updateDemoPanel({});
@@ -954,7 +1126,10 @@ async function showPreview(type) {
     <div class="msg-chars" style="margin-top:4px">${result.chars} chars · ${result.texts} SMS</div>
   `;
 
-  // Also show in chat thread
+  // System event marker in chat thread
+  appendSystemEvent(`── ${label} sent ──`);
+
+  // Then show the preview bubble below it
   const wrap = document.createElement("div");
   wrap.innerHTML = `
     <div class="preview-bubble">
@@ -1022,7 +1197,11 @@ function updateInspectorFromSession(session, meta) {
     setVal("s-handoff", String(session.handoff ?? false));
     setVal("s-msgs",    String(session.messages?.length ?? 0));
     setVal("s-session", session.session_type ?? "—");
+    // Extract stage from session and store in State for bubble rendering
+    const stage = session.booking_data?._stage ?? null;
+    if (stage) State.currentStage = stage;
   }
+  updateStateBar(meta, session);
 }
 
 function clearInspector() {
@@ -1140,9 +1319,11 @@ function appendBotMsg(text, meta = {}) {
   const texts    = Math.ceil(text.length / 160);
   const botName  = State.clientBotName || "Bot";
   const initial  = botName.charAt(0).toUpperCase();
+  const stage = meta.stage ?? State.currentStage;
   const metaTags = [
     meta.intent    ? `<span class="tag intent">${escHtml(meta.intent)}</span>` : "",
     meta.sentiment ? `<span class="tag sentiment">${escHtml(meta.sentiment)}</span>` : "",
+    stage          ? `<span class="tag" style="color:#60a5fa;border-color:#1e3a5f;background:#0f1e30">${escHtml(stage)}</span>` : "",
     meta.agent     ? `<span class="tag" style="color:#34d399;border-color:#0a3020;background:#050f0a">${escHtml(meta.agent)}</span>` : "",
     meta.action    ? `<span class="tag" style="color:#fb923c;border-color:#3a1a0a;background:#150a05">${escHtml(meta.action)}</span>` : "",
     meta.bookingStep != null ? `<span class="tag step">step ${meta.bookingStep}</span>` : "",
@@ -1228,19 +1409,28 @@ function toggleMobileDrawer() {
 
 function toggleMode() {
   State.safeMode = !State.safeMode;
-  const badge = document.getElementById("mode-toggle");
-  const label = document.getElementById("mode-label");
-  if (State.safeMode) {
-    badge.className = "mode-badge safe";
-    label.textContent = "SAFE MODE";
-  } else {
-    badge.className = "mode-badge live";
-    label.textContent = "LIVE MODE";
+  if (!State.safeMode) {
     if (!confirm("⚠ LIVE MODE: booking confirmation previews will attempt real Twilio sends if CONFIRMATIONS_ENABLED=true on the server.\n\nAre you sure?")) {
       State.safeMode = true;
-      badge.className = "mode-badge safe";
-      label.textContent = "SAFE MODE";
     }
+  }
+  applyModeBanner();
+}
+
+function applyModeBanner() {
+  const banner = document.getElementById("safe-mode-banner");
+  const badge  = document.getElementById("mode-toggle");
+  const label  = document.getElementById("mode-label");
+  if (State.safeMode) {
+    banner.className   = "banner-safe";
+    banner.innerHTML   = '<span>✓ Safe Mode — No real Twilio messages sent</span><button class="ban-btn" onclick="toggleMode()">Disable</button>';
+    badge.className    = "mode-badge safe";
+    label.textContent  = "SAFE MODE";
+  } else {
+    banner.className   = "banner-live";
+    banner.innerHTML   = '<span>⚠ LIVE MODE — Real Twilio messages will be sent to real phones</span><button class="ban-btn" onclick="toggleMode()">Enable Safe Mode</button>';
+    badge.className    = "mode-badge live";
+    label.textContent  = "LIVE MODE";
   }
 }
 
@@ -1312,6 +1502,86 @@ function linkify(str) {
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ─── Session ID generator ─────────────────────────────────────────────────────
+function genSessionId() {
+  return "ui-" + Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
+}
+
+// ─── Safe mode banner ─────────────────────────────────────────────────────────
+// applyModeBanner() is called by toggleMode() — already defined above.
+
+// ─── Demo script panel ───────────────────────────────────────────────────────
+function toggleDemoScript() {
+  const panel = document.getElementById("demo-script-panel");
+  const btn   = document.getElementById("dsp-toggle-btn");
+  panel.classList.toggle("open");
+  if (btn) btn.classList.toggle("active", panel.classList.contains("open"));
+}
+
+function fillDemoStep(text) {
+  const input = document.getElementById("chat-input");
+  if (input) {
+    input.value = text;
+    input.focus();
+    autoResize(input);
+  }
+}
+
+function fireDemoStep(type) {
+  // Close the demo script panel for focus, then trigger the simulation
+  const panel = document.getElementById("demo-script-panel");
+  if (panel?.classList.contains("open")) toggleDemoScript();
+  showPreview(type);
+}
+
+// ─── Channel switcher ─────────────────────────────────────────────────────────
+function channelChanged(value) {
+  State.channel = value;
+  updateStateBar(State.lastMeta ?? {}, State.currentPayloads?.session ?? null);
+}
+
+// ─── Session state bar ───────────────────────────────────────────────────────
+function updateStateBar(meta, session) {
+  const bar = document.getElementById("state-bar");
+  if (!bar) return;
+
+  const intent    = meta?.intent    ?? null;
+  const sentiment = meta?.sentiment ?? null;
+  const stage     = session?.booking_data?._stage ?? State.currentStage ?? null;
+  const channel   = State.channel === "web" ? "🌐 web" : "📱 sms";
+
+  if (!intent && !sentiment && !stage) {
+    bar.innerHTML = `<span class="sb-lbl">Waiting for first message…</span>`;
+    return;
+  }
+
+  const intentCls    = intent    ? `sb-badge sb-intent-${intent.toLowerCase().replace(/\s+/g,"-")}` : "sb-badge";
+  const sentimentCls = sentiment ? `sb-badge sb-sentiment-${sentiment.toLowerCase()}` : "sb-badge";
+
+  bar.innerHTML = [
+    intent    ? `<span class="sb-lbl">Intent</span><span class="${intentCls}">${escHtml(intent)}</span>` : "",
+    sentiment ? `<span class="sb-div">·</span><span class="sb-lbl">Sentiment</span><span class="${sentimentCls}">${escHtml(sentiment)}</span>` : "",
+    stage     ? `<span class="sb-div">·</span><span class="sb-lbl">Stage</span><span class="sb-badge sb-stage">${escHtml(stage)}</span>` : "",
+    `<span class="sb-div">·</span><span class="sb-channel">${channel}</span>`,
+  ].filter(Boolean).join(" ");
+}
+
+function clearStateBar() {
+  const bar = document.getElementById("state-bar");
+  if (bar) bar.innerHTML = `<span class="sb-lbl">Waiting for first message…</span>`;
+}
+
+// ─── System event message ─────────────────────────────────────────────────────
+function appendSystemEvent(text) {
+  hideEmpty();
+  const thread = document.getElementById("chat-thread");
+  const row    = document.createElement("div");
+  row.className = "msg-row system";
+  row.innerHTML = `<div class="sys-event">${escHtml(text)}</div>`;
+  thread.appendChild(row);
+  scrollToBottom();
+}
 
 // Boot
 init();
