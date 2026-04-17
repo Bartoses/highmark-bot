@@ -941,6 +941,9 @@ async function sendAndRender(body) {
   const meta = data.meta ?? {};
   State.lastMeta = meta;
 
+  // Keep bot display name in sync with the live runtime value
+  if (meta.botName) State.clientBotName = meta.botName;
+
   appendBotMsg(data.reply ?? "(no reply)", meta);
   updateInspector(meta);
   updateDemoPanel(meta);

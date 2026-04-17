@@ -2123,6 +2123,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           context:   orchestratorDebug?.context   ?? null,
           ownerMode: orchestratorDebug?.ownerMode ?? false,
           channel:   "sms",
+          botName:   client.botName ?? "Summit",
         },
       });
     }
