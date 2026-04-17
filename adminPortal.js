@@ -356,13 +356,14 @@ export function computeEstimatedRevenue(leadCount, avgBookingValue) {
 }
 
 // ── GET /portal/api/leads ─────────────────────────────────────────────────────
-// Query params: status, lead_type, limit (default 50), offset (default 0)
+// Query params: status, lead_type, search, filter, limit (default 50), offset (default 0)
+// filter=contacted_today — last_contacted_at is today (UTC)
 export async function handlePortalLeads(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id is required" });
 
-  const { status, lead_type, search, limit = 50, offset = 0 } = req.query;
+  const { status, lead_type, search, filter, limit = 50, offset = 0 } = req.query;
 
   let query = supabase
     .from("leads")
@@ -376,6 +377,11 @@ export async function handlePortalLeads(req, res, supabase) {
   if (search) {
     const term = search.replace(/[%_]/g, "\\$&");
     query = query.or(`contact_name.ilike.%${term}%,contact_phone.ilike.%${term}%,requested_service.ilike.%${term}%`);
+  }
+  if (filter === "contacted_today") {
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    query = query.gte("last_contacted_at", todayStart.toISOString());
   }
 
   const { data, error, count } = await query;
@@ -397,7 +403,7 @@ export async function handlePortalUpdateLead(req, res, supabase) {
   if (fetchErr || !existing) return res.status(404).json({ error: "Lead not found" });
   if (existing.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
 
-  const { status, notes, contact_name, contact_email, requested_service, preferred_timeframe } = req.body;
+  const { status, notes, contact_name, contact_email, requested_service, preferred_timeframe, last_contacted_at, channel } = req.body;
   if (status && !VALID_LEAD_STATUSES.includes(status)) {
     return res.status(400).json({
       error: `Invalid status. Must be one of: ${VALID_LEAD_STATUSES.join(", ")}`,
@@ -405,12 +411,14 @@ export async function handlePortalUpdateLead(req, res, supabase) {
   }
 
   const updates = { updated_at: new Date().toISOString() };
-  if (status             !== undefined) updates.status             = status;
-  if (notes              !== undefined) updates.notes              = notes;
-  if (contact_name       !== undefined) updates.contact_name       = contact_name       || null;
-  if (contact_email      !== undefined) updates.contact_email      = contact_email      || null;
-  if (requested_service  !== undefined) updates.requested_service  = requested_service  || null;
-  if (preferred_timeframe!== undefined) updates.preferred_timeframe= preferred_timeframe|| null;
+  if (status              !== undefined) updates.status              = status;
+  if (notes               !== undefined) updates.notes               = notes;
+  if (contact_name        !== undefined) updates.contact_name        = contact_name        || null;
+  if (contact_email       !== undefined) updates.contact_email       = contact_email       || null;
+  if (requested_service   !== undefined) updates.requested_service   = requested_service   || null;
+  if (preferred_timeframe !== undefined) updates.preferred_timeframe = preferred_timeframe || null;
+  if (last_contacted_at   !== undefined) updates.last_contacted_at   = last_contacted_at   || null;
+  if (channel             !== undefined) updates.channel             = channel             || "sms";
 
   if (Object.keys(updates).length === 1) {
     return res.status(400).json({ error: "No updatable fields provided" });

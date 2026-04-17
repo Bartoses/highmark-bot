@@ -170,6 +170,69 @@ tr:hover td { background: var(--panel2); }
 .pill-failed    { background: rgba(239,68,68,.15);   color: #fca5a5; }
 .pill-green     { background: rgba(16,185,129,.15);  color: #6ee7b7; }
 .pill-gray      { background: rgba(107,114,128,.15); color: #9ca3af; }
+.pill-sms       { background: rgba(99,102,241,.15);  color: #a5b4fc; }
+.pill-web       { background: rgba(14,165,233,.15);  color: #7dd3fc; }
+
+/* ── Filter pills ────────────────────────────────────────────────────────── */
+.filter-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.fpill {
+  display: inline-flex; align-items: center; padding: 4px 12px;
+  border-radius: 100px; font-size: 11px; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--border2); background: transparent; color: var(--text2);
+  transition: all .15s;
+}
+.fpill:hover { border-color: var(--accent); color: var(--accent); }
+.fpill.active { background: var(--accent); border-color: var(--accent); color: #000; }
+
+/* ── Lead slide-in panel ─────────────────────────────────────────────────── */
+#leadPanel {
+  position: fixed; top: 0; right: -440px; width: 420px; max-width: 95vw;
+  height: 100vh; background: var(--panel); border-left: 1px solid var(--border);
+  z-index: 200; overflow-y: auto; transition: right .25s ease;
+  display: flex; flex-direction: column;
+}
+#leadPanel.open { right: 0; }
+#leadPanelBackdrop {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 199;
+}
+#leadPanelBackdrop.open { display: block; }
+.lp-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 20px 20px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.lp-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.lp-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.lp-close {
+  background: none; border: none; cursor: pointer; color: var(--text3);
+  font-size: 20px; padding: 0; line-height: 1; flex-shrink: 0;
+}
+.lp-close:hover { color: var(--text); }
+.lp-body { padding: 18px 20px; flex: 1; display: flex; flex-direction: column; gap: 16px; }
+.lp-field { display: flex; flex-direction: column; gap: 4px; }
+.lp-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text3); }
+.lp-value { font-size: 13px; color: var(--text); }
+.lp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.lp-status-select {
+  background: var(--bg); border: 1px solid var(--border2); color: var(--text);
+  border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600;
+  cursor: pointer; outline: none; width: 100%;
+}
+.lp-status-select:focus { border-color: var(--accent); }
+.lp-notes-wrap { display: flex; flex-direction: column; gap: 6px; }
+.lp-notes {
+  background: var(--bg); border: 1px solid var(--border2); color: var(--text);
+  border-radius: 6px; padding: 9px 12px; font-size: 12px; font-family: var(--font);
+  resize: vertical; min-height: 90px; outline: none; width: 100%;
+}
+.lp-notes:focus { border-color: var(--accent); }
+.lp-save-indicator { font-size: 10px; color: var(--text3); height: 14px; text-align: right; }
+.lp-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 20px 20px; flex-shrink: 0; }
+.inline-status {
+  background: var(--bg); border: 1px solid var(--border2); color: var(--text);
+  border-radius: 6px; padding: 3px 7px; font-size: 11px; font-weight: 600;
+  cursor: pointer; outline: none;
+}
+.inline-status:focus { border-color: var(--accent); }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; }
@@ -536,26 +599,25 @@ tr:hover td { background: var(--panel2); }
       <div class="section" id="sec-leads">
         <div class="section-header">
           <span class="section-title">Leads</span>
+          <button class="btn btn-ghost btn-sm" id="leadsRefreshBtn">↻ Refresh</button>
+        </div>
+        <!-- Quick filter pills -->
+        <div class="filter-pills" id="leadFilterPills">
+          <button class="fpill active" data-filter="">All</button>
+          <button class="fpill" data-filter="status:new">New</button>
+          <button class="fpill" data-filter="status:contacted">Contacted</button>
+          <button class="fpill" data-filter="status:engaged">Engaged</button>
+          <button class="fpill" data-filter="status:converted">Converted</button>
+          <button class="fpill" data-filter="special:contacted_today">Contacted today</button>
         </div>
         <div class="filter-bar">
-          <input type="text" id="leadSearch" placeholder="Search name, phone, service…" style="flex:1;min-width:160px;max-width:260px;padding:6px 10px;font-size:12px;border:1px solid var(--border2);border-radius:6px;background:var(--panel);color:var(--text);outline:none;">
-          <select id="leadStatusFilter">
-            <option value="">All statuses</option>
-            <option value="new">New</option>
-            <option value="contacted">Contacted</option>
-            <option value="engaged">Engaged</option>
-            <option value="converted">Converted</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="closed">Closed</option>
-            <option value="ignored">Ignored</option>
-          </select>
+          <input type="text" id="leadSearch" placeholder="Search name, phone, service…" style="flex:1;min-width:160px;max-width:260px;">
           <select id="leadTypeFilter">
             <option value="">All types</option>
             <option value="booking">Booking</option>
             <option value="waitlist">Waitlist</option>
             <option value="demo">Demo</option>
           </select>
-          <button class="btn btn-ghost btn-sm" id="leadsRefreshBtn">↻ Refresh</button>
         </div>
         <div id="leadsTable"><div class="loading">Loading…</div></div>
         <div class="pagination" id="leadsPagination"></div>
@@ -1105,6 +1167,68 @@ tr:hover td { background: var(--panel2); }
     </div><!-- /content -->
   </div><!-- /main -->
 </div><!-- /app -->
+
+<!-- ── Lead slide-in panel ────────────────────────────────────────────────── -->
+<div id="leadPanelBackdrop" onclick="closeLeadPanel()"></div>
+<div id="leadPanel">
+  <div class="lp-header">
+    <div>
+      <div class="lp-name" id="lpName">—</div>
+      <div class="lp-meta" id="lpMeta"></div>
+    </div>
+    <button class="lp-close" onclick="closeLeadPanel()">×</button>
+  </div>
+  <div class="lp-body">
+    <div class="lp-grid">
+      <div class="lp-field">
+        <div class="lp-label">Phone</div>
+        <div class="lp-value" id="lpPhone">—</div>
+      </div>
+      <div class="lp-field">
+        <div class="lp-label">Email</div>
+        <div class="lp-value" id="lpEmail">—</div>
+      </div>
+      <div class="lp-field">
+        <div class="lp-label">Service requested</div>
+        <div class="lp-value" id="lpService">—</div>
+      </div>
+      <div class="lp-field">
+        <div class="lp-label">Timeframe</div>
+        <div class="lp-value" id="lpTimeframe">—</div>
+      </div>
+      <div class="lp-field">
+        <div class="lp-label">Created</div>
+        <div class="lp-value" id="lpCreated">—</div>
+      </div>
+      <div class="lp-field">
+        <div class="lp-label">Last contacted</div>
+        <div class="lp-value" id="lpLastContacted">—</div>
+      </div>
+    </div>
+    <div class="lp-field">
+      <div class="lp-label">Status</div>
+      <select class="lp-status-select" id="lpStatusSelect" onchange="updateLeadStatusFromPanel()">
+        <option value="new">New</option>
+        <option value="contacted">Contacted</option>
+        <option value="engaged">Engaged</option>
+        <option value="scheduled">Scheduled</option>
+        <option value="converted">Converted</option>
+        <option value="closed">Closed</option>
+        <option value="ignored">Ignored</option>
+      </select>
+    </div>
+    <div class="lp-notes-wrap">
+      <div class="lp-label">Notes</div>
+      <textarea class="lp-notes" id="lpNotes" placeholder="Add notes…" oninput="debouncedSaveNotes()"></textarea>
+      <div class="lp-save-indicator" id="lpSaveIndicator"></div>
+    </div>
+  </div>
+  <div class="lp-actions">
+    <button class="btn btn-primary btn-sm" onclick="markLeadContacted()">✓ Mark contacted</button>
+    <button class="btn btn-ghost btn-sm" id="lpViewConvBtn" onclick="viewLeadConversation()">View conversation</button>
+    <button class="btn btn-ghost btn-sm" onclick="closeLeadPanel()">Close</button>
+  </div>
+</div>
 
 <!-- ── Lead edit modal ──────────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="leadModal">
@@ -2053,52 +2177,93 @@ function copyToClipboard(text) {
 // ── LEADS ──────────────────────────────────────────────────────────────────
 let leadsEventsSet = false;
 let leadsSearchTimer = null;
+let activeLeadFilter = '';   // '' | 'status:new' | 'status:contacted' | 'special:contacted_today' etc.
+let notesDebounceTimer = null;
+
 function setupLeadsEvents() {
   if (leadsEventsSet) return;
   leadsEventsSet = true;
-  document.getElementById('leadStatusFilter').addEventListener('change', () => { leadsOffset = 0; loadLeads(); });
   document.getElementById('leadTypeFilter').addEventListener('change',  () => { leadsOffset = 0; loadLeads(); });
   document.getElementById('leadsRefreshBtn').addEventListener('click',  () => { leadsOffset = 0; loadLeads(); });
   document.getElementById('leadSearch').addEventListener('input', () => {
     clearTimeout(leadsSearchTimer);
     leadsSearchTimer = setTimeout(() => { leadsOffset = 0; loadLeads(); }, 350);
   });
+  // Filter pills
+  document.getElementById('leadFilterPills').addEventListener('click', e => {
+    const pill = e.target.closest('.fpill');
+    if (!pill) return;
+    document.querySelectorAll('#leadFilterPills .fpill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    activeLeadFilter = pill.dataset.filter;
+    leadsOffset = 0;
+    loadLeads();
+  });
 }
 
 async function loadLeads() {
   document.getElementById('leadsTable').innerHTML = '<div class="loading">Loading…</div>';
-  const status    = document.getElementById('leadStatusFilter').value;
   const lead_type = document.getElementById('leadTypeFilter').value;
   const search    = document.getElementById('leadSearch')?.value?.trim() ?? '';
   const clientParam = me?.isAdmin ? `&client_id=${me.clientId ?? ''}` : '';
-  const qs = `?limit=${LEADS_LIMIT}&offset=${leadsOffset}${status ? '&status='+status : ''}${lead_type ? '&lead_type='+lead_type : ''}${search ? '&search='+encodeURIComponent(search) : ''}${clientParam}`;
-  const d  = await apiFetch(`/leads${qs}`);
+
+  // Parse the active filter pill
+  let statusParam = '';
+  let filterParam = '';
+  if (activeLeadFilter.startsWith('status:'))  statusParam = activeLeadFilter.slice(7);
+  if (activeLeadFilter.startsWith('special:')) filterParam = activeLeadFilter.slice(8);
+
+  const qs = `?limit=${LEADS_LIMIT}&offset=${leadsOffset}`
+    + (statusParam  ? `&status=${statusParam}`              : '')
+    + (lead_type    ? `&lead_type=${lead_type}`             : '')
+    + (search       ? `&search=${encodeURIComponent(search)}`  : '')
+    + (filterParam  ? `&filter=${filterParam}`              : '')
+    + clientParam;
+
+  const d = await apiFetch(`/leads${qs}`);
   if (!d) { document.getElementById('leadsTable').innerHTML = '<div class="error-msg">Failed to load leads.</div>'; return; }
 
   if (d.leads.length === 0) {
-    document.getElementById('leadsTable').innerHTML = '<div class="empty-state"><div class="esc-icon">👤</div>No leads match your filter.</div>';
+    const emptyMsg = activeLeadFilter
+      ? 'No leads match this filter.'
+      : 'No leads yet. They\'ll appear here after the first conversation.';
+    document.getElementById('leadsTable').innerHTML =
+      `<div class="empty-state"><div class="esc-icon">👤</div>${emptyMsg}</div>`;
     document.getElementById('leadsPagination').innerHTML = '';
     return;
   }
 
+  const channelBadge = ch => ch === 'web'
+    ? '<span class="pill pill-web">Web</span>'
+    : '<span class="pill pill-sms">SMS</span>';
+
   document.getElementById('leadsTable').innerHTML = `
     <div class="tbl-wrap"><table>
-      <thead><tr><th>Name</th><th>Phone</th><th>Type</th><th>Status</th><th>Created</th><th></th></tr></thead>
+      <thead><tr>
+        <th>Name</th><th>Phone</th><th>Channel</th><th>Type</th>
+        <th>Status</th><th>Created</th><th></th>
+      </tr></thead>
       <tbody>${d.leads.map(l => `<tr>
         <td>${l.contact_name ?? '—'}</td>
         <td>${l.contact_phone ?? '—'}</td>
+        <td>${channelBadge(l.channel)}</td>
         <td class="text-muted">${l.lead_type ?? '—'}</td>
-        <td>${pill(l.status)}</td>
+        <td>
+          <select class="inline-status" data-lead-id="${l.id}" onchange="inlineStatusChange(this)">
+            ${['new','contacted','engaged','scheduled','converted','closed','ignored']
+              .map(s => `<option value="${s}"${l.status===s?' selected':''}>${s}</option>`).join('')}
+          </select>
+        </td>
         <td class="text-muted text-xs">${fmt(l.created_at)}</td>
-        <td><span class="row-action" data-id="${l.id}">Edit →</span></td>
+        <td><span class="row-action" data-lead-open="${l.id}">Open →</span></td>
       </tr>`).join('')}</tbody>
     </table></div>`;
 
-  // Row edit actions
-  document.querySelectorAll('[data-id]').forEach(el => {
+  // Bind open-panel actions — store lead data on element
+  document.querySelectorAll('[data-lead-open]').forEach(el => {
     el.addEventListener('click', () => {
-      const lead = d.leads.find(l => l.id === el.dataset.id);
-      if (lead) openLeadModal(lead);
+      const lead = d.leads.find(l => l.id === el.dataset.leadOpen);
+      if (lead) openLeadPanel(lead);
     });
   });
 
@@ -2111,38 +2276,111 @@ async function loadLeads() {
     <button class="btn btn-ghost btn-sm" ${currentPage >= totalPages ? 'disabled' : ''} onclick="leadsOffset += ${LEADS_LIMIT}; loadLeads()">Next →</button>` : '';
 }
 
-function openLeadModal(lead) {
-  activeLead = lead;
-  document.getElementById('leadModalName').value      = lead.contact_name ?? '';
-  document.getElementById('leadModalPhone').value     = lead.contact_phone ?? '';
-  document.getElementById('leadModalEmail').value     = lead.contact_email ?? '';
-  document.getElementById('leadModalStatus').value    = lead.status ?? 'new';
-  document.getElementById('leadModalType').value      = lead.lead_type ?? '';
-  document.getElementById('leadModalService').value   = lead.requested_service ?? '';
-  document.getElementById('leadModalTimeframe').value = lead.preferred_timeframe ?? '';
-  document.getElementById('leadModalNotes').value     = lead.notes ?? '';
-  document.getElementById('leadModalError').style.display = 'none';
-  document.getElementById('leadModal').classList.add('open');
+async function inlineStatusChange(select) {
+  const id = select.dataset.leadId;
+  const status = select.value;
+  select.disabled = true;
+  const r = await apiPatch(`/leads/${id}`, { status });
+  select.disabled = false;
+  if (!r) { select.style.borderColor = 'var(--danger)'; setTimeout(() => select.style.borderColor = '', 2000); }
+  // If the open panel matches, sync it
+  if (activeLead?.id === id) {
+    activeLead.status = status;
+    document.getElementById('lpStatusSelect').value = status;
+  }
 }
-document.getElementById('leadModalCancel').addEventListener('click', () => document.getElementById('leadModal').classList.remove('open'));
-document.getElementById('leadModalSave').addEventListener('click', async () => {
-  const btn = document.getElementById('leadModalSave');
-  btn.disabled = true;
-  btn.textContent = 'Saving…';
+
+// ── Lead slide-in panel ────────────────────────────────────────────────────
+function openLeadPanel(lead) {
+  activeLead = lead;
+  document.getElementById('lpName').textContent = lead.contact_name || 'Unknown';
+  document.getElementById('lpPhone').textContent = lead.contact_phone || '—';
+  document.getElementById('lpEmail').textContent = lead.contact_email || '—';
+  document.getElementById('lpService').textContent = lead.requested_service || '—';
+  document.getElementById('lpTimeframe').textContent = lead.preferred_timeframe || '—';
+  document.getElementById('lpCreated').textContent = fmt(lead.created_at);
+  document.getElementById('lpLastContacted').textContent = lead.last_contacted_at ? fmt(lead.last_contacted_at) : '—';
+  document.getElementById('lpStatusSelect').value = lead.status ?? 'new';
+  document.getElementById('lpNotes').value = lead.notes ?? '';
+  document.getElementById('lpSaveIndicator').textContent = '';
+
+  // Meta badges
+  const ch = lead.channel === 'web' ? '<span class="pill pill-web">Web</span>' : '<span class="pill pill-sms">SMS</span>';
+  document.getElementById('lpMeta').innerHTML = ch
+    + (lead.lead_type ? ` <span class="pill pill-gray">${lead.lead_type}</span>` : '');
+
+  // View conversation button — only visible if we have a phone
+  document.getElementById('lpViewConvBtn').style.display = lead.contact_phone ? '' : 'none';
+
+  document.getElementById('leadPanel').classList.add('open');
+  document.getElementById('leadPanelBackdrop').classList.add('open');
+}
+
+function closeLeadPanel() {
+  document.getElementById('leadPanel').classList.remove('open');
+  document.getElementById('leadPanelBackdrop').classList.remove('open');
+}
+
+async function updateLeadStatusFromPanel() {
+  if (!activeLead) return;
+  const status = document.getElementById('lpStatusSelect').value;
+  document.getElementById('lpSaveIndicator').textContent = 'Saving…';
+  const r = await apiPatch(`/leads/${activeLead.id}`, { status });
+  document.getElementById('lpSaveIndicator').textContent = r ? 'Saved ✓' : 'Error saving';
+  setTimeout(() => { document.getElementById('lpSaveIndicator').textContent = ''; }, 2000);
+  if (r) { activeLead.status = status; loadLeads(); }
+}
+
+function debouncedSaveNotes() {
+  clearTimeout(notesDebounceTimer);
+  document.getElementById('lpSaveIndicator').textContent = 'Unsaved…';
+  notesDebounceTimer = setTimeout(saveNotesNow, 1000);
+}
+
+async function saveNotesNow() {
+  if (!activeLead) return;
+  const notes = document.getElementById('lpNotes').value;
+  document.getElementById('lpSaveIndicator').textContent = 'Saving…';
+  const r = await apiPatch(`/leads/${activeLead.id}`, { notes });
+  document.getElementById('lpSaveIndicator').textContent = r ? 'Saved ✓' : 'Error saving';
+  setTimeout(() => { document.getElementById('lpSaveIndicator').textContent = ''; }, 2000);
+  if (r) activeLead.notes = notes;
+}
+
+async function markLeadContacted() {
+  if (!activeLead) return;
+  const now = new Date().toISOString();
+  document.getElementById('lpSaveIndicator').textContent = 'Saving…';
   const r = await apiPatch(`/leads/${activeLead.id}`, {
-    contact_name:       document.getElementById('leadModalName').value.trim() || null,
-    contact_email:      document.getElementById('leadModalEmail').value.trim() || null,
-    status:             document.getElementById('leadModalStatus').value,
-    requested_service:  document.getElementById('leadModalService').value.trim() || null,
-    preferred_timeframe: document.getElementById('leadModalTimeframe').value.trim() || null,
-    notes:              document.getElementById('leadModalNotes').value,
+    status: 'contacted',
+    last_contacted_at: now,
   });
-  btn.disabled = false;
-  btn.textContent = 'Save changes';
-  if (!r) { document.getElementById('leadModalError').textContent = 'Failed to save changes.'; document.getElementById('leadModalError').style.display = 'block'; return; }
-  document.getElementById('leadModal').classList.remove('open');
-  loadLeads();
-});
+  if (r) {
+    activeLead.status = 'contacted';
+    activeLead.last_contacted_at = now;
+    document.getElementById('lpStatusSelect').value = 'contacted';
+    document.getElementById('lpLastContacted').textContent = fmt(now);
+    document.getElementById('lpSaveIndicator').textContent = 'Marked contacted ✓';
+    setTimeout(() => { document.getElementById('lpSaveIndicator').textContent = ''; }, 2000);
+    loadLeads();
+  } else {
+    document.getElementById('lpSaveIndicator').textContent = 'Error';
+  }
+}
+
+function viewLeadConversation() {
+  if (!activeLead?.contact_phone) return;
+  // Navigate to conversations section filtered by this phone
+  navigate('conversations');
+  setTimeout(() => {
+    const search = document.getElementById('convSearch');
+    if (search) { search.value = activeLead.contact_phone; search.dispatchEvent(new Event('input')); }
+  }, 300);
+  closeLeadPanel();
+}
+
+// Keep old modal open function for backward compatibility (still used by inline save path)
+function openLeadModal(lead) { openLeadPanel(lead); }
 
 // ── CAMPAIGNS ─────────────────────────────────────────────────────────────
 let campaignEventsSet = false;

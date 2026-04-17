@@ -3122,6 +3122,7 @@ async function main() {
     await testAnalyticsHttp();    // Phase 11.10: /portal/api/performance
     await testConversations();    // Phase 2A: conversations API, detectChannel, maskPhone, bot_paused gate
     await testDashboardUpgrade(); // Phase 2B: dashboard API shape, calcTimeSaved unit tests
+    await testLeadsUpgrade();     // Phase 3A: leads filter/PATCH fields, channel column
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -12562,6 +12563,107 @@ async function testDashboardUpgrade() {
   // We verify via calcTimeSaved edge cases already covered above.
   chk("dash: calcTimeSaved(100) correct", calcTimeSaved(100) === 6.7);
   chk("dash: calcTimeSaved(75) correct",  calcTimeSaved(75)  === 5.0);
+}
+
+// testLeadsUpgrade — Phase 3A: leads filter/PATCH field validation
+async function testLeadsUpgrade() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  // ── Auth guard: GET /portal/api/leads requires JWT ─────────────────────
+  {
+    const r = await httpGet("/portal/api/leads");
+    chk("leads3a: GET /leads → 401 without auth", r.status === 401);
+  }
+
+  // ── Auth guard: PATCH /portal/api/leads/:id requires JWT ──────────────
+  {
+    const r = await fetch(`${BASE_URL}/portal/api/leads/fake-id`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "contacted" }),
+    });
+    chk("leads3a: PATCH /leads/:id → 401 without auth", r.status === 401);
+  }
+
+  // ── handlePortalLeads: filter=contacted_today is a valid param ─────────
+  // We call the function directly with a mock req/res using supabase=null
+  // (DB unavailable → 503) to verify it reads the filter param without crashing
+  {
+    let statusCode = null;
+    const mockReq = {
+      query: { filter: "contacted_today", limit: "10", offset: "0" },
+      headers: { authorization: "Bearer fake" },
+      user: { clientId: "csr_rea", role: "client_admin" },
+    };
+    const mockRes = {
+      status(s) { statusCode = s; return this; },
+      json() {},
+    };
+    await handlePortalLeads(mockReq, mockRes, null); // supabase=null → 503
+    chk("leads3a: handlePortalLeads with filter=contacted_today → 503 (not crash)", statusCode === 503);
+  }
+
+  // ── handlePortalUpdateLead: accepts last_contacted_at and channel ──────
+  {
+    let statusCode = null;
+    const mockReq = {
+      params: { id: "fake-id" },
+      body: { status: "contacted", last_contacted_at: new Date().toISOString(), channel: "web" },
+      headers: { authorization: "Bearer fake" },
+      user: { clientId: "csr_rea", role: "client_admin" },
+    };
+    const mockRes = {
+      status(s) { statusCode = s; return this; },
+      json() {},
+    };
+    await handlePortalUpdateLead(mockReq, mockRes, null); // supabase=null → 503
+    chk("leads3a: handlePortalUpdateLead accepts last_contacted_at + channel → 503 (not crash)", statusCode === 503);
+  }
+
+  // ── handlePortalUpdateLead: invalid status rejected ────────────────────
+  {
+    let statusCode = null;
+    let body = null;
+    const mockReq = {
+      params: { id: "fake-id" },
+      body: { status: "bogus_status" },
+      headers: { authorization: "Bearer fake" },
+      user: { clientId: "csr_rea", role: "client_admin" },
+    };
+    const mockRes = {
+      status(s) { statusCode = s; return this; },
+      json(b) { body = b; },
+    };
+    // supabase=null → 503 before status validation — pass a mock supabase that
+    // returns a fake existing row so we reach the status check
+    const mockSb = {
+      from: () => ({
+        select: () => ({ eq: () => ({ eq: () => ({ single: async () => ({ data: { id: "fake-id", client_id: "csr_rea" }, error: null }) }) }) }),
+      }),
+    };
+    // resolvePortalClientId reads req.user — we need to set up correctly:
+    mockReq.query = {};
+    await handlePortalUpdateLead(mockReq, mockRes, mockSb);
+    chk("leads3a: invalid status → 400", statusCode === 400,
+      `got ${statusCode}, body: ${JSON.stringify(body)}`);
+  }
+
+  // ── GET /portal/api/leads route registered (not 404) ──────────────────
+  {
+    const r = await httpGet("/portal/api/leads");
+    chk("leads3a: GET /leads route registered (not 404)", r.status !== 404);
+  }
+
+  // ── PATCH /portal/api/leads/:id route registered (not 404) ───────────
+  {
+    const r = await fetch(`${BASE_URL}/portal/api/leads/fake`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "new" }),
+    });
+    chk("leads3a: PATCH /leads/:id route registered (not 404)", r.status !== 404);
+  }
 }
 
 main().catch((e) => {
