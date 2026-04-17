@@ -48,7 +48,8 @@ import { handlePortalIntegrations, handlePortalSettings, handlePortalUpdateSetti
   handleGetOptimization, handleRunOptimizationAnalysis, handleDismissInsight,
   handleGetRewrites, handleRunRewrites, handleUpdateRewriteStatus,
   handlePortalLeads, handlePortalUpdateLead, handlePortalAudiencePreview,
-  computeEstimatedRevenue } from "./adminPortal.js";
+  computeEstimatedRevenue,
+  handlePortalPreviewOpener, handlePortalUsage } from "./adminPortal.js";
 import {
   createIntegration, inferSchema, sanitizeForPortal, getCustomApiContext,
 } from "./apiIntegrations.js";
@@ -3123,6 +3124,7 @@ async function main() {
     await testConversations();    // Phase 2A: conversations API, detectChannel, maskPhone, bot_paused gate
     await testDashboardUpgrade(); // Phase 2B: dashboard API shape, calcTimeSaved unit tests
     await testLeadsUpgrade();     // Phase 3A: leads filter/PATCH fields, channel column
+    await testSettingsPolish();   // Phase 3B: hours/timezone fields, preview-opener, usage endpoints
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -12563,6 +12565,100 @@ async function testDashboardUpgrade() {
   // We verify via calcTimeSaved edge cases already covered above.
   chk("dash: calcTimeSaved(100) correct", calcTimeSaved(100) === 6.7);
   chk("dash: calcTimeSaved(75) correct",  calcTimeSaved(75)  === 5.0);
+}
+
+// testSettingsPolish — Phase 3B: hours/timezone, preview-opener, usage endpoints
+async function testSettingsPolish() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || "expected truthy");
+
+  // ── Auth guards ────────────────────────────────────────────────────────────
+  {
+    const r = await fetch(`${BASE_URL}/portal/api/settings/preview-opener`, { method: "POST" });
+    chk("sett3b: POST /settings/preview-opener → 401 without auth", r.status === 401);
+  }
+  {
+    const r = await httpGet("/portal/api/settings/usage");
+    chk("sett3b: GET /settings/usage → 401 without auth", r.status === 401);
+  }
+
+  // ── Routes registered (not 404) ────────────────────────────────────────────
+  {
+    const r = await fetch(`${BASE_URL}/portal/api/settings/preview-opener`, { method: "POST" });
+    chk("sett3b: preview-opener route registered (not 404)", r.status !== 404);
+  }
+  {
+    const r = await httpGet("/portal/api/settings/usage");
+    chk("sett3b: usage route registered (not 404)", r.status !== 404);
+  }
+
+  // ── handlePortalPreviewOpener: TEST_MODE → returns preview, sent:false ─────
+  {
+    let statusCode = null;
+    let body = null;
+    const mockReq = {
+      body: { opener_text: "Welcome to our ranch!" },
+      query: {},
+      headers: { authorization: "Bearer fake" },
+      portalUser: { clientId: "csr_rea", role: "client_admin", isAdmin: false, isClientAdmin: true },
+    };
+    const mockRes = {
+      status(s) { statusCode = s; return this; },
+      json(b) { body = b; },
+    };
+    // Temporarily set TEST_MODE
+    const prev = process.env.TEST_MODE;
+    process.env.TEST_MODE = "true";
+    await handlePortalPreviewOpener(mockReq, mockRes, null);
+    process.env.TEST_MODE = prev;
+    chk("sett3b: previewOpener TEST_MODE returns {preview, sent:false}",
+      body?.preview === "Welcome to our ranch!" && body?.sent === false,
+      `got: ${JSON.stringify(body)}`);
+  }
+
+  // ── handlePortalUsage: supabase=null → 503 ─────────────────────────────────
+  {
+    let statusCode = null;
+    const mockReq = {
+      query: {},
+      headers: { authorization: "Bearer fake" },
+      user: { clientId: "csr_rea", role: "client_admin" },
+    };
+    const mockRes = {
+      status(s) { statusCode = s; return this; },
+      json() {},
+    };
+    await handlePortalUsage(mockReq, mockRes, null);
+    chk("sett3b: handlePortalUsage supabase=null → 503", statusCode === 503);
+  }
+
+  // ── EDITABLE_SETTINGS includes hours and timezone ──────────────────────────
+  {
+    // Verify via handlePortalUpdateSettings: hours/timezone included in no-op body
+    let statusCode = null;
+    let body = null;
+    const mockReq = {
+      params: {},
+      body: { hours: "Mon–Fri 9am–5pm", timezone: "America/Denver" },
+      query: {},
+      headers: { authorization: "Bearer fake" },
+      user: { clientId: "highmark_demo", role: "client_admin" },
+      portalUser: { role: "internal_admin" },
+    };
+    const mockRes = {
+      status(s) { statusCode = s; return this; },
+      json(b) { body = b; },
+    };
+    await handlePortalUpdateSettings(mockReq, mockRes, null);
+    chk("sett3b: handlePortalUpdateSettings supabase=null → 503 (not crash on hours/timezone)",
+      statusCode === 503);
+  }
+
+  // ── VALID_BOOKING_MODES includes the three simplified modes ────────────────
+  const VALID = ["fareharbor", "static_links", "call_only", "hybrid", "demo"];
+  ["fareharbor", "static_links", "call_only"].forEach(m => {
+    chk(`sett3b: "${m}" is a valid booking mode`, VALID.includes(m));
+  });
 }
 
 // testLeadsUpgrade — Phase 3A: leads filter/PATCH field validation

@@ -48,7 +48,9 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handlePortalEmbedConfig, handlePortalUpdateEmbedConfig,
   handlePortalAttribution,
   handlePortalPerformance,
-  handleDismissChecklist } from "./adminPortal.js";
+  handleDismissChecklist,
+  handlePortalPreviewOpener,
+  handlePortalUsage } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
@@ -2441,6 +2443,8 @@ app.post( "/portal/api/campaigns/:id/send",         requirePortalAuth, (req, res
 app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
 app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res, supabase));
 app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));
+app.post( "/portal/api/settings/preview-opener", requirePortalAuth, (req, res) => handlePortalPreviewOpener(req, res, supabase));
+app.get(  "/portal/api/settings/usage",      requirePortalAuth, (req, res) => handlePortalUsage(req, res, supabase));
 // Scrape sources CRUD
 app.get(   "/portal/api/scrape-sources",         requirePortalAuth, (req, res) => handlePortalScrapeSources(req, res, supabase));
 app.post(  "/portal/api/scrape-sources",         requirePortalAuth, (req, res) => handlePortalCreateScrapeSource(req, res, supabase));

@@ -234,6 +234,35 @@ tr:hover td { background: var(--panel2); }
 }
 .inline-status:focus { border-color: var(--accent); }
 
+/* ── Settings field group dividers ──────────────────────────────────────── */
+.sett-group { margin-bottom: 24px; }
+.sett-group-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text3); border-bottom: 1px solid var(--border); padding-bottom: 6px;
+  margin-bottom: 16px;
+}
+.form-hint { font-size: 11px; color: var(--text2); margin-top: 4px; }
+
+/* ── Booking mode radio cards ────────────────────────────────────────────── */
+.booking-mode-cards { display: flex; flex-direction: column; gap: 10px; }
+.mode-card {
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px;
+  border: 1px solid var(--border2); border-radius: 8px; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.mode-card:hover { border-color: var(--text3); }
+.mode-card input[type="radio"] { flex-shrink: 0; margin-top: 3px; accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+.mode-card-content strong { font-size: 13px; display: block; margin-bottom: 4px; }
+.mode-card-content p { font-size: 12px; color: var(--text2); margin: 0; line-height: 1.5; }
+.mode-card.selected { border-color: var(--accent); background: rgba(16,185,129,.05); }
+
+/* ── Plan & Usage bar ────────────────────────────────────────────────────── */
+.usage-bar-wrap { margin: 8px 0; }
+.usage-bar-track { height: 6px; background: var(--border2); border-radius: 100px; overflow: hidden; }
+.usage-bar-fill  { height: 100%; background: var(--accent); border-radius: 100px; transition: width .4s ease; }
+.usage-stat { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+.usage-stat strong { color: var(--text); }
+
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; }
 .btn-primary { background: var(--accent); color: #000; }
@@ -3127,31 +3156,65 @@ async function loadSettings() {
   const bkTableHtml  = renderBookingOptionsTable(d.bookingLinks ?? [], canEdit, d.bookingMode);
 
   document.getElementById('settingsContent').innerHTML = `
+    <div id="settingsMsg" style="display:none;margin-bottom:12px;"></div>
+
     <div class="card">
-      <div class="card-title">General</div>
-      <div id="settingsMsg" style="display:none;margin-bottom:12px;"></div>
-      <div class="two-col">
-        <div class="form-group"><label>Business name</label><input type="text" id="set_name" value="${d.name ?? ''}"></div>
-        <div class="form-group"><label>Bot name</label><input type="text" id="set_bot_name" value="${d.botName ?? ''}">
-          <div class="form-hint">Name the bot uses in conversations (e.g. "Summit")</div></div>
+      <div class="sett-group">
+        <div class="sett-group-label">Business Info</div>
+        <div class="two-col">
+          <div class="form-group">
+            <label>Business name</label>
+            <input type="text" id="set_name" value="${d.name ?? ''}">
+            <div class="form-hint">The name shown in bot responses and your portal.</div>
+          </div>
+          <div class="form-group">
+            <label>Website URL</label>
+            <input type="url" id="set_website_url" value="${d.websiteUrl ?? ''}">
+            <div class="form-hint">Your bot re-crawls this periodically to stay up to date.</div>
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="form-group">
+            <label>Business hours</label>
+            <input type="text" id="set_hours" value="${d.hours ?? ''}" placeholder="e.g. Mon–Fri 9am–5pm, Sat 9am–3pm">
+            <div class="form-hint">Used by your bot when customers ask about hours.</div>
+          </div>
+          <div class="form-group">
+            <label>Timezone</label>
+            <input type="text" id="set_timezone" value="${d.timezone ?? 'America/Denver'}" placeholder="America/Denver">
+            <div class="form-hint">Used for the morning briefing and campaign scheduling.</div>
+          </div>
+        </div>
       </div>
-      <div class="form-group"><label>Tone</label><input type="text" id="set_tone" value="${d.tone ?? ''}" placeholder="e.g. warm, helpful, knowledgeable">
-        <div class="form-hint">One-line personality description injected into every response</div></div>
-      <div class="two-col">
-        <div class="form-group"><label>Support phone</label><input type="text" id="set_support_phone" value="${d.supportPhone ?? ''}" placeholder="+18005551234">
-          <div class="form-hint">Shown in HELP replies and handoff messages</div></div>
-        <div class="form-group"><label>Lead notification phone</label><input type="text" id="set_lead_notification_phone" value="${d.leadNotificationPhone ?? ''}">
-          <div class="form-hint">SMS destination for new lead notifications</div></div>
+
+      <div class="sett-group">
+        <div class="sett-group-label">Contact &amp; Notifications</div>
+        <div class="two-col">
+          <div class="form-group">
+            <label>Support phone</label>
+            <input type="text" id="set_support_phone" value="${d.supportPhone ?? ''}" placeholder="+18005551234">
+            <div class="form-hint">Given to customers who need urgent human help. Should be a number staff actively monitors.</div>
+          </div>
+          <div class="form-group">
+            <label>Notification email</label>
+            <input type="email" id="set_support_email" value="${d.supportEmail ?? ''}">
+            <div class="form-hint">Where lead alerts, weekly digests, and booking alerts are sent.</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Lead notification phone</label>
+          <input type="text" id="set_lead_notification_phone" value="${d.leadNotificationPhone ?? ''}" style="max-width:240px;">
+          <div class="form-hint">Receives an SMS when a new lead is captured. Usually the owner's cell.</div>
+        </div>
       </div>
-      <div class="two-col">
-        <div class="form-group"><label>Support email</label><input type="email" id="set_support_email" value="${d.supportEmail ?? ''}"></div>
-        <div class="form-group"><label>Website URL</label><input type="url" id="set_website_url" value="${d.websiteUrl ?? ''}">
-          <div class="form-hint">Used as the default scrape source for the knowledge base</div></div>
-      </div>
-      <div class="form-group" style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border);">
-        <label>Owner / internal mode phone</label>
-        <input type="text" id="set_owner_phone" value="${d.ownerPhone ?? ''}" placeholder="+12223334444" style="max-width:220px;">
-        <div class="form-hint">When this number texts your bot, it responds in <strong style="color:var(--text);">internal mode</strong> — business reports, lead summaries, and campaign ideas instead of guest replies. Leave blank to disable.</div>
+
+      <div class="sett-group" style="margin-bottom:0;">
+        <div class="sett-group-label">Internal</div>
+        <div class="form-group">
+          <label>Owner / internal mode phone</label>
+          <input type="text" id="set_owner_phone" value="${d.ownerPhone ?? ''}" placeholder="+12223334444" style="max-width:240px;">
+          <div class="form-hint">When this number texts your bot, it responds in <strong style="color:var(--text);">internal mode</strong> — business reports, lead summaries, and campaign ideas instead of guest replies. Leave blank to disable.</div>
+        </div>
       </div>
     </div>
 
@@ -3168,18 +3231,39 @@ async function loadSettings() {
     <div class="card" style="margin-top:16px;">
       <div class="card-title">Booking</div>
       <div class="form-group">
-        <label>Booking mode</label>
-        <select id="set_booking_mode" onchange="onBookingModeChange()">${modeOptions}</select>
-        <div class="form-hint">Controls how the bot handles booking requests from guests</div>
+        <label style="margin-bottom:10px;display:block;">How do customers book?</label>
+        <div class="booking-mode-cards" id="bookingModeCards">
+          <label class="mode-card ${['fareharbor','api_live_booking'].includes(d.bookingMode) ? 'selected' : ''}" for="mode-fareharbor">
+            <input type="radio" id="mode-fareharbor" name="booking_mode" value="fareharbor" ${['fareharbor','api_live_booking'].includes(d.bookingMode) ? 'checked' : ''} onchange="onBookingModeChange()">
+            <div class="mode-card-content">
+              <strong>🎟️ FareHarbor</strong>
+              <p>I use FareHarbor to manage my bookings. My bot checks live availability and sends booking links.</p>
+            </div>
+          </label>
+          <label class="mode-card ${d.bookingMode === 'static_links' ? 'selected' : ''}" for="mode-static">
+            <input type="radio" id="mode-static" name="booking_mode" value="static_links" ${d.bookingMode === 'static_links' ? 'checked' : ''} onchange="onBookingModeChange()">
+            <div class="mode-card-content">
+              <strong>🔗 Direct links</strong>
+              <p>I have my own booking pages. My bot sends customers to the right URL based on what they're asking about.</p>
+            </div>
+          </label>
+          <label class="mode-card ${'call_only,informational,lead_capture,hybrid'.includes(d.bookingMode) ? 'selected' : ''}" for="mode-phone">
+            <input type="radio" id="mode-phone" name="booking_mode" value="call_only" ${'call_only,informational,lead_capture,hybrid'.includes(d.bookingMode) ? 'checked' : ''} onchange="onBookingModeChange()">
+            <div class="mode-card-content">
+              <strong>📞 Phone only</strong>
+              <p>My bot answers questions and captures leads. I follow up with customers directly to handle bookings.</p>
+            </div>
+          </label>
+        </div>
       </div>
       <div class="form-group" id="bookingLinkGroup">
         <label>Fallback booking link <span style="color:var(--text2);font-size:11px;">(shown when no specific options match)</span></label>
         <input type="url" id="set_booking_link" value="${d.bookingLink ?? ''}" placeholder="https://…">
       </div>
       <div class="form-group" id="callCtaGroup">
-        <label>Phone CTA text <span style="color:var(--text2);font-size:11px;">(call_only / hybrid modes)</span></label>
+        <label>Phone CTA text</label>
         <input type="text" id="set_call_cta_text" value="${escHtml(_callCtaText)}" placeholder="e.g. Call us to book: (970) 555-1234">
-        <div class="form-hint">Custom text shown when the bot can't book directly. Shown only for call_only and hybrid modes.</div>
+        <div class="form-hint">Shown when the bot can't book directly — for phone-only mode.</div>
       </div>
       <div style="display:flex;align-items:center;gap:12px;">
         <input type="checkbox" id="set_human_handoff" ${d.humanHandoffEnabled ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
@@ -3202,7 +3286,7 @@ async function loadSettings() {
         ${[
           ['set_campaigns',    d.campaignsEnabled,   'Campaigns',    'Enable outbound SMS campaign sending to leads'],
           ['set_followups',    d.followupsEnabled,   'Follow-ups',   'Automatically follow up on captured leads (1 day + 3 day)'],
-          ['set_lead_capture', d.leadCaptureEnabled, 'Lead capture', 'Collect contact info from interested guests during conversation'],
+          ['set_lead_capture', d.leadCaptureEnabled, 'Ask for contact info after engaged conversations', 'Captured leads appear in your Leads tab'],
           ['set_waitlist',     d.waitlistEnabled,    'Waitlist',     'Allow guests to join a waitlist when requested tours are full'],
         ].map(([id,val,label,desc]) => `
           <div style="display:flex;align-items:center;gap:12px;">
@@ -3277,6 +3361,11 @@ async function loadSettings() {
       </div>
     </div>
 
+    <div class="card" style="margin-top:16px;" id="planUsageCard">
+      <div class="card-title">Plan &amp; Usage</div>
+      <div id="planUsageContent"><div class="loading">Loading…</div></div>
+    </div>
+
     <div style="display:flex;justify-content:flex-end;margin-top:16px;">
       <button class="btn btn-primary" id="settingsSaveBtn">Save changes</button>
     </div>`;
@@ -3329,14 +3418,14 @@ async function loadSettings() {
 
     const body = {
       name:                    document.getElementById('set_name').value.trim() || null,
-      bot_name:                document.getElementById('set_bot_name').value.trim() || null,
-      tone:                    document.getElementById('set_tone').value.trim() || null,
       support_phone:           document.getElementById('set_support_phone').value.trim() || null,
       lead_notification_phone: document.getElementById('set_lead_notification_phone').value.trim() || null,
       support_email:           document.getElementById('set_support_email').value.trim() || null,
       owner_phone:             document.getElementById('set_owner_phone').value.trim() || null,
       website_url:             document.getElementById('set_website_url').value.trim() || null,
-      booking_mode:            document.getElementById('set_booking_mode').value,
+      hours:                   document.getElementById('set_hours')?.value.trim() || null,
+      timezone:                document.getElementById('set_timezone')?.value.trim() || 'America/Denver',
+      booking_mode:            document.querySelector('input[name="booking_mode"]:checked')?.value ?? d.bookingMode,
       booking_link:            document.getElementById('set_booking_link').value.trim() || null,
       human_handoff_enabled:   document.getElementById('set_human_handoff').checked,
       campaigns_enabled:       document.getElementById('set_campaigns').checked,
@@ -3381,16 +3470,59 @@ async function loadSettings() {
   });
 
   onBookingModeChange(); // init conditional visibility
+  loadPlanUsage();       // async — loads into #planUsageContent
 }
 
 function onBookingModeChange() {
-  const mode = document.getElementById('set_booking_mode')?.value ?? '';
-  const showBk = ['static_links', 'hybrid'].includes(mode);
-  const showCta = ['call_only', 'hybrid'].includes(mode);
+  const checkedRadio = document.querySelector('input[name="booking_mode"]:checked');
+  const mode = checkedRadio?.value ?? document.getElementById('set_booking_mode')?.value ?? '';
+  // Update selected card highlighting
+  document.querySelectorAll('.mode-card').forEach(card => {
+    const radio = card.querySelector('input[type="radio"]');
+    card.classList.toggle('selected', radio?.checked ?? false);
+  });
+  const showBk = ['fareharbor', 'static_links', 'hybrid', 'api_live_booking'].includes(mode);
+  const showCta = ['call_only', 'hybrid', 'informational', 'lead_capture'].includes(mode);
   const bkSection = document.getElementById('bkSection');
   const ctaGroup = document.getElementById('callCtaGroup');
   if (bkSection) bkSection.style.display = showBk ? '' : 'none';
   if (ctaGroup) ctaGroup.style.display = showCta ? '' : 'none';
+}
+
+async function loadPlanUsage() {
+  const el = document.getElementById('planUsageContent');
+  if (!el) return;
+  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const d = await apiFetch(`/settings/usage${clientParam}`);
+  if (!d) { el.innerHTML = '<div class="text-muted text-xs">Could not load usage data.</div>'; return; }
+
+  const limit = d.message_limit;
+  const convCount = d.conversations_this_month ?? 0;
+  const webCount  = d.web_sessions_this_month  ?? 0;
+  const limitText = limit ? `/ ${limit}` : '/ Unlimited';
+  const barHtml = limit
+    ? `<div class="usage-bar-wrap">
+        <div class="usage-bar-track"><div class="usage-bar-fill" style="width:${Math.min(100, Math.round(convCount/limit*100))}%"></div></div>
+        <div style="font-size:10px;color:var(--text3);margin-top:4px;">${convCount} of ${limit} messages used</div>
+       </div>`
+    : '';
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px;">
+      <div>
+        <div class="usage-stat"><strong>${d.plan ?? 'Growth'}</strong></div>
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;">Current plan</div>
+      </div>
+      <div>
+        <div class="usage-stat"><strong>${convCount}</strong> ${limitText}</div>
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;">Messages this month</div>
+        ${barHtml}
+      </div>
+      <div>
+        <div class="usage-stat"><strong>${webCount}</strong></div>
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;">Web sessions this month</div>
+      </div>
+    </div>
+    <a href="mailto:hello@whiteoutsolutions.co?subject=Highmark+Plan+Upgrade" style="font-size:12px;color:var(--accent);">Upgrade plan →</a>`;
 }
 
 function renderScrapeSourcesTable(sources, canEdit) {
@@ -4602,37 +4734,48 @@ async function loadBotConfig() {
 }
 
 function renderBotConfigSection(cfg, editable) {
-  function field(id, label, value, hint, multiline) {
+  function field(id, label, value, hint, multiline, extraAfterLabel) {
     const v = escHtml(value ?? '');
     if (!editable) {
-      return `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
-        <div style="font-size:12px;color:var(--text2);margin-bottom:4px;">${label}</div>
-        <div style="font-size:13px;">${v || '<span style="color:var(--text2)">—</span>'}</div>
-        ${hint ? `<div style="font-size:11px;color:var(--text2);margin-top:3px;">${hint}</div>` : ''}
+      return `<div class="form-group">
+        <label>${label}</label>
+        <div style="font-size:13px;padding:8px 0;">${v || '<span style="color:var(--text2)">—</span>'}</div>
+        ${hint ? `<div class="form-hint">${hint}</div>` : ''}
       </div>`;
     }
+    const labelHtml = extraAfterLabel
+      ? `<label style="display:flex;align-items:center;justify-content:space-between;gap:8px;">${label}${extraAfterLabel}</label>`
+      : `<label>${label}</label>`;
     const input = multiline
-      ? `<textarea id="${id}" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:13px;resize:vertical;">${v}</textarea>`
-      : `<input type="text" id="${id}" value="${v}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:13px;">`;
-    return `<div style="padding:14px 0;border-bottom:1px solid var(--border);">
-      <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">${label}${hint ? ` — <span style="font-style:italic;">${hint}</span>` : ''}</div>
-      ${input}
-    </div>`;
+      ? `<textarea id="${id}" rows="4">${v}</textarea>`
+      : `<input type="text" id="${id}" value="${v}">`;
+    return `<div class="form-group">${labelHtml}${input}${hint ? `<div class="form-hint">${hint}</div>` : ''}</div>`;
   }
 
+  const previewBtn = editable
+    ? `<button class="btn btn-ghost btn-sm" style="flex-shrink:0;" onclick="previewOpener()">📱 Preview opener</button>`
+    : '';
+
   const saveBtn = editable
-    ? `<div style="margin-top:20px;"><button class="btn btn-primary" onclick="saveBotConfig()">Save Bot Config</button></div>`
+    ? `<div style="display:flex;justify-content:flex-end;margin-top:20px;"><button class="btn btn-primary" onclick="saveBotConfig()">Save Bot Config</button></div>`
     : `<div style="margin-top:12px;font-size:12px;color:var(--text2);">Contact your admin to change bot config.</div>`;
 
   return `<div class="card">
     <div class="card-title" style="margin-bottom:4px;">Bot Identity</div>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:16px;">Override bot name, tone, and AI behavior for this client.</div>
-    ${field('bc_bot_name', 'Bot Name', cfg.bot_name, 'Name the bot uses to introduce itself')}
-    ${field('bc_tone', 'Tone', cfg.tone, 'Personality style (e.g. "warm, stoked, genuinely local")')}
-    ${field('bc_opener_text', 'Opener Text', cfg.opener_text, 'First message sent to new guests (leave blank for seasonal default)')}
-    ${field('bc_handoff_message', 'Handoff Message', cfg.handoff_message, 'Override the default human handoff text')}
-    ${field('bc_system_prompt_addon', 'Custom AI Instructions', cfg.system_prompt_addon, 'Appended to every system prompt — use for business-specific rules', true)}
+    <div style="font-size:12px;color:var(--text2);margin-bottom:20px;">Configure your bot's name, personality, and opening message.</div>
+    ${field('bc_bot_name', 'Bot name', cfg.bot_name, 'What your bot calls itself. Defaults to your business name if left blank.')}
+    ${field('bc_tone', 'Bot tone', cfg.tone, 'Personality style, e.g. "warm, stoked, genuinely local" or "direct and efficient".')}
+    ${field('bc_opener_text', 'Opener message', cfg.opener_text, 'The first message customers receive when they text you. Leave blank to use the seasonal default opener.', false, previewBtn)}
+    ${field('bc_handoff_message', 'Handoff message', cfg.handoff_message, 'Override the default human handoff text sent when a guest asks to speak to a person.')}
+    ${field('bc_system_prompt_addon', 'Custom AI instructions', cfg.system_prompt_addon, 'Add specific instructions for your bot. e.g. "Always mention our Tuesday discount. Never discuss competitor pricing." Changes take effect on the next conversation.', true)}
+    <div id="botConfigMsg" style="display:none;margin-top:12px;"></div>
     ${saveBtn}
+  </div>
+
+  <div id="openerPreviewBox" style="display:none;margin-top:16px;" class="card">
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Opener preview</div>
+    <div id="openerPreviewText" style="background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:12px 14px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;"></div>
+    <div id="openerPreviewSent" style="display:none;font-size:12px;color:var(--accent);margin-top:8px;"></div>
   </div>`;
 }
 
@@ -4650,8 +4793,39 @@ async function saveBotConfig() {
 
   const r = await apiFetch('/bot-config', { method: 'PATCH', body: JSON.stringify(body) });
   if (btn) { btn.disabled = false; btn.textContent = 'Save Bot Config'; }
-  if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
+  if (!r || r.error) {
+    const msgEl = document.getElementById('botConfigMsg');
+    if (msgEl) { msgEl.className = 'error-msg'; msgEl.textContent = r?.error ?? 'Save failed'; msgEl.style.display = 'block'; }
+    return;
+  }
   showToast('Bot config saved');
+}
+
+async function previewOpener() {
+  const openerEl  = document.getElementById('bc_opener_text');
+  const previewBox = document.getElementById('openerPreviewBox');
+  const previewText = document.getElementById('openerPreviewText');
+  const previewSent = document.getElementById('openerPreviewSent');
+  if (!previewBox) return;
+
+  const opener_text = openerEl?.value?.trim() ?? '';
+  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+
+  previewBox.style.display = 'block';
+  previewText.textContent = 'Loading…';
+  previewSent.style.display = 'none';
+
+  const r = await apiFetch(`/settings/preview-opener${clientParam}`, {
+    method: 'POST',
+    body: JSON.stringify({ opener_text }),
+  });
+  if (!r) { previewText.textContent = 'Failed to load preview.'; return; }
+
+  previewText.textContent = r.preview ?? '(no preview)';
+  if (r.sent) {
+    previewSent.textContent = `✓ Test SMS sent to ${r.to}`;
+    previewSent.style.display = 'block';
+  }
 }
 
 // ── Booking Config section ─────────────────────────────────────────────────

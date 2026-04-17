@@ -55,6 +55,8 @@ const EDITABLE_SETTINGS = {
   website_url:             "website_url",
   booking_link:            "booking_link",
   booking_mode:            "booking_mode",
+  hours:                   "hours",
+  timezone:                "timezone",
   // Twilio routing fields (db1_twilio_config.sql)
   outbound_phone:          "outbound_phone",
   messaging_service_sid:   "messaging_service_sid",
@@ -670,6 +672,8 @@ export async function handlePortalSettings(req, res, supabase) {
     leadNotificationPhone:   client.leadNotificationPhone ?? null,
     ownerPhone:              client.ownerPhone            ?? null,
     websiteUrl:              client.websiteUrl            ?? null,
+    hours:                   client.hours                 ?? null,
+    timezone:                client.timezone              ?? "America/Denver",
     bookingMode:             client.bookingMode,
     bookingLink:             client.bookingLink           ?? null,
     // Feature toggles
@@ -872,6 +876,87 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
     ok:      true,
     clientId,
     updated: Object.keys(updates).filter(k => k !== "updated_at"),
+  });
+}
+
+// ── POST /portal/api/settings/preview-opener ─────────────────────────────────
+// Returns the opener text (or sends a test SMS). Body: { opener_text?: string }
+// TEST_MODE → always returns { preview, sent: false }
+// LIVE mode → sends Twilio SMS to client.ownerPhone if not overridden
+export async function handlePortalPreviewOpener(req, res, supabase) {
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const clients = getAllClients();
+  const client  = clients[clientId];
+  if (!client) return res.status(404).json({ error: "Client not found" });
+
+  // Resolve opener text: body override → bot_config → seasonal default
+  let openerText = (req.body?.opener_text ?? "").trim();
+  if (!openerText && supabase) {
+    const { data: bc } = await supabase.from("bot_config").select("opener_text").eq("client_id", clientId).maybeSingle();
+    if (bc?.opener_text) openerText = bc.opener_text;
+  }
+  if (!openerText) {
+    const { getSeasonalOpener } = await import("./index.js");
+    openerText = getSeasonalOpener(client);
+  }
+
+  const testMode = process.env.TEST_MODE === "true";
+  if (testMode) {
+    return res.json({ preview: openerText, sent: false });
+  }
+
+  // LIVE mode: send to ownerPhone
+  const toPhone = client.ownerPhone ?? null;
+  if (!toPhone) {
+    return res.status(400).json({ error: "No owner phone configured — add one in General settings" });
+  }
+
+  try {
+    const twilio = (await import("twilio")).default;
+    const accountSid = client.twilioAccountSid ?? process.env.TWILIO_ACCOUNT_SID;
+    const authToken  = client.twilioAuthToken  ?? process.env.TWILIO_AUTH_TOKEN;
+    const fromPhone  = client.outboundPhone ?? process.env.TWILIO_PHONE_NUMBER;
+    const tw = twilio(accountSid, authToken);
+    await tw.messages.create({ body: `[OPENER PREVIEW]\n${openerText}`, from: fromPhone, to: toPhone });
+    const masked = toPhone.slice(0, 3) + "****" + toPhone.slice(-4);
+    return res.json({ sent: true, to: masked });
+  } catch (err) {
+    return res.status(500).json({ error: `Failed to send: ${err.message}` });
+  }
+}
+
+// ── GET /portal/api/settings/usage ───────────────────────────────────────────
+// Returns message count + web session count for current calendar month
+export async function handlePortalUsage(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+
+  const [convRes, webRes] = await Promise.all([
+    supabase
+      .from("conversations")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId)
+      .gte("updated_at", monthStart),
+    supabase
+      .from("web_events")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId)
+      .eq("event_type", "chat_started")
+      .gte("created_at", monthStart),
+  ]);
+
+  return res.json({
+    month:              `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}`,
+    conversations_this_month: convRes.count  ?? 0,
+    web_sessions_this_month:  webRes.count   ?? 0,
+    plan:               "Growth",   // static for now — extend with billing table later
+    message_limit:      null,       // null = Unlimited
   });
 }
 
