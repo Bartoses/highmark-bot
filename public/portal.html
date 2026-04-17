@@ -321,6 +321,22 @@ tr:hover td { background: var(--panel2); }
   /* Modals: full-width on mobile */
   .modal { max-width: 100% !important; margin: 0; border-radius: 12px 12px 0 0; position: fixed; bottom: 0; left: 0; right: 0; max-height: 80vh; }
   .modal-backdrop { align-items: flex-end !important; }
+  /* Lead panel: full-width slide-up on mobile, clear bottom nav */
+  #leadPanel {
+    width: 100vw !important;
+    right: auto !important;
+    left: 0;
+    bottom: -100vh;
+    top: auto;
+    height: auto;
+    max-height: 92vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    transition: bottom .25s ease !important;
+  }
+  #leadPanel.open { bottom: 0 !important; right: auto !important; }
+  .lp-actions { padding-bottom: calc(20px + 56px); }
   /* Prevent horizontal scroll on settings tables */
   #settingsContent .tbl-wrap { max-width: calc(100vw - 64px); }
   /* Settings/onboarding grid: single column on mobile */
