@@ -2370,13 +2370,8 @@ async function markLeadContacted() {
 
 function viewLeadConversation() {
   if (!activeLead?.contact_phone) return;
-  // Navigate to conversations section filtered by this phone
-  navigate('conversations');
-  setTimeout(() => {
-    const search = document.getElementById('convSearch');
-    if (search) { search.value = activeLead.contact_phone; search.dispatchEvent(new Event('input')); }
-  }, 300);
   closeLeadPanel();
+  switchSection('conversations');
 }
 
 // Keep old modal open function for backward compatibility (still used by inline save path)
