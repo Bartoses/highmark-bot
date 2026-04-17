@@ -1,0 +1,259 @@
+# HIGHMARK — PROJECT PLAN & ROADMAP
+
+## PRINCIPLES
+
+* Build in small, releasable chunks
+* Each feature must be demoable
+* Prioritize revenue and onboarding speed
+* Keep Claude sessions small to save credits
+* Start new Claude session when:
+
+  * Task > 1 feature
+  * Context gets messy
+  * You switch domains (backend → frontend → infra)
+
+---
+
+## CURRENT STATE (v1)
+
+* AI SMS bot live (Twilio + Claude + Node)
+* Booking flows working
+* Weather + knowledge base working
+* CRM schema exists but campaigns not sending
+* Single-client deployment model
+* No onboarding flow
+* No client dashboard
+
+---
+
+## PHASE 1 — SELLABLE MVP
+
+### 1. Multi-Client Support
+
+Goal: Support multiple businesses in one system
+
+Tasks:
+
+* Create `clients` table (Supabase)
+* Route requests by `To` phone number
+* Load client config dynamically
+* Refactor CLIENT_CONFIG usage
+
+Done when:
+
+* 2+ clients run on same deployment
+
+---
+
+### 2. CRM Campaign Sending
+
+Goal: Enable revenue-driving outbound messaging
+
+Tasks:
+
+* Wire Twilio send into `/crm/campaigns/:id/send`
+* Add batching + rate limiting
+* Add basic segmentation by tags
+
+Done when:
+
+* Can send campaign to tagged users
+
+---
+
+### 3. Client Onboarding Flow
+
+Goal: Reduce onboarding time to <10 minutes
+
+Tasks:
+
+* Create onboarding form
+* Store client config in DB
+* Auto-create client record
+* Assign Twilio number
+
+Done when:
+
+* New client can be added without code changes
+
+---
+
+### 4. Demo System
+
+Goal: Convert leads via SMS demo
+
+Tasks:
+
+* Improve DEMO trigger flow
+* Add scripted responses
+* Separate demo vs live behavior
+
+Done when:
+
+* Demo consistently shows value in <60 seconds
+
+---
+
+### 5. Marketing Website
+
+Goal: Establish legitimacy + drive inbound leads
+
+Tasks:
+
+* Landing page
+* Pricing tiers
+* Demo number CTA
+* Value props
+
+Done when:
+
+* Can send link to prospects
+
+---
+
+## PHASE 2 — PRODUCTIZATION
+
+### 6. Admin Dashboard (MVP)
+
+* View conversations
+* View contacts
+* Basic analytics
+
+---
+
+### 7. Knowledge Base Expansion
+
+* Pull full FareHarbor item details
+* Add structured tour + rental data
+* Improve answer accuracy
+
+---
+
+### 8. Chat Optimization Loop
+
+* Store conversations
+* Identify failures
+* Improve prompts
+
+---
+
+### 9. Booking Lookup
+
+* Allow users to check reservations via SMS
+
+---
+
+## PHASE 3 — GROWTH
+
+### 10. Interest Capture
+
+* “Notify me when available”
+* Store + trigger campaigns
+
+---
+
+### 11. External APIs
+
+* Snow report
+* Trail conditions
+* Things to do
+
+---
+
+### 12. Cross-Sell Engine
+
+* Recommend + book other activities
+
+---
+
+## PHASE 4 — SCALE
+
+### 13. Pricing Tiers
+
+* Free
+* Starter
+* Pro (CRM + campaigns)
+
+---
+
+### 14. Self-Serve Platform
+
+* Auto onboarding
+* Billing integration
+* Multi-client dashboard
+
+---
+
+## COMPLETED SPRINTS
+
+### Sprint 1 — Multi-Client Portal MVP
+- Multi-client architecture, client portal (Supabase Auth + JWT), Conversations viewer,
+  Dashboard, Leads, Campaigns, Analytics, Settings, Users & Access, Invites
+
+### Sprint 2A — Conversations Upgrade
+- Unified SMS + web chat viewer, pause/resume bot, send-from-portal, AI suggest reply
+
+### Sprint 2B — Dashboard Upgrade
+- Hero story cards, conversion funnel, activity feed, calcTimeSaved, ROI banner
+
+### Sprint 2C — Test Console Polish
+- Full-width safe/live mode banner, collapsible demo script panel, channel switcher
+  (SMS/Web), session state bar, stage badges, system event messages
+
+### Sprint 3A — Leads Table Upgrade (2026-04-17)
+- Filter pills (All/New/Contacted/Engaged/Converted/Contacted today)
+- Slide-in panel with inline status select, auto-save notes, Mark contacted, View conv
+- Channel badge (SMS/Web), `channel` column added to `leads` DB table
+- PATCH /portal/api/leads/:id accepts last_contacted_at + channel
+- GET /portal/api/leads supports filter=contacted_today
+
+### Sprint 3B — Settings Polish (2026-04-17)
+- General tab: 3 visual groups (Business Info / Contact & Notifications / Internal)
+  with helper text on every field; added hours + timezone fields
+- Booking: 3 plain-English radio cards (FareHarbor / Direct links / Phone only)
+  with conditional field visibility
+- Bot tab: Preview opener button → in-page preview (TEST_MODE) or Twilio send (live)
+- Plan & Usage card: conversations + web sessions this month, usage bar
+- POST /portal/api/settings/preview-opener + GET /portal/api/settings/usage
+
+---
+
+## NEXT 5 BUILDS (STRICT ORDER)
+
+1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
+2. Sprint 3D — Campaigns v2 (scheduling, segment preview, send history)
+3. Analytics deep-dive (per-channel funnel, lead source attribution)
+4. Billing & plan enforcement (message limits, upgrade flow)
+5. Self-serve onboarding (new client wizard, Twilio provisioning)
+
+---
+
+## CLAUDE CODE RULES
+
+For every task:
+
+1. Keep scope small (1 feature only)
+2. Write tests
+3. Test locally
+4. Deploy
+5. Verify end-to-end
+6. Update docs
+
+Never:
+
+* Bundle multiple features in one prompt
+* Skip testing
+* Break existing flows
+
+---
+
+## SUCCESS METRIC
+
+You can:
+
+* Add a new client in <10 min
+* Demo in <60 sec
+* Send campaigns
+* Charge $300+/mo per client
+
+---
