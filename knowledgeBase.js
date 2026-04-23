@@ -235,22 +235,26 @@ async function refreshWeatherKnowledge(supabase) {
 
   try {
     // Steamboat Springs town (6,695 ft) — for general conditions
-    const [currentRes, forecastRes, passRes, stormPeakRes] = await Promise.all([
+    const [currentRes, forecastRes, passRes, stormPeakRes, kremmlingRes] = await Promise.all([
       fetch(`${OPENWEATHER_BASE}/weather?q=Steamboat+Springs,CO,US&appid=${apiKey}&units=imperial`),
-      fetch(`${OPENWEATHER_BASE}/forecast?q=Steamboat+Springs,CO,US&appid=${apiKey}&units=imperial&cnt=24`),
+      // cnt=40 → ~5 days of 3-hour readings (free tier max is 5 days / 40 points)
+      fetch(`${OPENWEATHER_BASE}/forecast?q=Steamboat+Springs,CO,US&appid=${apiKey}&units=imperial&cnt=40`),
       // Rabbit Ears Pass (9,426 ft) — where REA tours actually run
       fetch(`${OPENWEATHER_BASE}/weather?lat=40.38&lon=-106.60&appid=${apiKey}&units=imperial`),
       // Storm Peak / Steamboat Ski Resort summit (10,568 ft)
       fetch(`${OPENWEATHER_BASE}/weather?lat=40.457&lon=-106.804&appid=${apiKey}&units=imperial`),
+      // Kremmling, CO (7,923 ft) — CSR Kremmling operations
+      fetch(`${OPENWEATHER_BASE}/weather?lat=40.058&lon=-106.864&appid=${apiKey}&units=imperial`),
     ]);
 
     if (!currentRes.ok) throw new Error(`Weather API ${currentRes.status}`);
 
-    const [current, forecastData, pass, stormPeak] = await Promise.all([
+    const [current, forecastData, pass, stormPeak, kremmling] = await Promise.all([
       currentRes.json(),
       forecastRes.json(),
       passRes.ok ? passRes.json() : null,
       stormPeakRes.ok ? stormPeakRes.json() : null,
+      kremmlingRes.ok ? kremmlingRes.json() : null,
     ]);
 
     // Build daily forecast summaries (prefer noon reading per day)
@@ -287,6 +291,12 @@ async function refreshWeatherKnowledge(supabase) {
         wind_mph: Math.round(stormPeak.wind.speed),
         snow_1h:  ((stormPeak.snow?.["1h"] ?? 0) / 25.4).toFixed(2),
       } : null,
+      kremmling: kremmling ? {
+        temp:     Math.round(kremmling.main.temp),
+        desc:     kremmling.weather[0].description,
+        wind_mph: Math.round(kremmling.wind.speed),
+        snow_1h:  ((kremmling.snow?.["1h"] ?? 0) / 25.4).toFixed(2),
+      } : null,
       forecast: days,
       updated_at: new Date().toISOString(),
     };
@@ -298,8 +308,11 @@ async function refreshWeatherKnowledge(supabase) {
     const stormPeakNote = data.storm_peak
       ? ` | Storm Peak summit: ${data.storm_peak.temp}°F, ${data.storm_peak.desc}, wind ${data.storm_peak.wind_mph}mph`
       : "";
+    const kremmlingNote = data.kremmling
+      ? ` | Kremmling: ${data.kremmling.temp}°F, ${data.kremmling.desc}`
+      : "";
 
-    const dayLines = Object.entries(days).slice(0, 3).map(([date, d]) => {
+    const dayLines = Object.entries(days).slice(0, 5).map(([date, d]) => {
       const label = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
         weekday: "short", month: "short", day: "numeric",
       });
@@ -307,7 +320,7 @@ async function refreshWeatherKnowledge(supabase) {
       return `${label}: ${d.low}-${d.high}°F ${d.desc}${snowNote}`;
     });
 
-    const summary = `Steamboat: ${data.steamboat.temp}°F, ${data.steamboat.desc}, wind ${data.steamboat.wind_mph}mph${passNote}${stormPeakNote}. Forecast: ${dayLines.join(" | ")}`.slice(0, 400);
+    const summary = `Steamboat: ${data.steamboat.temp}°F, ${data.steamboat.desc}, wind ${data.steamboat.wind_mph}mph${passNote}${stormPeakNote}${kremmlingNote}. Forecast: ${dayLines.join(" | ")}`.slice(0, 500);
 
     await supabase.from("knowledge_base").upsert({
       client_id:       "csr_rea",

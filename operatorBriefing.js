@@ -383,6 +383,10 @@ function formatWeatherResponse(snap) {
     const rp = w.rabbit_ears_pass;
     lines.push(`Rabbit Ears Pass: ${rp.temp}°F, ${rp.desc}`);
   }
+  if (w?.kremmling) {
+    const kr = w.kremmling;
+    lines.push(`Kremmling: ${kr.temp}°F, ${kr.desc}`);
+  }
 
   if (s?.stations) {
     for (const st of Object.values(s.stations).slice(0, 2)) {

@@ -4726,6 +4726,10 @@ async function loadOperator() {
         const rp = w.rabbit_ears_pass;
         html += `<div style="margin-bottom:8px;"><strong>Rabbit Ears Pass:</strong> ${rp.temp}°F, ${rp.desc}</div>`;
       }
+      if (w?.kremmling) {
+        const kr = w.kremmling;
+        html += `<div style="margin-bottom:8px;"><strong>Kremmling:</strong> ${kr.temp}°F, ${kr.desc}, wind ${kr.wind_mph} mph</div>`;
+      }
       if (s?.stations) {
         for (const st of Object.values(s.stations).slice(0, 2)) {
           const depth = st.snow_depth_in != null ? `${st.snow_depth_in}" snow depth` : 'N/A';
@@ -4737,6 +4741,25 @@ async function loadOperator() {
         const alp = s.avalanche_danger.split('|')[0].trim();
         html += `<div style="margin-top:6px;font-size:12px;"><strong>Avalanche:</strong> ${escHtml(alp)}</div>`;
       }
+      // 5-day forecast
+      const forecast = w?.forecast ?? {};
+      const fDays = Object.entries(forecast).slice(0, 5);
+      if (fDays.length) {
+        html += `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);"><strong style="font-size:12px;">5-Day Forecast</strong><div style="display:grid;grid-template-columns:repeat(${fDays.length},1fr);gap:6px;margin-top:8px;">`;
+        for (const [date, d] of fDays) {
+          const label = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+          const snowNote = d.snow > 0 ? `<div style="color:#38bdf8;font-size:10px;">+${d.snow.toFixed(1)}"</div>` : '';
+          html += `<div style="text-align:center;background:var(--panel2);border-radius:6px;padding:6px 4px;">
+            <div style="font-size:10px;color:var(--text3);margin-bottom:2px;">${label.split(',')[0]}</div>
+            <div style="font-size:11px;color:var(--text2);">${label.split(',').slice(1).join(',').trim()}</div>
+            <div style="font-size:13px;font-weight:600;margin:4px 0;">${d.low}–${d.high}°F</div>
+            <div style="font-size:10px;color:var(--text2);">${d.desc}</div>
+            ${snowNote}
+          </div>`;
+        }
+        html += '</div></div>';
+      }
+
       if (snap.fetched_at) {
         const mins = Math.round((Date.now() - new Date(snap.fetched_at).getTime()) / 60000);
         html += `<div style="margin-top:8px;font-size:11px;color:var(--text3);">Updated ${mins < 1 ? 'just now' : mins + ' min ago'}</div>`;
