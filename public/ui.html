@@ -522,7 +522,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div class="dsp-tip-line">💡 This demo works for both SMS and Web Chat channels — use the channel switcher above.</div>
 </div>
 
-<!-- ── Mobile drawer (scenarios + simulate, shown on small screens) ─────── -->
+<!-- ── Mobile drawer ───────────────────────────────────────────────────── -->
 <div id="mobile-drawer">
   <div class="panel-section">
     <div class="section-label">Client</div>
@@ -531,18 +531,21 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </select>
   </div>
   <div class="panel-section">
-    <div class="section-label">Guest identity</div>
-    <label class="form-label">From phone (simulated guest)</label>
+    <div class="section-label">Identity</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <button id="op-toggle-mobile" class="sim-btn" onclick="toggleOperatorMode()" style="flex:1;text-align:center;">👤 Operator Mode</button>
+    </div>
     <input class="phone-input" id="from-phone-mobile" value="+15550000099" placeholder="+15550000099"
-           oninput="State.fromPhone = this.value; document.getElementById('from-phone').value = this.value">
+           oninput="State.fromPhone=this.value;document.getElementById('from-phone').value=this.value">
   </div>
   <div class="panel-section">
     <div class="section-label">Scenarios</div>
     <div id="mobile-scenario-list"></div>
   </div>
   <div class="panel-section">
+    <div class="section-label">Simulate</div>
     <button class="sim-btn" onclick="showPreview('confirmation');toggleMobileDrawer()">📋 Booking confirmation</button>
-    <button class="sim-btn" onclick="showPreview('followup');toggleMobileDrawer()">⏰ Follow-up (30 min)</button>
+    <button class="sim-btn" onclick="showPreview('followup');toggleMobileDrawer()">⏰ Follow-up</button>
     <button class="sim-btn" onclick="showPreview('cancellation');toggleMobileDrawer()">❌ Cancellation</button>
   </div>
 </div>
@@ -563,13 +566,14 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         <button class="copy-link-btn" onclick="copyDemoLink()" title="Copy a shareable link for this client">⎘ Copy demo link</button>
       </div>
 
-      <!-- Guest identity -->
+      <!-- Identity -->
       <div class="panel-section">
-        <div class="section-label">Guest identity</div>
-        <label class="form-label">From phone (simulated guest)</label>
+        <div class="section-label">Identity</div>
+        <button id="op-toggle" class="sim-btn" onclick="toggleOperatorMode()" style="margin-bottom:8px;width:100%;text-align:center;">👤 Operator Mode</button>
+        <label class="form-label">From phone</label>
         <input class="phone-input" id="from-phone" value="+15550000099" placeholder="+15550000099"
-               oninput="State.fromPhone = this.value; document.getElementById('from-phone-mobile').value = this.value">
-        <label class="form-label" style="margin-top:4px">Name (for booking previews)</label>
+               oninput="State.fromPhone=this.value;State.operatorMode=false;applyOperatorToggle();document.getElementById('from-phone-mobile').value=this.value">
+        <label class="form-label" style="margin-top:4px">Name (booking previews)</label>
         <input class="form-input" id="guest-name" value="Test Guest"
                oninput="State.booking.contactName = this.value">
       </div>
@@ -583,39 +587,40 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <!-- Simulate events -->
       <div class="panel-section">
         <div class="section-label">Simulate events</div>
-
         <button class="sim-btn" onclick="showPreview('confirmation')">📋 Booking confirmation</button>
         <button class="sim-btn" onclick="showPreview('followup')">⏰ Follow-up (30 min)</button>
         <button class="sim-btn" onclick="showPreview('cancellation')">❌ Cancellation</button>
-
-        <!-- Booking form -->
-        <div class="sim-form">
-          <div class="form-row">
-            <label class="form-label">Company</label>
-            <select class="form-select" id="sim-company" oninput="State.booking.company = this.value">
-              <option value="coloradosledrentals">Colorado Sled Rentals</option>
-              <option value="rabbitearsadventures">Rabbit Ears Adventures</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label class="form-label">Tour name</label>
-            <input class="form-input" id="sim-tour" value="Pro-Ride Guided Adventure"
-                   oninput="State.booking.tourName = this.value">
-          </div>
-          <div class="form-row">
-            <label class="form-label">Date &amp; time</label>
-            <input class="form-input" type="datetime-local" id="sim-date"
-                   oninput="State.booking.startAt = this.value">
-          </div>
-          <div class="form-row">
-            <label class="form-label">Booking UUID (optional)</label>
-            <input class="form-input" id="sim-uuid" placeholder="leave blank for no link"
-                   oninput="State.booking.uuid = this.value">
-          </div>
-          <div class="form-row">
-            <label class="form-label">Item PK (optional)</label>
-            <input class="form-input" id="sim-pk" placeholder="e.g. 662221"
-                   oninput="State.booking.itemPk = this.value">
+        <!-- Booking detail (collapsed by default) -->
+        <div style="margin-top:6px;">
+          <button class="sim-btn" id="sim-detail-toggle" onclick="toggleSimDetail()" style="font-size:10px;padding:4px 8px;">▸ Booking details</button>
+          <div id="sim-detail" style="display:none;" class="sim-form">
+            <div class="form-row">
+              <label class="form-label">Company</label>
+              <select class="form-select" id="sim-company" oninput="State.booking.company = this.value">
+                <option value="coloradosledrentals">Colorado Sled Rentals</option>
+                <option value="rabbitearsadventures">Rabbit Ears Adventures</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Tour name</label>
+              <input class="form-input" id="sim-tour" value="Pro-Ride Guided Adventure"
+                     oninput="State.booking.tourName = this.value">
+            </div>
+            <div class="form-row">
+              <label class="form-label">Date &amp; time</label>
+              <input class="form-input" type="datetime-local" id="sim-date"
+                     oninput="State.booking.startAt = this.value">
+            </div>
+            <div class="form-row">
+              <label class="form-label">UUID (optional)</label>
+              <input class="form-input" id="sim-uuid" placeholder="leave blank for no link"
+                     oninput="State.booking.uuid = this.value">
+            </div>
+            <div class="form-row">
+              <label class="form-label">Item PK (optional)</label>
+              <input class="form-input" id="sim-pk" placeholder="e.g. 662221"
+                     oninput="State.booking.itemPk = this.value">
+            </div>
           </div>
         </div>
       </div>
@@ -750,11 +755,12 @@ function uiHeaders(extra = {}) {
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
+const GUEST_PHONE = "+15550000099";
 const State = {
   safeMode:      true,
-  channel:       "sms",           // "sms" | "web"
-  webSessionId:  genSessionId(),  // unique per page load / reset
-  fromPhone:     "+15550000099",
+  channel:       "sms",
+  webSessionId:  genSessionId(),
+  fromPhone:     GUEST_PHONE,
   toPhone:       "+18668906657",
   clientName:    "Colorado Sled Rentals",
   clientBotName: "Summit",
@@ -764,6 +770,7 @@ const State = {
   transcript:    [],
   lastMeta:      null,
   currentStage:  null,
+  operatorMode:  false,
   demoLeadsThisSession: 0,
   currentPayloads: { sms: {}, fh: {}, session: {} },
   booking: {
@@ -1020,6 +1027,9 @@ async function switchClient(toPhone, doReset = true) {
     history.replaceState(null, "", "?" + params.toString());
   }
 
+  // Reset operator mode when switching clients
+  State.operatorMode = false;
+  applyOperatorToggle();
   if (doReset) await resetChat();
   else updateDemoPanel({});
 }
@@ -1509,6 +1519,42 @@ function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ─── Session ID generator ─────────────────────────────────────────────────────
 function genSessionId() {
   return "ui-" + Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
+}
+
+// ─── Operator mode toggle ────────────────────────────────────────────────────
+function toggleOperatorMode() {
+  const client = State.clients.find(c => c.toPhone === State.toPhone);
+  const opPhone = client?.ownerPhone || client?.operatorPhones?.[0] || null;
+  if (!opPhone) {
+    alert("No operator phone configured for this client. Set Owner / Internal Mode Phone in Settings → General.");
+    return;
+  }
+  State.operatorMode = !State.operatorMode;
+  const phone = State.operatorMode ? opPhone : GUEST_PHONE;
+  State.fromPhone = phone;
+  for (const id of ["from-phone", "from-phone-mobile"]) {
+    const el = document.getElementById(id);
+    if (el) el.value = phone;
+  }
+  applyOperatorToggle();
+}
+
+function applyOperatorToggle() {
+  for (const id of ["op-toggle", "op-toggle-mobile"]) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.textContent = State.operatorMode ? "✓ Operator Mode ON" : "👤 Operator Mode";
+    btn.style.borderColor = State.operatorMode ? "var(--warn)" : "";
+    btn.style.color        = State.operatorMode ? "var(--warn)" : "";
+  }
+}
+
+function toggleSimDetail() {
+  const d = document.getElementById("sim-detail");
+  const btn = document.getElementById("sim-detail-toggle");
+  const open = d.style.display !== "none";
+  d.style.display = open ? "none" : "";
+  btn.textContent = open ? "▸ Booking details" : "▾ Booking details";
 }
 
 // ─── Safe mode banner ─────────────────────────────────────────────────────────

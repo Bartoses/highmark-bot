@@ -2342,13 +2342,15 @@ app.get("/internal/info", requireUiAccess, (_req, res) => {
 app.get("/internal/clients", requireUiAccess, (_req, res) => {
   res.json(
     Object.values(getAllClients()).map((c) => ({
-      id:          c.id,
-      name:        c.name,
-      botName:     c.botName,
-      toPhone:     c.inboundPhones[0] ?? null,
-      bookingMode: c.bookingMode,
-      tier:        c.tier ?? null,
-      isDemo:      c.isDemo ?? false,
+      id:             c.id,
+      name:           c.name,
+      botName:        c.botName,
+      toPhone:        c.inboundPhones[0] ?? null,
+      bookingMode:    c.bookingMode,
+      tier:           c.tier ?? null,
+      isDemo:         c.isDemo ?? false,
+      ownerPhone:     c.ownerPhone ?? null,
+      operatorPhones: c.operatorPhones ?? [],
     }))
   );
 });
