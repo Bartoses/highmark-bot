@@ -4498,12 +4498,10 @@ function renderIntegrationSection(s, status) {
       <div style="font-weight:600;font-size:13px;margin-bottom:4px;">Custom Weather Locations</div>
       <p style="font-size:12px;color:var(--text2);margin:0 0 10px;">Type a city or place name and select from the results. Fetched every hour.</p>
       <div id="weatherLocList">${weatherLocRows}</div>
-      <div style="margin-top:8px;">
-        <div style="position:relative;max-width:340px;">
-          <input type="text" id="weatherLocSearch" class="form-input" placeholder="Search location… e.g. Kremmling, CO" autocomplete="off" style="padding-right:36px;" oninput="weatherLocSearchDebounce()" onkeydown="if(event.key==='Escape')weatherLocCloseDropdown()">
-          <span id="weatherLocSpinner" style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px;">⏳</span>
-        </div>
-        <div id="weatherLocDropdown" style="display:none;position:absolute;z-index:200;background:var(--bg);border:1px solid var(--border2);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.25);max-width:340px;overflow:hidden;margin-top:4px;"></div>
+      <div style="margin-top:8px;position:relative;max-width:340px;">
+        <input type="text" id="weatherLocSearch" class="form-input" placeholder="Search location… e.g. Kremmling, CO" autocomplete="off" style="padding-right:36px;" oninput="weatherLocSearchDebounce()" onkeydown="if(event.key==='Escape')weatherLocCloseDropdown()">
+        <span id="weatherLocSpinner" style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px;">⏳</span>
+        <div id="weatherLocDropdown" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:200;background:var(--bg);border:1px solid var(--border2);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.25);overflow:hidden;"></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:12px;">
         <button class="btn btn-primary btn-sm" id="weatherLocSaveBtn" onclick="saveWeatherLocations()">Save locations</button>
@@ -6181,7 +6179,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('click', (e) => {
   const search = document.getElementById('weatherLocSearch');
   const dropdown = document.getElementById('weatherLocDropdown');
-  if (dropdown && search && !search.contains(e.target) && !dropdown.contains(e.target)) {
+  if (dropdown && search && e.target !== search && !dropdown.contains(e.target)) {
     weatherLocCloseDropdown();
   }
 });
