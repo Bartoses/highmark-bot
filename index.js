@@ -2513,13 +2513,19 @@ app.patch("/portal/api/rewrites/:id",  requirePortalAuth, (req, res) => handleUp
 app.get("/portal/api/geocode", requirePortalAuth, async (req, res) => {
   const q = (req.query.q || "").trim();
   if (!q) return res.status(400).json({ error: "q required" });
-  const key = process.env.OPENWEATHER_API_KEY;
-  if (!key) return res.status(503).json({ error: "OpenWeather not configured" });
   try {
-    const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(q)}&limit=5&appid=${key}`;
-    const r = await fetch(url);
+    // Nominatim (OpenStreetMap) — free, no key, excellent small-town coverage
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&countrycodes=us&addressdetails=1`;
+    const r = await fetch(url, { headers: { "User-Agent": "Highmark-Bot/1.0 (usehighmark.com)" } });
     const data = await r.json();
-    res.json(Array.isArray(data) ? data.map(d => ({ name: d.name, state: d.state, country: d.country, lat: d.lat, lon: d.lon })) : []);
+    if (!Array.isArray(data)) return res.json([]);
+    const results = data.map(d => {
+      const a = d.address || {};
+      const name = a.city || a.town || a.village || a.hamlet || a.county || d.display_name.split(",")[0];
+      const state = a.state || "";
+      return { name, state, country: "US", lat: parseFloat(d.lat), lon: parseFloat(d.lon) };
+    });
+    res.json(results);
   } catch (err) {
     res.status(503).json({ error: err.message });
   }
