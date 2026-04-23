@@ -741,6 +741,7 @@ tr:hover td { background: var(--panel2); }
           <div class="tab-btn active" data-stab="general" onclick="switchSettingsTab('general')">General</div>
           <div class="tab-btn" data-stab="bot" onclick="switchSettingsTab('bot')">Bot</div>
           <div class="tab-btn" data-stab="embed" onclick="switchSettingsTab('embed')">Widget &amp; Embed</div>
+          <div class="tab-btn" data-stab="integrations-tab" onclick="switchSettingsTab('integrations-tab')">Integrations</div>
         </div>
         <!-- General tab -->
         <div class="tab-pane active" id="stab-general" data-stab="general">
@@ -894,6 +895,13 @@ tr:hover td { background: var(--panel2); }
             </div>
           </div>
         </div><!-- /stab-embed -->
+        <!-- Integrations tab -->
+        <div class="tab-pane" id="stab-integrations-tab" data-stab="integrations-tab">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+            <button class="btn btn-ghost btn-sm" onclick="loadIntegrationsSection()">↻ Refresh</button>
+          </div>
+          <div id="integrationsContentInner"><div class="loading">Loading…</div></div>
+        </div>
       </div><!-- /sec-settings -->
 
       <!-- USERS (admin only) -->
@@ -1803,8 +1811,9 @@ function switchSettingsTab(tab) {
   if (tab === 'booking') tab = 'general';
   document.querySelectorAll('#sec-settings .tab-btn[data-stab]').forEach(b => b.classList.toggle('active', b.dataset.stab === tab));
   document.querySelectorAll('#sec-settings .tab-pane[data-stab]').forEach(p => p.classList.toggle('active', p.dataset.stab === tab));
-  if (tab === 'bot')   loadBotConfig();
-  if (tab === 'embed') loadEmbedConfig();
+  if (tab === 'bot')               loadBotConfig();
+  if (tab === 'embed')             loadEmbedConfig();
+  if (tab === 'integrations-tab')  loadIntegrationsSection();
 }
 
 function switchAnalyticsTab(tab) {
@@ -4301,7 +4310,8 @@ function renderIntegrationCards(integrations) {
 let _intData = null;  // cached settings for the integrations section
 
 async function loadIntegrationsSection() {
-  const wrap = document.getElementById('integrationsContent');
+  // Write to whichever container is currently visible (standalone section or Settings tab)
+  const wrap = document.getElementById('integrationsContentInner') || document.getElementById('integrationsContent');
   wrap.innerHTML = '<div class="loading">Loading…</div>';
 
   const [settings, statusData] = await Promise.all([
