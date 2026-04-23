@@ -129,9 +129,10 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
   // Use per-message from_phone override (set by followUpEngine for demo/multi-client sends)
   const sendFrom = msg.metadata?.from_phone || fromNumber;
 
-  // Stop condition: if this message is linked to a lead, check the lead's status.
-  // ENGAGED / CONVERTED leads have replied — no further automation needed.
-  if (msg.lead_id) {
+  // Stop condition: follow-up sequences should halt once the lead engages.
+  // Campaigns / confirmations / transactional sends always go out regardless of lead status.
+  const isFollowUp = msg.message_type === "followup" || msg.message_type?.startsWith("followup_");
+  if (msg.lead_id && isFollowUp) {
     try {
       const { data: lead } = await supabase
         .from("leads")
@@ -150,7 +151,6 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
         return;
       }
     } catch (err) {
-      // Non-fatal: log and proceed — don't block sends over a lead lookup failure
       console.warn(`[SCHEDULER] Lead status check failed for ${msg.id} — proceeding:`, err.message);
     }
   }

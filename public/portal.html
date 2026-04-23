@@ -1829,6 +1829,9 @@ const sectionTitles = {
   operator: 'Operator View',
 };
 function switchSection(name, tabParam) {
+  // Close any open modals before navigating
+  document.querySelectorAll('.modal-backdrop.open').forEach(el => el.classList.remove('open'));
+
   // Redirect old section names to their new tab locations
   if (name === 'bot-config')     { switchSection('settings'); switchSettingsTab('bot');     return; }
   if (name === 'booking-config') { switchSection('settings'); switchSettingsTab('booking'); return; }
