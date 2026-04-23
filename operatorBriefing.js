@@ -392,25 +392,32 @@ function formatLeadsResponse(leads, label) {
 function formatWeatherResponse(snap) {
   if (!snap) return "No weather data cached. Check back after the next refresh (every hour).";
   const lines = [];
+  const emitted = new Set(); // track names to skip duplicates
+  const emit = (label, text) => {
+    const key = label.toLowerCase().replace(/\s+/g, "");
+    if (emitted.has(key)) return;
+    emitted.add(key);
+    lines.push(text);
+  };
 
   const w = snap.weather;
   const s = snap.snow;
 
   if (w?.steamboat) {
     const sb = w.steamboat;
-    lines.push(`Steamboat: ${sb.temp}°F, ${sb.desc}, wind ${sb.wind_mph}mph`);
+    emit("steamboat", `Steamboat: ${sb.temp}°F, ${sb.desc}, wind ${sb.wind_mph}mph`);
   }
   if (w?.rabbit_ears_pass) {
     const rp = w.rabbit_ears_pass;
-    lines.push(`Rabbit Ears Pass: ${rp.temp}°F, ${rp.desc}`);
+    emit("rabbitears", `Rabbit Ears Pass: ${rp.temp}°F, ${rp.desc}`);
   }
   if (w?.kremmling) {
     const kr = w.kremmling;
-    lines.push(`Kremmling: ${kr.temp}°F, ${kr.desc}`);
+    emit("kremmling", `Kremmling: ${kr.temp}°F, ${kr.desc}`);
   }
-  // Custom per-client locations
+  // Custom per-client locations — skip any that duplicate a global entry
   for (const loc of (snap.custom_locations ?? [])) {
-    lines.push(`${loc.name}: ${loc.temp}°F, ${loc.desc}`);
+    emit(loc.name, `${loc.name}: ${loc.temp}°F, ${loc.desc}`);
   }
 
   if (s?.stations) {
