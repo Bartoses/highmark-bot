@@ -16,6 +16,7 @@ import cron from "node-cron";
 import { getDefaultClient, getAllClients } from "./clients.js";
 import { runCrawlerForClient, buildCrawlerContext } from "./crawler.js";
 import { runOptimizationAnalysis } from "./optimizationEngine.js";
+import { getActivePartnerActivities, buildPartnerActivitiesContext } from "./partnerActivities.js";
 
 const FAREHARBOR_BASE     = "https://fareharbor.com/api/external/v1";
 const OPENWEATHER_BASE    = "https://api.openweathermap.org/data/2.5";
@@ -892,7 +893,22 @@ export async function getKnowledgeContext(supabase, client = null) {
                          : websiteSummary ? `BUSINESS INFO: ${websiteSummary}\n`
                          : "";
 
-    return `${opsSection}${weatherSection}${snowSection}${availSection}${itemsSection}${websiteSection}${linkSection}`.trim();
+    // ── Partner activities (Sprint 5) — recommend ONLY for things we don't sell ──
+    let partnerSection = "";
+    try {
+      const month  = new Date().getUTCMonth();
+      const season = (month >= 10 || month <= 2) ? "winter"
+                   : (month >= 5 && month <= 9)  ? "summer"
+                   : "shoulder";
+      const partners = await getActivePartnerActivities(supabase, c.id, { season });
+      const trackingBaseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : (process.env.APP_URL ?? "");
+      const partnerCtx = buildPartnerActivitiesContext(partners, { trackingBaseUrl });
+      if (partnerCtx) partnerSection = `\n${partnerCtx}\n`;
+    } catch { /* non-fatal */ }
+
+    return `${opsSection}${weatherSection}${snowSection}${availSection}${itemsSection}${websiteSection}${linkSection}${partnerSection}`.trim();
   } catch {
     return "";
   }

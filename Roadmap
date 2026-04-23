@@ -227,13 +227,32 @@ Done when:
   accessible to client_admin role
 - db1_operator_briefings.sql: run once in Supabase DB1 to create operator_briefings table
 
+### Sprint 4B — Smart Campaigns (2026-04-23)
+- Event-triggered campaigns: snow_fresh / good_weather / opening_date / custom_date
+- campaignTriggers.js: evaluateTrigger, evaluateSnowFresh, evaluateGoodWeather, cooldown helper
+- POST /admin/simulate-event for preview; campaign_type="event_triggered" on campaigns table
+
+### Sprint 5 — Activity Distribution Network (2026-04-23)
+- partner_activities table (DB1): client_id, partner_name, activity_name, category, booking_url,
+  seasons text[], keywords text[], commission_pct, enabled, metadata jsonb
+- partnerActivities.js: scorePartnerMatch, getActivePartnerActivities, resolvePartnerLink,
+  detectSeasonFromContext, buildPartnerActivitiesContext, buildPartnerTrackingUrl
+- bookingLinks.js: **Source 5** (confidence 0.60) — activates only when no config/api/crawl match
+- knowledgeBase.js: partner context appended to KNOWLEDGE_BASE block (≤12 partners, season-filtered)
+- index.js: GET /track/partner (302 + fire-and-forget partner_link_clicked),
+  partner_link_sent event when Source 5 wins in SMS
+- adminPortal.js: 5 new routes — GET/POST/PATCH/DELETE /portal/api/partners + /analytics
+- portal.html: Partners page — cards list, add/edit modal, per-partner CTR analytics
+- db1_partner_activities.sql: migration applied to Supabase DB1
+- Tests: 34 new assertions covering pure scorers, validators, Source 5 regression, HTTP guards
+
 ---
 
 ## NEXT 5 BUILDS (STRICT ORDER)
 
-1. Sprint 4B — Smart Campaigns (scheduled send, segment preview, auto-triggers)
-2. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
-3. Sprint 3D — Campaigns v2 (send history, delivery stats)
+1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
+2. Sprint 3D — Campaigns v2 (send history, delivery stats)
+3. Sprint 6 — Partner onboarding UX (bulk CSV import, auto-season from keywords)
 4. Analytics deep-dive (per-channel funnel, lead source attribution)
 5. Billing & plan enforcement (message limits, upgrade flow)
 

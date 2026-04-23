@@ -543,6 +543,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="messaging">
         <span class="nav-icon">📨</span> Messaging
       </div>
+      <div class="nav-item" data-section="partners">
+        <span class="nav-icon">🤝</span> Partners
+      </div>
       <div class="nav-section-label client-admin-only" style="padding:10px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Admin</div>
       <div class="nav-item client-admin-only" data-section="operator">
         <span class="nav-icon">📋</span> Operator View
@@ -960,6 +963,21 @@ tr:hover td { background: var(--panel2); }
         <div id="messagingContent"><div class="loading">Loading…</div></div>
       </div><!-- /sec-messaging -->
 
+      <!-- PARTNERS (Sprint 5) -->
+      <div class="section" id="sec-partners">
+        <div class="section-header">
+          <span class="section-title">Partners</span>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-ghost btn-sm" onclick="loadPartners()">↻ Refresh</button>
+            <button class="btn btn-primary btn-sm client-admin-only" onclick="openPartnerModal()">+ Add partner</button>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--text2);margin:8px 0 16px;">
+          Activities you don't run yourself but want to refer out. The bot will recommend these when a guest asks about something outside your own lineup. Every click is tracked.
+        </p>
+        <div id="partnersContent"><div class="loading">Loading…</div></div>
+      </div><!-- /sec-partners -->
+
 
       <!-- ONBOARDING — New Client (internal_admin only) -->
       <div class="section admin-only" id="sec-onboarding">
@@ -1211,6 +1229,10 @@ tr:hover td { background: var(--panel2); }
             </div>
             <div class="more-link-item" onclick="switchSection('messaging')">
               <span>💬</span> Messaging
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item" onclick="switchSection('partners')">
+              <span>🤝</span> Partners
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item client-admin-only" onclick="switchSection('users')">
@@ -1638,6 +1660,81 @@ tr:hover td { background: var(--panel2); }
   </div>
 </div>
 
+<!-- ── Partner activity modal (Sprint 5) ────────────────────────────────────── -->
+<div class="modal-backdrop" id="partnerModal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-title" id="partnerModalTitle">Add Partner Activity</div>
+    <div class="modal-body">
+      <div id="partnerModalError" class="error-msg" style="display:none"></div>
+      <input type="hidden" id="partnerId">
+      <div class="form-group">
+        <label>Partner name</label>
+        <input class="form-input" type="text" id="partnerName" placeholder="e.g. Mountain Rafting Co.">
+      </div>
+      <div class="form-group">
+        <label>Activity name</label>
+        <input class="form-input" type="text" id="partnerActivity" placeholder="e.g. Half-day whitewater trip">
+      </div>
+      <div class="form-group">
+        <label>Category</label>
+        <select class="form-input" id="partnerCategory">
+          <option value="tour">Tour</option>
+          <option value="rental">Rental</option>
+          <option value="lodging">Lodging</option>
+          <option value="dining">Dining</option>
+          <option value="transport">Transport</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Booking URL</label>
+        <input class="form-input" type="url" id="partnerUrl" placeholder="https://partner.com/book/…">
+        <div class="form-hint">Guests click a tracked /track/partner link that redirects here.</div>
+      </div>
+      <div class="form-group">
+        <label>Description <span style="color:var(--text3);font-weight:400;">(optional, shown to bot)</span></label>
+        <input class="form-input" type="text" id="partnerDescription" placeholder="Short summary the bot uses when recommending">
+      </div>
+      <div class="form-group">
+        <label>Keywords <span style="color:var(--text3);font-weight:400;">(comma-separated)</span></label>
+        <input class="form-input" type="text" id="partnerKeywords" placeholder="e.g. rafting, whitewater, kayak">
+        <div class="form-hint">Helps the bot decide when to recommend this partner.</div>
+      </div>
+      <div class="form-group">
+        <label>Price range <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+        <input class="form-input" type="text" id="partnerPrice" placeholder="e.g. $75–$150">
+      </div>
+      <div class="form-group">
+        <label>Location <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+        <input class="form-input" type="text" id="partnerLocation" placeholder="e.g. Steamboat Springs">
+      </div>
+      <div class="form-group">
+        <label>Seasons</label>
+        <select class="form-input" id="partnerSeasons">
+          <option value="all">All year</option>
+          <option value="winter">Winter only</option>
+          <option value="summer">Summer only</option>
+          <option value="shoulder">Shoulder only</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Commission % <span style="color:var(--text3);font-weight:400;">(optional, internal only)</span></label>
+        <input class="form-input" type="number" id="partnerCommission" min="0" max="100" step="0.5" placeholder="e.g. 10">
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="partnerEnabled" checked style="width:auto;">
+          <span>Enabled (bot can recommend this partner)</span>
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closePartnerModal()">Cancel</button>
+      <button class="btn btn-primary" id="partnerSaveBtn" onclick="savePartner()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Custom API integration modal ─────────────────────────────────────────── -->
 <div class="modal-backdrop" id="customApiModal">
   <div class="modal" style="max-width:680px;">
@@ -1788,7 +1885,7 @@ async function init() {
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
   const urlParams = new URLSearchParams(location.search);
   const urlTab = urlParams.get('tab') || null;
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','conversations','knowledge','integrations','messaging','bot-config','booking-config','website-embed','attribution','users','clients','onboarding','operator'];
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','conversations','knowledge','integrations','messaging','partners','bot-config','booking-config','website-embed','attribution','users','clients','onboarding','operator'];
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard', urlTab);
 }
 
@@ -1824,7 +1921,7 @@ async function signOut() {
 const sectionTitles = {
   dashboard: 'Dashboard', leads: 'Leads', campaigns: 'Campaigns', conversations: 'Conversations',
   analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
-  integrations: 'Integrations', messaging: 'Messaging',
+  integrations: 'Integrations', messaging: 'Messaging', partners: 'Partners',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
   operator: 'Operator View',
 };
@@ -1863,6 +1960,7 @@ function switchSection(name, tabParam) {
   if (name === 'knowledge')     loadKnowledge();
   if (name === 'integrations')  loadIntegrationsSection();
   if (name === 'messaging')     loadMessaging();
+  if (name === 'partners')      loadPartners();
   if (name === 'onboarding')    resetOnboarding();
   if (name === 'operator')      loadOperator();
 }
@@ -5057,6 +5155,166 @@ function timeAgo(date) {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24)    return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+// ── Partners section (Sprint 5) ────────────────────────────────────────────
+let _partnersData = [];
+let _partnerAnalytics = null;
+
+async function loadPartners() {
+  const wrap = document.getElementById('partnersContent');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  const [list, analytics] = await Promise.all([
+    apiFetch('/partners'),
+    apiFetch('/partners/analytics?days=30'),
+  ]);
+  if (!list) {
+    wrap.innerHTML = '<div class="error-msg" style="display:block">Could not load partners.</div>';
+    return;
+  }
+  _partnersData = Array.isArray(list.partners) ? list.partners : [];
+  _partnerAnalytics = analytics ?? null;
+  wrap.innerHTML = renderPartnersSection(_partnersData, _partnerAnalytics);
+}
+
+function renderPartnersSection(partners, analytics) {
+  if (!partners.length) {
+    return `
+      <div class="card" style="text-align:center;padding:32px 20px;">
+        <div style="font-size:28px;margin-bottom:8px;">🤝</div>
+        <div class="card-title">No partners yet</div>
+        <p style="font-size:13px;color:var(--text2);margin:8px auto 16px;max-width:420px;">
+          Add activities you don't run yourself. The bot will recommend them when guests ask about things outside your core lineup — and every click is tracked.
+        </p>
+        <button class="btn btn-primary client-admin-only" onclick="openPartnerModal()">+ Add your first partner</button>
+      </div>`;
+  }
+
+  const analyticsById = new Map();
+  if (analytics?.rows) for (const r of analytics.rows) analyticsById.set(r.id, r);
+
+  const summary = analytics?.summary ?? { totalSent: 0, totalClicked: 0 };
+  const summaryBar = `
+    <div class="card" style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
+      <div><div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;">Recommended (30d)</div><div style="font-size:22px;font-weight:700;">${summary.totalSent}</div></div>
+      <div><div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;">Clicked (30d)</div><div style="font-size:22px;font-weight:700;">${summary.totalClicked}</div></div>
+      <div><div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;">Active partners</div><div style="font-size:22px;font-weight:700;">${partners.filter(p => p.enabled).length} / ${partners.length}</div></div>
+    </div>`;
+
+  const rows = partners.map((p) => {
+    const stats = analyticsById.get(p.id) ?? { sent: 0, clicked: 0, click_through_rate: 0 };
+    const statusBadge = p.enabled
+      ? '<span class="pill pill-success">Enabled</span>'
+      : '<span class="pill pill-muted">Disabled</span>';
+    const keywords = Array.isArray(p.keywords) && p.keywords.length
+      ? p.keywords.slice(0, 4).map(k => `<span class="pill pill-muted" style="margin-right:4px;">${escapeHtml(k)}</span>`).join('')
+      : '<span style="color:var(--text3);font-size:12px;">—</span>';
+    const seasons = Array.isArray(p.seasons) && p.seasons.length ? p.seasons.join(', ') : 'all';
+    return `
+      <div class="card" style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:240px;">
+            <div style="font-weight:600;font-size:15px;">${escapeHtml(p.activity_name)} <span style="color:var(--text2);font-weight:400;">via ${escapeHtml(p.partner_name)}</span></div>
+            <div style="font-size:12px;color:var(--text2);margin-top:2px;">
+              ${escapeHtml(p.category || 'other')} · seasons: ${escapeHtml(seasons)}${p.price_range ? ' · ' + escapeHtml(p.price_range) : ''}${p.location ? ' · ' + escapeHtml(p.location) : ''}
+            </div>
+            ${p.description ? `<div style="font-size:13px;color:var(--text2);margin-top:6px;">${escapeHtml(p.description)}</div>` : ''}
+            <div style="margin-top:8px;">${keywords}</div>
+          </div>
+          <div style="text-align:right;min-width:140px;">
+            <div style="margin-bottom:6px;">${statusBadge}</div>
+            <div style="font-size:12px;color:var(--text2);">Sent: <b>${stats.sent}</b> · Clicks: <b>${stats.clicked}</b></div>
+            <div style="font-size:12px;color:var(--text2);">CTR: <b>${stats.click_through_rate}%</b></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px;" class="client-admin-only">
+          <button class="btn btn-ghost btn-sm" onclick="openPartnerModal('${p.id}')">Edit</button>
+          <button class="btn btn-ghost btn-sm" onclick="deletePartner('${p.id}')" style="color:var(--danger,#e53);">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  return summaryBar + rows;
+}
+
+function openPartnerModal(id) {
+  const modal = document.getElementById('partnerModal');
+  const err   = document.getElementById('partnerModalError');
+  err.style.display = 'none';
+  err.textContent = '';
+  const p = id ? _partnersData.find(x => x.id === id) : null;
+  document.getElementById('partnerModalTitle').textContent = p ? 'Edit Partner Activity' : 'Add Partner Activity';
+  document.getElementById('partnerId').value          = p?.id ?? '';
+  document.getElementById('partnerName').value        = p?.partner_name ?? '';
+  document.getElementById('partnerActivity').value    = p?.activity_name ?? '';
+  document.getElementById('partnerCategory').value    = p?.category ?? 'tour';
+  document.getElementById('partnerUrl').value         = p?.booking_url ?? '';
+  document.getElementById('partnerDescription').value = p?.description ?? '';
+  document.getElementById('partnerKeywords').value    = Array.isArray(p?.keywords) ? p.keywords.join(', ') : '';
+  document.getElementById('partnerPrice').value       = p?.price_range ?? '';
+  document.getElementById('partnerLocation').value    = p?.location ?? '';
+  const season = Array.isArray(p?.seasons) && p.seasons.length ? p.seasons[0] : 'all';
+  document.getElementById('partnerSeasons').value     = season;
+  document.getElementById('partnerCommission').value  = p?.commission_pct ?? '';
+  document.getElementById('partnerEnabled').checked   = p ? !!p.enabled : true;
+  modal.classList.add('open');
+}
+
+function closePartnerModal() {
+  document.getElementById('partnerModal').classList.remove('open');
+}
+
+async function savePartner() {
+  const err = document.getElementById('partnerModalError');
+  err.style.display = 'none';
+
+  const body = {
+    partner_name:   document.getElementById('partnerName').value.trim(),
+    activity_name:  document.getElementById('partnerActivity').value.trim(),
+    category:       document.getElementById('partnerCategory').value,
+    booking_url:    document.getElementById('partnerUrl').value.trim(),
+    description:    document.getElementById('partnerDescription').value.trim(),
+    keywords:       document.getElementById('partnerKeywords').value,
+    price_range:    document.getElementById('partnerPrice').value.trim() || null,
+    location:       document.getElementById('partnerLocation').value.trim() || null,
+    seasons:        [document.getElementById('partnerSeasons').value],
+    commission_pct: document.getElementById('partnerCommission').value === '' ? null : Number(document.getElementById('partnerCommission').value),
+    enabled:        document.getElementById('partnerEnabled').checked,
+  };
+
+  if (!body.partner_name || !body.activity_name || !body.booking_url) {
+    err.textContent = 'Partner name, activity name, and booking URL are required.';
+    err.style.display = 'block';
+    return;
+  }
+  try { new URL(body.booking_url); } catch {
+    err.textContent = 'Booking URL must be a full URL starting with https://';
+    err.style.display = 'block';
+    return;
+  }
+
+  const id  = document.getElementById('partnerId').value;
+  const url = id ? `/partners/${id}` : '/partners';
+  const method = id ? 'PATCH' : 'POST';
+  const result = await apiFetch(url, { method, body: JSON.stringify(body) });
+  if (!result) {
+    err.textContent = _lastApiError ?? 'Save failed';
+    err.style.display = 'block';
+    return;
+  }
+  closePartnerModal();
+  loadPartners();
+}
+
+async function deletePartner(id) {
+  if (!confirm('Delete this partner? Existing click tracking data will be preserved.')) return;
+  const result = await apiFetch(`/partners/${id}`, { method: 'DELETE' });
+  if (!result) {
+    alert(_lastApiError ?? 'Delete failed');
+    return;
+  }
+  loadPartners();
 }
 
 // ── Messaging section ──────────────────────────────────────────────────────

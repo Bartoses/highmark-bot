@@ -6,6 +6,11 @@
 //   2. API      — FareHarbor item PKs from knowledge_base cache      (confidence 0.85)
 //   3. Crawl    — booking pages from client_pages table              (confidence 0.70)
 //   4. Fallback — browse-all links, first available                  (confidence 0.40)
+//   5. Partner  — partner_activities (Sprint 5, additive)             (confidence 0.60)
+//
+// Source 5 (partner) only activates when the client asked about something the
+// client does NOT sell themselves and no source 1–3 returned a real match.
+// It cannot beat config / api / crawl — it only rescues "fallback" cases.
 //
 // No regex link detection. No model-generated URLs. Always deterministic.
 //
@@ -14,9 +19,11 @@
 //   matchConfigLink(context, client) → { url, source, confidence } | null
 //   getApiLink(context, client, supabase) → { url, source, confidence } | null
 //   getCrawlLink(context, client, supabase) → { url, source, confidence } | null
-//   resolveBookingLink({ message, entity, company, location, season, client, supabase })
-//     → { url, source, confidence } | null
+//   resolveBookingLink({ message, entity, company, location, season, client, supabase, trackingBaseUrl })
+//     → { url, source, confidence, partner? } | null
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { resolvePartnerLink, PARTNER_CONFIDENCE } from "./partnerActivities.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENTITY EXTRACTION
@@ -340,7 +347,7 @@ function getFallbackLink(context, client) {
  *
  * @returns {{ url: string, source: string, confidence: number } | null}
  */
-export async function resolveBookingLink({ message, entity, company, location, season, client, supabase }) {
+export async function resolveBookingLink({ message, entity, company, location, season, client, supabase, trackingBaseUrl, sessionId, channel }) {
   const context = {
     message:  message  ?? "",
     entity:   entity   ?? null,
@@ -380,7 +387,21 @@ export async function resolveBookingLink({ message, entity, company, location, s
     }
   }
 
-  // 5. Fallback
+  // 5. Partner (Sprint 5) — additive: only surfaces when no other source matched.
+  //    Confidence is 0.60, so it beats fallback (0.30–0.40) but never config/api/crawl.
+  if (supabase) {
+    const partnerResult = await resolvePartnerLink(context, client, supabase, {
+      trackingBaseUrl,
+      sessionId,
+      channel,
+    });
+    if (partnerResult && partnerResult.confidence >= PARTNER_CONFIDENCE) {
+      console.log(`[BOOKING LINK] source=partner confidence=${partnerResult.confidence} partner=${partnerResult.partner?.partner_name} url=${partnerResult.url}`);
+      return partnerResult;
+    }
+  }
+
+  // 6. Fallback — client's own browse-all / generic links
   const fallback = getFallbackLink(context, client);
   if (fallback) {
     console.log(`[BOOKING LINK] source=fallback confidence=${fallback.confidence} url=${fallback.url}`);

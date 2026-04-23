@@ -3127,6 +3127,7 @@ async function main() {
     await testSettingsPolish();   // Phase 3B: hours/timezone fields, preview-opener, usage endpoints
     await testOperatorMode();     // Sprint 4A: operator briefing, commands, portal
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
+    await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -13010,6 +13011,271 @@ async function testSmartCampaigns() {
       }),
     });
     chk("4b: event campaign missing trigger_type → 400", r.status === 400, `got ${r.status}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint 5 — Activity Distribution Network
+// ─────────────────────────────────────────────────────────────────────────────
+async function testPartnerActivities() {
+  console.log("\nTEST: Sprint 5 — Partner Activities (distribution network)\n");
+
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const {
+    PARTNER_MATCH_THRESHOLD,
+    PARTNER_CONFIDENCE,
+    scorePartnerMatch,
+    buildPartnerActivitiesContext,
+    buildPartnerTrackingUrl,
+    detectSeasonFromContext,
+    getActivePartnerActivities,
+    resolvePartnerLink,
+  } = await import("./partnerActivities.js");
+
+  const {
+    handlePortalPartners,
+    handlePortalCreatePartner,
+    handlePortalUpdatePartner,
+    handlePortalDeletePartner,
+    handlePortalPartnerAnalytics,
+  } = await import("./adminPortal.js");
+
+  // ── Constants ─────────────────────────────────────────────────────────────
+  chk("sprint5: PARTNER_MATCH_THRESHOLD is 12",     PARTNER_MATCH_THRESHOLD === 12, `got ${PARTNER_MATCH_THRESHOLD}`);
+  chk("sprint5: PARTNER_CONFIDENCE is 0.60",        PARTNER_CONFIDENCE === 0.60,    `got ${PARTNER_CONFIDENCE}`);
+
+  // ── scorePartnerMatch ─────────────────────────────────────────────────────
+  const partnerZipline = {
+    partner_name:  "Howelsen Hill",
+    activity_name: "Zipline tour",
+    category:      "tour",
+    description:   "Zipline in Steamboat",
+    location:      "steamboat",
+    keywords:      ["zipline", "aerial", "canopy"],
+  };
+
+  chk(
+    "sprint5: scorePartnerMatch keyword hit → ≥ 15",
+    scorePartnerMatch(partnerZipline, { message: "anywhere to do a zipline tour?" }) >= 15
+  );
+  chk(
+    "sprint5: scorePartnerMatch no match → 0",
+    scorePartnerMatch(partnerZipline, { message: "snowmobile rentals for tomorrow" }) === 0,
+    `got ${scorePartnerMatch(partnerZipline, { message: "snowmobile rentals for tomorrow" })}`
+  );
+  chk(
+    "sprint5: scorePartnerMatch location boost",
+    scorePartnerMatch(partnerZipline, { message: "steamboat activity ideas" }) > 0
+  );
+  chk(
+    "sprint5: scorePartnerMatch missing partner/text → 0",
+    scorePartnerMatch(null, { message: "zipline" }) === 0 &&
+      scorePartnerMatch(partnerZipline, { message: "" }) === 0
+  );
+
+  // ── detectSeasonFromContext ───────────────────────────────────────────────
+  chk("sprint5: detectSeasonFromContext — winter keywords", detectSeasonFromContext({ message: "snowmobile tour" }) === "winter");
+  chk("sprint5: detectSeasonFromContext — summer keywords", detectSeasonFromContext({ message: "kayak rentals" })   === "summer");
+  chk("sprint5: detectSeasonFromContext — explicit season wins", detectSeasonFromContext({ season: "shoulder", message: "kayak" }) === "shoulder");
+  const monthFallback = detectSeasonFromContext({ message: "hello world" });
+  chk("sprint5: detectSeasonFromContext — month fallback produces a valid season",
+    ["winter", "summer", "shoulder"].includes(monthFallback), `got ${monthFallback}`);
+
+  // ── buildPartnerTrackingUrl ───────────────────────────────────────────────
+  const urlA = buildPartnerTrackingUrl("abc-123", { base: "https://example.com" });
+  chk("sprint5: buildPartnerTrackingUrl — path + id + channel",
+    urlA.includes("/track/partner") && urlA.includes("id=abc-123") && urlA.includes("c=sms"), urlA);
+
+  const urlB = buildPartnerTrackingUrl("abc-123", { base: "https://example.com/", sessionId: "s1", channel: "web" });
+  chk("sprint5: buildPartnerTrackingUrl — trailing slash stripped + session/channel params",
+    !/example\.com\/\/track/.test(urlB) && urlB.includes("s=s1") && urlB.includes("c=web"), urlB);
+
+  chk("sprint5: buildPartnerTrackingUrl — empty id → empty string",
+    buildPartnerTrackingUrl("", { base: "https://x" }) === "");
+
+  // ── buildPartnerActivitiesContext ─────────────────────────────────────────
+  const ctx = buildPartnerActivitiesContext(
+    [{ id: "p1", partner_name: "Howelsen Hill", activity_name: "Zipline tour", description: "Aerial canopy", price_range: "$79" }],
+    { trackingBaseUrl: "https://example.com" }
+  );
+  chk("sprint5: buildPartnerActivitiesContext includes intro + activity + tracked URL",
+    ctx.includes("PARTNER ACTIVITIES") && ctx.includes("Zipline tour") && ctx.includes("/track/partner?id=p1"), ctx.slice(0, 120));
+  chk("sprint5: buildPartnerActivitiesContext — empty list → empty string",
+    buildPartnerActivitiesContext([], { trackingBaseUrl: "x" }) === "");
+
+  // ── resolveBookingLink regression — config still wins when it matches ────
+  const { resolveBookingLink } = await import("./bookingLinks.js");
+  const csrClient = resolveClient("+18335786496") ?? resolveClient("+18668906657");
+  chk("sprint5: CSR/REA client resolvable", !!csrClient);
+
+  if (csrClient) {
+    // No supabase → Source 5 inactive; only config/fallback paths available
+    const cfgWin = await resolveBookingLink({
+      message:  "2hr snowmobile tour",
+      entity:   "2hr_tour",
+      company:  "rea",
+      season:   "winter",
+      client:   csrClient,
+      supabase: null,
+    });
+    chk("sprint5: resolveBookingLink — specific entity still resolves config link (no supabase)",
+      !!cfgWin && cfgWin.source === "config", JSON.stringify(cfgWin));
+
+    // Generic booking query → fallback or config, never partner (no supabase = Source 5 skipped)
+    const genericNoDb = await resolveBookingLink({
+      message:  "where do I book?",
+      client:   csrClient,
+      supabase: null,
+    });
+    chk("sprint5: resolveBookingLink no-supabase — partner Source 5 never runs",
+      genericNoDb?.source !== "partner", JSON.stringify(genericNoDb));
+  }
+
+  // ── getActivePartnerActivities — gracefully handles no supabase / no clientId ─
+  const emptyNoSupabase = await getActivePartnerActivities(null, "csr_rea", { season: "winter" });
+  chk("sprint5: getActivePartnerActivities — null supabase → []", Array.isArray(emptyNoSupabase) && emptyNoSupabase.length === 0);
+  const emptyNoClient = await getActivePartnerActivities({}, null);
+  chk("sprint5: getActivePartnerActivities — no clientId → []", Array.isArray(emptyNoClient) && emptyNoClient.length === 0);
+
+  // ── resolvePartnerLink — no clientId / no supabase → null ─────────────────
+  const rpl1 = await resolvePartnerLink({ message: "zipline" }, null, {});
+  chk("sprint5: resolvePartnerLink — null client → null", rpl1 === null);
+  const rpl2 = await resolvePartnerLink({ message: "zipline" }, { id: "csr_rea" }, null);
+  chk("sprint5: resolvePartnerLink — null supabase → null", rpl2 === null);
+
+  // ── validatePartnerInput via handlePortalCreatePartner (no DB insert path) ─
+  function mockRes() {
+    const r = { statusCode: 200, body: null };
+    r.status = (c) => { r.statusCode = c; return r; };
+    r.json   = (b) => { r.body = b;        return r; };
+    return r;
+  }
+  function mockSupa() {
+    // Minimal — validation returns before any insert.
+    return {
+      from: () => ({
+        select: () => ({ eq: () => ({ order: () => ({ data: [], error: null }) }) }),
+        insert: () => ({ select: () => ({ single: async () => ({ data: { id: "new" }, error: null }) }) }),
+      }),
+    };
+  }
+  const adminUser = { role: "client_admin", isAdmin: false, isClientAdmin: true, clientId: "csr_rea" };
+  const readOnlyUser = { role: "client_user",  isAdmin: false, isClientAdmin: false, clientId: "csr_rea" };
+
+  // Missing required fields → 400
+  {
+    const res = mockRes();
+    await handlePortalCreatePartner({ portalUser: adminUser, body: {} }, res, mockSupa());
+    chk("sprint5: POST partners missing fields → 400",
+      res.statusCode === 400 && typeof res.body?.error === "string", JSON.stringify(res.body));
+  }
+
+  // Invalid category → 400
+  {
+    const res = mockRes();
+    await handlePortalCreatePartner({
+      portalUser: adminUser,
+      body: { partner_name: "X", activity_name: "Y", booking_url: "https://x.com", category: "bogus" },
+    }, res, mockSupa());
+    chk("sprint5: POST partners invalid category → 400",
+      res.statusCode === 400 && /category/.test(res.body?.error ?? ""), JSON.stringify(res.body));
+  }
+
+  // Invalid URL → 400
+  {
+    const res = mockRes();
+    await handlePortalCreatePartner({
+      portalUser: adminUser,
+      body: { partner_name: "X", activity_name: "Y", booking_url: "not a url", category: "tour" },
+    }, res, mockSupa());
+    chk("sprint5: POST partners invalid URL → 400",
+      res.statusCode === 400 && /booking_url/.test(res.body?.error ?? ""), JSON.stringify(res.body));
+  }
+
+  // Invalid commission_pct → 400
+  {
+    const res = mockRes();
+    await handlePortalCreatePartner({
+      portalUser: adminUser,
+      body: { partner_name: "X", activity_name: "Y", booking_url: "https://x.com", category: "tour", commission_pct: 150 },
+    }, res, mockSupa());
+    chk("sprint5: POST partners commission_pct > 100 → 400",
+      res.statusCode === 400 && /commission/.test(res.body?.error ?? ""), JSON.stringify(res.body));
+  }
+
+  // Invalid season value → 400
+  {
+    const res = mockRes();
+    await handlePortalCreatePartner({
+      portalUser: adminUser,
+      body: { partner_name: "X", activity_name: "Y", booking_url: "https://x.com", category: "tour", seasons: ["spring"] },
+    }, res, mockSupa());
+    chk("sprint5: POST partners invalid season → 400",
+      res.statusCode === 400 && /season/i.test(res.body?.error ?? ""), JSON.stringify(res.body));
+  }
+
+  // client_user → 403 on mutating operations
+  {
+    const res = mockRes();
+    await handlePortalCreatePartner({
+      portalUser: readOnlyUser,
+      body: { partner_name: "X", activity_name: "Y", booking_url: "https://x.com", category: "tour" },
+    }, res, mockSupa());
+    chk("sprint5: POST partners client_user → 403",
+      res.statusCode === 403, JSON.stringify({ status: res.statusCode, body: res.body }));
+  }
+  {
+    const res = mockRes();
+    await handlePortalUpdatePartner({
+      portalUser: readOnlyUser, params: { id: "abc" }, body: { partner_name: "X" },
+    }, res, mockSupa());
+    chk("sprint5: PATCH partners client_user → 403", res.statusCode === 403);
+  }
+  {
+    const res = mockRes();
+    await handlePortalDeletePartner({ portalUser: readOnlyUser, params: { id: "abc" } }, res, mockSupa());
+    chk("sprint5: DELETE partners client_user → 403", res.statusCode === 403);
+  }
+
+  // No supabase → 503
+  {
+    const res = mockRes();
+    await handlePortalPartners({ portalUser: adminUser }, res, null);
+    chk("sprint5: GET partners with no supabase → 503", res.statusCode === 503);
+  }
+
+  // ── Integration: HTTP guards ──────────────────────────────────────────────
+  const { default: fetch } = await import("node-fetch");
+  const partnerRoutes = [
+    ["GET",    "/portal/api/partners"],
+    ["GET",    "/portal/api/partners/analytics"],
+    ["POST",   "/portal/api/partners"],
+    ["PATCH",  "/portal/api/partners/abc"],
+    ["DELETE", "/portal/api/partners/abc"],
+  ];
+  let allPartner401 = true;
+  for (const [method, route] of partnerRoutes) {
+    const res = await fetch(`${BASE_URL}${route}`, {
+      method,
+      headers: method === "POST" || method === "PATCH" ? { "Content-Type": "application/json" } : {},
+      body:    method === "POST" || method === "PATCH" ? "{}" : undefined,
+    });
+    if (res.status !== 401) { allPartner401 = false; console.log(`  Expected 401 on ${method} ${route}, got ${res.status}`); }
+  }
+  chk("sprint5: all /portal/api/partners routes return 401 without token", allPartner401);
+
+  // /track/partner — missing id → 400
+  {
+    const r = await fetch(`${BASE_URL}/track/partner`, { redirect: "manual" });
+    chk("sprint5: GET /track/partner missing id → 400", r.status === 400, `got ${r.status}`);
+  }
+  // /track/partner — unknown id → 404
+  {
+    const r = await fetch(`${BASE_URL}/track/partner?id=00000000-0000-0000-0000-000000000000`, { redirect: "manual" });
+    // If supabase isn't configured in tests, the handler returns 500; either "not found" or misconfigured is acceptable evidence the route is wired
+    chk("sprint5: GET /track/partner unknown id → 404 or 500", r.status === 404 || r.status === 500, `got ${r.status}`);
   }
 }
 

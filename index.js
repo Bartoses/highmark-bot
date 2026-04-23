@@ -50,7 +50,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handlePortalPerformance,
   handleDismissChecklist,
   handlePortalPreviewOpener,
-  handlePortalUsage } from "./adminPortal.js";
+  handlePortalUsage,
+  handlePortalPartners, handlePortalCreatePartner, handlePortalUpdatePartner, handlePortalDeletePartner, handlePortalPartnerAnalytics } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
@@ -1767,6 +1768,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
           season,
           client,
           supabase,
+          trackingBaseUrl: process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : (process.env.APP_URL ?? ""),
+          channel:         "sms",
         });
         if (resolved?.url) {
           const knowledgeCtx = await getKnowledgeContext(supabase, client);
@@ -1777,6 +1780,23 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
             `Guest asked for a booking link directly. Send them this link: ${resolved.url}. Include the full URL. Keep it brief and warm.`
           );
           replyText = ensureUrlInResponse(replyText, resolved.url);
+
+          // Sprint 5: log partner_link_sent when Source 5 wins
+          if (resolved.source === "partner") {
+            supabase.from("web_events").insert({
+              client_id:  client.id,
+              session_id: null,
+              channel:    "sms",
+              page_url:   resolved.url,
+              event_type: "partner_link_sent",
+              metadata:   {
+                partner_id:    resolved.partner?.id ?? null,
+                partner_name:  resolved.partner?.partner_name ?? null,
+                activity_name: resolved.partner?.activity_name ?? null,
+                confidence:    resolved.confidence,
+              },
+            }).then().catch(() => {});
+          }
         }
       }
 
@@ -2184,6 +2204,47 @@ app.get("/embed.js", (_req, res) => {
   res.sendFile(path.join(__uiDir, "embed.js"));
 });
 
+// ─── Sprint 5: partner activity click tracker ───────────────────────────────
+// 302 redirect to the partner's booking_url and fire-and-forget log to web_events.
+// Params: id=<partner_activities.id>  s=<session_id?>  c=<channel?>
+app.get("/track/partner", async (req, res) => {
+  const id        = String(req.query.id ?? "").trim();
+  const sessionId = req.query.s ? String(req.query.s) : null;
+  const channel   = req.query.c ? String(req.query.c) : "sms";
+  if (!id) return res.status(400).send("missing id");
+
+  try {
+    const { data: partner } = await supabase
+      .from("partner_activities")
+      .select("id, client_id, booking_url, partner_name, activity_name, enabled")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!partner || !partner.enabled || !partner.booking_url) {
+      return res.status(404).send("partner not found");
+    }
+
+    // Fire-and-forget event log — never block the redirect
+    supabase.from("web_events").insert({
+      client_id:  partner.client_id,
+      session_id: sessionId,
+      channel,
+      page_url:   partner.booking_url,
+      event_type: "partner_link_clicked",
+      metadata:   {
+        partner_id:    partner.id,
+        partner_name:  partner.partner_name,
+        activity_name: partner.activity_name,
+      },
+    }).then().catch(() => {});
+
+    return res.redirect(302, partner.booking_url);
+  } catch (err) {
+    console.error("[TRACK/PARTNER] error:", err.message);
+    return res.status(500).send("redirect failed");
+  }
+});
+
 // Public config endpoint: returns non-secret client config for the widget.
 // Phase 11.2: fetches embed_config row so widget gets full customization.
 // CORS preflight for embed widget (runs on third-party sites)
@@ -2492,6 +2553,13 @@ app.get(   "/portal/api/booking-options",        requirePortalAuth, (req, res) =
 app.post(  "/portal/api/booking-options",        requirePortalAuth, (req, res) => handlePortalCreateBookingOption(req, res, supabase));
 app.patch( "/portal/api/booking-options/:id",    requirePortalAuth, (req, res) => handlePortalUpdateBookingOption(req, res, supabase));
 app.delete("/portal/api/booking-options/:id",    requirePortalAuth, (req, res) => handlePortalDeleteBookingOption(req, res, supabase));
+
+// Sprint 5: partner activities CRUD + analytics
+app.get(   "/portal/api/partners/analytics",     requirePortalAuth, (req, res) => handlePortalPartnerAnalytics(req, res, supabase));
+app.get(   "/portal/api/partners",               requirePortalAuth, (req, res) => handlePortalPartners(req, res, supabase));
+app.post(  "/portal/api/partners",               requirePortalAuth, (req, res) => handlePortalCreatePartner(req, res, supabase));
+app.patch( "/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalUpdatePartner(req, res, supabase));
+app.delete("/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalDeletePartner(req, res, supabase));
 // Crawler pages + manual trigger
 app.get( "/portal/api/crawl-pages",   requirePortalAuth, (req, res) => handlePortalCrawlPages(req, res, supabase));
 app.get( "/portal/api/integrations",  requirePortalAuth, (req, res) => handlePortalIntegrations(req, res, supabase));

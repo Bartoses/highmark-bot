@@ -2118,3 +2118,207 @@ export async function handlePortalAttribution(req, res, supabase, resolveClientI
     return res.status(500).json({ error: err.message });
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PARTNER ACTIVITIES CRUD (Sprint 5)  — /portal/api/partners
+// Read: any portal user (client-scoped).  Mutating: client_admin+.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VALID_PARTNER_CATEGORIES = ["tour", "rental", "lodging", "dining", "transport", "other"];
+const VALID_PARTNER_SEASONS    = ["all", "winter", "summer", "shoulder"];
+
+function normalizeStringArray(value) {
+  if (Array.isArray(value)) return value.map((s) => String(s).trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(",").map((s) => s.trim()).filter(Boolean);
+  return [];
+}
+
+function validatePartnerInput(body, { partial = false } = {}) {
+  const errors = [];
+  const out = {};
+
+  if (body.partner_name !== undefined) {
+    const v = String(body.partner_name ?? "").trim();
+    if (!v) errors.push("partner_name is required");
+    out.partner_name = v;
+  } else if (!partial) errors.push("partner_name is required");
+
+  if (body.activity_name !== undefined) {
+    const v = String(body.activity_name ?? "").trim();
+    if (!v) errors.push("activity_name is required");
+    out.activity_name = v;
+  } else if (!partial) errors.push("activity_name is required");
+
+  if (body.booking_url !== undefined) {
+    const v = String(body.booking_url ?? "").trim();
+    try { new URL(v); } catch { errors.push("booking_url must be a valid URL"); }
+    out.booking_url = v;
+  } else if (!partial) errors.push("booking_url is required");
+
+  if (body.category !== undefined) {
+    const v = String(body.category ?? "").trim().toLowerCase();
+    if (!VALID_PARTNER_CATEGORIES.includes(v)) {
+      errors.push(`category must be one of: ${VALID_PARTNER_CATEGORIES.join(", ")}`);
+    }
+    out.category = v;
+  } else if (!partial) errors.push("category is required");
+
+  if (body.description !== undefined) out.description = String(body.description ?? "").trim();
+  if (body.price_range !== undefined) out.price_range = body.price_range ? String(body.price_range).trim() : null;
+  if (body.location    !== undefined) out.location    = body.location    ? String(body.location).trim()    : null;
+
+  if (body.commission_pct !== undefined && body.commission_pct !== null && body.commission_pct !== "") {
+    const n = Number(body.commission_pct);
+    if (Number.isNaN(n) || n < 0 || n > 100) errors.push("commission_pct must be 0–100");
+    else out.commission_pct = n;
+  } else if (body.commission_pct === null || body.commission_pct === "") {
+    out.commission_pct = null;
+  }
+
+  if (body.seasons !== undefined) {
+    const arr = normalizeStringArray(body.seasons).map((s) => s.toLowerCase());
+    for (const s of arr) {
+      if (!VALID_PARTNER_SEASONS.includes(s)) { errors.push(`seasons: "${s}" invalid`); break; }
+    }
+    out.seasons = arr.length ? arr : ["all"];
+  }
+
+  if (body.keywords !== undefined) out.keywords = normalizeStringArray(body.keywords);
+  if (body.enabled  !== undefined) out.enabled  = !!body.enabled;
+  if (body.metadata !== undefined && typeof body.metadata === "object" && body.metadata !== null) {
+    out.metadata = body.metadata;
+  }
+
+  return { errors, values: out };
+}
+
+// GET /portal/api/partners
+export async function handlePortalPartners(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { data, error } = await supabase
+    .from("partner_activities")
+    .select("*")
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    if (error.message?.includes("does not exist")) return res.json({ partners: [] });
+    return res.status(500).json({ error: error.message });
+  }
+  return res.json({ partners: data ?? [] });
+}
+
+// POST /portal/api/partners
+export async function handlePortalCreatePartner(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { errors, values } = validatePartnerInput(req.body ?? {}, { partial: false });
+  if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+
+  const row = { client_id: clientId, enabled: true, seasons: ["all"], keywords: [], ...values };
+
+  const { data, error } = await supabase.from("partner_activities").insert(row).select().single();
+  if (error) {
+    if (error.message?.includes("does not exist")) {
+      return res.status(503).json({ error: "Run db1_partner_activities.sql migration first" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  return res.status(201).json({ partner: data });
+}
+
+// PATCH /portal/api/partners/:id
+export async function handlePortalUpdatePartner(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: existing, error: fetchErr } = await supabase
+    .from("partner_activities").select("id, client_id").eq("id", id).single();
+  if (fetchErr || !existing) return res.status(404).json({ error: "Partner not found" });
+  if (existing.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
+
+  const { errors, values } = validatePartnerInput(req.body ?? {}, { partial: true });
+  if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+  if (Object.keys(values).length === 0) {
+    return res.status(400).json({ error: "No updatable fields provided" });
+  }
+  values.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("partner_activities").update(values).eq("id", id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ partner: data });
+}
+
+// DELETE /portal/api/partners/:id
+export async function handlePortalDeletePartner(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: existing, error: fetchErr } = await supabase
+    .from("partner_activities").select("id, client_id").eq("id", id).single();
+  if (fetchErr || !existing) return res.status(404).json({ error: "Partner not found" });
+  if (existing.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
+
+  const { error } = await supabase.from("partner_activities").delete().eq("id", id);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true });
+}
+
+// GET /portal/api/partners/analytics — click counts per partner over ?days=30
+export async function handlePortalPartnerAnalytics(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const days  = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 30));
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    const [{ data: partners }, { data: events }] = await Promise.all([
+      supabase.from("partner_activities").select("id, partner_name, activity_name, category").eq("client_id", clientId),
+      supabase.from("web_events").select("event_type, metadata, created_at")
+        .eq("client_id", clientId)
+        .in("event_type", ["partner_link_sent", "partner_link_clicked"])
+        .gte("created_at", since),
+    ]);
+
+    const totals = new Map(); // partner_id -> { sent, clicked }
+    for (const e of events ?? []) {
+      const pid = e.metadata?.partner_id;
+      if (!pid) continue;
+      if (!totals.has(pid)) totals.set(pid, { sent: 0, clicked: 0 });
+      const bucket = totals.get(pid);
+      if (e.event_type === "partner_link_sent")    bucket.sent++;
+      if (e.event_type === "partner_link_clicked") bucket.clicked++;
+    }
+
+    const rows = (partners ?? []).map((p) => {
+      const t = totals.get(p.id) ?? { sent: 0, clicked: 0 };
+      const ctr = t.sent > 0 ? Math.round((t.clicked / t.sent) * 1000) / 10 : 0;
+      return { ...p, sent: t.sent, clicked: t.clicked, click_through_rate: ctr };
+    }).sort((a, b) => b.clicked - a.clicked);
+
+    const summary = rows.reduce((acc, r) => {
+      acc.totalSent    += r.sent;
+      acc.totalClicked += r.clicked;
+      return acc;
+    }, { totalSent: 0, totalClicked: 0 });
+
+    return res.json({ days, rows, summary, clientId });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}

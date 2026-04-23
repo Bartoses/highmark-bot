@@ -57,8 +57,9 @@ adminScheduledMessages.js — scheduled message queue visibility: GET /admin/sch
 adminClients.js        — client provisioning: create/update/list/readiness routes
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 public/portal-login.html — client portal login page
-public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Analytics, Settings, Users & Access
+public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Partners, Analytics, Settings, Users & Access
 public/portal-accept.html — invite acceptance page
+partnerActivities.js   — Sprint 5: partner distribution — scoring, season filter, /track/partner resolver (Source 5 in bookingLinks)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
 db2_crm_schema.sql     — DB2 CRM schema (Supabase Project 2 SQL editor)
 railway.json           — Railway deployment config
@@ -67,7 +68,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`
 
 ---
 
@@ -225,7 +226,7 @@ Step 1: what service needed → Step 2: callback number → Step 3: preferred ti
 Outbound SMS to filtered audience (`all_leads`, `engaged_leads`, `new_leads`). Templates support `{{name}}` / `{{first_name}}`. Status: `draft → sending/scheduled`. Routes: `POST/GET/PATCH /admin/campaigns`, `POST /admin/campaigns/:id/send`.
 
 ### Client Portal (portalAuth.js + adminPortal.js)
-`/portal` — Supabase Auth + `portal_users` table. Roles: `internal_admin`, `client_admin`, `client_user`. JWT validated on every `/portal/api/*` request. 3-layer client scoping. Sections: Dashboard, Leads, Campaigns, Analytics, Settings, Users & Access.
+`/portal` — Supabase Auth + `portal_users` table. Roles: `internal_admin`, `client_admin`, `client_user`. JWT validated on every `/portal/api/*` request. 3-layer client scoping. Sections: Dashboard, Leads, Campaigns, Partners, Analytics, Settings, Users & Access.
 - `client_user` → read-only (403 on mutating operations)
 - `client_admin` → manage own client + invite users (cannot escalate to internal_admin)
 - `internal_admin` → access any client via `?client_id=`
@@ -242,6 +243,9 @@ Outbound SMS to filtered audience (`all_leads`, `engaged_leads`, `new_leads`). T
 
 ### Booking Confirmations (bookingConfirmations.js)
 FH webhook + 30-min poller. Confirmation link: `fareharbor.com/embeds/book/{shortname}/items/{pk}/booking/{uuid}/`. Cancellations idempotent via `cancellation_sent` column. Rebooking: cancel old + confirm new.
+
+### Activity Distribution Network (partnerActivities.js — Sprint 5)
+Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).
 
 ### Whole-Site Crawler (crawler.js)
 BFS crawl from `crawlSettings.primaryUrl`, same-domain only, skips junk paths. Per-page: classify (10 types) → Haiku fact extraction (hash-gated). Output: `buildCrawlerContext()` assembles ≤1500 char `WEBSITE KNOWLEDGE:` block from `client_pages` table. Cron: Monday 4am.
