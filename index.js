@@ -30,7 +30,7 @@ import { handleDemoAnalyticsSummary, handleDemoAnalyticsEvents } from "./demoAna
 import { scheduleFollowUps, checkAndMarkLeadEngaged } from "./followUpEngine.js";
 import { handleListScheduledMessages } from "./adminScheduledMessages.js";
 import { handleListClients, handleGetClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
-import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign } from "./adminCampaigns.js";
+import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleUpdateCampaign, handleSendCampaign, handleSimulateEvent } from "./adminCampaigns.js";
 import { makePortalAuth, resolvePortalClientId } from "./portalAuth.js";
 import {
   handleListConversations, handleConversationBadgeCount, handleGetConversation,
@@ -2423,6 +2423,7 @@ app.get("/admin/campaigns",               requireUiAccess, (req, res) => handleL
 app.get("/admin/campaigns/:id",           requireUiAccess, (req, res) => handleGetCampaign(req, res, supabase));
 app.patch("/admin/campaigns/:id",         requireUiAccess, (req, res) => handleUpdateCampaign(req, res, supabase));
 app.post("/admin/campaigns/:id/send",     requireUiAccess, (req, res) => handleSendCampaign(req, res, supabase, crmSupabase));
+app.post("/admin/simulate-event",         requireUiAccess, (req, res) => handleSimulateEvent(req, res, supabase, crmSupabase));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT PORTAL (Chunk 10)

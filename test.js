@@ -3126,6 +3126,7 @@ async function main() {
     await testLeadsUpgrade();     // Phase 3A: leads filter/PATCH fields, channel column
     await testSettingsPolish();   // Phase 3B: hours/timezone fields, preview-opener, usage endpoints
     await testOperatorMode();     // Sprint 4A: operator briefing, commands, portal
+    await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -12857,6 +12858,158 @@ async function testOperatorMode() {
   {
     const r = await httpGet("/portal/api/operator");
     chk("4a: GET /portal/api/operator — 401 without auth", r.status === 401, `got ${r.status}`);
+  }
+}
+
+async function testSmartCampaigns() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  // Import pure functions directly (no supabase needed)
+  const {
+    evaluateOpeningDate,
+    evaluateCustomDate,
+    isCooledDown,
+  } = await import("./campaignTriggers.js");
+
+  const { interpolateMessage } = await import("./campaigns.js");
+
+  // ── isCooledDown ─────────────────────────────────────────────────────────
+  chk("4b: isCooledDown — never fired (null) → true",  isCooledDown(null, 7)  === true);
+  chk("4b: isCooledDown — 8 days ago → true",          isCooledDown(new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(), 7) === true);
+  chk("4b: isCooledDown — 3 days ago → false",         isCooledDown(new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), 7) === false);
+  chk("4b: isCooledDown — 7 days exactly → true",      isCooledDown(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), 7) === true);
+  chk("4b: isCooledDown — 0 days, cooldown 0 → true",  isCooledDown(new Date().toISOString(), 0) === true);
+
+  // ── evaluateCustomDate ────────────────────────────────────────────────────
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const tomorrowStr = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  chk("4b: evaluateCustomDate — today → true",         evaluateCustomDate({ fire_date: todayStr })    === true);
+  chk("4b: evaluateCustomDate — tomorrow → false",     evaluateCustomDate({ fire_date: tomorrowStr }) === false);
+  chk("4b: evaluateCustomDate — no fire_date → false", evaluateCustomDate({})                         === false);
+
+  // ── evaluateOpeningDate ───────────────────────────────────────────────────
+  chk("4b: evaluateOpeningDate — today → true",        evaluateOpeningDate({ open_date: todayStr })    === true);
+  chk("4b: evaluateOpeningDate — tomorrow → false",    evaluateOpeningDate({ open_date: tomorrowStr }) === false);
+  chk("4b: evaluateOpeningDate — no open_date → false",evaluateOpeningDate({})                         === false);
+
+  // ── evaluateSnowFresh — via evaluateTrigger with override_data ─────────────
+  // Build a minimal mock supabase (evaluateTrigger uses it only when no override)
+  const { evaluateTrigger } = await import("./campaignTriggers.js");
+  const mockSupa = { from: () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: null, error: null }) }) }) }) };
+
+  const snowAbove = await evaluateTrigger(mockSupa, "snow_fresh", { threshold_inches: 6 }, "csr_rea", { new_snow_24h: 10 });
+  chk("4b: evaluateSnowFresh override above threshold → true", snowAbove === true, `got ${snowAbove}`);
+
+  const snowBelow = await evaluateTrigger(mockSupa, "snow_fresh", { threshold_inches: 6 }, "csr_rea", { new_snow_24h: 3 });
+  chk("4b: evaluateSnowFresh override below threshold → false", snowBelow === false, `got ${snowBelow}`);
+
+  const snowNull = await evaluateTrigger(mockSupa, "snow_fresh", { threshold_inches: 6 }, "csr_rea", { new_snow_24h: 0 });
+  chk("4b: evaluateSnowFresh override 0 inches → false", snowNull === false, `got ${snowNull}`);
+
+  // ── evaluateGoodWeather — via evaluateTrigger with override_data ──────────
+  const goodWeekend = await evaluateTrigger(mockSupa, "good_weather", { min_temp_f: 50 }, "csr_rea", { high_f: 65, condition: "sunny", is_weekend: true });
+  chk("4b: evaluateGoodWeather sunny weekend above min_temp → true", goodWeekend === true, `got ${goodWeekend}`);
+
+  const badRain = await evaluateTrigger(mockSupa, "good_weather", { min_temp_f: 50 }, "csr_rea", { high_f: 65, condition: "heavy rain", is_weekend: true });
+  chk("4b: evaluateGoodWeather rain condition → false", badRain === false, `got ${badRain}`);
+
+  const coldWeekend = await evaluateTrigger(mockSupa, "good_weather", { min_temp_f: 50 }, "csr_rea", { high_f: 40, condition: "clear", is_weekend: true });
+  chk("4b: evaluateGoodWeather too cold → false", coldWeekend === false, `got ${coldWeekend}`);
+
+  const goodWeekday = await evaluateTrigger(mockSupa, "good_weather", { min_temp_f: 50 }, "csr_rea", { high_f: 70, condition: "sunny", is_weekend: false });
+  chk("4b: evaluateGoodWeather weekday → false", goodWeekday === false, `got ${goodWeekday}`);
+
+  // ── Unknown trigger type → false ──────────────────────────────────────────
+  const unknown = await evaluateTrigger(mockSupa, "unknown_trigger", {}, "csr_rea", null);
+  chk("4b: evaluateTrigger unknown type → false", unknown === false, `got ${unknown}`);
+
+  // ── interpolateMessage with new {{booking_link}} ───────────────────────────
+  const mockLead   = { contact_name: "Jerry Smith" };
+  const mockClient = { booking_link: "https://book.example.com" };
+
+  const msg1 = interpolateMessage("Hi {{name}}, book now: {{booking_link}}", mockLead, mockClient);
+  chk("4b: interpolateMessage {{name}} substitution",         msg1.includes("Jerry Smith"),            msg1);
+  chk("4b: interpolateMessage {{booking_link}} substitution", msg1.includes("https://book.example.com"), msg1);
+
+  const msg2 = interpolateMessage("Hi {{first_name}}, great news!", mockLead);
+  chk("4b: interpolateMessage {{first_name}} uses first word", msg2.includes("Jerry") && !msg2.includes("Smith"), msg2);
+
+  const msg3 = interpolateMessage("Hey {{name}}!", {});
+  chk("4b: interpolateMessage no name → 'there'", msg3.includes("there"), msg3);
+
+  const msg4 = interpolateMessage("Hello {{unknown_var}}!", {});
+  chk("4b: interpolateMessage unknown var cleaned up", !msg4.includes("{{"), msg4);
+
+  // ── POST /admin/simulate-event — missing params → 400 ─────────────────────
+  {
+    const r = await fetch(`${BASE_URL}/admin/simulate-event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_id: "csr_rea" }), // missing trigger_type
+    });
+    chk("4b: simulate-event missing trigger_type → 400", r.status === 400, `got ${r.status}`);
+    const d = await r.json();
+    chk("4b: simulate-event 400 returns error field", typeof d.error === "string", JSON.stringify(d));
+  }
+
+  // ── POST /admin/simulate-event — valid request with override_data ──────────
+  {
+    const r = await fetch(`${BASE_URL}/admin/simulate-event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: "csr_rea",
+        trigger_type: "snow_fresh",
+        override_data: { new_snow_24h: 12 },
+        bypass_cooldown: true,
+      }),
+    });
+    chk("4b: simulate-event valid request — 200", r.status === 200, `got ${r.status}`);
+    const d = await r.json();
+    chk("4b: simulate-event response has fired field", "fired" in d, JSON.stringify(d));
+    chk("4b: simulate-event response has eligible_count", "eligible_count" in d, JSON.stringify(d));
+    chk("4b: simulate-event response has scheduled field", "scheduled" in d, JSON.stringify(d));
+  }
+
+  // ── POST /admin/campaigns — event_triggered type ───────────────────────────
+  {
+    const r = await fetch(`${BASE_URL}/admin/campaigns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: "csr_rea",
+        name: "4B Test Snow Campaign",
+        message_body: "Fresh powder, {{first_name}}! Book today.",
+        audience_type: "engaged_leads",
+        campaign_type: "event_triggered",
+        trigger_type: "snow_fresh",
+        trigger_config: { threshold_inches: 8 },
+        cooldown_days: 3,
+      }),
+    });
+    chk("4b: POST /admin/campaigns event_triggered — 201", r.status === 201, `got ${r.status}`);
+    const d = await r.json();
+    chk("4b: event campaign returned with campaign_type", d.campaign?.campaign_type === "event_triggered", JSON.stringify(d.campaign));
+    chk("4b: event campaign status is active", d.campaign?.status === "active", JSON.stringify(d.campaign));
+    chk("4b: event campaign has trigger_type", d.campaign?.trigger_type === "snow_fresh", JSON.stringify(d.campaign));
+    chk("4b: event campaign has cooldown_days", d.campaign?.cooldown_days === 3, JSON.stringify(d.campaign));
+  }
+
+  // ── POST /admin/campaigns — event_triggered without trigger_type → 400 ─────
+  {
+    const r = await fetch(`${BASE_URL}/admin/campaigns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: "csr_rea",
+        name: "Bad Event Campaign",
+        message_body: "test",
+        campaign_type: "event_triggered",
+        // no trigger_type
+      }),
+    });
+    chk("4b: event campaign missing trigger_type → 400", r.status === 400, `got ${r.status}`);
   }
 }
 

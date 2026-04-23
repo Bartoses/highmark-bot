@@ -35,24 +35,38 @@ export async function createCampaign(supabase, {
   clientId,
   name,
   messageBody,
-  audienceType  = "all_leads",
-  scheduledAt   = null,
-  metadata      = {},
+  audienceType   = "all_leads",
+  scheduledAt    = null,
+  metadata       = {},
+  // Smart event campaign fields
+  campaignType   = "manual",
+  triggerType    = null,
+  triggerConfig  = {},
+  cooldownDays   = 7,
+  audienceFilter = null,
 }) {
   if (!VALID_AUDIENCE_TYPES.includes(audienceType)) {
     throw new Error(`Invalid audience_type: ${audienceType}. Must be one of: ${VALID_AUDIENCE_TYPES.join(", ")}`);
   }
 
+  // Event-triggered campaigns are always "active" (ready to fire); manual campaigns start as draft
+  const initialStatus = campaignType === "event_triggered" ? "active" : (scheduledAt ? "scheduled" : "draft");
+
   const { data, error } = await supabase
     .from("campaigns")
     .insert({
-      client_id:    clientId,
+      client_id:       clientId,
       name,
-      message_body: messageBody,
-      audience_type: audienceType,
-      status:       scheduledAt ? "scheduled" : "draft",
-      scheduled_at: scheduledAt ?? null,
+      message_body:    messageBody,
+      audience_type:   audienceType,
+      status:          initialStatus,
+      scheduled_at:    scheduledAt ?? null,
       metadata,
+      campaign_type:   campaignType,
+      trigger_type:    triggerType ?? null,
+      trigger_config:  triggerConfig,
+      cooldown_days:   cooldownDays,
+      audience_filter: audienceFilter ?? audienceType,
     })
     .select()
     .single();
@@ -264,8 +278,11 @@ export async function getCampaignStats(supabase, campaignId) {
 // Lightweight template substitution. Replaces {{name}} with lead.contact_name.
 // Structured for future expansion — add new variables here as needed.
 
-export function interpolateMessage(body, lead = {}) {
-  return body
-    .replace(/\{\{name\}\}/gi,     lead.contact_name ?? "there")
-    .replace(/\{\{first_name\}\}/gi, (lead.contact_name ?? "there").split(" ")[0]);
+export function interpolateMessage(body, lead = {}, client = {}) {
+  const bookingLink = client.bookingLink ?? client.booking_link ?? "";
+  return String(body)
+    .replace(/\{\{name\}\}/gi,         lead.contact_name ?? "there")
+    .replace(/\{\{first_name\}\}/gi,   (lead.contact_name ?? "there").split(" ")[0])
+    .replace(/\{\{booking_link\}\}/gi, bookingLink)
+    .replace(/\{\{\w+\}\}/gi,          "");
 }

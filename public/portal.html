@@ -1377,19 +1377,64 @@ tr:hover td { background: var(--panel2); }
 
 <!-- ── Campaign create modal ────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="campaignModal">
-  <div class="modal">
+  <div class="modal" style="max-width:520px;">
     <div class="modal-title" id="campaignModalTitle">New Campaign</div>
     <div id="campaignModalError" class="error-msg" style="display:none"></div>
+
+    <!-- Campaign type selector -->
+    <div class="form-group">
+      <label>Campaign type</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <label id="campTypeManualCard" class="camp-type-card active" onclick="setCampType('manual')" style="cursor:pointer;border:2px solid var(--accent);border-radius:8px;padding:10px 12px;display:block;">
+          <div style="font-weight:600;font-size:13px;margin-bottom:2px;">📣 Manual</div>
+          <div style="font-size:11px;color:var(--text2);">Send when you want — draft or schedule.</div>
+          <input type="radio" name="campType" value="manual" checked style="display:none">
+        </label>
+        <label id="campTypeEventCard" class="camp-type-card" onclick="setCampType('event_triggered')" style="cursor:pointer;border:2px solid var(--border2);border-radius:8px;padding:10px 12px;display:block;">
+          <div style="font-weight:600;font-size:13px;margin-bottom:2px;">⚡ Smart Event</div>
+          <div style="font-size:11px;color:var(--text2);">Auto-fires when conditions are met.</div>
+          <input type="radio" name="campType" value="event_triggered" style="display:none">
+        </label>
+      </div>
+    </div>
+
     <div class="form-group">
       <label>Campaign name</label>
-      <input type="text" id="campName" placeholder="e.g. Summer Promo">
+      <input type="text" id="campName" placeholder="e.g. Fresh Powder Alert">
     </div>
+
+    <!-- Event trigger config (shown only for event_triggered) -->
+    <div id="campTriggerSection" style="display:none;">
+      <div class="form-group">
+        <label>Trigger condition</label>
+        <select id="campTriggerType" onchange="updateTriggerConfig()">
+          <option value="snow_fresh">❄️ Fresh snow alert — fires when new snowfall exceeds threshold</option>
+          <option value="good_weather">☀️ Good weather weekend — fires on sunny weekends above temp</option>
+          <option value="opening_date">📅 Opening date — fires on a specific date</option>
+          <option value="custom_date">🗓 Custom date — one-time send on a specific date</option>
+        </select>
+      </div>
+      <div id="campTriggerConfigFields" style="margin-bottom:12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;"></div>
+      <div class="form-group">
+        <label>Cooldown — don't re-send to same contact for <input type="number" id="campCooldown" value="7" min="1" max="365" style="width:56px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:3px 6px;font-size:12px;"> days after firing</label>
+      </div>
+    </div>
+
+    <!-- Manual schedule (shown only for manual) -->
+    <div id="campScheduleSection">
+      <div class="form-group">
+        <label>Schedule (optional)</label>
+        <input type="datetime-local" id="campScheduled">
+        <div class="form-hint">Leave blank to send immediately when you click Send.</div>
+      </div>
+    </div>
+
     <div class="form-group">
       <label>Audience</label>
       <select id="campAudience" onchange="fetchAudiencePreview()">
         <option value="all_leads">All leads (new, contacted, engaged, scheduled)</option>
         <option value="engaged_leads">Engaged leads only</option>
-        <option value="new_leads">New leads only</option>
+        <option value="new_leads">New leads (joined last 7 days)</option>
         <option value="missed_leads">Missed leads (7+ days, no engagement)</option>
       </select>
       <div id="audiencePreview" class="form-hint" style="margin-top:4px;min-height:16px;"></div>
@@ -1397,19 +1442,15 @@ tr:hover td { background: var(--panel2); }
     <div class="form-group">
       <label style="display:flex;justify-content:space-between;align-items:center;">
         Message
-        <span style="display:flex;gap:6px;">
-          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('missed_lead')" title="Missed Lead Recovery template">Missed Lead</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('reengagement')" title="Re-engagement template">Re-engage</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('promo')" title="Promo template">Promo</button>
+        <span style="display:flex;gap:6px;" id="campTemplateButtons">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('missed_lead')">Missed Lead</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('reengagement')">Re-engage</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('promo')">Promo</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('snow')">Snow</button>
         </span>
       </label>
-      <textarea id="campMessage" placeholder="Hi {{name}}, your message here…"></textarea>
-      <div class="form-hint">Use {{name}} for first + last name, {{first_name}} for first name only.</div>
-    </div>
-    <div class="form-group">
-      <label>Schedule (optional)</label>
-      <input type="datetime-local" id="campScheduled">
-      <div class="form-hint">Leave blank to send immediately when you click Send.</div>
+      <textarea id="campMessage" placeholder="Hi {{first_name}}, your message here…"></textarea>
+      <div class="form-hint">Use {{first_name}}, {{name}}, {{booking_link}}.</div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" id="campaignModalCancel">Cancel</button>
@@ -2495,15 +2536,22 @@ async function loadCampaigns() {
 
   document.getElementById('campaignsTable').innerHTML = `
     <div class="tbl-wrap"><table>
-      <thead><tr><th>Name</th><th>Audience</th><th>Status</th><th>Recipients</th><th>Created</th><th></th></tr></thead>
-      <tbody>${d.campaigns.map(c => `<tr>
-        <td><strong>${c.name}</strong></td>
-        <td class="text-muted">${c.audience_type?.replace('_',' ') ?? '—'}</td>
-        <td>${pill(c.status)}</td>
-        <td class="text-muted">${c.metadata?.recipient_count ?? c.metadata?.enqueued ?? '—'}</td>
-        <td class="text-muted text-xs">${fmt(c.created_at)}</td>
-        <td><span class="row-action" data-cid="${c.id}">View →</span></td>
-      </tr>`).join('')}</tbody>
+      <thead><tr><th>Name</th><th>Type</th><th>Audience</th><th>Status</th><th>Last Fired</th><th>Times Fired</th><th></th></tr></thead>
+      <tbody>${d.campaigns.map(c => {
+        const isEvent = c.campaign_type === 'event_triggered';
+        const typeLabel = isEvent ? '<span title="Smart Event Campaign" style="color:var(--warn);">⚡ Smart</span>' : '📣 Manual';
+        const audience = (c.audience_filter || c.audience_type || '').replace(/_/g,' ') || '—';
+        const lastFired = c.last_fired_at ? fmt(c.last_fired_at) : '—';
+        return `<tr>
+          <td><strong>${escHtml(c.name)}</strong></td>
+          <td style="white-space:nowrap;">${typeLabel}</td>
+          <td class="text-muted">${audience}</td>
+          <td>${pill(c.status)}</td>
+          <td class="text-muted text-xs">${lastFired}</td>
+          <td class="text-muted text-xs" style="text-align:center;">${c.fire_count ?? 0}</td>
+          <td><span class="row-action" data-cid="${c.id}">View →</span></td>
+        </tr>`;
+      }).join('')}</tbody>
     </table></div>`;
 
   document.querySelectorAll('[data-cid]').forEach(el => {
@@ -2515,6 +2563,7 @@ const CAMPAIGN_TEMPLATES = {
   missed_lead:  "Hey {{first_name}}, it looks like you reached out a while back but we never connected. We still have availability — want to book a tour? Reply YES and we'll get you set up.",
   reengagement: "Hi {{first_name}}! Just checking in — are you still interested in booking? We'd love to get you out here. Reply YES or let us know a good time.",
   promo:        "Hey {{first_name}}, we have a limited-time offer just for you. Reply YES to claim it or ask any questions — happy to help!",
+  snow:         "❄️ Fresh powder, {{first_name}}! We just got a great dump overnight — perfect conditions this weekend. Book your tour before it fills up: {{booking_link}}",
 };
 
 function applyCampaignTemplate(type) {
@@ -2545,22 +2594,84 @@ function openCampaignModal() {
   document.getElementById('campAudience').value = 'all_leads';
   document.getElementById('audiencePreview').textContent = '';
   document.getElementById('campaignModalError').style.display = 'none';
+  setCampType('manual');
   document.getElementById('campaignModal').classList.add('open');
   fetchAudiencePreview();
+}
+
+function setCampType(type) {
+  const isEvent = type === 'event_triggered';
+  document.getElementById('campTypeManualCard').style.borderColor = isEvent ? 'var(--border2)' : 'var(--accent)';
+  document.getElementById('campTypeEventCard').style.borderColor  = isEvent ? 'var(--warn)'    : 'var(--border2)';
+  document.getElementById('campTypeEventCard').style.borderWidth  = isEvent ? '2px' : '2px';
+  document.getElementById('campTriggerSection').style.display  = isEvent ? '' : 'none';
+  document.getElementById('campScheduleSection').style.display = isEvent ? 'none' : '';
+  const saveBtn = document.getElementById('campaignModalSave');
+  if (saveBtn) saveBtn.textContent = isEvent ? 'Save & Activate' : 'Save draft';
+  document.getElementById('campTypeManualCard').querySelector('input').checked = !isEvent;
+  document.getElementById('campTypeEventCard').querySelector('input').checked  =  isEvent;
+  if (isEvent) updateTriggerConfig();
+}
+
+function updateTriggerConfig() {
+  const type = document.getElementById('campTriggerType')?.value;
+  const container = document.getElementById('campTriggerConfigFields');
+  if (!container) return;
+  const fld = (id, label, input) => `<div style="margin-bottom:8px;"><label class="form-label">${label}</label>${input}</div>`;
+  switch (type) {
+    case 'snow_fresh':
+      container.innerHTML = fld('trigSnowThreshold', 'Threshold (inches of snow on ground)',
+        `<input type="number" id="trigSnowThreshold" class="form-input" value="6" min="1" style="max-width:100px;"> inches`);
+      break;
+    case 'good_weather':
+      container.innerHTML = fld('trigMinTemp', 'Minimum temperature (°F)',
+        `<input type="number" id="trigMinTemp" class="form-input" value="32" min="-20" style="max-width:100px;"> °F`);
+      break;
+    case 'opening_date':
+      container.innerHTML = fld('trigOpenDate', 'Opening date (fires on this day)',
+        `<input type="date" id="trigOpenDate" class="form-input" style="max-width:180px;">`);
+      break;
+    case 'custom_date':
+      container.innerHTML = fld('trigFireDate', 'Send on this date (one-time)',
+        `<input type="date" id="trigFireDate" class="form-input" style="max-width:180px;">`);
+      break;
+    default:
+      container.innerHTML = '';
+  }
+}
+
+function buildTriggerConfig() {
+  const type = document.getElementById('campTriggerType')?.value;
+  switch (type) {
+    case 'snow_fresh':   return { threshold_inches: parseFloat(document.getElementById('trigSnowThreshold')?.value ?? 6) };
+    case 'good_weather': return { min_temp_f: parseFloat(document.getElementById('trigMinTemp')?.value ?? 32) };
+    case 'opening_date': return { open_date: document.getElementById('trigOpenDate')?.value ?? '' };
+    case 'custom_date':  return { fire_date: document.getElementById('trigFireDate')?.value ?? '' };
+    default: return {};
+  }
 }
 
 async function saveCampaignDraft() {
   const btn = document.getElementById('campaignModalSave');
   btn.disabled = true; btn.textContent = 'Saving…';
+  const isEvent = document.getElementById('campTypeEventCard').querySelector('input').checked;
+  const audience = document.getElementById('campAudience').value;
   const body = {
-    name:         document.getElementById('campName').value.trim(),
-    message_body: document.getElementById('campMessage').value.trim(),
-    audience_type: document.getElementById('campAudience').value,
-    scheduled_at: document.getElementById('campScheduled').value || null,
+    name:            document.getElementById('campName').value.trim(),
+    message_body:    document.getElementById('campMessage').value.trim(),
+    audience_type:   audience,
+    audience_filter: audience,
+    campaign_type:   isEvent ? 'event_triggered' : 'manual',
+    scheduled_at:    isEvent ? null : (document.getElementById('campScheduled').value || null),
+    ...(isEvent ? {
+      trigger_type:   document.getElementById('campTriggerType').value,
+      trigger_config: buildTriggerConfig(),
+      cooldown_days:  parseInt(document.getElementById('campCooldown').value ?? '7', 10),
+    } : {}),
   };
   if (me?.isAdmin && me.clientId) body.client_id = me.clientId;
   const r = await apiPost('/campaigns', body);
-  btn.disabled = false; btn.textContent = 'Save draft';
+  btn.disabled = false; btn.textContent = isEvent ? 'Save & Activate' : 'Save draft';
   if (!r) { document.getElementById('campaignModalError').textContent = 'Failed to create campaign.'; document.getElementById('campaignModalError').style.display = 'block'; return; }
   document.getElementById('campaignModal').classList.remove('open');
   loadCampaigns();
@@ -2580,7 +2691,15 @@ async function openCampaignDetail(id) {
   const canSend = ['draft','scheduled'].includes(c.status);
   if (canSend) document.getElementById('cdSend').style.display = '';
 
+  const isEvent = c.campaign_type === 'event_triggered';
+  const triggerLabels = { snow_fresh:'❄️ Fresh snow alert', good_weather:'☀️ Good weather weekend', opening_date:'📅 Opening date', custom_date:'🗓 Custom date' };
+  const eventMeta = isEvent ? `
+    <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:10px;">
+      <span style="color:var(--warn);font-weight:600;">⚡ Smart Event Campaign</span> — ${triggerLabels[c.trigger_type] ?? c.trigger_type ?? '—'}<br>
+      <span style="color:var(--text2);">Cooldown: ${c.cooldown_days ?? 7} days &nbsp;·&nbsp; Last fired: ${c.last_fired_at ? fmt(c.last_fired_at) : 'Never'} &nbsp;·&nbsp; Times fired: ${c.fire_count ?? 0}</span>
+    </div>` : '';
   document.getElementById('cdContent').innerHTML = `
+    ${eventMeta}
     <div class="stats-grid" style="margin-bottom:16px">
       <div class="stat-card"><div class="val">${s.total}</div><div class="lbl">Recipients</div></div>
       <div class="stat-card"><div class="val">${s.sent}</div><div class="lbl">Sent</div></div>
@@ -2588,10 +2707,10 @@ async function openCampaignDetail(id) {
       <div class="stat-card"><div class="val">${s.pending}</div><div class="lbl">Pending</div></div>
     </div>
     <div style="font-size:12px;color:var(--text2);margin-bottom:10px;">
-      Status: ${pill(c.status)} &nbsp; Audience: <strong>${c.audience_type?.replace('_',' ')}</strong>
+      Status: ${pill(c.status)} &nbsp; Audience: <strong>${(c.audience_filter || c.audience_type || '').replace(/_/g,' ')}</strong>
     </div>
     <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;">
-      ${c.message_body}
+      ${escHtml(c.message_body)}
     </div>
   `;
 }

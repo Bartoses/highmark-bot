@@ -15,6 +15,7 @@ import twilio from "twilio";
 import { createClient } from "@supabase/supabase-js";
 import { processScheduledMessages } from "./scheduler.js";
 import { sendOperatorBriefing } from "./operatorBriefing.js";
+import { evaluateEventCampaigns } from "./campaignTriggers.js";
 import { getAllClients } from "./clients.js";
 
 const required = [
@@ -84,6 +85,9 @@ try {
   // Always process scheduled messages
   const result = await processScheduledMessages(supabase, twilioClient, crmSupabase);
   console.log(`[CRON-WORKER] Done — processed=${result.processed} sent=${result.sent} cancelled=${result.cancelled} failed=${result.failed}`);
+
+  // Smart event campaigns — evaluate on every cron tick
+  await evaluateEventCampaigns(supabase, crmSupabase);
 
   // Morning briefing — only runs in the 7am MT window
   if (isBriefingWindow()) {
