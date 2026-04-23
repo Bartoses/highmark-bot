@@ -350,6 +350,9 @@ function dbRowToClient(row) {
     // Phase 3: industry classification + alternative offering routing
     industry:              row.industry              ?? null,
     alternativeOfferings:  row.alternative_offerings ?? [],
+    // Sprint 4A: operator config
+    operatorPhones:        row.operator_phones       ?? [],
+    weatherLocations:      row.weather_locations     ?? [],
     _fromDb:      true,
   };
 }
