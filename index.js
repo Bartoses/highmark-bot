@@ -2510,6 +2510,21 @@ app.post( "/portal/api/rewrites/run",  requirePortalAuth, (req, res) => handleRu
 app.patch("/portal/api/rewrites/:id",  requirePortalAuth, (req, res) => handleUpdateRewriteStatus(req, res, supabase));
 // Phase 2A — Conversations (badge-count MUST be before :id to avoid route collision)
 // Operator view API — client_admin or internal_admin
+app.get("/portal/api/geocode", requirePortalAuth, async (req, res) => {
+  const q = (req.query.q || "").trim();
+  if (!q) return res.status(400).json({ error: "q required" });
+  const key = process.env.OPENWEATHER_API_KEY;
+  if (!key) return res.status(503).json({ error: "OpenWeather not configured" });
+  try {
+    const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(q)}&limit=5&appid=${key}`;
+    const r = await fetch(url);
+    const data = await r.json();
+    res.json(Array.isArray(data) ? data.map(d => ({ name: d.name, state: d.state, country: d.country, lat: d.lat, lon: d.lon })) : []);
+  } catch (err) {
+    res.status(503).json({ error: err.message });
+  }
+});
+
 app.get("/portal/api/operator", requirePortalAuth, async (req, res) => {
   if (!req.portalUser?.isClientAdmin) return res.status(403).json({ error: "client_admin or internal_admin role required" });
   const clientId = resolvePortalClientId(req);

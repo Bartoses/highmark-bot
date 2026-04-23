@@ -4481,11 +4481,11 @@ function renderIntegrationSection(s, status) {
 
   // ── Weather card (read-only for clients) ───────────────────────────────────
   const weatherLocRows = (s.weatherLocations ?? []).map(loc => `
-    <div class="weather-loc-row" style="display:grid;grid-template-columns:1fr 90px 90px 110px 32px;gap:6px;margin-bottom:6px;align-items:center;">
-      <input type="text"   class="form-input wl-name" placeholder="Location name" value="${escHtml(loc.name ?? '')}">
-      <input type="number" class="form-input wl-lat"  placeholder="Lat" step="0.001" value="${loc.lat ?? ''}">
-      <input type="number" class="form-input wl-lon"  placeholder="Lon" step="0.001" value="${loc.lon ?? ''}">
-      <input type="text"   class="form-input wl-elev" placeholder="e.g. 9,426 ft"  value="${escHtml(loc.elevation ?? '')}">
+    <div class="weather-loc-row" data-lat="${loc.lat ?? ''}" data-lon="${loc.lon ?? ''}" data-name="${escHtml(loc.name ?? '')}" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <div style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:13px;">
+        <span style="font-weight:600;">${escHtml(loc.name ?? '')}</span>
+        <span style="color:var(--text3);font-size:11px;margin-left:8px;">${loc.lat}, ${loc.lon}</span>
+      </div>
       <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.weather-loc-row').remove()" title="Remove">✕</button>
     </div>`).join('');
 
@@ -4496,17 +4496,16 @@ function renderIntegrationSection(s, status) {
     ${editable && s.weather?.enabled ? `
     <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
       <div style="font-weight:600;font-size:13px;margin-bottom:4px;">Custom Weather Locations</div>
-      <p style="font-size:12px;color:var(--text2);margin:0 0 10px;">Fetched every hour. Use decimal degrees for lat/lon (e.g. 40.38, -106.60).</p>
-      <div style="display:grid;grid-template-columns:1fr 90px 90px 110px 32px;gap:6px;margin-bottom:4px;padding:0 2px;">
-        <span style="font-size:10px;color:var(--text3);font-weight:700;">NAME</span>
-        <span style="font-size:10px;color:var(--text3);font-weight:700;">LAT</span>
-        <span style="font-size:10px;color:var(--text3);font-weight:700;">LON</span>
-        <span style="font-size:10px;color:var(--text3);font-weight:700;">ELEVATION</span>
-        <span></span>
-      </div>
+      <p style="font-size:12px;color:var(--text2);margin:0 0 10px;">Type a city or place name and select from the results. Fetched every hour.</p>
       <div id="weatherLocList">${weatherLocRows}</div>
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button class="btn btn-ghost btn-sm" onclick="addWeatherLocationRow()">+ Add location</button>
+      <div style="margin-top:8px;">
+        <div style="position:relative;max-width:340px;">
+          <input type="text" id="weatherLocSearch" class="form-input" placeholder="Search location… e.g. Kremmling, CO" autocomplete="off" style="padding-right:36px;" oninput="weatherLocSearchDebounce()" onkeydown="if(event.key==='Escape')weatherLocCloseDropdown()">
+          <span id="weatherLocSpinner" style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px;">⏳</span>
+        </div>
+        <div id="weatherLocDropdown" style="display:none;position:absolute;z-index:200;background:var(--bg);border:1px solid var(--border2);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.25);max-width:340px;overflow:hidden;margin-top:4px;"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
         <button class="btn btn-primary btn-sm" id="weatherLocSaveBtn" onclick="saveWeatherLocations()">Save locations</button>
       </div>
     </div>` : ''}
@@ -4665,12 +4664,11 @@ async function saveWeatherLocations() {
   const rows = document.querySelectorAll('.weather-loc-row');
   const locs = [];
   for (const row of rows) {
-    const name = row.querySelector('.wl-name')?.value.trim();
-    const lat  = parseFloat(row.querySelector('.wl-lat')?.value.trim());
-    const lon  = parseFloat(row.querySelector('.wl-lon')?.value.trim());
-    const elev = row.querySelector('.wl-elev')?.value.trim() || null;
+    const name = row.dataset.name;
+    const lat  = parseFloat(row.dataset.lat);
+    const lon  = parseFloat(row.dataset.lon);
     if (!name || isNaN(lat) || isNaN(lon)) continue;
-    locs.push({ name, lat, lon, elevation: elev });
+    locs.push({ name, lat, lon });
   }
   const r = await apiFetch('/settings', { method: 'PATCH', body: JSON.stringify({ weather_locations: locs }) });
   if (btn) { btn.disabled = false; btn.textContent = 'Save locations'; }
@@ -4679,19 +4677,67 @@ async function saveWeatherLocations() {
   loadIntegrationsSection();
 }
 
-function addWeatherLocationRow(loc = {}) {
+function addWeatherLocationRow(loc) {
   const list = document.getElementById('weatherLocList');
   if (!list) return;
   const row = document.createElement('div');
   row.className = 'weather-loc-row';
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 90px 100px 32px;gap:6px;margin-bottom:6px;align-items:center;';
+  row.dataset.name = loc.name;
+  row.dataset.lat  = loc.lat;
+  row.dataset.lon  = loc.lon;
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px;';
   row.innerHTML = `
-    <input type="text"   class="form-input wl-name" placeholder="Location name" value="${escHtml(loc.name ?? '')}">
-    <input type="number" class="form-input wl-lat"  placeholder="Lat" step="0.001" value="${loc.lat ?? ''}">
-    <input type="number" class="form-input wl-lon"  placeholder="Lon" step="0.001" value="${loc.lon ?? ''}">
-    <input type="text"   class="form-input wl-elev" placeholder="Elevation" value="${escHtml(loc.elevation ?? '')}">
+    <div style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:13px;">
+      <span style="font-weight:600;">${escHtml(loc.name)}</span>
+      <span style="color:var(--text3);font-size:11px;margin-left:8px;">${loc.lat}, ${loc.lon}</span>
+    </div>
     <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.weather-loc-row').remove()" title="Remove">✕</button>`;
   list.appendChild(row);
+}
+
+let _weatherLocTimer = null;
+function weatherLocSearchDebounce() {
+  clearTimeout(_weatherLocTimer);
+  _weatherLocTimer = setTimeout(weatherLocSearch, 350);
+}
+
+async function weatherLocSearch() {
+  const input = document.getElementById('weatherLocSearch');
+  const spinner = document.getElementById('weatherLocSpinner');
+  const dropdown = document.getElementById('weatherLocDropdown');
+  if (!input) return;
+  const q = input.value.trim();
+  if (q.length < 2) { weatherLocCloseDropdown(); return; }
+  if (spinner) spinner.style.display = 'block';
+  try {
+    const results = await apiFetch(`/geocode?q=${encodeURIComponent(q)}`);
+    if (spinner) spinner.style.display = 'none';
+    if (!results || !results.length) { weatherLocCloseDropdown(); return; }
+    dropdown.innerHTML = results.map((r, i) => {
+      const label = [r.name, r.state, r.country].filter(Boolean).join(', ');
+      return `<div class="wl-result" data-i="${i}" data-name="${escHtml(r.name)}" data-lat="${r.lat}" data-lon="${r.lon}"
+        style="padding:10px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);"
+        onmouseenter="this.style.background='var(--bg2)'" onmouseleave="this.style.background=''"
+        onclick="weatherLocPick(this)">${escHtml(label)} <span style="color:var(--text3);font-size:11px;">${r.lat.toFixed(3)}, ${r.lon.toFixed(3)}</span></div>`;
+    }).join('');
+    dropdown.style.display = 'block';
+  } catch {
+    if (spinner) spinner.style.display = 'none';
+  }
+}
+
+function weatherLocPick(el) {
+  addWeatherLocationRow({ name: el.dataset.name, lat: parseFloat(el.dataset.lat), lon: parseFloat(el.dataset.lon) });
+  weatherLocCloseDropdown();
+  const input = document.getElementById('weatherLocSearch');
+  if (input) input.value = '';
+}
+
+function weatherLocCloseDropdown() {
+  const d = document.getElementById('weatherLocDropdown');
+  if (d) { d.style.display = 'none'; d.innerHTML = ''; }
+  const s = document.getElementById('weatherLocSpinner');
+  if (s) s.style.display = 'none';
 }
 
 async function saveSnotelConfig() {
@@ -6130,6 +6176,14 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('click', (e) => {
   if (!e.target.classList.contains('modal-backdrop')) return;
   e.target.classList.remove('open');
+});
+
+document.addEventListener('click', (e) => {
+  const search = document.getElementById('weatherLocSearch');
+  const dropdown = document.getElementById('weatherLocDropdown');
+  if (dropdown && search && !search.contains(e.target) && !dropdown.contains(e.target)) {
+    weatherLocCloseDropdown();
+  }
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────
