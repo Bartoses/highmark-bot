@@ -109,11 +109,32 @@ export async function getTomorrowsAvailability(clientId, supabase) {
   return slotsForDate(rows, tomorrowMT());
 }
 
-export async function getWeatherSnapshot(supabase) {
-  const weather = await getWeatherData(supabase);
-  const snow    = await getSnowData(supabase);
-  if (!weather && !snow) return null;
-  return { weather: weather?.data ?? null, snow: snow?.data ?? null, fetched_at: weather?.fetched_at ?? snow?.fetched_at ?? null };
+async function getCustomWeatherData(clientId, supabase) {
+  try {
+    const { data } = await supabase
+      .from("knowledge_base")
+      .select("data, fetched_at")
+      .eq("key", `weather_custom_${clientId}`)
+      .single();
+    return data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getWeatherSnapshot(supabase, clientId = null) {
+  const [weather, snow, custom] = await Promise.all([
+    getWeatherData(supabase),
+    getSnowData(supabase),
+    clientId ? getCustomWeatherData(clientId, supabase) : Promise.resolve(null),
+  ]);
+  if (!weather && !snow && !custom) return null;
+  return {
+    weather:         weather?.data ?? null,
+    snow:            snow?.data    ?? null,
+    custom_locations: custom?.data?.locations ?? [],
+    fetched_at:      weather?.fetched_at ?? snow?.fetched_at ?? custom?.fetched_at ?? null,
+  };
 }
 
 export async function getHotLeads(clientId, supabase, limit = 5) {
@@ -264,7 +285,7 @@ export async function sendOperatorBriefing(client, supabase, twilioClient) {
   const [todaySlots, hotLeads, weatherSnap] = await Promise.all([
     getTodaysAvailability(client.id, supabase),
     getHotLeads(client.id, supabase, 3),
-    getWeatherSnapshot(supabase),
+    getWeatherSnapshot(supabase, client.id),
   ]);
 
   const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap);
@@ -330,7 +351,7 @@ export async function detectAndHandleOperatorCommand(message, client, supabase) 
 
   // WEATHER / CONDITIONS
   if (msg.match(/^weather$/) || msg.match(/\bconditions?\b/) || msg.match(/^snow$/)) {
-    const snap = await getWeatherSnapshot(supabase);
+    const snap = await getWeatherSnapshot(supabase, client.id);
     return formatWeatherResponse(snap);
   }
 
@@ -387,6 +408,10 @@ function formatWeatherResponse(snap) {
     const kr = w.kremmling;
     lines.push(`Kremmling: ${kr.temp}°F, ${kr.desc}`);
   }
+  // Custom per-client locations
+  for (const loc of (snap.custom_locations ?? [])) {
+    lines.push(`${loc.name}: ${loc.temp}°F, ${loc.desc}`);
+  }
 
   if (s?.stations) {
     for (const st of Object.values(s.stations).slice(0, 2)) {
@@ -418,7 +443,7 @@ export async function buildOperatorApiData(clientId, supabase) {
   const [todaySlots, hotLeads, weatherSnap, fhRows] = await Promise.all([
     getTodaysAvailability(clientId, supabase),
     getHotLeads(clientId, supabase, 10),
-    getWeatherSnapshot(supabase),
+    getWeatherSnapshot(supabase, clientId),
     getFhDataForClient(clientId, supabase),
   ]);
 

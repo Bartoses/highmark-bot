@@ -339,6 +339,64 @@ async function refreshWeatherKnowledge(supabase) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CUSTOM WEATHER LOCATIONS — per-client, DB-configured, refreshed every hour.
+// Reads client.weatherLocations (JSONB array from clients table).
+// Stores per-client under key: weather_custom_{clientId}
+// ─────────────────────────────────────────────────────────────────────────────
+async function refreshCustomWeatherLocations(supabase) {
+  const apiKey = process.env.OPENWEATHER_API_KEY;
+  if (!apiKey) return;
+
+  for (const client of Object.values(getAllClients())) {
+    const locations = client.weatherLocations ?? client.weather_locations ?? [];
+    if (!locations.length) continue;
+
+    try {
+      const results = [];
+      for (const loc of locations) {
+        if (loc.lat == null || loc.lon == null) continue;
+        const res = await fetch(
+          `${OPENWEATHER_BASE}/weather?lat=${loc.lat}&lon=${loc.lon}&appid=${apiKey}&units=imperial`
+        );
+        if (!res.ok) continue;
+        const d = await res.json();
+        results.push({
+          name:      loc.name      ?? "Unknown",
+          elevation: loc.elevation ?? null,
+          lat:       loc.lat,
+          lon:       loc.lon,
+          temp:      Math.round(d.main.temp),
+          desc:      d.weather[0].description,
+          wind_mph:  Math.round(d.wind.speed),
+          snow_1h:   ((d.snow?.["1h"] ?? 0) / 25.4).toFixed(2),
+        });
+      }
+
+      if (!results.length) continue;
+
+      const summary = results
+        .map((r) => `${r.name}: ${r.temp}°F, ${r.desc}`)
+        .join(" | ")
+        .slice(0, 300);
+
+      await supabase.from("knowledge_base").upsert({
+        client_id:       client.id,
+        type:            "weather_custom",
+        key:             `weather_custom_${client.id}`,
+        data:            { locations: results },
+        summary,
+        fetched_at:      new Date().toISOString(),
+        next_refresh_at: new Date(Date.now() + ONE_HOUR_MS).toISOString(),
+      }, { onConflict: "key" });
+
+      console.log(`[KB] Custom weather refreshed for ${client.id}: ${results.length} location(s)`);
+    } catch (err) {
+      console.error(`[KB] Custom weather failed for ${client.id}:`, err.message);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SNOW CONDITIONS — SNOTEL (snow depth) + CAIC (avalanche danger)
 // Refreshes every 3 hours. Zero Claude tokens — pure JS from structured data.
 // SNOTEL: USDA NRCS official stations, free, no API key required.
@@ -652,6 +710,7 @@ export async function initKnowledgeBase(supabase, anthropic) {
       .from("knowledge_base").select("fetched_at").eq("key", "weather_steamboat").single();
     const weatherStale = !weatherRow || Date.now() - new Date(weatherRow.fetched_at).getTime() > ONE_HOUR_MS;
     if (weatherStale) await refreshWeatherKnowledge(supabase);
+    await refreshCustomWeatherLocations(supabase);
 
     // ── Snow conditions — shared, only if any client has SNOTEL stations ─────
     const snowClient = allClients.find((c) => c.snotelStations?.length > 0);
@@ -697,6 +756,7 @@ export async function initKnowledgeBase(supabase, anthropic) {
   // Weather: refresh every hour (cheap, zero Claude)
   cron.schedule("0 * * * *", () => {
     refreshWeatherKnowledge(supabase);
+    refreshCustomWeatherLocations(supabase);
   });
 
   // Snow conditions (SNOTEL + CAIC): refresh every 3 hours

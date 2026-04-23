@@ -146,6 +146,8 @@ function applyDbOverrides(client, dbRow) {
   if (dbRow.support_email) merged.supportEmail  = dbRow.support_email;
   if (dbRow.owner_phone)   merged.ownerPhone    = dbRow.owner_phone;
   if (dbRow.booking_link)  merged.bookingLink   = dbRow.booking_link;
+  if (Array.isArray(dbRow.operator_phones)   && dbRow.operator_phones.length)   merged.operatorPhones   = dbRow.operator_phones;
+  if (Array.isArray(dbRow.weather_locations) && dbRow.weather_locations.length) merged.weatherLocations = dbRow.weather_locations;
   // Don't override bookingMode for demo clients — it's identity, not configurable setting
   if (dbRow.booking_mode && !client.isDemo)  merged.bookingMode = dbRow.booking_mode;
 

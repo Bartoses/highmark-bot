@@ -708,6 +708,10 @@ export async function handlePortalSettings(req, res, supabase) {
     },
     // SNOTEL stations
     snotelStations: client.snotelStations ?? [],
+    // Operator phones (additional numbers that trigger owner mode)
+    operatorPhones: client.operatorPhones ?? [],
+    // Custom weather locations (fetched hourly per-client)
+    weatherLocations: client.weatherLocations ?? [],
     // Weather API key status (global, not per-client)
     weather: {
       enabled: !!(process.env.OPENWEATHER_API_KEY),
@@ -858,6 +862,42 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
       return res.status(400).json({ error: "snotel_stations must be an array" });
     }
     updates.snotel_stations = req.body.snotel_stations.filter(Boolean);
+  }
+
+  // operator_phones — array of E.164 phone strings
+  if (req.body.operator_phones !== undefined) {
+    if (!Array.isArray(req.body.operator_phones)) {
+      return res.status(400).json({ error: "operator_phones must be an array" });
+    }
+    const phones = [];
+    for (const p of req.body.operator_phones) {
+      const normalized = normalizePhone(String(p ?? "").trim());
+      if (p && !normalized) {
+        return res.status(400).json({ error: `Invalid phone in operator_phones: "${p}"` });
+      }
+      if (normalized) phones.push(normalized);
+    }
+    updates.operator_phones = phones;
+  }
+
+  // weather_locations — array of { name, lat, lon, elevation? }
+  if (req.body.weather_locations !== undefined) {
+    if (!Array.isArray(req.body.weather_locations)) {
+      return res.status(400).json({ error: "weather_locations must be an array" });
+    }
+    const locs = [];
+    for (const loc of req.body.weather_locations) {
+      if (!loc.name || loc.lat == null || loc.lon == null) {
+        return res.status(400).json({ error: "Each weather_location requires name, lat, and lon" });
+      }
+      const lat = parseFloat(loc.lat);
+      const lon = parseFloat(loc.lon);
+      if (isNaN(lat) || isNaN(lon)) {
+        return res.status(400).json({ error: `Invalid lat/lon for location "${loc.name}"` });
+      }
+      locs.push({ name: String(loc.name).trim(), lat, lon, elevation: loc.elevation ? String(loc.elevation).trim() : null });
+    }
+    updates.weather_locations = locs;
   }
 
   if (Object.keys(updates).length === 1) {

@@ -3254,6 +3254,18 @@ async function loadSettings() {
           <input type="text" id="set_owner_phone" value="${d.ownerPhone ?? ''}" placeholder="+12223334444" style="max-width:240px;">
           <div class="form-hint">When this number texts your bot, it responds in <strong style="color:var(--text);">internal mode</strong> — business reports, lead summaries, and campaign ideas instead of guest replies. Leave blank to disable.</div>
         </div>
+        <div class="form-group">
+          <label>Additional operator phones</label>
+          <div class="form-hint" style="margin-bottom:8px;">Other staff numbers that also get internal mode. One E.164 phone per row.</div>
+          <div id="operatorPhonesList">
+            ${(d.operatorPhones ?? []).map((p, i) => `
+            <div class="op-phone-row" style="display:flex;gap:8px;margin-bottom:6px;">
+              <input type="text" class="form-input op-phone-input" value="${escHtml(p)}" placeholder="+12223334444" style="max-width:220px;">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.op-phone-row').remove()" title="Remove">✕</button>
+            </div>`).join('')}
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="addOperatorPhoneRow()" style="margin-top:4px;">+ Add phone</button>
+        </div>
       </div>
     </div>
 
@@ -3461,6 +3473,7 @@ async function loadSettings() {
       lead_notification_phone: document.getElementById('set_lead_notification_phone').value.trim() || null,
       support_email:           document.getElementById('set_support_email').value.trim() || null,
       owner_phone:             document.getElementById('set_owner_phone').value.trim() || null,
+      operator_phones:         [...document.querySelectorAll('.op-phone-input')].map(i => i.value.trim()).filter(Boolean),
       website_url:             document.getElementById('set_website_url').value.trim() || null,
       hours:                   document.getElementById('set_hours')?.value.trim() || null,
       timezone:                document.getElementById('set_timezone')?.value.trim() || 'America/Denver',
@@ -4467,10 +4480,36 @@ function renderIntegrationSection(s, status) {
   </div>`;
 
   // ── Weather card (read-only for clients) ───────────────────────────────────
+  const weatherLocRows = (s.weatherLocations ?? []).map(loc => `
+    <div class="weather-loc-row" style="display:grid;grid-template-columns:1fr 90px 90px 110px 32px;gap:6px;margin-bottom:6px;align-items:center;">
+      <input type="text"   class="form-input wl-name" placeholder="Location name" value="${escHtml(loc.name ?? '')}">
+      <input type="number" class="form-input wl-lat"  placeholder="Lat" step="0.001" value="${loc.lat ?? ''}">
+      <input type="number" class="form-input wl-lon"  placeholder="Lon" step="0.001" value="${loc.lon ?? ''}">
+      <input type="text"   class="form-input wl-elev" placeholder="e.g. 9,426 ft"  value="${escHtml(loc.elevation ?? '')}">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.weather-loc-row').remove()" title="Remove">✕</button>
+    </div>`).join('');
+
   const weatherCard = `<div class="card" style="margin-bottom:16px;">
     ${cardHeader('🌤', 'OpenWeather — Weather Data', syncBadge('weather'))}
-    <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">Current conditions and 3-day forecast for Steamboat Springs and Rabbit Ears Pass.</p>
+    <p style="font-size:12px;color:var(--text2);margin:0 0 14px;">Current conditions and 5-day forecast for Steamboat Springs. Add locations below to include them in operator briefings and the Operator View.</p>
     ${roField('API Key', s.weather?.enabled ? 'Configured (global)' : null, s.weather?.enabled ? 'Global API key is set.' : 'Contact Highmark to configure the OpenWeather API key.')}
+    ${editable && s.weather?.enabled ? `
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-weight:600;font-size:13px;margin-bottom:4px;">Custom Weather Locations</div>
+      <p style="font-size:12px;color:var(--text2);margin:0 0 10px;">Fetched every hour. Use decimal degrees for lat/lon (e.g. 40.38, -106.60).</p>
+      <div style="display:grid;grid-template-columns:1fr 90px 90px 110px 32px;gap:6px;margin-bottom:4px;padding:0 2px;">
+        <span style="font-size:10px;color:var(--text3);font-weight:700;">NAME</span>
+        <span style="font-size:10px;color:var(--text3);font-weight:700;">LAT</span>
+        <span style="font-size:10px;color:var(--text3);font-weight:700;">LON</span>
+        <span style="font-size:10px;color:var(--text3);font-weight:700;">ELEVATION</span>
+        <span></span>
+      </div>
+      <div id="weatherLocList">${weatherLocRows}</div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="addWeatherLocationRow()">+ Add location</button>
+        <button class="btn btn-primary btn-sm" id="weatherLocSaveBtn" onclick="saveWeatherLocations()">Save locations</button>
+      </div>
+    </div>` : ''}
   </div>`;
 
   // ── Custom APIs card ───────────────────────────────────────────────────────
@@ -4610,6 +4649,51 @@ async function syncFhNow() {
   loadIntegrationsSection();
 }
 
+function addOperatorPhoneRow(value = '') {
+  const list = document.getElementById('operatorPhonesList');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'op-phone-row';
+  row.style.cssText = 'display:flex;gap:8px;margin-bottom:6px;';
+  row.innerHTML = `<input type="text" class="form-input op-phone-input" value="${escHtml(value)}" placeholder="+12223334444" style="max-width:220px;"><button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.op-phone-row').remove()" title="Remove">✕</button>`;
+  list.appendChild(row);
+}
+
+async function saveWeatherLocations() {
+  const btn = document.getElementById('weatherLocSaveBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const rows = document.querySelectorAll('.weather-loc-row');
+  const locs = [];
+  for (const row of rows) {
+    const name = row.querySelector('.wl-name')?.value.trim();
+    const lat  = parseFloat(row.querySelector('.wl-lat')?.value.trim());
+    const lon  = parseFloat(row.querySelector('.wl-lon')?.value.trim());
+    const elev = row.querySelector('.wl-elev')?.value.trim() || null;
+    if (!name || isNaN(lat) || isNaN(lon)) continue;
+    locs.push({ name, lat, lon, elevation: elev });
+  }
+  const r = await apiFetch('/settings', { method: 'PATCH', body: JSON.stringify({ weather_locations: locs }) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Save locations'; }
+  if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
+  showToast('Weather locations saved');
+  loadIntegrationsSection();
+}
+
+function addWeatherLocationRow(loc = {}) {
+  const list = document.getElementById('weatherLocList');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'weather-loc-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 90px 100px 32px;gap:6px;margin-bottom:6px;align-items:center;';
+  row.innerHTML = `
+    <input type="text"   class="form-input wl-name" placeholder="Location name" value="${escHtml(loc.name ?? '')}">
+    <input type="number" class="form-input wl-lat"  placeholder="Lat" step="0.001" value="${loc.lat ?? ''}">
+    <input type="number" class="form-input wl-lon"  placeholder="Lon" step="0.001" value="${loc.lon ?? ''}">
+    <input type="text"   class="form-input wl-elev" placeholder="Elevation" value="${escHtml(loc.elevation ?? '')}">
+    <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.weather-loc-row').remove()" title="Remove">✕</button>`;
+  list.appendChild(row);
+}
+
 async function saveSnotelConfig() {
   const btn = document.getElementById('intSnotelSaveBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -4729,6 +4813,9 @@ async function loadOperator() {
       if (w?.kremmling) {
         const kr = w.kremmling;
         html += `<div style="margin-bottom:8px;"><strong>Kremmling:</strong> ${kr.temp}°F, ${kr.desc}, wind ${kr.wind_mph} mph</div>`;
+      }
+      for (const loc of (data.weather?.custom_locations ?? [])) {
+        html += `<div style="margin-bottom:8px;"><strong>${escHtml(loc.name)}${loc.elevation ? ` (${escHtml(loc.elevation)})` : ''}:</strong> ${loc.temp}°F, ${loc.desc}</div>`;
       }
       if (s?.stations) {
         for (const st of Object.values(s.stations).slice(0, 2)) {
