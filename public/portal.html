@@ -301,10 +301,12 @@ tr:hover td { background: var(--panel2); }
 .modal-backdrop.open { display: flex; }
 .modal {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 24px; width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto;
+  padding: 0; width: 100%; max-width: 480px; max-height: 90vh;
+  display: flex; flex-direction: column;
 }
-.modal-title { font-size: 15px; font-weight: 700; margin-bottom: 18px; }
-.modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px; }
+.modal-title { font-size: 15px; font-weight: 700; padding: 20px 24px 0; flex-shrink: 0; }
+.modal-body { flex: 1; overflow-y: auto; padding: 18px 24px; -webkit-overflow-scrolling: touch; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0; border-top: 1px solid var(--border); padding: 14px 24px; }
 
 /* ── Misc ────────────────────────────────────────────────────────────────── */
 .empty-state { text-align: center; color: var(--text3); padding: 40px; }
@@ -347,8 +349,9 @@ tr:hover td { background: var(--panel2); }
   .client-badge  { display: none; }
   /* Settings: stack card header (title + action button) on small screens */
   .card-header-row { flex-direction: column; align-items: flex-start !important; gap: 8px !important; }
-  /* Modals: full-width on mobile */
-  .modal { max-width: 100% !important; margin: 0; border-radius: 12px 12px 0 0; position: fixed; bottom: 0; left: 0; right: 0; max-height: 80vh; }
+  /* Modals: full-width slide-up on mobile */
+  .modal { max-width: 100% !important; margin: 0; border-radius: 12px 12px 0 0; position: fixed; bottom: 0; left: 0; right: 0; max-height: 85vh; }
+  .modal-footer { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
   .modal-backdrop { align-items: flex-end !important; }
   /* Lead panel: full-width slide-up on mobile, clear bottom nav */
   #leadPanel {
@@ -1323,50 +1326,52 @@ tr:hover td { background: var(--panel2); }
 <div class="modal-backdrop" id="leadModal">
   <div class="modal">
     <div class="modal-title">Update Lead</div>
-    <div id="leadModalError" class="error-msg" style="display:none"></div>
-    <div class="two-col">
-      <div class="form-group">
-        <label>Name</label>
-        <input type="text" id="leadModalName" placeholder="Contact name">
+    <div class="modal-body">
+      <div id="leadModalError" class="error-msg" style="display:none"></div>
+      <div class="two-col">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="leadModalName" placeholder="Contact name">
+        </div>
+        <div class="form-group">
+          <label>Phone</label>
+          <input type="text" id="leadModalPhone" readonly style="opacity:.6">
+        </div>
       </div>
       <div class="form-group">
-        <label>Phone</label>
-        <input type="text" id="leadModalPhone" readonly style="opacity:.6">
+        <label>Email</label>
+        <input type="email" id="leadModalEmail" placeholder="contact@example.com">
       </div>
-    </div>
-    <div class="form-group">
-      <label>Email</label>
-      <input type="email" id="leadModalEmail" placeholder="contact@example.com">
-    </div>
-    <div class="two-col">
+      <div class="two-col">
+        <div class="form-group">
+          <label>Status</label>
+          <select id="leadModalStatus">
+            <option value="new">New</option>
+            <option value="contacted">Contacted</option>
+            <option value="engaged">Engaged</option>
+            <option value="converted">Converted</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="closed">Closed</option>
+            <option value="ignored">Ignored</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Type</label>
+          <input type="text" id="leadModalType" readonly style="opacity:.6">
+        </div>
+      </div>
       <div class="form-group">
-        <label>Status</label>
-        <select id="leadModalStatus">
-          <option value="new">New</option>
-          <option value="contacted">Contacted</option>
-          <option value="engaged">Engaged</option>
-          <option value="converted">Converted</option>
-          <option value="scheduled">Scheduled</option>
-          <option value="closed">Closed</option>
-          <option value="ignored">Ignored</option>
-        </select>
+        <label>Requested service</label>
+        <input type="text" id="leadModalService" placeholder="e.g. guided snowmobile tour">
       </div>
       <div class="form-group">
-        <label>Type</label>
-        <input type="text" id="leadModalType" readonly style="opacity:.6">
+        <label>Preferred timeframe</label>
+        <input type="text" id="leadModalTimeframe" placeholder="e.g. this weekend, March 15">
       </div>
-    </div>
-    <div class="form-group">
-      <label>Requested service</label>
-      <input type="text" id="leadModalService" placeholder="e.g. guided snowmobile tour">
-    </div>
-    <div class="form-group">
-      <label>Preferred timeframe</label>
-      <input type="text" id="leadModalTimeframe" placeholder="e.g. this weekend, March 15">
-    </div>
-    <div class="form-group">
-      <label>Notes</label>
-      <textarea id="leadModalNotes" placeholder="Internal notes…"></textarea>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="leadModalNotes" placeholder="Internal notes…"></textarea>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" id="leadModalCancel">Cancel</button>
@@ -1379,78 +1384,80 @@ tr:hover td { background: var(--panel2); }
 <div class="modal-backdrop" id="campaignModal">
   <div class="modal" style="max-width:520px;">
     <div class="modal-title" id="campaignModalTitle">New Campaign</div>
-    <div id="campaignModalError" class="error-msg" style="display:none"></div>
+    <div class="modal-body">
+      <div id="campaignModalError" class="error-msg" style="display:none"></div>
 
-    <!-- Campaign type selector -->
-    <div class="form-group">
-      <label>Campaign type</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-        <label id="campTypeManualCard" class="camp-type-card active" onclick="setCampType('manual')" style="cursor:pointer;border:2px solid var(--accent);border-radius:8px;padding:10px 12px;display:block;">
-          <div style="font-weight:600;font-size:13px;margin-bottom:2px;">📣 Manual</div>
-          <div style="font-size:11px;color:var(--text2);">Send when you want — draft or schedule.</div>
-          <input type="radio" name="campType" value="manual" checked style="display:none">
-        </label>
-        <label id="campTypeEventCard" class="camp-type-card" onclick="setCampType('event_triggered')" style="cursor:pointer;border:2px solid var(--border2);border-radius:8px;padding:10px 12px;display:block;">
-          <div style="font-weight:600;font-size:13px;margin-bottom:2px;">⚡ Smart Event</div>
-          <div style="font-size:11px;color:var(--text2);">Auto-fires when conditions are met.</div>
-          <input type="radio" name="campType" value="event_triggered" style="display:none">
-        </label>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label>Campaign name</label>
-      <input type="text" id="campName" placeholder="e.g. Fresh Powder Alert">
-    </div>
-
-    <!-- Event trigger config (shown only for event_triggered) -->
-    <div id="campTriggerSection" style="display:none;">
+      <!-- Campaign type selector -->
       <div class="form-group">
-        <label>Trigger condition</label>
-        <select id="campTriggerType" onchange="updateTriggerConfig()">
-          <option value="snow_fresh">❄️ Fresh snow alert — fires when new snowfall exceeds threshold</option>
-          <option value="good_weather">☀️ Good weather weekend — fires on sunny weekends above temp</option>
-          <option value="opening_date">📅 Opening date — fires on a specific date</option>
-          <option value="custom_date">🗓 Custom date — one-time send on a specific date</option>
+        <label>Campaign type</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <label id="campTypeManualCard" class="camp-type-card active" onclick="setCampType('manual')" style="cursor:pointer;border:2px solid var(--accent);border-radius:8px;padding:10px 12px;display:block;">
+            <div style="font-weight:600;font-size:13px;margin-bottom:2px;">📣 Manual</div>
+            <div style="font-size:11px;color:var(--text2);">Send when you want — draft or schedule.</div>
+            <input type="radio" name="campType" value="manual" checked style="display:none">
+          </label>
+          <label id="campTypeEventCard" class="camp-type-card" onclick="setCampType('event_triggered')" style="cursor:pointer;border:2px solid var(--border2);border-radius:8px;padding:10px 12px;display:block;">
+            <div style="font-weight:600;font-size:13px;margin-bottom:2px;">⚡ Smart Event</div>
+            <div style="font-size:11px;color:var(--text2);">Auto-fires when conditions are met.</div>
+            <input type="radio" name="campType" value="event_triggered" style="display:none">
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Campaign name</label>
+        <input type="text" id="campName" placeholder="e.g. Fresh Powder Alert">
+      </div>
+
+      <!-- Event trigger config (shown only for event_triggered) -->
+      <div id="campTriggerSection" style="display:none;">
+        <div class="form-group">
+          <label>Trigger condition</label>
+          <select id="campTriggerType" onchange="updateTriggerConfig()">
+            <option value="snow_fresh">❄️ Fresh snow alert — fires when new snowfall exceeds threshold</option>
+            <option value="good_weather">☀️ Good weather weekend — fires on sunny weekends above temp</option>
+            <option value="opening_date">📅 Opening date — fires on a specific date</option>
+            <option value="custom_date">🗓 Custom date — one-time send on a specific date</option>
+          </select>
+        </div>
+        <div id="campTriggerConfigFields" style="margin-bottom:12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;"></div>
+        <div class="form-group">
+          <label>Cooldown — don't re-send to same contact for <input type="number" id="campCooldown" value="7" min="1" max="365" style="width:56px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:3px 6px;font-size:12px;"> days after firing</label>
+        </div>
+      </div>
+
+      <!-- Manual schedule (shown only for manual) -->
+      <div id="campScheduleSection">
+        <div class="form-group">
+          <label>Schedule (optional)</label>
+          <input type="datetime-local" id="campScheduled">
+          <div class="form-hint">Leave blank to send immediately when you click Send.</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Audience</label>
+        <select id="campAudience" onchange="fetchAudiencePreview()">
+          <option value="all_leads">All leads (new, contacted, engaged, scheduled)</option>
+          <option value="engaged_leads">Engaged leads only</option>
+          <option value="new_leads">New leads (joined last 7 days)</option>
+          <option value="missed_leads">Missed leads (7+ days, no engagement)</option>
         </select>
+        <div id="audiencePreview" class="form-hint" style="margin-top:4px;min-height:16px;"></div>
       </div>
-      <div id="campTriggerConfigFields" style="margin-bottom:12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;"></div>
       <div class="form-group">
-        <label>Cooldown — don't re-send to same contact for <input type="number" id="campCooldown" value="7" min="1" max="365" style="width:56px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:3px 6px;font-size:12px;"> days after firing</label>
+        <label style="display:flex;justify-content:space-between;align-items:center;">
+          Message
+          <span style="display:flex;gap:6px;" id="campTemplateButtons">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('missed_lead')">Missed Lead</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('reengagement')">Re-engage</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('promo')">Promo</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('snow')">Snow</button>
+          </span>
+        </label>
+        <textarea id="campMessage" placeholder="Hi {{first_name}}, your message here…"></textarea>
+        <div class="form-hint">Use {{first_name}}, {{name}}, {{booking_link}}.</div>
       </div>
-    </div>
-
-    <!-- Manual schedule (shown only for manual) -->
-    <div id="campScheduleSection">
-      <div class="form-group">
-        <label>Schedule (optional)</label>
-        <input type="datetime-local" id="campScheduled">
-        <div class="form-hint">Leave blank to send immediately when you click Send.</div>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label>Audience</label>
-      <select id="campAudience" onchange="fetchAudiencePreview()">
-        <option value="all_leads">All leads (new, contacted, engaged, scheduled)</option>
-        <option value="engaged_leads">Engaged leads only</option>
-        <option value="new_leads">New leads (joined last 7 days)</option>
-        <option value="missed_leads">Missed leads (7+ days, no engagement)</option>
-      </select>
-      <div id="audiencePreview" class="form-hint" style="margin-top:4px;min-height:16px;"></div>
-    </div>
-    <div class="form-group">
-      <label style="display:flex;justify-content:space-between;align-items:center;">
-        Message
-        <span style="display:flex;gap:6px;" id="campTemplateButtons">
-          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('missed_lead')">Missed Lead</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('reengagement')">Re-engage</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('promo')">Promo</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="applyCampaignTemplate('snow')">Snow</button>
-        </span>
-      </label>
-      <textarea id="campMessage" placeholder="Hi {{first_name}}, your message here…"></textarea>
-      <div class="form-hint">Use {{first_name}}, {{name}}, {{booking_link}}.</div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" id="campaignModalCancel">Cancel</button>
@@ -1463,48 +1470,50 @@ tr:hover td { background: var(--panel2); }
 <div class="modal-backdrop" id="clientModal">
   <div class="modal">
     <div class="modal-title" id="clientModalTitle">New Client</div>
-    <div id="clientModalError" class="error-msg" style="display:none"></div>
-    <div id="clientModalForm">
-      <div class="two-col">
-        <div class="form-group">
-          <label>Client ID <span style="color:var(--text2);font-weight:400;">(lowercase, no spaces)</span></label>
-          <input type="text" id="clientId" placeholder="e.g. mountain_lodge">
+    <div class="modal-body">
+      <div id="clientModalError" class="error-msg" style="display:none"></div>
+      <div id="clientModalForm">
+        <div class="two-col">
+          <div class="form-group">
+            <label>Client ID <span style="color:var(--text2);font-weight:400;">(lowercase, no spaces)</span></label>
+            <input type="text" id="clientId" placeholder="e.g. mountain_lodge">
+          </div>
+          <div class="form-group">
+            <label>Business name</label>
+            <input type="text" id="clientName" placeholder="e.g. Mountain Lodge">
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="form-group">
+            <label>Bot name</label>
+            <input type="text" id="clientBotName" placeholder="Summit" value="Summit">
+          </div>
+          <div class="form-group">
+            <label>Booking mode</label>
+            <select id="clientBookingMode">
+              <option value="informational">Informational (Q&amp;A + phone CTA)</option>
+              <option value="fareharbor">FareHarbor (real-time availability)</option>
+              <option value="lead_capture">Lead capture (3-step form)</option>
+              <option value="static_links">Static links (numbered booking list)</option>
+              <option value="call_only">Call only (phone CTA only)</option>
+              <option value="hybrid">Hybrid (links + phone CTA)</option>
+            </select>
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="form-group">
+            <label>Support phone <span style="color:var(--text2);font-weight:400;">(E.164)</span></label>
+            <input type="text" id="clientSupportPhone" placeholder="+19705550001">
+          </div>
+          <div class="form-group">
+            <label>Website URL</label>
+            <input type="text" id="clientWebsiteUrl" placeholder="https://example.com">
+          </div>
         </div>
         <div class="form-group">
-          <label>Business name</label>
-          <input type="text" id="clientName" placeholder="e.g. Mountain Lodge">
+          <label>Tone</label>
+          <input type="text" id="clientTone" placeholder="warm, helpful, and knowledgeable" value="warm, helpful, and knowledgeable">
         </div>
-      </div>
-      <div class="two-col">
-        <div class="form-group">
-          <label>Bot name</label>
-          <input type="text" id="clientBotName" placeholder="Summit" value="Summit">
-        </div>
-        <div class="form-group">
-          <label>Booking mode</label>
-          <select id="clientBookingMode">
-            <option value="informational">Informational (Q&amp;A + phone CTA)</option>
-            <option value="fareharbor">FareHarbor (real-time availability)</option>
-            <option value="lead_capture">Lead capture (3-step form)</option>
-            <option value="static_links">Static links (numbered booking list)</option>
-            <option value="call_only">Call only (phone CTA only)</option>
-            <option value="hybrid">Hybrid (links + phone CTA)</option>
-          </select>
-        </div>
-      </div>
-      <div class="two-col">
-        <div class="form-group">
-          <label>Support phone <span style="color:var(--text2);font-weight:400;">(E.164)</span></label>
-          <input type="text" id="clientSupportPhone" placeholder="+19705550001">
-        </div>
-        <div class="form-group">
-          <label>Website URL</label>
-          <input type="text" id="clientWebsiteUrl" placeholder="https://example.com">
-        </div>
-      </div>
-      <div class="form-group">
-        <label>Tone</label>
-        <input type="text" id="clientTone" placeholder="warm, helpful, and knowledgeable" value="warm, helpful, and knowledgeable">
       </div>
     </div>
     <div class="modal-footer">
@@ -1527,29 +1536,31 @@ tr:hover td { background: var(--panel2); }
 <div class="modal-backdrop" id="inviteModal">
   <div class="modal">
     <div class="modal-title">Invite Portal User</div>
-    <div id="inviteModalResult" style="display:none"></div>
-    <div id="inviteModalForm">
-      <div id="inviteModalError" class="error-msg" style="display:none"></div>
-      <div class="form-group">
-        <label>Email address</label>
-        <input type="email" id="inviteEmail" placeholder="client@example.com">
+    <div class="modal-body">
+      <div id="inviteModalResult" style="display:none"></div>
+      <div id="inviteModalForm">
+        <div id="inviteModalError" class="error-msg" style="display:none"></div>
+        <div class="form-group">
+          <label>Email address</label>
+          <input type="email" id="inviteEmail" placeholder="client@example.com">
+        </div>
+        <div class="form-group">
+          <label>Client</label>
+          <select id="inviteClient"></select>
+        </div>
+        <div class="form-group">
+          <label>Role</label>
+          <select id="inviteRole">
+            <option value="client_user">Client user</option>
+            <option value="client_admin">Client admin (can manage own users)</option>
+            <option value="internal_admin" class="admin-only">Internal admin (all clients)</option>
+          </select>
+        </div>
       </div>
-      <div class="form-group">
-        <label>Client</label>
-        <select id="inviteClient"></select>
-      </div>
-      <div class="form-group">
-        <label>Role</label>
-        <select id="inviteRole">
-          <option value="client_user">Client user</option>
-          <option value="client_admin">Client admin (can manage own users)</option>
-          <option value="internal_admin" class="admin-only">Internal admin (all clients)</option>
-        </select>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" id="inviteModalCancel">Cancel</button>
-        <button class="btn btn-primary" id="inviteModalSend">Create invite link</button>
-      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="inviteModalCancel">Cancel</button>
+      <button class="btn btn-primary" id="inviteModalSend">Create invite link</button>
     </div>
   </div>
 </div>
@@ -1558,7 +1569,9 @@ tr:hover td { background: var(--panel2); }
 <div class="modal-backdrop" id="campaignDetailModal">
   <div class="modal">
     <div class="modal-title" id="cdTitle">Campaign</div>
-    <div id="cdContent"></div>
+    <div class="modal-body">
+      <div id="cdContent"></div>
+    </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" id="cdClose">Close</button>
       <button class="btn btn-primary" id="cdSend" style="display:none">Send now</button>
@@ -1570,25 +1583,27 @@ tr:hover td { background: var(--panel2); }
 <div class="modal-backdrop" id="srcModal">
   <div class="modal">
     <div class="modal-title">Add Knowledge Source</div>
-    <div id="srcModalError" class="error-msg" style="display:none"></div>
-    <div class="form-group">
-      <label>URL</label>
-      <input type="url" id="srcModalUrl" placeholder="https://example.com/faq">
-      <div class="form-hint">Public URL the bot will scrape for knowledge base content</div>
-    </div>
-    <div class="form-group">
-      <label>Label <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
-      <input type="text" id="srcModalLabel" placeholder="FAQ page">
-    </div>
-    <div class="form-group">
-      <label>Type</label>
-      <select id="srcModalType">
-        <option value="website">Website (general)</option>
-        <option value="faq">FAQ</option>
-        <option value="booking">Booking info</option>
-        <option value="policies">Policies</option>
-        <option value="blog">Blog</option>
-      </select>
+    <div class="modal-body">
+      <div id="srcModalError" class="error-msg" style="display:none"></div>
+      <div class="form-group">
+        <label>URL</label>
+        <input type="url" id="srcModalUrl" placeholder="https://example.com/faq">
+        <div class="form-hint">Public URL the bot will scrape for knowledge base content</div>
+      </div>
+      <div class="form-group">
+        <label>Label <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+        <input type="text" id="srcModalLabel" placeholder="FAQ page">
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select id="srcModalType">
+          <option value="website">Website (general)</option>
+          <option value="faq">FAQ</option>
+          <option value="booking">Booking info</option>
+          <option value="policies">Policies</option>
+          <option value="blog">Blog</option>
+        </select>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="document.getElementById('srcModal').classList.remove('open')">Cancel</button>
@@ -1601,19 +1616,21 @@ tr:hover td { background: var(--panel2); }
 <div class="modal-backdrop" id="bkModal">
   <div class="modal">
     <div class="modal-title">Add Booking Option</div>
-    <div id="bkModalError" class="error-msg" style="display:none"></div>
-    <div class="form-group">
-      <label>Title</label>
-      <input type="text" id="bkModalTitle" placeholder="e.g. Guided Snowmobile Tour">
-      <div class="form-hint">Shown as a numbered menu item when guests ask to book</div>
-    </div>
-    <div class="form-group">
-      <label>URL</label>
-      <input type="url" id="bkModalUrl" placeholder="https://fareharbor.com/…">
-    </div>
-    <div class="form-group">
-      <label>Description <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
-      <input type="text" id="bkModalDesc" placeholder="e.g. 2hr guided tour, up to 6 guests">
+    <div class="modal-body">
+      <div id="bkModalError" class="error-msg" style="display:none"></div>
+      <div class="form-group">
+        <label>Title</label>
+        <input type="text" id="bkModalTitle" placeholder="e.g. Guided Snowmobile Tour">
+        <div class="form-hint">Shown as a numbered menu item when guests ask to book</div>
+      </div>
+      <div class="form-group">
+        <label>URL</label>
+        <input type="url" id="bkModalUrl" placeholder="https://fareharbor.com/…">
+      </div>
+      <div class="form-group">
+        <label>Description <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+        <input type="text" id="bkModalDesc" placeholder="e.g. 2hr guided tour, up to 6 guests">
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="document.getElementById('bkModal').classList.remove('open')">Cancel</button>
@@ -1624,50 +1641,51 @@ tr:hover td { background: var(--panel2); }
 
 <!-- ── Custom API integration modal ─────────────────────────────────────────── -->
 <div class="modal-backdrop" id="customApiModal">
-  <div class="modal" style="max-width:680px;max-height:90vh;overflow-y:auto;">
+  <div class="modal" style="max-width:680px;">
     <div class="modal-title" id="customApiModalTitle">New API Integration</div>
-    <div id="customApiModalError" class="error-msg" style="display:none"></div>
+    <div class="modal-body">
+      <div id="customApiModalError" class="error-msg" style="display:none"></div>
 
-    <!-- Basic Info -->
-    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px;">Basic Info</div>
-    <div class="form-group">
-      <label>Name</label>
-      <input class="form-input" type="text" id="capiName" placeholder="e.g. My Booking System">
+      <!-- Basic Info -->
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px;">Basic Info</div>
+      <div class="form-group">
+        <label>Name</label>
+        <input class="form-input" type="text" id="capiName" placeholder="e.g. My Booking System">
+      </div>
+      <div class="form-group">
+        <label>Description <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
+        <input class="form-input" type="text" id="capiDesc" placeholder="What this API does">
+      </div>
+      <div class="form-group">
+        <label>Base URL</label>
+        <input class="form-input" type="url" id="capiBaseUrl" placeholder="https://api.example.com">
+        <div class="form-hint">All endpoint paths are relative to this URL.</div>
+      </div>
+
+      <!-- Authentication -->
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Authentication</div>
+      <div class="form-group">
+        <label>Auth Type</label>
+        <select class="form-input" id="capiAuthType" onchange="updateAuthFields()">
+          <option value="none">None</option>
+          <option value="bearer">Bearer Token</option>
+          <option value="api_key_header">API Key (Header)</option>
+          <option value="api_key_query">API Key (Query Param)</option>
+          <option value="basic">Basic Auth</option>
+        </select>
+      </div>
+      <div id="capiAuthFields"></div>
+
+      <!-- Headers -->
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Global Headers <span style="font-weight:400;text-transform:none;">(optional)</span></div>
+      <div id="capiHeadersList"></div>
+      <button class="btn btn-ghost btn-sm" onclick="addHeaderRow()" style="margin-bottom:12px;">+ Add header</button>
+
+      <!-- Endpoints -->
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Endpoints</div>
+      <div id="capiEndpointsList"></div>
+      <button class="btn btn-ghost btn-sm" onclick="addEndpointRow()" style="margin-bottom:12px;">+ Add endpoint</button>
     </div>
-    <div class="form-group">
-      <label>Description <span style="color:var(--text3);font-weight:400;">(optional)</span></label>
-      <input class="form-input" type="text" id="capiDesc" placeholder="What this API does">
-    </div>
-    <div class="form-group">
-      <label>Base URL</label>
-      <input class="form-input" type="url" id="capiBaseUrl" placeholder="https://api.example.com">
-      <div class="form-hint">All endpoint paths are relative to this URL.</div>
-    </div>
-
-    <!-- Authentication -->
-    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Authentication</div>
-    <div class="form-group">
-      <label>Auth Type</label>
-      <select class="form-input" id="capiAuthType" onchange="updateAuthFields()">
-        <option value="none">None</option>
-        <option value="bearer">Bearer Token</option>
-        <option value="api_key_header">API Key (Header)</option>
-        <option value="api_key_query">API Key (Query Param)</option>
-        <option value="basic">Basic Auth</option>
-      </select>
-    </div>
-    <div id="capiAuthFields"></div>
-
-    <!-- Headers -->
-    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Global Headers <span style="font-weight:400;text-transform:none;">(optional)</span></div>
-    <div id="capiHeadersList"></div>
-    <button class="btn btn-ghost btn-sm" onclick="addHeaderRow()" style="margin-bottom:12px;">+ Add header</button>
-
-    <!-- Endpoints -->
-    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.06em;text-transform:uppercase;margin:18px 0 10px;">Endpoints</div>
-    <div id="capiEndpointsList"></div>
-    <button class="btn btn-ghost btn-sm" onclick="addEndpointRow()" style="margin-bottom:12px;">+ Add endpoint</button>
-
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeCustomApiModal()">Cancel</button>
       <button class="btn btn-primary" id="capiSaveBtn" onclick="saveCustomApi()">Save</button>
