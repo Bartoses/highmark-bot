@@ -349,10 +349,9 @@ tr:hover td { background: var(--panel2); }
   .client-badge  { display: none; }
   /* Settings: stack card header (title + action button) on small screens */
   .card-header-row { flex-direction: column; align-items: flex-start !important; gap: 8px !important; }
-  /* Modals: full-width slide-up on mobile */
-  .modal { max-width: 100% !important; margin: 0; border-radius: 12px 12px 0 0; position: fixed; bottom: 0; left: 0; right: 0; max-height: 85vh; }
-  .modal-footer { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
-  .modal-backdrop { align-items: flex-end !important; }
+  /* Modals: full-width slide-up on mobile, clear the 56px bottom nav */
+  .modal { max-width: 100% !important; margin: 0; border-radius: 12px 12px 0 0; position: fixed; bottom: 56px; left: 0; right: 0; max-height: calc(85vh - 56px); }
+  .modal-backdrop { align-items: flex-end !important; padding-bottom: 56px; }
   /* Lead panel: full-width slide-up on mobile, clear bottom nav */
   #leadPanel {
     width: 100vw !important;
