@@ -69,6 +69,7 @@ import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 import { getOrchestratorReply, runOrchestrator } from "./agentOrchestrator.js";
 import { detectOwner } from "./ownerMode.js";
 import { callClaudeForChannel } from "./messageEngine.js";
+import { sendOperatorBriefing, buildOperatorApiData } from "./operatorBriefing.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -2374,6 +2375,38 @@ app.get("/admin/demo-analytics/events",  requireUiAccess, (req, res) => handleDe
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN CLIENTS — Client provisioning API (protected by UI_SECRET)
 // ─────────────────────────────────────────────────────────────────────────────
+// ── Operator briefing admin endpoints ────────────────────────────────────────
+app.post("/admin/trigger-operator-briefing", requireUiAccess, async (req, res) => {
+  const clientId = req.body?.client_id ?? req.query.client_id;
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+  const client = getAllClients()[clientId];
+  if (!client)  return res.status(404).json({ error: `Client '${clientId}' not found` });
+  try {
+    const result = await sendOperatorBriefing(client, supabase, twilioClient);
+    res.json({ success: result.success, client_id: clientId, preview: result.preview, sent: result.sent ?? false, chars: result.chars ?? 0 });
+  } catch (err) {
+    console.error("[BRIEFING] Trigger failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/admin/operator-briefings", requireUiAccess, async (req, res) => {
+  const clientId = req.query.client_id;
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+  try {
+    const { data, error } = await supabase
+      .from("operator_briefings")
+      .select("*")
+      .eq("client_id", clientId)
+      .order("sent_at", { ascending: false })
+      .limit(10);
+    if (error) throw error;
+    res.json({ briefings: data ?? [] });
+  } catch (err) {
+    res.status(503).json({ error: "DB unavailable: " + err.message });
+  }
+});
+
 app.get("/admin/clients",       requireUiAccess, (req, res) => handleListClients(req, res));
 app.get("/admin/clients/:id",   requireUiAccess, (req, res) => handleGetClient(req, res));
 app.post("/admin/clients",      requireUiAccess, (req, res) => handleCreateClient(req, res, supabase));
@@ -2476,6 +2509,19 @@ app.get(  "/portal/api/rewrites",      requirePortalAuth, (req, res) => handleGe
 app.post( "/portal/api/rewrites/run",  requirePortalAuth, (req, res) => handleRunRewrites(req, res, supabase, anthropic));
 app.patch("/portal/api/rewrites/:id",  requirePortalAuth, (req, res) => handleUpdateRewriteStatus(req, res, supabase));
 // Phase 2A — Conversations (badge-count MUST be before :id to avoid route collision)
+// Operator view API — client_admin or internal_admin
+app.get("/portal/api/operator", requirePortalAuth, async (req, res) => {
+  if (!req.portalUser?.isClientAdmin) return res.status(403).json({ error: "client_admin or internal_admin role required" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+  try {
+    const data = await buildOperatorApiData(clientId, supabase);
+    res.json(data);
+  } catch (err) {
+    res.status(503).json({ error: "DB unavailable: " + err.message });
+  }
+});
+
 app.get(  "/portal/api/conversations/badge-count",  requirePortalAuth, (req, res) => handleConversationBadgeCount(req, res, supabase));
 app.get(  "/portal/api/conversations",              requirePortalAuth, (req, res) => handleListConversations(req, res, supabase));
 app.get(  "/portal/api/conversations/:id",          requirePortalAuth, (req, res) => handleGetConversation(req, res, supabase));

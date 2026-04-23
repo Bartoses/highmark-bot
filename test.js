@@ -3125,6 +3125,7 @@ async function main() {
     await testDashboardUpgrade(); // Phase 2B: dashboard API shape, calcTimeSaved unit tests
     await testLeadsUpgrade();     // Phase 3A: leads filter/PATCH fields, channel column
     await testSettingsPolish();   // Phase 3B: hours/timezone fields, preview-opener, usage endpoints
+    await testOperatorMode();     // Sprint 4A: operator briefing, commands, portal
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -12759,6 +12760,103 @@ async function testLeadsUpgrade() {
       body: JSON.stringify({ status: "new" }),
     });
     chk("leads3a: PATCH /leads/:id route registered (not 404)", r.status !== 404);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint 4A — Operator Mode Dashboard
+// ─────────────────────────────────────────────────────────────────────────────
+async function testOperatorMode() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  // ── Command detection unit tests ──────────────────────────────────────────
+  function detectCommand(msg) {
+    const m = msg.toLowerCase().trim();
+    if (m.match(/\bbookings?\s+(today|for today)\b/) || m === "bookings today" || m === "today's bookings" || m === "todays bookings") return "BOOKINGS_TODAY";
+    if (m.match(/\bbookings?\s+(tomorrow|for tomorrow)\b/) || m === "bookings tomorrow") return "BOOKINGS_TOMORROW";
+    if (m.match(/^leads?$/) || m.match(/\bmy\s+leads?\b/) || m.match(/^show\s+(me\s+)?leads?$/)) return "LEADS";
+    if (m.match(/\bnew\s+leads?\b/) || m.match(/\brecent\s+leads?\b/)) return "NEW_LEADS";
+    if (m.match(/^weather$/) || m.match(/\bconditions?\b/) || m.match(/^snow$/)) return "WEATHER";
+    if (m.match(/\brevenue\b/) || m.match(/\bearnings?\b/)) return "REVENUE";
+    return null;
+  }
+  chk("4a: detectCommand('bookings today')", detectCommand("bookings today") === "BOOKINGS_TODAY");
+  chk("4a: detectCommand('BOOKINGS TODAY') case-insensitive", detectCommand("BOOKINGS TODAY") === "BOOKINGS_TODAY");
+  chk("4a: detectCommand('bookings tomorrow')", detectCommand("bookings tomorrow") === "BOOKINGS_TOMORROW");
+  chk("4a: detectCommand('leads')", detectCommand("leads") === "LEADS");
+  chk("4a: detectCommand('my leads')", detectCommand("my leads") === "LEADS");
+  chk("4a: detectCommand('show me leads')", detectCommand("show me leads") === "LEADS");
+  chk("4a: detectCommand('new leads')", detectCommand("new leads") === "NEW_LEADS");
+  chk("4a: detectCommand('recent leads')", detectCommand("recent leads") === "NEW_LEADS");
+  chk("4a: detectCommand('weather')", detectCommand("weather") === "WEATHER");
+  chk("4a: detectCommand('snow')", detectCommand("snow") === "WEATHER");
+  chk("4a: detectCommand('conditions')", detectCommand("conditions") === "WEATHER");
+  chk("4a: detectCommand('what are current conditions')", detectCommand("what are current conditions") === "WEATHER");
+  chk("4a: detectCommand('revenue')", detectCommand("revenue") === "REVENUE");
+  chk("4a: detectCommand('revenue this week')", detectCommand("revenue this week") === "REVENUE");
+  chk("4a: detectCommand('hello how are you') → null", detectCommand("hello how are you") === null);
+  chk("4a: detectCommand('can I book for tomorrow') → null (not bookings-tomorrow cmd)", detectCommand("can I book for tomorrow") === null);
+
+  // ── Briefing text builder unit tests ──────────────────────────────────────
+  const { buildBriefingText } = await import("./operatorBriefing.js");
+  const mockClient = { id: "csr_rea", name: "Colorado Sled Rentals", owner_phone: "+17202892483", inboundPhones: ["+18335786496"] };
+  const mockSlots  = [{ time: "9:00 AM", name: "Guided Tour", capacity: 2 }];
+  const mockLeads  = [{ name: "Jerry Smith", service: "snowmobile tour", status: "engaged" }];
+  const mockWeather = {
+    weather: { steamboat: { temp: 28, desc: "light snow", wind_mph: 10, feels_like: 20 }, rabbit_ears_pass: { temp: 22, desc: "snowing", wind_mph: 15 } },
+    snow: { stations: { "Rabbit Ears Pass": { name: "Rabbit Ears Pass", snow_depth_in: 68, temp_f: 22 } }, avalanche_danger: "Alpine: Low | Treeline: Low | Below: Low" },
+    fetched_at: new Date().toISOString(),
+  };
+
+  const briefing = buildBriefingText(mockClient, mockSlots, mockLeads, mockWeather);
+  chk("4a: buildBriefingText returns string", typeof briefing === "string");
+  chk("4a: buildBriefingText ≤ 960 chars", briefing.length <= 960, `got ${briefing.length}`);
+  chk("4a: briefing includes business name", briefing.includes("Colorado Sled Rentals"));
+  chk("4a: briefing includes bookings section", briefing.includes("TODAY'S BOOKINGS"));
+  chk("4a: briefing includes HOT LEADS", briefing.includes("HOT LEADS"));
+  chk("4a: briefing includes CONDITIONS", briefing.includes("CONDITIONS"));
+  chk("4a: briefing includes Reply instruction", briefing.includes("Reply:"));
+
+  const emptyBriefing = buildBriefingText(mockClient, [], [], null);
+  chk("4a: empty briefing ≤ 960 chars", emptyBriefing.length <= 960, `got ${emptyBriefing.length}`);
+  chk("4a: empty briefing has no-bookings message", emptyBriefing.includes("No bookings found"));
+  chk("4a: empty briefing has no-leads message", emptyBriefing.includes("No open leads"));
+
+  // ── Admin trigger endpoint ─────────────────────────────────────────────────
+  {
+    const r = await fetch(`${BASE_URL}/admin/trigger-operator-briefing?key=highmark2026`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_id: "csr_rea" }),
+    });
+    chk("4a: POST /admin/trigger-operator-briefing — 200", r.status === 200, `got ${r.status}`);
+    const d = await r.json();
+    chk("4a: briefing trigger returns success=true", d.success === true, JSON.stringify(d));
+    chk("4a: briefing trigger returns preview string", typeof d.preview === "string", JSON.stringify(d));
+    chk("4a: briefing preview ≤ 960 chars", (d.preview ?? "").length <= 960, `got ${d.preview?.length}`);
+  }
+
+  // ── Admin trigger — unknown client_id → 404 ──────────────────────────────
+  {
+    const r = await fetch(`${BASE_URL}/admin/trigger-operator-briefing?key=highmark2026`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_id: "nonexistent_client_xyz" }),
+    });
+    chk("4a: trigger with unknown client_id → 404", r.status === 404, `got ${r.status}`);
+  }
+
+  // ── Admin operator-briefings history ─────────────────────────────────────
+  {
+    const r = await httpGet("/admin/operator-briefings?key=highmark2026&client_id=csr_rea");
+    chk("4a: GET /admin/operator-briefings — route registered (not 404)", r.status !== 404, `got ${r.status}`);
+  }
+
+  // ── Portal operator API — requires auth ──────────────────────────────────
+  {
+    const r = await httpGet("/portal/api/operator");
+    chk("4a: GET /portal/api/operator — 401 without auth", r.status === 401, `got ${r.status}`);
   }
 }
 

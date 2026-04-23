@@ -42,6 +42,7 @@ import {
   isAffirmative,
   isNegative,
 } from "./ownerMode.js";
+import { detectAndHandleOperatorCommand } from "./operatorBriefing.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ORCHESTRATOR CONSTANTS
@@ -180,6 +181,15 @@ export async function runOrchestrator(params) {
         // Ambiguous reply — clear the pending action and let Claude handle it normally
         console.log(`[ORCHESTRATOR] ambiguous reply with pending action=${pending.action}, clearing`);
         clearPendingAction(fromNumber);
+      }
+    }
+
+    // ── Owner command shortcut (deterministic, no Claude cost) ───────────────
+    if (ownerMode && supabase && client) {
+      const commandReply = await detectAndHandleOperatorCommand(msg, client, supabase).catch(() => null);
+      if (commandReply) {
+        console.log(`[ORCHESTRATOR] owner command handled deterministically, reply_len=${commandReply.length}`);
+        return { reply: commandReply, parsed: {}, actionResult: null, agent, intent, context, ownerMode };
       }
     }
 

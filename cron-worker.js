@@ -14,6 +14,8 @@ import "dotenv/config";
 import twilio from "twilio";
 import { createClient } from "@supabase/supabase-js";
 import { processScheduledMessages } from "./scheduler.js";
+import { sendOperatorBriefing } from "./operatorBriefing.js";
+import { getAllClients } from "./clients.js";
 
 const required = [
   "TWILIO_ACCOUNT_SID",
@@ -38,9 +40,56 @@ const crmSupabase  = process.env.CRM_SUPABASE_URL
 
 console.log(`[CRON-WORKER] Starting at ${new Date().toISOString()}`);
 
+// ─── Morning briefing check (7:00 AM MT = 13:00 UTC in MDT / 14:00 UTC in MST) ──
+// Railway cron runs every 5 min — check if we're in the 7am MT briefing window.
+function isBriefingWindow() {
+  const now     = new Date();
+  const utcHour = now.getUTCHours();
+  const utcMin  = now.getUTCMinutes();
+  // Accept 13:00–13:04 UTC (MDT) or 14:00–14:04 UTC (MST) to cover both offsets
+  return (utcHour === 13 || utcHour === 14) && utcMin < 5;
+}
+
+async function sendOperatorBriefings() {
+  console.log("[CRON-WORKER] Running morning operator briefings...");
+  let clients = [];
+  try {
+    // Prefer DB-backed clients list (all active, with owner_phone)
+    const { data } = await supabase
+      .from("clients")
+      .select("*")
+      .not("owner_phone", "is", null);
+    clients = data ?? [];
+  } catch {
+    // Fallback to static clients if DB query fails
+    clients = Object.values(getAllClients()).filter((c) => c.ownerPhone ?? c.owner_phone);
+  }
+
+  let sent = 0;
+  let skipped = 0;
+  for (const client of clients) {
+    try {
+      const result = await sendOperatorBriefing(client, supabase, twilioClient);
+      if (result.success) sent++;
+      else skipped++;
+    } catch (err) {
+      console.error(`[BRIEFING] Failed for ${client.id ?? client.slug}:`, err.message);
+      skipped++;
+    }
+  }
+  console.log(`[CRON-WORKER] Briefings — sent=${sent} skipped=${skipped}`);
+}
+
 try {
+  // Always process scheduled messages
   const result = await processScheduledMessages(supabase, twilioClient, crmSupabase);
   console.log(`[CRON-WORKER] Done — processed=${result.processed} sent=${result.sent} cancelled=${result.cancelled} failed=${result.failed}`);
+
+  // Morning briefing — only runs in the 7am MT window
+  if (isBriefingWindow()) {
+    await sendOperatorBriefings();
+  }
+
   process.exit(0);
 } catch (err) {
   console.error("[CRON-WORKER] Fatal error:", err.message);

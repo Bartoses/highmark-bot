@@ -542,6 +542,9 @@ tr:hover td { background: var(--panel2); }
         <span class="nav-icon">📨</span> Messaging
       </div>
       <div class="nav-section-label client-admin-only" style="padding:10px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Admin</div>
+      <div class="nav-item client-admin-only" data-section="operator">
+        <span class="nav-icon">📋</span> Operator View
+      </div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
@@ -1132,6 +1135,39 @@ tr:hover td { background: var(--panel2); }
         </div>
       </div><!-- /sec-onboarding -->
 
+      <!-- OPERATOR VIEW — client_admin only -->
+      <div class="section client-admin-only" id="sec-operator">
+        <div class="section-header">
+          <span class="section-title">Operator View</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadOperator()" id="operatorRefreshBtn">↻ Refresh</button>
+        </div>
+
+        <!-- Today's Schedule -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:12px;" id="operatorDateTitle">Today's Schedule</div>
+          <div id="operatorSchedule" style="font-size:13px;color:var(--text2);">Loading...</div>
+          <div style="margin-top:10px;font-size:11px;color:var(--text3);" id="operatorSyncedAt"></div>
+        </div>
+
+        <!-- Hot Leads -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:12px;">Hot Leads — Follow Up Today</div>
+          <div id="operatorLeads" style="font-size:13px;color:var(--text2);">Loading...</div>
+        </div>
+
+        <!-- Weather Snapshot -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:12px;">Conditions</div>
+          <div id="operatorWeather" style="font-size:13px;color:var(--text2);">Loading...</div>
+        </div>
+
+        <!-- Staff Roles Placeholder -->
+        <div class="card" style="border:1px dashed var(--border);background:transparent;">
+          <div class="card-title" style="margin-bottom:6px;">Staff Role Briefings</div>
+          <p style="font-size:13px;color:var(--text2);margin:0;">Configure role-specific morning briefings for your team — coming in a future update.</p>
+        </div>
+      </div><!-- /sec-operator -->
+
       <!-- MORE (mobile-only) -->
       <div class="section" id="sec-more">
         <div class="card" style="margin-bottom:12px;">
@@ -1686,7 +1722,7 @@ async function init() {
   const urlSection = location.pathname.replace('/portal/', '') || 'dashboard';
   const urlParams = new URLSearchParams(location.search);
   const urlTab = urlParams.get('tab') || null;
-  const validSections = ['dashboard','leads','campaigns','analytics','settings','conversations','knowledge','integrations','messaging','bot-config','booking-config','website-embed','attribution','users','clients','onboarding'];
+  const validSections = ['dashboard','leads','campaigns','analytics','settings','conversations','knowledge','integrations','messaging','bot-config','booking-config','website-embed','attribution','users','clients','onboarding','operator'];
   switchSection(validSections.includes(urlSection) ? urlSection : 'dashboard', urlTab);
 }
 
@@ -1724,6 +1760,7 @@ const sectionTitles = {
   analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
   integrations: 'Integrations', messaging: 'Messaging',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
+  operator: 'Operator View',
 };
 function switchSection(name, tabParam) {
   // Redirect old section names to their new tab locations
@@ -1735,6 +1772,7 @@ function switchSection(name, tabParam) {
   if (name === 'users'       && !me?.isClientAdmin) name = 'dashboard';
   if (name === 'clients'     && !me?.isAdmin)       name = 'dashboard';
   if (name === 'onboarding'  && !me?.isAdmin)       name = 'dashboard';
+  if (name === 'operator'    && !me?.isClientAdmin) name = 'dashboard';
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.mob-nav-item').forEach(n => n.classList.remove('active'));
@@ -1757,6 +1795,7 @@ function switchSection(name, tabParam) {
   if (name === 'integrations')  loadIntegrationsSection();
   if (name === 'messaging')     loadMessaging();
   if (name === 'onboarding')    resetOnboarding();
+  if (name === 'operator')      loadOperator();
 }
 
 function switchSettingsTab(tab) {
@@ -4595,6 +4634,126 @@ function showToast(msg) {
   toast.style.opacity = '1';
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+}
+
+// ── Operator View section ──────────────────────────────────────────────────
+async function loadOperator() {
+  const schedEl  = document.getElementById('operatorSchedule');
+  const leadsEl  = document.getElementById('operatorLeads');
+  const weatherEl = document.getElementById('operatorWeather');
+  const dateEl   = document.getElementById('operatorDateTitle');
+  const syncEl   = document.getElementById('operatorSyncedAt');
+  if (schedEl)  schedEl.innerHTML  = '<div class="loading">Loading…</div>';
+  if (leadsEl)  leadsEl.innerHTML  = '<div class="loading">Loading…</div>';
+  if (weatherEl) weatherEl.innerHTML = '<div class="loading">Loading…</div>';
+
+  const data = await apiFetch('/operator');
+  if (!data) {
+    if (schedEl)  schedEl.innerHTML  = '<span style="color:var(--danger)">Could not load operator data.</span>';
+    if (leadsEl)  leadsEl.innerHTML  = '';
+    if (weatherEl) weatherEl.innerHTML = '';
+    return;
+  }
+
+  // Date title
+  const today = data.date ? new Date(data.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : 'Today';
+  if (dateEl) dateEl.textContent = `Today's Schedule — ${today}`;
+
+  // Last synced
+  if (syncEl) {
+    if (data.kb_synced_at) {
+      const mins = Math.round((Date.now() - new Date(data.kb_synced_at).getTime()) / 60000);
+      syncEl.textContent = `Last synced: ${mins < 1 ? 'just now' : mins + ' min ago'}`;
+    } else {
+      syncEl.textContent = 'Last synced: unknown';
+    }
+  }
+
+  // Schedule
+  if (schedEl) {
+    if (!data.bookings || data.bookings.length === 0) {
+      schedEl.innerHTML = '<span style="color:var(--text3)">No bookings found in cache — check FareHarbor directly.</span>';
+    } else {
+      let html = '<div style="border-top:1px solid var(--border);margin-bottom:8px;padding-top:8px;">';
+      for (const b of data.bookings) {
+        html += `<div style="display:flex;gap:16px;padding:6px 0;border-bottom:1px solid var(--border);">
+          <span style="min-width:70px;font-weight:600;">${escHtml(b.time)}</span>
+          <span>${escHtml(b.name)}</span>
+        </div>`;
+      }
+      html += `</div><div style="margin-top:6px;font-size:12px;color:var(--text3);">${data.bookings.length} available slot${data.bookings.length !== 1 ? 's' : ''} today</div>`;
+      schedEl.innerHTML = html;
+    }
+  }
+
+  // Hot leads
+  if (leadsEl) {
+    if (!data.hot_leads || data.hot_leads.length === 0) {
+      leadsEl.innerHTML = '<span style="color:var(--text3)">No open leads needing follow-up.</span>';
+    } else {
+      let html = '';
+      for (const l of data.hot_leads) {
+        const name   = escHtml(l.name ?? 'Unknown');
+        const svc    = escHtml(l.service ?? 'N/A');
+        const status = escHtml(l.status ?? '');
+        const created = l.created_at ? timeAgo(new Date(l.created_at)) : '';
+        html += `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);">
+          <span style="min-width:110px;font-weight:600;">${name}</span>
+          <span style="flex:1;color:var(--text2);">${svc}</span>
+          <span class="badge" style="text-transform:uppercase;font-size:10px;">${status}</span>
+          <span style="color:var(--text3);font-size:11px;">${created}</span>
+          <button class="btn btn-ghost btn-sm" onclick="switchSection('conversations')" title="View conversations">View →</button>
+        </div>`;
+      }
+      leadsEl.innerHTML = html;
+    }
+  }
+
+  // Weather
+  if (weatherEl) {
+    const snap = data.weather;
+    if (!snap) {
+      weatherEl.innerHTML = '<span style="color:var(--text3)">No weather data cached.</span>';
+    } else {
+      const w = snap.weather;
+      const s = snap.snow;
+      let html = '';
+      if (w?.steamboat) {
+        const sb = w.steamboat;
+        html += `<div style="margin-bottom:8px;"><strong>Steamboat Springs:</strong> ${sb.temp}°F, ${sb.desc}, wind ${sb.wind_mph} mph</div>`;
+      }
+      if (w?.rabbit_ears_pass) {
+        const rp = w.rabbit_ears_pass;
+        html += `<div style="margin-bottom:8px;"><strong>Rabbit Ears Pass:</strong> ${rp.temp}°F, ${rp.desc}</div>`;
+      }
+      if (s?.stations) {
+        for (const st of Object.values(s.stations).slice(0, 2)) {
+          const depth = st.snow_depth_in != null ? `${st.snow_depth_in}" snow depth` : 'N/A';
+          const tmp   = st.temp_f != null ? `, ${st.temp_f}°F` : '';
+          html += `<div style="margin-bottom:4px;font-size:12px;color:var(--text2);">${escHtml(st.name)}: ${depth}${tmp}</div>`;
+        }
+      }
+      if (s?.avalanche_danger) {
+        const alp = s.avalanche_danger.split('|')[0].trim();
+        html += `<div style="margin-top:6px;font-size:12px;"><strong>Avalanche:</strong> ${escHtml(alp)}</div>`;
+      }
+      if (snap.fetched_at) {
+        const mins = Math.round((Date.now() - new Date(snap.fetched_at).getTime()) / 60000);
+        html += `<div style="margin-top:8px;font-size:11px;color:var(--text3);">Updated ${mins < 1 ? 'just now' : mins + ' min ago'}</div>`;
+      }
+      weatherEl.innerHTML = html || '<span style="color:var(--text3)">No conditions data available.</span>';
+    }
+  }
+}
+
+function timeAgo(date) {
+  const secs = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (secs < 60)   return 'just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60)   return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)    return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 // ── Messaging section ──────────────────────────────────────────────────────
