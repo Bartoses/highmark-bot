@@ -216,15 +216,26 @@ Done when:
 - Plan & Usage card: conversations + web sessions this month, usage bar
 - POST /portal/api/settings/preview-opener + GET /portal/api/settings/usage
 
+### Sprint 4A — Operator Mode Dashboard (2026-04-23)
+- operatorBriefing.js: morning briefing builder (≤960 chars), deterministic SMS command handlers
+  (BOOKINGS TODAY/TOMORROW, LEADS, NEW LEADS, WEATHER, REVENUE), portal API data builder
+- cron-worker.js: morning briefings run at 7am MT (13:00 UTC window check)
+- agentOrchestrator.js: detectAndHandleOperatorCommand() before Claude in owner mode
+- index.js: POST /admin/trigger-operator-briefing, GET /admin/operator-briefings,
+  GET /portal/api/operator
+- portal.html: Operator View section (today's schedule, hot leads, weather, staff placeholder)
+  accessible to client_admin role
+- db1_operator_briefings.sql: run once in Supabase DB1 to create operator_briefings table
+
 ---
 
 ## NEXT 5 BUILDS (STRICT ORDER)
 
-1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
-2. Sprint 3D — Campaigns v2 (scheduling, segment preview, send history)
-3. Analytics deep-dive (per-channel funnel, lead source attribution)
-4. Billing & plan enforcement (message limits, upgrade flow)
-5. Self-serve onboarding (new client wizard, Twilio provisioning)
+1. Sprint 4B — Smart Campaigns (scheduled send, segment preview, auto-triggers)
+2. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
+3. Sprint 3D — Campaigns v2 (send history, delivery stats)
+4. Analytics deep-dive (per-channel funnel, lead source attribution)
+5. Billing & plan enforcement (message limits, upgrade flow)
 
 ---
 
