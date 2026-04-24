@@ -30,7 +30,8 @@ Before starting any new feature or task, read the `Roadmap` file in this directo
 ```
 Roadmap                — project phases, priorities, next 5 builds — READ THIS BEFORE STARTING ANY TASK
 clients.js             — per-client configuration registry + resolveClient(toNumber) — ADD NEW CLIENTS HERE
-index.js               — main Express server, SMS webhook, all bot logic, booking state machine
+index.js               — main Express server, all bot logic, booking state machine; /sms route delegates to smsOrchestrator.js
+smsOrchestrator.js     — /sms webhook body: keyword routing, opt-out gate, demo flow, booking state machine, lead capture, Claude default branch
 knowledgeBase.js       — FH items (24hr cron) + FH availability (3hr cron) + weather (1hr cron) + website (7-day cron, hash-gated) + crawler cron wiring
 crawler.js             — Phase 2 whole-site crawler: crawlSite, classifyPageType, extractPageFacts (Haiku, hash-gated), buildCrawlerContext, runCrawlerForClient
 clientConfig.js        — getRuntimeClientConfig(): merges DB settings into static client on every SMS request
