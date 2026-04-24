@@ -15,6 +15,28 @@
 
 import { buildSystemPrompt, enforceLength } from "./index.js";
 
+// Installed Anthropic SDK (0.20.9) silently drops `cache_control` from request
+// bodies. We call the API directly here so we can opt the stable system block
+// into prompt caching (5-min ephemeral TTL) — cuts input-token cost by ~90%
+// on cache hits and shaves a few hundred ms off every LLM turn after the first.
+// If the raw call fails, we fall back to the SDK path to preserve availability.
+async function callAnthropicCached({ apiKey, model, maxTokens, systemBlocks, messages }) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method:  "POST",
+    headers: {
+      "content-type":     "application/json",
+      "x-api-key":        apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({ model, max_tokens: maxTokens, system: systemBlocks, messages }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Anthropic API ${res.status}: ${body.slice(0, 400)}`);
+  }
+  return res.json();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // callClaudeForChannel — the ONE Claude call for all channels
 //
@@ -46,18 +68,38 @@ export async function callClaudeForChannel(
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map(({ role, content }) => ({ role, content }));
 
-  const system = extraInstruction
-    ? `${buildSystemPrompt(client, season, knowledgeCtx)}\n\nCURRENT CONTEXT: ${extraInstruction}`
-    : buildSystemPrompt(client, season, knowledgeCtx);
+  // Split stable (cacheable) vs volatile (per-turn) system content.
+  // Stable = persona + rules + booking info. Reused across every turn in a session.
+  // Volatile = LIVE DATA (weather/availability, rotates hourly) + turn-specific plan.
+  const stableSystem   = buildSystemPrompt(client, season, "");
+  const volatileParts  = [];
+  if (knowledgeCtx)    volatileParts.push(`━━━ LIVE DATA ━━━\n${knowledgeCtx}`);
+  if (extraInstruction) volatileParts.push(`CURRENT CONTEXT: ${extraInstruction}`);
+  const volatile = volatileParts.join("\n\n");
 
-  const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-6",
-    max_tokens: maxTokens,
-    system,
-    messages,
-  });
+  const systemBlocks = [
+    { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
+  ];
+  if (volatile) systemBlocks.push({ type: "text", text: volatile });
 
-  const text = response.content[0].text;
+  const model = "claude-sonnet-4-6";
+  let text;
+  try {
+    const response = await callAnthropicCached({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      model, maxTokens, systemBlocks, messages,
+    });
+    text = response.content[0].text;
+  } catch (err) {
+    // Fallback to SDK with flat string system — preserves availability if the
+    // direct call fails (network, auth, schema). Cache is lost for this turn.
+    console.warn("[callClaudeForChannel] cached-path failed, falling back to SDK:", err.message);
+    const flatSystem = volatile ? `${stableSystem}\n\n${volatile}` : stableSystem;
+    const response = await anthropic.messages.create({
+      model, max_tokens: maxTokens, system: flatSystem, messages,
+    });
+    text = response.content[0].text;
+  }
 
   // Never truncate replies that contain URLs — the link must arrive intact
   if (maxLength === null || /https?:\/\//.test(text)) return text;
