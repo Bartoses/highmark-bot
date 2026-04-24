@@ -246,6 +246,17 @@ Done when:
 - db1_partner_activities.sql: migration applied to Supabase DB1
 - Tests: 34 new assertions covering pure scorers, validators, Source 5 regression, HTTP guards
 
+### Platform Polish — Flexibility + Caching (2026-04-23)
+- buildSystemPromptGeneric: industry/season-agnostic builder for non-CSR guided clients
+  (driven by client.name, botName, tone, services, bookingUrls, hours, address, faq)
+- Dispatcher routes: informational → Informational, id==="csr_rea" → CsrRea (byte-identical),
+  all other booking-enabled clients → Generic
+- Informational builder: parameterized location + contact name via client.address + primaryContactName
+- messageEngine.js: stable system block (persona + rules) wrapped with cache_control: ephemeral;
+  volatile block (LIVE DATA + turn plan) sent uncached. ~90% input-token savings on cache hits.
+- Uses raw fetch() because @anthropic-ai/sdk@0.20.9 silently drops cache_control; falls back to
+  SDK path on any direct-call failure to preserve availability.
+
 ---
 
 ## NEXT 5 BUILDS (STRICT ORDER)
