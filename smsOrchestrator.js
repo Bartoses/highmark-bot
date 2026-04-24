@@ -37,6 +37,7 @@ import { runOrchestrator } from "./agentOrchestrator.js";
 import { detectOwner } from "./ownerMode.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
+import { extractDateFromMessage } from "./dateExtract.js";
 
 import {
   supabase, crmSupabase, twilioClient, anthropic,
@@ -573,18 +574,9 @@ export async function handleSmsRequest(req, res) {
       if (!replyText) {
         convo.bookingStep = 1;
 
-        // Extract date from message if present (for availability check)
-        const dateExtract = await anthropic.messages.create({
-          model: "claude-sonnet-4-6", max_tokens: 30,
-          messages: [{ role: "user", content: `Extract date as YYYY-MM-DD or null. Today is ${new Date().toISOString().slice(0,10)}. Message: "${rawBody}". Reply with JSON: {"date":"YYYY-MM-DD or null"}` }],
-        }).catch(() => null);
-        let extractedDate = null;
-        try {
-          const raw = dateExtract?.content[0]?.text ?? "";
-          const m   = raw.match(/\{[\s\S]*\}/);
-          const parsed = m ? JSON.parse(m[0]) : {};
-          if (parsed.date && parsed.date !== "null") extractedDate = parsed.date;
-        } catch { /* ignore */ }
+        // Extract date from message if present (for availability check).
+        // Deterministic pure-JS parser — no LLM call, zero latency/tokens.
+        const extractedDate = extractDateFromMessage(rawBody);
 
         const menuOptions  = await buildTourMenu(client, season, extractedDate);
         const knowledgeCtx = await getKnowledgeContext(supabase, client);

@@ -3128,6 +3128,7 @@ async function main() {
     await testOperatorMode();     // Sprint 4A: operator briefing, commands, portal
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
+    await testDateExtract();      // Deterministic date parser (replaces per-message Claude call)
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -13277,6 +13278,65 @@ async function testPartnerActivities() {
     // If supabase isn't configured in tests, the handler returns 500; either "not found" or misconfigured is acceptable evidence the route is wired
     chk("sprint5: GET /track/partner unknown id → 404 or 500", r.status === 404 || r.status === 500, `got ${r.status}`);
   }
+}
+
+async function testDateExtract() {
+  console.log("\nTEST: Deterministic date extraction\n");
+  const { extractDateFromMessage } = await import("./dateExtract.js");
+
+  const chk = (name, cond, detail) => (cond ? pass(name) : fail(name, detail));
+
+  // Fixed anchor — Monday, 2026-06-15 — makes weekday / rollover math deterministic
+  const anchor = new Date(2026, 5, 15); // June is month index 5
+  const run    = (msg) => extractDateFromMessage(msg, anchor);
+
+  // Relative day words
+  chk("dateExtract: today",                   run("can I book for today?") === "2026-06-15");
+  chk("dateExtract: tonight",                 run("anything tonight?")     === "2026-06-15");
+  chk("dateExtract: tomorrow",                run("book for tomorrow")     === "2026-06-16");
+  chk("dateExtract: tmrw (slang)",            run("tmrw works")            === "2026-06-16");
+  chk("dateExtract: day after tomorrow",      run("day after tomorrow")    === "2026-06-17");
+
+  // ISO
+  chk("dateExtract: YYYY-MM-DD",              run("2026-07-04 please")     === "2026-07-04");
+  chk("dateExtract: invalid ISO → null",      run("2026-13-40")            === null);
+
+  // MM/DD and MM/DD/YY(YY)
+  chk("dateExtract: 7/4 → upcoming Jul 4",    run("7/4 at 10am")           === "2026-07-04");
+  chk("dateExtract: 1/15 rolls to next yr",   run("1/15")                  === "2027-01-15");
+  chk("dateExtract: 12/15/26",                run("12/15/26 all day")      === "2026-12-15");
+  chk("dateExtract: 12/15/2026",              run("12/15/2026 ok")         === "2026-12-15");
+  chk("dateExtract: invalid slash → null",    run("13/40")                 === null);
+
+  // Month + day (and day + month)
+  chk("dateExtract: December 15",             run("December 15 please")    === "2026-12-15");
+  chk("dateExtract: Dec 15th",                run("dec 15th")              === "2026-12-15");
+  chk("dateExtract: July 4 → upcoming",       run("July 4 cookout")        === "2026-07-04");
+  chk("dateExtract: Jan 3 rolls forward",     run("jan 3rd?")              === "2027-01-03");
+  chk("dateExtract: Sept 7 (3-letter abbr)",  run("sept 7")                === "2026-09-07");
+  chk("dateExtract: March 15, 2027",          run("march 15, 2027")        === "2027-03-15");
+  chk("dateExtract: 15 December (day-first)", run("15 December works")     === "2026-12-15");
+  chk("dateExtract: 3rd of January",          run("3rd of January")        === "2027-01-03");
+
+  // Weekday names — anchor is Monday, so "friday" = 2026-06-19, "next friday" = 2026-06-26
+  chk("dateExtract: Friday (next occurrence)", run("how's friday?")        === "2026-06-19");
+  chk("dateExtract: fri (abbrev)",             run("fri works")            === "2026-06-19");
+  chk("dateExtract: next Friday",              run("next friday instead")  === "2026-06-26");
+  chk("dateExtract: Monday → next week",       run("monday?")              === "2026-06-22"); // today IS monday, so "monday" = next monday
+  chk("dateExtract: Sunday (tomorrow's-is-Tuesday edge)", run("sunday ok") === "2026-06-21");
+
+  // Weekend phrases
+  chk("dateExtract: this weekend (Saturday)",  run("this weekend")         === "2026-06-20");
+  chk("dateExtract: weekend (no 'this')",      run("weekend any openings") === "2026-06-20");
+  chk("dateExtract: next weekend",             run("next weekend?")        === "2026-06-27");
+
+  // No date found
+  chk("dateExtract: generic message → null",   run("hey what's up")        === null);
+  chk("dateExtract: empty → null",             run("")                     === null);
+  chk("dateExtract: non-string → null",        extractDateFromMessage(null, anchor) === null);
+
+  // Regression: weekend phrase must not be clobbered by "sun" substring match
+  chk("dateExtract: 'weekend' beats 'sun' abbrev", run("weekend sun")      === "2026-06-20");
 }
 
 main().catch((e) => {
