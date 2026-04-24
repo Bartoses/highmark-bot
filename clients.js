@@ -149,6 +149,7 @@ export const CLIENTS = {
     supportPhone: "(970) 761-2124",
     handoffPhone: "(970) 761-2124",
     supportEmail: "jake@lonepineperformance.com",
+    primaryContactName: "Jake",
     address:      "1660 Copper Ridge Ct Unit 101, Steamboat Springs, CO 80487",
     timezone:     "America/Denver",
     hours: {
@@ -309,6 +310,7 @@ function dbRowToClient(row) {
     supportPhone:  row.support_phone        ?? null,
     handoffPhone:  row.handoff_phone        ?? row.support_phone ?? null,
     supportEmail:  row.support_email        ?? null,
+    primaryContactName: row.primary_contact_name ?? null,
     address:       row.address              ?? null,
     timezone:      row.timezone,
     hours:         row.hours                ?? null,
