@@ -257,6 +257,17 @@ Done when:
 - Uses raw fetch() because @anthropic-ai/sdk@0.20.9 silently drops cache_control; falls back to
   SDK path on any direct-call failure to preserve availability.
 
+### Platform Polish — /sms Refactor + Latency (2026-04-24)
+- /sms handler body extracted from index.js (2953 → 2063 lines) to smsOrchestrator.js (944 lines).
+  index.js keeps a 3-line delegate; ESM live bindings handle the circular import. Byte-identical behavior.
+- Parallelized independent Supabase reads in /sms: checkOptOut + getRuntimeClientConfig +
+  getConversation fire together at step 5 (~300ms off common path); opt-out awaits first, others
+  downstream as needed. Orphaned reads get .catch(() => {}) on the opt-out short-circuit.
+- dateExtract.js: deterministic pure-JS date parser replaces the per-message Claude call in
+  booking-step null→1. Covers today/tomorrow/day-after-tomorrow/tonight, weekday names (+ "next Friday"),
+  this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
+  Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
+
 ---
 
 ## NEXT 5 BUILDS (STRICT ORDER)
