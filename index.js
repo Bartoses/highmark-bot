@@ -1450,10 +1450,21 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     }
   }
 
-  // 5. Opted-out gate — drop silently if this number has opted out (DB1, all clients)
-  const isOptedOut = await checkOptOut(fromNumber, supabase);
+  // 5. Kick off three independent Supabase reads in parallel — shaves ~300ms
+  //    off the critical path. Opt-out is awaited first (cheapest check, highest
+  //    short-circuit value); runtime config and conversation load are awaited
+  //    downstream as needed.
+  const optOutP     = checkOptOut(fromNumber, supabase);
+  const runtimeCfgP = getRuntimeClientConfig(client, supabase);
+  const convoP      = getConversation(fromNumber, toNumber);
+
+  // 5a. Opted-out gate — drop silently if this number has opted out (DB1, all clients)
+  const isOptedOut = await optOutP;
   if (isOptedOut) {
     console.log(`[OPT-OUT] Dropping message from opted-out number ${fromNumber}`);
+    // Swallow errors on the orphaned in-flight reads (we're dropping the reply)
+    runtimeCfgP.catch(() => {});
+    convoP.catch(() => {});
     if (isUiReq(req)) return res.json({ reply: "[opted out — message dropped]" });
     res.set("Content-Type", "text/xml");
     return res.send("<Response></Response>");
@@ -1463,10 +1474,9 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   //      Fire-and-forget — never delays the SMS response.
   checkAndMarkLeadEngaged(supabase, fromNumber);
 
-  // 5.6. Enrich client config with DB-backed settings (feature toggles, booking links, scrape sources).
-  //      Merges portal settings into the runtime client object for this request.
-  //      Falls back safely if DB is unavailable or tables don't exist yet.
-  client = await getRuntimeClientConfig(client, supabase);
+  // 5.6. Await enriched client config (merges DB-backed settings: feature toggles,
+  //      booking links, scrape sources). Falls back safely if DB unavailable.
+  client = await runtimeCfgP;
 
   // 5.7. Detect owner phone — must run after getRuntimeClientConfig so ownerPhone is populated.
   //      Owner messages skip guest-routing branches (opener, returning, booking steps) and go
@@ -1477,7 +1487,7 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
   // 6. Demo mode — deterministic guided sales demo, no AI/API calls
   //    Triggered when bookingMode==="demo" OR isDemo flag (protects against DB overriding bookingMode).
   if (client.bookingMode === "demo" || client.isDemo) {
-    const { isNew, convo } = await getConversation(fromNumber, toNumber);
+    const { isNew, convo } = await convoP;
     if (isNew && isUiReq(req)) convo.sessionType = "test";
     const { reply, meta } = await handleDemoFlowWithMeta({
       supabase, twilioClient, fromNumber, toNumber, rawBody,
@@ -1539,8 +1549,8 @@ app.post("/sms", ipLimiter, phoneRateLimit, async (req, res) => {
     return res.send("<Response></Response>");
   }
 
-  // 6. Load conversation from Supabase
-  const { isNew, convo } = await getConversation(fromNumber, toNumber);
+  // 6. Load conversation from Supabase (reads kicked off in parallel at step 5)
+  const { isNew, convo } = await convoP;
   // Mark UI console sessions as test so they're filterable in the DB
   if (isNew && isUiReq(req)) convo.sessionType = "test";
 
