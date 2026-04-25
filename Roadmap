@@ -257,6 +257,14 @@ Done when:
 - Uses raw fetch() because @anthropic-ai/sdk@0.20.9 silently drops cache_control; falls back to
   SDK path on any direct-call failure to preserve availability.
 
+### Platform Polish — DRY System Prompt Builders (2026-04-25)
+- promptParts.js: shared helpers — smsRulesBlock, contactFailsafeBlock, handoffSection,
+  businessInfoBlock, faqBlock, liveDataBlock, formatHours
+- buildSystemPromptInformational / Generic / CsrRea now compose via these helpers;
+  only domain-specific narrative (CSR snowmobile/RZR/Steamboat blocks, informational
+  booking-scheduling block) stays inline. index.js: -106 / +88 lines.
+- 1803/1805 tests pass (same 2 pre-existing campaign failures, no regressions).
+
 ### Platform Polish — /sms Refactor + Latency (2026-04-24)
 - /sms handler body extracted from index.js (2953 → 2063 lines) to smsOrchestrator.js (944 lines).
   index.js keeps a 3-line delegate; ESM live bindings handle the circular import. Byte-identical behavior.
