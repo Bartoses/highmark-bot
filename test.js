@@ -7731,15 +7731,16 @@ async function test56() {
   };
 
   // ── handlePortalBotConfig GET ───────────────────────────────────────────
-  // 1. Returns defaults when no DB row
+  // 1. Returns clients-table fallback values when no bot_config row exists
+  //    (so newly approved self-serve clients see their onboarding answers).
   {
     let statusCode = 200, jsonData = null;
     const res = { status: (c) => { statusCode = c; return { json: (d) => { jsonData = d; } }; }, json: (d) => { jsonData = d; } };
     const mockSb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) };
     await handlePortalBotConfig({ ...adminReq }, res, mockSb);
-    (statusCode === 200 && jsonData?.client_id === "csr_rea" && jsonData?.bot_name === null)
-      ? pass("test56: handlePortalBotConfig returns defaults when no row")
-      : fail("test56: handlePortalBotConfig defaults", JSON.stringify(jsonData));
+    (statusCode === 200 && jsonData?.client_id === "csr_rea" && jsonData?.bot_name === "Summit")
+      ? pass("test56: handlePortalBotConfig falls back to client.botName when no row")
+      : fail("test56: handlePortalBotConfig fallback", JSON.stringify(jsonData));
   }
 
   // 2. Returns DB values when row exists
@@ -7754,15 +7755,15 @@ async function test56() {
       : fail("test56: handlePortalBotConfig DB row", JSON.stringify(jsonData));
   }
 
-  // 3. Returns defaults when table doesn't exist (42P01)
+  // 3. Returns clients-table fallback when bot_config table doesn't exist (42P01)
   {
     let statusCode = 200, jsonData = null;
     const res = { status: (c) => { statusCode = c; return { json: (d) => { jsonData = d; } }; }, json: (d) => { jsonData = d; } };
     const mockSb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "does not exist", code: "42P01" } }) }) }) }) };
     await handlePortalBotConfig({ ...adminReq }, res, mockSb);
-    (statusCode === 200 && jsonData?.bot_name === null)
-      ? pass("test56: handlePortalBotConfig table-not-exist returns defaults")
-      : fail("test56: handlePortalBotConfig table-not-exist", `status=${statusCode} data=${JSON.stringify(jsonData)}`);
+    (statusCode === 200 && jsonData?.bot_name === "Summit")
+      ? pass("test56: handlePortalBotConfig table-not-exist falls back to client values")
+      : fail("test56: handlePortalBotConfig table-not-exist fallback", `status=${statusCode} data=${JSON.stringify(jsonData)}`);
   }
 
   // ── handlePortalUpdateBotConfig PATCH ───────────────────────────────────

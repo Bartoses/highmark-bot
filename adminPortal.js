@@ -1495,11 +1495,24 @@ export async function handlePortalUpdateMessaging(req, res, supabase) {
 }
 
 // ── GET /portal/api/bot-config ────────────────────────────────────────────────
-// Returns bot_config row for client, or defaults from the client object.
+// Returns bot_config row for client, falling back to the clients-table values
+// (bot_name, tone, opener_text) when no per-client override row exists yet.
+// Matches the documented runtime behavior so newly approved self-serve clients
+// see their onboarding answers in the Bot tab without a separate seed step.
 export async function handlePortalBotConfig(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   const clientId = resolvePortalClientId(req);
   if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const client = getAllClients()[clientId] ?? {};
+  const fallback = {
+    client_id:           clientId,
+    bot_name:            client.botName    ?? null,
+    tone:                client.tone       ?? null,
+    opener_text:         client.openerText ?? null,
+    system_prompt_addon: null,
+    handoff_message:     null,
+  };
 
   const { data, error } = await supabase
     .from("bot_config")
@@ -1509,13 +1522,21 @@ export async function handlePortalBotConfig(req, res, supabase) {
 
   if (error) {
     if (error.message?.includes("does not exist") || error.code === "42P01") {
-      // Table not yet created — return empty defaults
-      return res.json({ client_id: clientId, bot_name: null, tone: null, opener_text: null, system_prompt_addon: null, handoff_message: null });
+      return res.json(fallback);
     }
     return res.status(500).json({ error: error.message });
   }
 
-  return res.json(data ?? { client_id: clientId, bot_name: null, tone: null, opener_text: null, system_prompt_addon: null, handoff_message: null });
+  if (!data) return res.json(fallback);
+
+  return res.json({
+    client_id:           clientId,
+    bot_name:            data.bot_name            ?? fallback.bot_name,
+    tone:                data.tone                ?? fallback.tone,
+    opener_text:         data.opener_text         ?? fallback.opener_text,
+    system_prompt_addon: data.system_prompt_addon ?? null,
+    handoff_message:     data.handoff_message     ?? null,
+  });
 }
 
 // ── PATCH /portal/api/bot-config ──────────────────────────────────────────────
