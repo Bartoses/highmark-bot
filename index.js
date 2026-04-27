@@ -161,7 +161,8 @@ function requireUiAccess(req, res, next) {
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const anthropic    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const supabase     = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-const requirePortalAuth = makePortalAuth(supabase);
+const requirePortalAuth          = makePortalAuth(supabase);
+const requirePortalAuthUnlinked  = makePortalAuth(supabase, { allowUnlinked: true });
 const crmSupabase  = process.env.CRM_SUPABASE_URL
   ? createClient(process.env.CRM_SUPABASE_URL, process.env.CRM_SUPABASE_KEY)
   : null;
@@ -1842,9 +1843,10 @@ app.get( "/portal/api/onboarding/drafts/:id",       requirePortalAuth, (req, res
 app.patch("/portal/api/onboarding/drafts/:id",      requirePortalAuth, (req, res) => handleOnboardingUpdateDraft(req, res, supabase));
 app.post("/portal/api/onboarding/drafts/:id/save",  requirePortalAuth, (req, res) => handleOnboardingSave(req, res, supabase));
 app.post("/portal/api/onboarding/create-client",    requirePortalAuth, (req, res) => handleOnboardingCreateClient(req, res, supabase, anthropic));
-// Sprint 7 — Self-serve signup polling + approval (auth'd, scoped to current user)
-app.get( "/portal/api/onboarding/status",  requirePortalAuth, (req, res) => handleOnboardingStatus(req, res, supabase));
-app.post("/portal/api/onboarding/approve", requirePortalAuth, (req, res) => handleOnboardingApprove(req, res, supabase, twilioClient));
+// Sprint 7 — Self-serve signup polling + approval. Uses requirePortalAuthUnlinked
+// because newly signed-up users have client_id=null until they approve their draft.
+app.get( "/portal/api/onboarding/status",  requirePortalAuthUnlinked, (req, res) => handleOnboardingStatus(req, res, supabase));
+app.post("/portal/api/onboarding/approve", requirePortalAuthUnlinked, (req, res) => handleOnboardingApprove(req, res, supabase, twilioClient));
 app.post("/portal/api/crawl-now",   requirePortalAuth, async (req, res) => {
   if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) return res.status(403).json({ error: "Admin only" });
   const clientId = resolvePortalClientId(req);

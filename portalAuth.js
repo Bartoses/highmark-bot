@@ -25,7 +25,8 @@
 // Returns an Express middleware that validates a Bearer JWT and populates
 // req.portalUser. Closes over the supabase service-role client.
 
-export function makePortalAuth(supabase) {
+export function makePortalAuth(supabase, opts = {}) {
+  const allowUnlinked = opts.allowUnlinked === true;
   return async function requirePortalAuth(req, res, next) {
     const authHeader = req.headers["authorization"] ?? "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
@@ -61,7 +62,7 @@ export function makePortalAuth(supabase) {
       if (!data.active) {
         return res.status(403).json({ error: "Portal access has been deactivated" });
       }
-      if ((data.role === "client_user" || data.role === "client_admin") && !data.client_id) {
+      if (!allowUnlinked && (data.role === "client_user" || data.role === "client_admin") && !data.client_id) {
         return res.status(403).json({ error: "Account is not linked to a client — contact support" });
       }
       portalUser = data;
