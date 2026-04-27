@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Highmark — Get Started</title>
+<title>Get started — Highmark</title>
 <meta name="description" content="Self-serve onboarding for the Highmark AI SMS + Web Chat concierge. We crawl your site and build your bot in minutes.">
 <link rel="canonical" href="https://highmark-bot-production.up.railway.app/signup">
-<meta property="og:title" content="Highmark — Get Started">
+<meta property="og:title" content="Get started — Highmark">
 <meta property="og:description" content="Self-serve onboarding for the Highmark AI SMS + Web Chat concierge.">
 <meta property="og:url" content="https://highmark-bot-production.up.railway.app/signup">
 <meta property="og:type" content="website">
@@ -14,40 +14,127 @@
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #0d0d0d; --panel: #131313; --border: #252525;
-  --text: #e0e0e0; --text2: #888; --accent: #10b981; --accent2: #059669;
-  --danger: #ef4444; --radius: 8px;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg:         #090d18;
+  --surface:    #0f1623;
+  --card:       #151e30;
+  --card-hover: #1a2540;
+  --accent:     #3b82f6;
+  --accent-dim: rgba(59,130,246,.12);
+  --green:      #22c55e;
+  --text:       #f1f5f9;
+  --muted:      #94a3b8;
+  --border:     rgba(255,255,255,.08);
+  --danger:     #ef4444;
+  --radius:     12px;
+  --max:        1100px;
 }
-html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
-.wrap { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
-.brand { font-size: 22px; font-weight: 700; letter-spacing: .03em; margin-bottom: 24px; }
-.brand span { color: var(--accent); }
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: 100%; max-width: 460px; }
-.card h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
-.card .sub { color: var(--text2); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
-label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
-input { width: 100%; background: #0d0d0d; border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px; padding: 10px 12px; outline: none; transition: border-color .15s; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 16px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(9,13,24,.9);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 0;
+}
+nav .inner {
+  max-width: var(--max); margin: 0 auto; padding: 0 20px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.nav-logo { font-size: 1.2rem; font-weight: 700; color: var(--text); letter-spacing: -.02em; }
+.nav-logo span { color: var(--accent); }
+.nav-login { color: var(--muted); font-size: .88rem; font-weight: 500; transition: color .15s; }
+.nav-login:hover { color: var(--text); text-decoration: none; }
+
+.hero-wrap {
+  padding: 64px 20px 80px;
+  background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(59,130,246,.15) 0%, transparent 70%);
+  display: flex; flex-direction: column; align-items: center;
+}
+.hero-badge {
+  display: inline-block; margin-bottom: 16px;
+  background: var(--accent-dim); border: 1px solid rgba(59,130,246,.3);
+  color: #93c5fd; border-radius: 100px;
+  padding: 5px 14px; font-size: .82rem; font-weight: 500;
+}
+h1 {
+  font-size: clamp(1.8rem, 4.5vw, 2.6rem);
+  font-weight: 800; letter-spacing: -.03em; line-height: 1.15;
+  text-align: center; max-width: 640px; margin: 0 auto 12px;
+}
+h1 em { color: var(--accent); font-style: normal; }
+.subhead {
+  font-size: 1.05rem; color: var(--muted);
+  text-align: center; max-width: 540px; margin: 0 auto 36px;
+}
+
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 32px;
+  width: 100%; max-width: 460px;
+}
+label {
+  display: block; font-size: .78rem; font-weight: 600;
+  color: var(--muted); margin-bottom: 6px;
+  text-transform: uppercase; letter-spacing: .08em;
+}
+input {
+  width: 100%; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: .95rem; padding: 11px 13px;
+  outline: none; transition: border-color .15s;
+  font-family: inherit;
+}
 input:focus { border-color: var(--accent); }
-.field { margin-bottom: 14px; }
-.btn { width: 100%; background: var(--accent); color: #000; font-weight: 700; font-size: 14px; border: none; border-radius: 6px; padding: 12px; cursor: pointer; transition: background .15s; margin-top: 8px; }
-.btn:hover:not(:disabled) { background: var(--accent2); }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
-.error-msg { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; border-radius: 6px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px; display: none; }
+.field { margin-bottom: 16px; }
+.btn {
+  width: 100%; background: var(--accent); color: #fff;
+  font-weight: 700; font-size: 1rem;
+  border: none; border-radius: 10px; padding: 14px;
+  cursor: pointer; transition: background .15s, transform .1s;
+  margin-top: 8px;
+}
+.btn:hover:not(:disabled) { background: #2563eb; transform: translateY(-1px); }
+.btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.error-msg {
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
+  color: #fca5a5; border-radius: 8px;
+  padding: 11px 14px; font-size: .9rem; margin-bottom: 16px;
+  display: none;
+}
 .error-msg.show { display: block; }
-.footer { margin-top: 20px; text-align: center; color: var(--text2); font-size: 12px; }
-.footer a { color: var(--accent); text-decoration: none; }
-.steps { color: var(--text2); font-size: 12px; margin-top: 14px; line-height: 1.6; }
-.steps b { color: var(--text); }
+.steps { color: var(--muted); font-size: .85rem; margin-top: 16px; line-height: 1.6; }
+.steps b { color: var(--text); font-weight: 600; }
+.footer-note {
+  margin-top: 24px; text-align: center;
+  color: var(--muted); font-size: .9rem;
+}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <a href="/" style="text-decoration:none"><div class="brand">High<span>mark</span></div></a>
-  <div class="card">
-    <h1>Get started — free</h1>
-    <p class="sub">Tell us about your business and we'll crawl your site, draft your bot's knowledge, and let you review it. Takes about a minute.</p>
 
+<nav>
+  <div class="inner">
+    <a href="/" class="nav-logo">High<span>mark</span></a>
+    <a href="/portal/login" class="nav-login">Already a client? Sign in →</a>
+  </div>
+</nav>
+
+<div class="hero-wrap">
+  <div class="hero-badge">🏔 Free to start — no credit card</div>
+  <h1>Build your AI concierge in <em>under a minute</em></h1>
+  <p class="subhead">Tell us about your business and we'll crawl your site, draft your bot's knowledge, and let you review it before going live.</p>
+
+  <div class="card">
     <div id="errorMsg" class="error-msg"></div>
 
     <form id="signupForm" autocomplete="on">
@@ -74,7 +161,8 @@ input:focus { border-color: var(--accent); }
       <b>Next:</b> we crawl your site → you review the draft → bot goes live in test mode. We'll text you when your Twilio number is ready.
     </div>
   </div>
-  <div class="footer">
+
+  <div class="footer-note">
     Already have an account? <a href="/portal/login">Sign in</a>
   </div>
 </div>
@@ -121,10 +209,8 @@ input:focus { border-color: var(--accent); }
         return;
       }
 
-      // Sign in with the credentials we just set so the user lands authenticated
       const { data: signIn, error: signInErr } = await sbClient.auth.signInWithPassword({ email, password });
       if (signInErr || !signIn?.session) {
-        // Account exists but sign-in failed — send to login with note
         window.location.replace('/portal/login?signup=1');
         return;
       }
