@@ -58,6 +58,7 @@ import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevoke
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { renderVerticalPage, VERTICAL_SLUGS } from "./verticals.js";
+import { handleSignup, handleOnboardingStatus, handleOnboardingApprove } from "./selfSignup.js";
 import { loadDbClients } from "./clients.js";
 import { handleDemoFlow, handleDemoFlowWithMeta } from "./demoFlow.js";
 import { getRuntimeClientConfig } from "./clientConfig.js";
@@ -1710,6 +1711,10 @@ app.get('/portal/booking-config', (_req, res) => res.redirect(302, '/portal/sett
 app.get('/portal/website-embed',  (_req, res) => res.redirect(302, '/portal/settings?tab=embed'));
 app.get('/portal/attribution',    (_req, res) => res.redirect(302, '/portal/analytics?tab=traffic'));
 
+// Sprint 7 — self-serve onboarding polling page (separate from portal SPA
+// because the user has no client_id assigned yet)
+app.get("/portal/onboarding",     (_req, res) => res.sendFile(path.join(__uiDir, "portal-onboarding.html")));
+
 // Catch-all for portal SPA sub-paths (dashboard, leads, campaigns, analytics,
 // settings, conversations, knowledge, integrations, messaging, users, clients, etc.)
 // login and invite have their own routes above and match first.
@@ -1837,6 +1842,9 @@ app.get( "/portal/api/onboarding/drafts/:id",       requirePortalAuth, (req, res
 app.patch("/portal/api/onboarding/drafts/:id",      requirePortalAuth, (req, res) => handleOnboardingUpdateDraft(req, res, supabase));
 app.post("/portal/api/onboarding/drafts/:id/save",  requirePortalAuth, (req, res) => handleOnboardingSave(req, res, supabase));
 app.post("/portal/api/onboarding/create-client",    requirePortalAuth, (req, res) => handleOnboardingCreateClient(req, res, supabase, anthropic));
+// Sprint 7 — Self-serve signup polling + approval (auth'd, scoped to current user)
+app.get( "/portal/api/onboarding/status",  requirePortalAuth, (req, res) => handleOnboardingStatus(req, res, supabase));
+app.post("/portal/api/onboarding/approve", requirePortalAuth, (req, res) => handleOnboardingApprove(req, res, supabase, twilioClient));
 app.post("/portal/api/crawl-now",   requirePortalAuth, async (req, res) => {
   if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) return res.status(403).json({ error: "Admin only" });
   const clientId = resolvePortalClientId(req);
@@ -1917,6 +1925,23 @@ for (const slug of VERTICAL_SLUGS) {
     res.send(html);
   });
 }
+
+// Sprint 7 — Self-serve signup
+app.get("/signup", (_req, res) => res.sendFile(path.join(__uiDir, "signup.html")));
+const signupRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max:      10,             // 10 signups per IP per hour
+  standardHeaders: true,
+  legacyHeaders:   false,
+  skip: () => process.env.TEST_MODE === "true",
+  handler: (req, res) => {
+    console.warn(`[SIGNUP] Rate limit hit: ${req.ip}`);
+    res.status(429).json({ error: "Too many signup attempts — try again later." });
+  },
+});
+app.post("/api/signup", signupRateLimit, (req, res) =>
+  handleSignup(req, res, supabase, anthropic, twilioClient),
+);
 
 app.get("/privacy",     (_req, res) => res.sendFile(path.join(__uiDir, "privacy.html")));
 app.get("/terms",       (_req, res) => res.sendFile(path.join(__uiDir, "terms.html")));

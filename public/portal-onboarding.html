@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Highmark — Onboarding</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d0d0d; --panel: #131313; --border: #252525;
+  --text: #e0e0e0; --text2: #888; --accent: #10b981; --accent2: #059669;
+  --danger: #ef4444; --warning: #f59e0b; --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+html, body { min-height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+.wrap { min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 40px 24px; }
+.brand { font-size: 22px; font-weight: 700; letter-spacing: .03em; margin-bottom: 24px; }
+.brand span { color: var(--accent); }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; width: 100%; max-width: 600px; }
+h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+.sub { color: var(--text2); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(16,185,129,.25); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -3px; margin-right: 8px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.row:last-child { border-bottom: none; }
+.row .k { color: var(--text2); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.row .v { color: var(--text); font-size: 14px; text-align: right; max-width: 60%; word-break: break-word; }
+.warning-list { list-style: none; padding: 0; margin: 16px 0; }
+.warning-list li { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.25); border-radius: 6px; color: #fcd34d; padding: 10px 12px; margin-bottom: 8px; font-size: 13px; }
+.btn { background: var(--accent); color: #000; font-weight: 700; font-size: 14px; border: none; border-radius: 6px; padding: 11px 20px; cursor: pointer; }
+.btn:hover:not(:disabled) { background: var(--accent2); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.actions { margin-top: 24px; display: flex; gap: 12px; justify-content: flex-end; }
+.error { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; border-radius: 6px; padding: 12px; font-size: 13px; margin-bottom: 16px; }
+.success { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.3); color: #6ee7b7; border-radius: 6px; padding: 12px; font-size: 13px; margin-bottom: 16px; }
+.section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); margin: 18px 0 8px; }
+.muted { color: var(--text2); font-size: 12px; }
+.sign-out { margin-top: 16px; text-align: center; }
+.sign-out a { color: var(--text2); font-size: 12px; text-decoration: none; }
+.sign-out a:hover { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="/" style="text-decoration:none"><div class="brand">High<span>mark</span></div></a>
+  <div class="card" id="card">
+    <div id="loading"><span class="spinner"></span>Loading your onboarding…</div>
+  </div>
+  <div class="sign-out"><a href="#" id="signOutLink">Sign out</a></div>
+</div>
+
+<script>
+(async () => {
+  // ── Auth + Supabase ────────────────────────────────────────────────────────
+  let sbClient, token;
+  try {
+    const cfg = await fetch('/portal/config').then(r => r.json());
+    sbClient = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    token    = localStorage.getItem('hm_portal_token');
+    if (!token) { window.location.replace('/portal/login'); return; }
+
+    const { data: { session } } = await sbClient.auth.getSession();
+    if (session?.access_token) {
+      token = session.access_token;
+      localStorage.setItem('hm_portal_token', token);
+    }
+  } catch (err) {
+    showError('Could not connect to onboarding service.');
+    return;
+  }
+
+  document.getElementById('signOutLink').addEventListener('click', async (e) => {
+    e.preventDefault();
+    try { await sbClient.auth.signOut(); } catch {}
+    localStorage.removeItem('hm_portal_token');
+    localStorage.removeItem('hm_portal_refresh');
+    window.location.replace('/');
+  });
+
+  // ── Polling loop ───────────────────────────────────────────────────────────
+  let pollTimer = null;
+  await refresh();
+
+  async function refresh() {
+    try {
+      const r = await fetch('/portal/api/onboarding/status', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      if (r.status === 401) { window.location.replace('/portal/login'); return; }
+      const data = await r.json();
+      render(data);
+
+      if (data.status === 'processing') {
+        pollTimer = setTimeout(refresh, 3000);
+      }
+    } catch (err) {
+      showError('Failed to check onboarding status. Retrying…');
+      pollTimer = setTimeout(refresh, 5000);
+    }
+  }
+
+  function render(data) {
+    const card = document.getElementById('card');
+
+    if (data.status === 'approved' || data.clientId && data.status === 'saved') {
+      window.location.replace('/portal/dashboard');
+      return;
+    }
+
+    if (data.status === 'none') {
+      card.innerHTML = `
+        <h1>No onboarding in progress</h1>
+        <p class="sub">It looks like your account isn't linked to an active onboarding draft. Contact support if this seems wrong.</p>
+        <div class="actions"><a class="btn btn-secondary" href="/signup">Start over</a></div>
+      `;
+      return;
+    }
+
+    if (data.status === 'failed') {
+      card.innerHTML = `
+        <h1>We couldn't finish setup</h1>
+        <p class="sub">Something went wrong while analyzing your site${data.errorMessage ? ': <code>' + escapeHtml(data.errorMessage) + '</code>' : '.'}</p>
+        <p class="sub">Reach out to <a href="mailto:hello@whiteoutsolutions.co" style="color:var(--accent)">support</a> and we'll get you set up manually.</p>
+      `;
+      return;
+    }
+
+    if (data.status === 'processing') {
+      const pages = data.pagesCrawled || 0;
+      card.innerHTML = `
+        <h1><span class="spinner"></span>Building your bot…</h1>
+        <p class="sub">We're crawling <b>${escapeHtml(data.sourceUrl || 'your site')}</b> and drafting your bot's knowledge base. This usually takes 30–90 seconds.</p>
+        <div class="muted">Pages analyzed so far: ${pages}</div>
+      `;
+      return;
+    }
+
+    if (data.status === 'draft') {
+      const c = data.draft?.client  || {};
+      const b = data.draft?.bot     || {};
+      const k = data.draft?.booking || {};
+      const warnings = data.warnings || [];
+      const services = Array.isArray(c.services) ? c.services.join(', ') : '—';
+
+      card.innerHTML = `
+        <h1>Review your bot</h1>
+        <p class="sub">We analyzed ${data.pagesCrawled || 0} page${data.pagesCrawled === 1 ? '' : 's'} from your site. Review the draft below — you can fine-tune everything later.</p>
+
+        <div class="section-title">Business</div>
+        <div class="row"><span class="k">Name</span><span class="v">${escapeHtml(c.name || '—')}</span></div>
+        <div class="row"><span class="k">Industry</span><span class="v">${escapeHtml(c.industry || '—')}</span></div>
+        <div class="row"><span class="k">Website</span><span class="v">${escapeHtml(c.website_url || '—')}</span></div>
+        <div class="row"><span class="k">Phone</span><span class="v">${escapeHtml(c.support_phone || '—')}</span></div>
+        <div class="row"><span class="k">Email</span><span class="v">${escapeHtml(c.support_email || '—')}</span></div>
+        <div class="row"><span class="k">Services</span><span class="v">${escapeHtml(services)}</span></div>
+        <div class="row"><span class="k">Hours</span><span class="v">${escapeHtml(c.hours || '—')}</span></div>
+
+        <div class="section-title">Bot</div>
+        <div class="row"><span class="k">Bot name</span><span class="v">${escapeHtml(b.bot_name || '—')}</span></div>
+        <div class="row"><span class="k">Tone</span><span class="v">${escapeHtml(b.tone || '—')}</span></div>
+
+        <div class="section-title">Booking</div>
+        <div class="row"><span class="k">Mode</span><span class="v">${escapeHtml(k.booking_mode || 'informational')}</span></div>
+        <div class="row"><span class="k">Platform</span><span class="v">${escapeHtml(k.booking_platform || 'none')}</span></div>
+        ${k.booking_link ? `<div class="row"><span class="k">Link</span><span class="v">${escapeHtml(k.booking_link)}</span></div>` : ''}
+
+        ${warnings.length > 0 ? `
+          <div class="section-title">Heads up</div>
+          <ul class="warning-list">${warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
+        ` : ''}
+
+        <div id="approveError"></div>
+
+        <div class="actions">
+          <button id="approveBtn" class="btn">Looks good — create my bot</button>
+        </div>
+      `;
+
+      document.getElementById('approveBtn').addEventListener('click', approve);
+      return;
+    }
+
+    showError('Unexpected onboarding state: ' + (data.status ?? 'unknown'));
+  }
+
+  async function approve() {
+    const btn = document.getElementById('approveBtn');
+    const err = document.getElementById('approveError');
+    err.innerHTML = '';
+    btn.disabled = true;
+    btn.textContent = 'Creating your bot…';
+
+    try {
+      const r = await fetch('/portal/api/onboarding/approve', {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': 'Bearer ' + token,
+        },
+        body: JSON.stringify({}),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        err.innerHTML = `<div class="error">${escapeHtml(data.error || 'Could not create your bot. Try again.')}</div>`;
+        btn.disabled = false;
+        btn.textContent = 'Looks good — create my bot';
+        return;
+      }
+      // Success — head to dashboard
+      window.location.replace('/portal/dashboard');
+    } catch (e) {
+      err.innerHTML = '<div class="error">Network error. Please try again.</div>';
+      btn.disabled = false;
+      btn.textContent = 'Looks good — create my bot';
+    }
+  }
+
+  function showError(msg) {
+    document.getElementById('card').innerHTML = `<div class="error">${escapeHtml(msg)}</div>`;
+  }
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+})();
+</script>
+</body>
+</html>

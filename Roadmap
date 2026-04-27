@@ -265,6 +265,31 @@ Done when:
   booking-scheduling block) stays inline. index.js: -106 / +88 lines.
 - 1803/1805 tests pass (same 2 pre-existing campaign failures, no regressions).
 
+### Sprint 7 — Self-Serve Signup + Streamlined Onboarding (2026-04-27)
+- selfSignup.js: validateSignupBody, handleSignup, runOnboardingCrawl, handleOnboardingStatus,
+  handleOnboardingApprove. Reuses existing onboardingConfig.js pipeline (startAutoConfig,
+  commitDraftToDb, getDraft, buildNextSteps).
+- Public /signup landing page (public/signup.html): form → POST /api/signup → signInWithPassword
+  → redirect /portal/onboarding. Mirrors /portal/login styling, links Supabase via /portal/config.
+- /portal/onboarding (public/portal-onboarding.html): polls GET /portal/api/onboarding/status
+  every 3s; renders processing/draft/failed/none/approved states. Draft state shows 3-section
+  preview (Business / Bot / Booking) + warnings + Approve button.
+- index.js: GET /signup, POST /api/signup (rate-limit 10/hr per IP, skipped in TEST_MODE),
+  GET /portal/onboarding (registered before /portal/:section catch-all),
+  GET /portal/api/onboarding/status, POST /portal/api/onboarding/approve.
+- adminPortal.js handlePortalDashboard: extended select to include onboarding_status, bot_mode,
+  inbound_phones; computes onboarding_banner (twilio_pending | test_mode); response now carries
+  onboarding_status, bot_mode, onboarding_banner.
+- public/portal.html loadDashboard: renders banner above checklist (yellow=twilio_pending,
+  blue=test_mode).
+- Team SMS notify on signup + approve to TEAM_NOTIFY_PHONE (+17202892483).
+- db1_onboarding_status.sql: extends onboarding_drafts.status CHECK to include 'processing' and
+  'failed'; adds owner_auth_user_id uuid + index, error_message text. Migration is additive;
+  must be run once in Supabase DB1 SQL editor.
+- Tests: ~40 new assertions in test.js testSelfSignup() — validateSignupBody (10 unit), GET /signup
+  (10), GET /portal/onboarding (5), POST /api/signup validation (6), auth guards (3), home regression
+  (1). 1928/1930 pass (same 2 pre-existing campaign failures).
+
 ### Sprint 6 — Vertical Landing Pages + FAQ Expansion (2026-04-27)
 - verticals.js: VERTICAL_SLUGS + VERTICALS config + renderVerticalPage(slug). Three new server-rendered
   pages: /tour-operators, /snowmobile-rentals, /service-businesses. Each has unique meta, canonical,

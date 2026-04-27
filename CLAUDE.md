@@ -56,11 +56,15 @@ leads.js               — lead capture module: saveLead() + notifyBusinessOfLea
 adminLeads.js          — admin lead management: list, get, update, summary routes
 adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages
 adminClients.js        — client provisioning: create/update/list/readiness routes
+selfSignup.js          — Sprint 7: public self-serve signup + onboarding status/approve handlers
+onboardingConfig.js    — auto-config pipeline: startAutoConfig, commitDraftToDb, getDraft, slugifyName, buildNextSteps
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 verticals.js           — Sprint 6: vertical landing pages (/tour-operators, /snowmobile-rentals, /service-businesses) — VERTICALS config + renderVerticalPage(slug)
 public/portal-login.html — client portal login page
 public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Partners, Analytics, Settings, Users & Access
 public/portal-accept.html — invite acceptance page
+public/signup.html     — Sprint 7: public self-serve signup form (businessName, websiteUrl, email, password)
+public/portal-onboarding.html — Sprint 7: polling page for crawl status + draft preview + approve
 partnerActivities.js   — Sprint 5: partner distribution — scoring, season filter, /track/partner resolver (Source 5 in bookingLinks)
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
 db2_crm_schema.sql     — DB2 CRM schema (Supabase Project 2 SQL editor)
@@ -70,7 +74,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`
 
 ---
 
@@ -248,6 +252,9 @@ FH webhook + 30-min poller. Confirmation link: `fareharbor.com/embeds/book/{shor
 
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).
+
+### Self-Serve Signup (selfSignup.js — Sprint 7)
+Public `/signup` page collects businessName / websiteUrl / email / password. `POST /api/signup` (rate-limited 10/hr per IP) validates, calls `auth.admin.createUser`, inserts a `portal_users` row (role=`client_admin`, client_id=null), inserts an `onboarding_drafts` placeholder (status=`processing`, `owner_auth_user_id`=auth user), kicks off `runOnboardingCrawl` via `setImmediate` (calls `startAutoConfig` then promotes the placeholder to status=`draft`, removing the duplicate row startAutoConfig creates internally), and texts `TEAM_NOTIFY_PHONE` (+17202892483). After signup the client signs in (same credentials), is redirected to `/portal/onboarding`, which polls `GET /portal/api/onboarding/status` every 3s. States returned: `processing` (spinner), `draft` (3-section preview Business/Bot/Booking + warnings + Approve), `failed` (error_message), `approved` / `saved` with `clientId` (redirect to `/portal/dashboard`). `POST /portal/api/onboarding/approve` calls `commitDraftToDb`, updates `portal_users.client_id`, notifies team. Migration `db1_onboarding_status.sql` extends `onboarding_drafts.status` CHECK to add `processing` and `failed` and adds `owner_auth_user_id` (+ index) and `error_message` columns. Dashboard handler (`adminPortal.js`) computes an `onboarding_banner` (kind: `twilio_pending` when no inbound phone yet, `test_mode` when inbound phone exists but `bot_mode='test'`) which `portal.html` renders above the checklist.
 
 ### Vertical Landing Pages (verticals.js — Sprint 6)
 Three industry pages render server-side from a single `VERTICAL_SLUGS` array: `/tour-operators`, `/snowmobile-rentals`, `/service-businesses`. Each has a unique `<head>` (meta + canonical + FAQPage + SoftwareApplication JSON-LD), hero, dual-channel SMS + Web Chat demo conversations, and 3-item industry FAQ. Nav, demo CTAs, pricing section (Free/Growth/Pro — must mirror `public/home.html`), demo band, and footer are shared via `renderVerticalPage(slug)`. Homepage `.use-card` blocks now link to the matching vertical. `public/sitemap.xml` lists all 3 at priority 0.8.

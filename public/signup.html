@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Highmark — Get Started</title>
+<meta name="description" content="Self-serve onboarding for the Highmark AI SMS + Web Chat concierge. We crawl your site and build your bot in minutes.">
+<link rel="canonical" href="https://highmark-bot-production.up.railway.app/signup">
+<meta property="og:title" content="Highmark — Get Started">
+<meta property="og:description" content="Self-serve onboarding for the Highmark AI SMS + Web Chat concierge.">
+<meta property="og:url" content="https://highmark-bot-production.up.railway.app/signup">
+<meta property="og:type" content="website">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d0d0d; --panel: #131313; --border: #252525;
+  --text: #e0e0e0; --text2: #888; --accent: #10b981; --accent2: #059669;
+  --danger: #ef4444; --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+.wrap { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+.brand { font-size: 22px; font-weight: 700; letter-spacing: .03em; margin-bottom: 24px; }
+.brand span { color: var(--accent); }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: 100%; max-width: 460px; }
+.card h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+.card .sub { color: var(--text2); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+input { width: 100%; background: #0d0d0d; border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px; padding: 10px 12px; outline: none; transition: border-color .15s; }
+input:focus { border-color: var(--accent); }
+.field { margin-bottom: 14px; }
+.btn { width: 100%; background: var(--accent); color: #000; font-weight: 700; font-size: 14px; border: none; border-radius: 6px; padding: 12px; cursor: pointer; transition: background .15s; margin-top: 8px; }
+.btn:hover:not(:disabled) { background: var(--accent2); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.error-msg { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; border-radius: 6px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px; display: none; }
+.error-msg.show { display: block; }
+.footer { margin-top: 20px; text-align: center; color: var(--text2); font-size: 12px; }
+.footer a { color: var(--accent); text-decoration: none; }
+.steps { color: var(--text2); font-size: 12px; margin-top: 14px; line-height: 1.6; }
+.steps b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="/" style="text-decoration:none"><div class="brand">High<span>mark</span></div></a>
+  <div class="card">
+    <h1>Get started — free</h1>
+    <p class="sub">Tell us about your business and we'll crawl your site, draft your bot's knowledge, and let you review it. Takes about a minute.</p>
+
+    <div id="errorMsg" class="error-msg"></div>
+
+    <form id="signupForm" autocomplete="on">
+      <div class="field">
+        <label for="businessName">Business name</label>
+        <input type="text" id="businessName" name="businessName" placeholder="Powder Peak Adventures" required maxlength="100">
+      </div>
+      <div class="field">
+        <label for="websiteUrl">Website URL</label>
+        <input type="url" id="websiteUrl" name="websiteUrl" placeholder="https://yourbusiness.com" required>
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" placeholder="you@yourbusiness.com" required autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password">
+      </div>
+      <button type="submit" class="btn" id="submitBtn">Build my bot</button>
+    </form>
+
+    <div class="steps">
+      <b>Next:</b> we crawl your site → you review the draft → bot goes live in test mode. We'll text you when your Twilio number is ready.
+    </div>
+  </div>
+  <div class="footer">
+    Already have an account? <a href="/portal/login">Sign in</a>
+  </div>
+</div>
+
+<script>
+(async () => {
+  let sbClient;
+  try {
+    const cfg = await fetch('/portal/config').then(r => r.json());
+    if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) {
+      showError('Signup is temporarily unavailable. Please contact support.');
+      return;
+    }
+    sbClient = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+  } catch (err) {
+    showError('Could not connect to signup service.');
+    return;
+  }
+
+  document.getElementById('signupForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearError();
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Building your bot…';
+
+    const businessName = document.getElementById('businessName').value.trim();
+    const websiteUrl   = document.getElementById('websiteUrl').value.trim();
+    const email        = document.getElementById('email').value.trim().toLowerCase();
+    const password     = document.getElementById('password').value;
+
+    try {
+      const resp = await fetch('/api/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessName, websiteUrl, email, password }),
+      });
+      const data = await resp.json().catch(() => ({}));
+
+      if (!resp.ok) {
+        showError(data.error || 'Signup failed. Please try again.');
+        btn.disabled = false;
+        btn.textContent = 'Build my bot';
+        return;
+      }
+
+      // Sign in with the credentials we just set so the user lands authenticated
+      const { data: signIn, error: signInErr } = await sbClient.auth.signInWithPassword({ email, password });
+      if (signInErr || !signIn?.session) {
+        // Account exists but sign-in failed — send to login with note
+        window.location.replace('/portal/login?signup=1');
+        return;
+      }
+
+      localStorage.setItem('hm_portal_token',   signIn.session.access_token);
+      localStorage.setItem('hm_portal_refresh', signIn.session.refresh_token ?? '');
+      window.location.replace('/portal/onboarding');
+    } catch (err) {
+      showError('Signup failed. Please try again.');
+      btn.disabled = false;
+      btn.textContent = 'Build my bot';
+    }
+  });
+
+  function showError(msg) {
+    const el = document.getElementById('errorMsg');
+    el.textContent = msg;
+    el.classList.add('show');
+  }
+  function clearError() {
+    document.getElementById('errorMsg').classList.remove('show');
+  }
+})();
+</script>
+</body>
+</html>

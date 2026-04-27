@@ -3219,6 +3219,7 @@ async function main() {
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
     await testDateExtract();      // Deterministic date parser (replaces per-message Claude call)
+    await testSelfSignup();       // Sprint 7: self-serve signup + onboarding polling page
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -13427,6 +13428,113 @@ async function testDateExtract() {
 
   // Regression: weekend phrase must not be clobbered by "sun" substring match
   chk("dateExtract: 'weekend' beats 'sun' abbrev", run("weekend sun")      === "2026-06-20");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint 7 — Self-Serve Signup + Streamlined Onboarding
+// Unit + integration tests
+// ─────────────────────────────────────────────────────────────────────────────
+async function testSelfSignup() {
+  console.log("\nSPRINT 7: Self-serve signup + onboarding polling");
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy, got ${cond}`);
+
+  // ── Unit: validateSignupBody ─────────────────────────────────────────────
+  const { _internal } = await import("./selfSignup.js");
+  const v = _internal.validateSignupBody;
+
+  chk("validateSignupBody: empty body errors",       !!v({}).error);
+  chk("validateSignupBody: missing name errors",     !!v({ websiteUrl: "https://x.co", email: "a@b.co", password: "longenough" }).error);
+  chk("validateSignupBody: name only errors",        !!v({ businessName: "x" }).error);
+  chk("validateSignupBody: missing website errors",  !!v({ businessName: "x", email: "a@b.co", password: "longenough" }).error);
+  chk("validateSignupBody: bad URL errors",          !!v({ businessName: "x", websiteUrl: "not a url", email: "a@b.co", password: "longenough" }).error);
+  chk("validateSignupBody: ftp URL rejected",        !!v({ businessName: "x", websiteUrl: "ftp://x.co", email: "a@b.co", password: "longenough" }).error);
+  chk("validateSignupBody: bad email errors",        !!v({ businessName: "x", websiteUrl: "https://x.co", email: "notanemail", password: "longenough" }).error);
+  chk("validateSignupBody: short password errors",   !!v({ businessName: "x", websiteUrl: "https://x.co", email: "a@b.co", password: "short" }).error);
+  chk("validateSignupBody: name too long errors",    !!v({ businessName: "x".repeat(101), websiteUrl: "https://x.co", email: "a@b.co", password: "longenough" }).error);
+
+  const ok = v({ businessName: "Powder Peak", websiteUrl: "powderpeak.com", email: "OWNER@PowderPeak.COM", password: "secret123" });
+  chk("validateSignupBody: valid input no error",    !ok.error);
+  chk("validateSignupBody: lowercases email",        ok.email === "owner@powderpeak.com");
+  chk("validateSignupBody: prepends https://",       ok.websiteUrl === "https://powderpeak.com/");
+  chk("validateSignupBody: accepts snake_case keys", !v({ business_name: "x", website_url: "https://x.co", email: "a@b.co", password: "longenough" }).error);
+
+  // ── Unit: sourceUrl already starts with http stays unchanged ─────────────
+  const ok2 = v({ businessName: "Y", websiteUrl: "http://example.org/foo", email: "a@b.co", password: "longenough" });
+  chk("validateSignupBody: preserves http scheme",   ok2.websiteUrl.startsWith("http://example.org/"));
+
+  // ── Integration: GET /signup serves the page ────────────────────────────
+  const sRes = await fetch(`http://localhost:${TEST_PORT}/signup`);
+  chk("GET /signup: 200",                            sRes.status === 200);
+  const sHtml = await sRes.text();
+  chk("GET /signup: has form",                       sHtml.includes('id="signupForm"'));
+  chk("GET /signup: has business name field",        sHtml.includes('id="businessName"'));
+  chk("GET /signup: has website url field",          sHtml.includes('id="websiteUrl"'));
+  chk("GET /signup: has email field",                sHtml.includes('id="email"'));
+  chk("GET /signup: has password field",             sHtml.includes('id="password"'));
+  chk("GET /signup: posts to /api/signup",           sHtml.includes("/api/signup"));
+  chk("GET /signup: links to /portal/login",         sHtml.includes("/portal/login"));
+  chk("GET /signup: has canonical link",             sHtml.includes('rel="canonical"'));
+  chk("GET /signup: has og:title",                   sHtml.includes('og:title'));
+
+  // ── Integration: GET /portal/onboarding serves polling page ─────────────
+  const oRes = await fetch(`http://localhost:${TEST_PORT}/portal/onboarding`);
+  chk("GET /portal/onboarding: 200",                 oRes.status === 200);
+  const oHtml = await oRes.text();
+  chk("GET /portal/onboarding: polls status route",  oHtml.includes("/portal/api/onboarding/status"));
+  chk("GET /portal/onboarding: posts to approve",    oHtml.includes("/portal/api/onboarding/approve"));
+  chk("GET /portal/onboarding: has spinner CSS",     oHtml.includes("spinner"));
+  chk("GET /portal/onboarding: redirects to login when no token", oHtml.includes("/portal/login"));
+
+  // ── Integration: POST /api/signup validation ───────────────────────────
+  async function postSignup(body) {
+    return fetch(`http://localhost:${TEST_PORT}/api/signup`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(body),
+    });
+  }
+  let r;
+
+  r = await postSignup({});
+  chk("POST /api/signup: empty body → 400",          r.status === 400);
+
+  r = await postSignup({ businessName: "x", websiteUrl: "https://x.co", email: "bad", password: "longenough" });
+  chk("POST /api/signup: bad email → 400",           r.status === 400);
+
+  r = await postSignup({ businessName: "x", websiteUrl: "javascript:void(0)", email: "a@b.co", password: "longenough" });
+  chk("POST /api/signup: javascript: URL → 400",     r.status === 400);
+
+  r = await postSignup({ businessName: "x", websiteUrl: "https://x.co", email: "a@b.co", password: "short" });
+  chk("POST /api/signup: short password → 400",      r.status === 400);
+
+  r = await postSignup({ businessName: "", websiteUrl: "https://x.co", email: "a@b.co", password: "longenough" });
+  chk("POST /api/signup: blank name → 400",          r.status === 400);
+
+  // The error response is JSON
+  r = await postSignup({});
+  const errJson = await r.json().catch(() => ({}));
+  chk("POST /api/signup: error response is JSON",    typeof errJson.error === "string" && errJson.error.length > 0);
+
+  // ── Integration: portal-only routes require auth ────────────────────────
+  const statusNoAuth = await fetch(`http://localhost:${TEST_PORT}/portal/api/onboarding/status`);
+  chk("GET /portal/api/onboarding/status: no auth → 401",  statusNoAuth.status === 401);
+
+  const approveNoAuth = await fetch(`http://localhost:${TEST_PORT}/portal/api/onboarding/approve`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    "{}",
+  });
+  chk("POST /portal/api/onboarding/approve: no auth → 401", approveNoAuth.status === 401);
+
+  const statusBadAuth = await fetch(`http://localhost:${TEST_PORT}/portal/api/onboarding/status`, {
+    headers: { Authorization: "Bearer not-a-real-token" },
+  });
+  chk("GET /portal/api/onboarding/status: bad token → 401", statusBadAuth.status === 401);
+
+  // ── Integration: home + portal-login still link to /signup somewhere reachable ──
+  const homeR = await fetch(`http://localhost:${TEST_PORT}/`);
+  chk("home: GET / still 200 with signup route added", homeR.status === 200);
 }
 
 main().catch((e) => {

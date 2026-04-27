@@ -2411,7 +2411,21 @@ async function loadDashboard(period) {
           ).join('')) +
     '</div>';
 
-  el.innerHTML = checklistHtml + heroHtml + periodBar + roiHtml + funnelHtml + activityHtml;
+  // Sprint 7 — onboarding banner (Twilio pending / test mode)
+  let bannerHtml = '';
+  const ob = d.onboarding_banner;
+  if (ob) {
+    const bannerStyle = ob.kind === 'twilio_pending'
+      ? 'background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.3);color:#fcd34d;'
+      : 'background:rgba(59,130,246,.08);border-color:rgba(59,130,246,.3);color:#93c5fd;';
+    bannerHtml =
+      '<div class="onboarding-banner" style="border:1px solid;border-radius:8px;padding:14px 16px;margin-bottom:16px;' + bannerStyle + '">' +
+        '<div style="font-weight:600;font-size:14px;margin-bottom:2px;">' + escHtml(ob.title) + '</div>' +
+        '<div style="font-size:13px;opacity:.9;">' + escHtml(ob.message) + '</div>' +
+      '</div>';
+  }
+
+  el.innerHTML = bannerHtml + checklistHtml + heroHtml + periodBar + roiHtml + funnelHtml + activityHtml;
 }
 
 async function dismissChecklist() {

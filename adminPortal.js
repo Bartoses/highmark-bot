@@ -246,8 +246,8 @@ export async function handlePortalDashboard(req, res, supabase) {
       .in("event_type", ["booking_clicked", "lead_captured"])
       .order("created_at", { ascending: false }).limit(10),
 
-    // Checklist dismissed (non-fatal if column missing)
-    supabase.from("clients").select("dashboard_checklist_dismissed")
+    // Checklist dismissed + Sprint 7 onboarding state (non-fatal if columns missing)
+    supabase.from("clients").select("dashboard_checklist_dismissed, onboarding_status, bot_mode, inbound_phones")
       .eq("id", clientId).maybeSingle(),
   ]);
 
@@ -301,10 +301,32 @@ export async function handlePortalDashboard(req, res, supabase) {
   actItems.sort((a, b) => (b.ts > a.ts ? 1 : b.ts < a.ts ? -1 : 0));
   const activity = actItems.slice(0, 10);
 
-  // ── Checklist ─────────────────────────────────────────────────────────────
-  const checklistDismissed = checklistR.status === "fulfilled"
-    ? (checklistR.value.data?.dashboard_checklist_dismissed ?? false)
-    : false;
+  // ── Checklist + Sprint 7 onboarding banners ──────────────────────────────
+  const checklistData      = checklistR.status === "fulfilled" ? (checklistR.value.data ?? {}) : {};
+  const checklistDismissed = checklistData.dashboard_checklist_dismissed ?? false;
+  const onboardingStatus   = checklistData.onboarding_status ?? "live";
+  const botMode            = checklistData.bot_mode ?? "live";
+  const dbInboundPhones    = checklistData.inbound_phones ?? [];
+  const hasInboundPhone    = dbInboundPhones.length > 0 || (twilioNumber !== null && twilioNumber !== undefined);
+
+  // Banner kinds (the portal SPA decides how to render):
+  //   "twilio_pending"  — client created but no Twilio number assigned yet
+  //   "test_mode"       — Twilio number is wired but bot is still in test mode
+  //   null              — no banner needed
+  let onboardingBanner = null;
+  if (!hasInboundPhone && (onboardingStatus === "created" || onboardingStatus === "configured" || onboardingStatus === "ready")) {
+    onboardingBanner = {
+      kind:    "twilio_pending",
+      title:   "Your bot is being set up",
+      message: "We're assigning your Twilio number — usually within 1 business day. We'll text you when it's live.",
+    };
+  } else if (hasInboundPhone && botMode === "test") {
+    onboardingBanner = {
+      kind:    "test_mode",
+      title:   "Bot is in test mode",
+      message: "Send a text to your Twilio number to try it out. When you're ready, switch to live in Settings.",
+    };
+  }
 
   return res.json({
     clientId,
@@ -331,6 +353,9 @@ export async function handlePortalDashboard(req, res, supabase) {
     },
     activity,
     checklist_dismissed: checklistDismissed,
+    onboarding_status:   onboardingStatus,
+    bot_mode:            botMode,
+    onboarding_banner:   onboardingBanner,
   });
 }
 
