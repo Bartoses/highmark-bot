@@ -52,6 +52,7 @@ db1_lead_capture.sql    — migration: lead_step/lead_data columns + leads table
 db1_waitlist.sql        — migration: waitlist_pending/waitlist_context + lead_type on leads
 db1_lead_mgmt.sql       — migration: extended status values + updated_by audit column on leads
 virtual-test.sh         — Twilio Virtual Phone test runner (10 scenarios)
+verticals.js            — Sprint 6: vertical landing pages (/tour-operators, /snowmobile-rentals, /service-businesses) — VERTICALS config + renderVerticalPage()
 db1_schema.sql          — Supabase DB1 migration (conversations + knowledge_base + settings)
 db2_crm_schema.sql      — Supabase DB2 CRM migration (contacts, campaigns, opt_outs)
 railway.json            — Railway deployment config

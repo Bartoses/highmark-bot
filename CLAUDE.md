@@ -57,6 +57,7 @@ adminLeads.js          — admin lead management: list, get, update, summary rou
 adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages
 adminClients.js        — client provisioning: create/update/list/readiness routes
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
+verticals.js           — Sprint 6: vertical landing pages (/tour-operators, /snowmobile-rentals, /service-businesses) — VERTICALS config + renderVerticalPage(slug)
 public/portal-login.html — client portal login page
 public/portal.html     — client portal SPA: Dashboard, Leads, Campaigns, Partners, Analytics, Settings, Users & Access
 public/portal-accept.html — invite acceptance page
@@ -247,6 +248,9 @@ FH webhook + 30-min poller. Confirmation link: `fareharbor.com/embeds/book/{shor
 
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).
+
+### Vertical Landing Pages (verticals.js — Sprint 6)
+Three industry pages render server-side from a single `VERTICAL_SLUGS` array: `/tour-operators`, `/snowmobile-rentals`, `/service-businesses`. Each has a unique `<head>` (meta + canonical + FAQPage + SoftwareApplication JSON-LD), hero, dual-channel SMS + Web Chat demo conversations, and 3-item industry FAQ. Nav, demo CTAs, pricing section (Free/Growth/Pro — must mirror `public/home.html`), demo band, and footer are shared via `renderVerticalPage(slug)`. Homepage `.use-card` blocks now link to the matching vertical. `public/sitemap.xml` lists all 3 at priority 0.8.
 
 ### Whole-Site Crawler (crawler.js)
 BFS crawl from `crawlSettings.primaryUrl`, same-domain only, skips junk paths. Per-page: classify (10 types) → Haiku fact extraction (hash-gated). Output: `buildCrawlerContext()` assembles ≤1500 char `WEBSITE KNOWLEDGE:` block from `client_pages` table. Cron: Monday 4am.

@@ -277,11 +277,16 @@
       gap: 20px; margin-top: 48px;
     }
     .use-card {
+      display: block; color: inherit; text-decoration: none;
       background: var(--card); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 28px 24px;
       transition: border-color .15s, background .15s;
     }
-    .use-card:hover { border-color: rgba(59,130,246,.4); background: var(--card-hover); }
+    .use-card:hover { border-color: rgba(59,130,246,.4); background: var(--card-hover); text-decoration: none; }
+    .card-link {
+      display: block; margin-top: 14px;
+      font-size: .85rem; font-weight: 600; color: var(--accent);
+    }
     .use-icon { font-size: 1.8rem; margin-bottom: 14px; }
     .use-card h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 10px; }
     .use-card p { font-size: .88rem; color: var(--muted); margin-bottom: 14px; }
@@ -545,30 +550,33 @@
     <div class="section-label">Use cases</div>
     <h2>Built for businesses that run on customer conversations</h2>
     <div class="use-grid">
-      <div class="use-card">
+      <a href="/tour-operators" class="use-card">
         <div class="use-icon">🏔</div>
-        <h3>Tours &amp; Outdoor Rentals</h3>
+        <h3>Tour Operators</h3>
         <p>Answer trail condition questions, check live availability, send booking links, and confirm reservations — all by text. No phone tag.</p>
+        <span class="use-tag">Guided tours</span>
+        <span class="use-tag">Rafting</span>
+        <span class="use-tag">Outfitters</span>
+        <span class="card-link">See how it works →</span>
+      </a>
+      <a href="/snowmobile-rentals" class="use-card">
+        <div class="use-icon">🛷</div>
+        <h3>Snowmobile &amp; RZR Rentals</h3>
+        <p>Trail conditions, real-time availability, license questions — handled automatically. Your team focuses on the mountain, not the inbox.</p>
         <span class="use-tag">Snowmobile</span>
         <span class="use-tag">ATV / RZR</span>
-        <span class="use-tag">Rafting</span>
-      </div>
-      <div class="use-card">
+        <span class="use-tag">Powersports</span>
+        <span class="card-link">See how it works →</span>
+      </a>
+      <a href="/service-businesses" class="use-card">
         <div class="use-icon">🔧</div>
         <h3>Service Businesses</h3>
         <p>Capture service inquiries, collect lead details, and notify your team instantly. Turn "just browsing" into a scheduled appointment.</p>
-        <span class="use-tag">HVAC</span>
-        <span class="use-tag">Landscaping</span>
-        <span class="use-tag">Auto / Moto</span>
-      </div>
-      <div class="use-card">
-        <div class="use-icon">📅</div>
-        <h3>Appointments &amp; Studios</h3>
-        <p>Answer availability questions, collect lead info, and drive people to book — without your front desk spending all day on the phone.</p>
-        <span class="use-tag">Salon / Spa</span>
-        <span class="use-tag">Fitness</span>
-        <span class="use-tag">Wellness</span>
-      </div>
+        <span class="use-tag">Bike shops</span>
+        <span class="use-tag">Tune shops</span>
+        <span class="use-tag">Outfitters</span>
+        <span class="card-link">See how it works →</span>
+      </a>
     </div>
   </div>
 </section>

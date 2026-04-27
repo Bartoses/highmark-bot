@@ -265,6 +265,18 @@ Done when:
   booking-scheduling block) stays inline. index.js: -106 / +88 lines.
 - 1803/1805 tests pass (same 2 pre-existing campaign failures, no regressions).
 
+### Sprint 6 — Vertical Landing Pages + FAQ Expansion (2026-04-27)
+- verticals.js: VERTICAL_SLUGS + VERTICALS config + renderVerticalPage(slug). Three new server-rendered
+  pages: /tour-operators, /snowmobile-rentals, /service-businesses. Each has unique meta, canonical,
+  hero, dual-channel SMS + Web Chat demo conversations, 3-item industry FAQ, and FAQPage +
+  SoftwareApplication JSON-LD. Shared nav, pricing (mirrors home.html), demo band, footer.
+- index.js: routes registered via for-loop over VERTICAL_SLUGS.
+- public/home.html: Use-Cases cards now anchor links to the matching vertical; "See how it works →"
+  cta on every card; restyled to be focusable links.
+- public/sitemap.xml: 3 new URLs at priority 0.8 (changefreq monthly).
+- test.js: ~85 new assertions covering route status, meta/og/canonical/JSON-LD, dual-channel demo
+  presence, pricing section, sitemap inclusion, homepage link-out, JSON-LD parse validity.
+
 ### Platform Polish — /sms Refactor + Latency (2026-04-24)
 - /sms handler body extracted from index.js (2953 → 2063 lines) to smsOrchestrator.js (944 lines).
   index.js keeps a 3-line delegate; ESM live bindings handle the circular import. Byte-identical behavior.

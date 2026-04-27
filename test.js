@@ -2410,6 +2410,96 @@ async function test30() {
   const sitemapText = await sitemapRes.text();
   chk("sitemap has urlset", sitemapText.includes("<urlset"));
 
+  // Sprint 6 — sitemap includes 3 vertical landing pages at priority 0.8
+  chk("sitemap includes /tour-operators",      sitemapText.includes("/tour-operators"));
+  chk("sitemap includes /snowmobile-rentals",  sitemapText.includes("/snowmobile-rentals"));
+  chk("sitemap includes /service-businesses",  sitemapText.includes("/service-businesses"));
+  {
+    const verticalLines = sitemapText
+      .split("\n")
+      .filter((l) => /tour-operators|snowmobile-rentals|service-businesses/.test(l));
+    chk("sitemap: vertical URLs at priority 0.8", verticalLines.every((l) => l.includes("0.8")));
+  }
+
+  // Sprint 6 — vertical landing pages
+  const verticalCases = [
+    {
+      slug:     "tour-operators",
+      h1:       "Your guests text or chat at 11pm. Highmark answers.",
+      metaTitle:"AI Concierge for Tour Operators",
+      schemaSubcat: "Tour Operator Software",
+      audience: "tour operator",
+    },
+    {
+      slug:     "snowmobile-rentals",
+      h1:       "Book more sleds. Answer fewer texts — and web chats.",
+      metaTitle:"AI Concierge for Snowmobile",
+      schemaSubcat: "Snowmobile Rental Software",
+      audience: "snowmobile and RZR rental",
+    },
+    {
+      slug:     "service-businesses",
+      h1:       "Every inquiry answered — by text or website chat.",
+      metaTitle:"AI Concierge for Outdoor Service Businesses",
+      schemaSubcat: "Outdoor Service Business Software",
+      audience: "outdoor service",
+    },
+  ];
+
+  for (const v of verticalCases) {
+    const r = await fetch(`http://localhost:${TEST_PORT}/${v.slug}`);
+    chk(`/${v.slug}: returns 200`, r.status === 200);
+    const ct = r.headers.get("content-type") || "";
+    chk(`/${v.slug}: HTML content-type`, ct.includes("text/html"));
+
+    const html = await r.text();
+    chk(`/${v.slug}: H1 correct`,                     html.includes(v.h1));
+    chk(`/${v.slug}: meta title set`,                 html.includes(v.metaTitle));
+    chk(`/${v.slug}: meta description present`,       html.includes('<meta name="description"'));
+    chk(`/${v.slug}: og:title present`,               html.includes("og:title"));
+    chk(`/${v.slug}: og:description present`,         html.includes("og:description"));
+    chk(`/${v.slug}: twitter:card present`,           html.includes("twitter:card"));
+    chk(`/${v.slug}: canonical tag present`,          html.includes(`canonical" href="https://www.usehighmark.com/${v.slug}`));
+    chk(`/${v.slug}: FAQPage JSON-LD schema`,         html.includes("FAQPage"));
+    chk(`/${v.slug}: SoftwareApplication JSON-LD`,    html.includes("SoftwareApplication"));
+    chk(`/${v.slug}: applicationSubCategory matches`, html.includes(v.schemaSubcat));
+    chk(`/${v.slug}: mentions SMS`,                   html.toLowerCase().includes("sms") || html.toLowerCase().includes("text"));
+    chk(`/${v.slug}: mentions web chat / widget`,     html.toLowerCase().includes("web chat") || html.toLowerCase().includes("widget"));
+    chk(`/${v.slug}: demo conversations section`,     html.includes("demo-conversations") || html.includes("See it in action"));
+    chk(`/${v.slug}: SMS demo conversation block`,    html.includes("📱"));
+    chk(`/${v.slug}: Web chat demo conversation`,     html.includes("💬"));
+    chk(`/${v.slug}: pricing — Growth tier`,          html.includes("Growth"));
+    chk(`/${v.slug}: pricing — $249`,                 html.includes("249"));
+    chk(`/${v.slug}: pricing — $449`,                 html.includes("449"));
+    chk(`/${v.slug}: SMS demo CTA href`,              html.includes("sms:+18668906657"));
+    chk(`/${v.slug}: Growth plan mailto CTA`,         html.includes("Growth%20Plan"));
+    chk(`/${v.slug}: footer links to privacy`,        html.includes("/privacy"));
+    chk(`/${v.slug}: industry FAQ heading`,           html.includes(v.audience));
+
+    // Validate JSON-LD blocks parse cleanly.
+    const ldMatches = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
+    chk(`/${v.slug}: at least 2 JSON-LD blocks`, ldMatches.length >= 2);
+    let allValid = true;
+    for (const m of ldMatches) {
+      try { JSON.parse(m[1]); } catch { allValid = false; }
+    }
+    chk(`/${v.slug}: all JSON-LD blocks parse`, allValid);
+  }
+
+  // Sprint 6 — homepage links to vertical pages
+  {
+    const homeHtml = await fetch(`http://localhost:${TEST_PORT}/`, { headers: { accept: "text/html,*/*" } }).then((r) => r.text());
+    chk("home: links to /tour-operators",      homeHtml.includes("/tour-operators"));
+    chk("home: links to /snowmobile-rentals",  homeHtml.includes("/snowmobile-rentals"));
+    chk("home: links to /service-businesses",  homeHtml.includes("/service-businesses"));
+  }
+
+  // Sprint 6 — unknown vertical returns 404 not a 200
+  {
+    const r404 = await fetch(`http://localhost:${TEST_PORT}/does-not-exist-vertical`);
+    chk("unknown vertical path: not 200", r404.status !== 200);
+  }
+
   // /robots.txt
   const robotsRes = await fetch(`http://localhost:${TEST_PORT}/robots.txt`);
   chk("robots.txt returns 200", robotsRes.status === 200);

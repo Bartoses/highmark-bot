@@ -57,6 +57,7 @@ import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
+import { renderVerticalPage, VERTICAL_SLUGS } from "./verticals.js";
 import { loadDbClients } from "./clients.js";
 import { handleDemoFlow, handleDemoFlowWithMeta } from "./demoFlow.js";
 import { getRuntimeClientConfig } from "./clientConfig.js";
@@ -1906,6 +1907,17 @@ app.post("/cron/scheduled-messages", async (req, res) => {
 // PUBLIC LANDING PAGE + COMPLIANCE PAGES — no auth required
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/home",        (_req, res) => res.redirect(301, "/"));
+
+// Sprint 6 — vertical landing pages
+for (const slug of VERTICAL_SLUGS) {
+  app.get(`/${slug}`, (_req, res) => {
+    const html = renderVerticalPage(slug);
+    if (!html) return res.status(404).send("Not found");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  });
+}
+
 app.get("/privacy",     (_req, res) => res.sendFile(path.join(__uiDir, "privacy.html")));
 app.get("/terms",       (_req, res) => res.sendFile(path.join(__uiDir, "terms.html")));
 app.get("/sms-consent", (_req, res) => res.sendFile(path.join(__uiDir, "sms-consent.html")));
