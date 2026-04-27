@@ -318,6 +318,19 @@ export async function handleOnboardingApprove(req, res, supabase, twilioClient) 
     .update({ client_id: clientId, updated_at: new Date().toISOString() })
     .eq("auth_user_id", authUserId);
 
+  // commitDraftToDb inserts with active=false ("draft clients start inactive
+  // until verified"). For self-serve, the user just verified by approving —
+  // flip active=true so the client enters the active-only runtime registry.
+  // Twilio inbound routing is still gated by inbound_phones (empty until
+  // provisioned), and bot_mode='test' keeps actual sends gated separately.
+  try {
+    await supabase.from("clients")
+      .update({ active: true, updated_at: new Date().toISOString() })
+      .eq("id", clientId);
+  } catch (err) {
+    console.error("[ONBOARDING APPROVE] activate failed:", err.message);
+  }
+
   // Refresh in-memory client registry so /portal/api/settings, /knowledge,
   // /messaging, etc. resolve the new client immediately. Without this every
   // subsequent portal API call returns 404 until the server restarts.
