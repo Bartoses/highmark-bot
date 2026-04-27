@@ -23,6 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { startAutoConfig, commitDraftToDb, getDraft, buildNextSteps } from "./onboardingConfig.js";
+import { loadDbClients } from "./clients.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TEAM_NOTIFY_PHONE = "+17202892483"; // Highmark owner
@@ -316,6 +317,16 @@ export async function handleOnboardingApprove(req, res, supabase, twilioClient) 
   await supabase.from("portal_users")
     .update({ client_id: clientId, updated_at: new Date().toISOString() })
     .eq("auth_user_id", authUserId);
+
+  // Refresh in-memory client registry so /portal/api/settings, /knowledge,
+  // /messaging, etc. resolve the new client immediately. Without this every
+  // subsequent portal API call returns 404 until the server restarts.
+  try {
+    const { data: allRows } = await supabase.from("clients").select("*").eq("active", true);
+    loadDbClients(allRows ?? []);
+  } catch (err) {
+    console.error("[ONBOARDING APPROVE] reload failed:", err.message);
+  }
 
   // Notify team
   notifyTeam(
