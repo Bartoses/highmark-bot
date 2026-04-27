@@ -28,6 +28,32 @@ import { loadDbClients } from "./clients.js";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TEAM_NOTIFY_PHONE = "+17202892483"; // Highmark owner
 
+// ── Geocoding ─────────────────────────────────────────────────────────────────
+// Best-effort: turn the draft's free-text address into one weather_locations
+// entry so newly approved clients see local weather without manual setup.
+// Returns null on any failure; caller leaves weather_locations empty.
+
+async function geocodeAddress(address) {
+  const apiKey = process.env.OPENWEATHER_API_KEY;
+  if (!apiKey || !address || typeof address !== "string") return null;
+  const query = address.trim();
+  if (query.length < 3) return null;
+
+  try {
+    const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query)}&limit=1&appid=${apiKey}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return null;
+    const arr = await r.json();
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    const hit = arr[0];
+    if (typeof hit.lat !== "number" || typeof hit.lon !== "number") return null;
+    const label = [hit.name, hit.state, hit.country].filter(Boolean).join(", ");
+    return { name: label || query, lat: hit.lat, lon: hit.lon, elevation: null };
+  } catch {
+    return null;
+  }
+}
+
 // ── Validation ────────────────────────────────────────────────────────────────
 
 function validateSignupBody(body) {
@@ -329,6 +355,21 @@ export async function handleOnboardingApprove(req, res, supabase, twilioClient) 
       .eq("id", clientId);
   } catch (err) {
     console.error("[ONBOARDING APPROVE] activate failed:", err.message);
+  }
+
+  // Auto-seed weather_locations from the draft address (best-effort).
+  // Saves the new client one manual step in the Integrations tab; if the
+  // address is missing/vague the lookup just no-ops and the user adds it.
+  try {
+    const address = draft.draft_client?.address ?? draft.extracted_facts?.address ?? null;
+    const loc = await geocodeAddress(address);
+    if (loc) {
+      await supabase.from("clients")
+        .update({ weather_locations: [loc], updated_at: new Date().toISOString() })
+        .eq("id", clientId);
+    }
+  } catch (err) {
+    console.error("[ONBOARDING APPROVE] weather geocode failed:", err.message);
   }
 
   // Refresh in-memory client registry so /portal/api/settings, /knowledge,
