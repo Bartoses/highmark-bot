@@ -87,7 +87,9 @@ import {
   extractPageTitle,
   buildCrawlerContext,
   buildFactExtractionPrompt,
+  extractPromoStrips,
 } from "./crawler.js";
+import { parse as parseHtmlForTest } from "node-html-parser";
 import {
   detectIntent as agentDetectIntent,
   detectContext,
@@ -6560,6 +6562,56 @@ async function test48() {
     /promo banners/i.test(prompt)
       ? pass("test48: buildFactExtractionPrompt homepage hint includes promo banners")
       : fail("test48: homepage hint missing promo banners");
+  }
+
+  // ── extractPromoStrips: captures plain-div banner with date ────────────────
+  {
+    const html = `<html><body>
+      <div class="hero">
+        <div style="padding:10px;font-weight:bold">Use code SENDIT10 • Steamboat locations open May 25 • Kremmling opens Apr 18</div>
+        <h1>RZR Rentals</h1>
+        <p>Pick your location.</p>
+      </div>
+    </body></html>`;
+    const root   = parseHtmlForTest(html);
+    const strips = extractPromoStrips(root);
+    const hit    = strips.find((s) => /open\s+May\s+25/i.test(s) && /Kremmling\s+opens\s+Apr\s+18/i.test(s));
+    hit
+      ? pass("test48: extractPromoStrips captures promo banner with dates")
+      : fail("test48: extractPromoStrips banner", `got ${JSON.stringify(strips)}`);
+  }
+
+  // ── extractPromoStrips: dedupes parent vs child, keeps shortest ────────────
+  {
+    const html = `<html><body>
+      <section>
+        <p>Lots of other content goes here that is unrelated to promotions.</p>
+        <div>
+          <span>Reservations open June 1</span>
+        </div>
+      </section>
+    </body></html>`;
+    const root   = parseHtmlForTest(html);
+    const strips = extractPromoStrips(root);
+    // Should keep "Reservations open June 1" but not parent <section>/<div> longer wraps
+    const onlyShort = strips.length === 1 && /^Reservations open June 1$/.test(strips[0]);
+    onlyShort
+      ? pass("test48: extractPromoStrips dedupes by containment")
+      : fail("test48: extractPromoStrips dedupe", `got ${JSON.stringify(strips)}`);
+  }
+
+  // ── extractPromoStrips: ignores text without verb+date combination ─────────
+  {
+    const html = `<html><body>
+      <p>We love May weather!</p>
+      <div>Use this site responsibly.</div>
+      <div>Tour pricing per group.</div>
+    </body></html>`;
+    const root   = parseHtmlForTest(html);
+    const strips = extractPromoStrips(root);
+    strips.length === 0
+      ? pass("test48: extractPromoStrips ignores non-promo text")
+      : fail("test48: extractPromoStrips false positives", `got ${JSON.stringify(strips)}`);
   }
 }
 

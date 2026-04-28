@@ -141,6 +141,36 @@ export function extractPageLinks(html, baseUrl) {
   return [...links];
 }
 
+// Patterns used by extractPromoStrips — promo banners typically combine an
+// action verb ("opens", "use code") with a date marker ("May 25", "Friday").
+const PROMO_VERB_RE   = /\b(opens?|opening|reopens?|reopening|closed?|closing|launch(es|ing)?|starts?|starting|begins?|beginning|ends?|ending|use\s+code|promo|sale|book\s+by|reservations?\s+open|now\s+booking)\b/i;
+const PROMO_DATE_RE   = /\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|tonight|this\s+week(end)?|next\s+week(end)?)\b|\b\d{1,2}\/\d{1,2}\b/i;
+
+/**
+ * Finds short promo-strip text on the page (e.g. "Steamboat locations open May 25").
+ * These often live in plain <div>/<span> elements that the main extractor skips,
+ * but they carry the most time-sensitive information for guests. We dedupe by
+ * containment, preferring the shortest matching string so we get the strip itself
+ * rather than its parent block.
+ * Exported for testing.
+ */
+export function extractPromoStrips(root) {
+  const candidates = [];
+  for (const el of root.querySelectorAll("div, span, header, section, p, li, aside")) {
+    const text = (el.text ?? "").replace(/\s+/g, " ").trim();
+    if (text.length < 10 || text.length > 250) continue;
+    if (!PROMO_VERB_RE.test(text) || !PROMO_DATE_RE.test(text)) continue;
+    candidates.push(text);
+  }
+  candidates.sort((a, b) => a.length - b.length);
+  const kept = [];
+  for (const text of candidates) {
+    if (kept.some((k) => k === text || k.includes(text) || text.includes(k))) continue;
+    kept.push(text);
+  }
+  return kept.slice(0, 5);
+}
+
 /**
  * Extracts plain text from an HTML page, prioritizing content elements.
  * Internal — not exported (similar to knowledgeBase.js extractMeaningfulText,
@@ -148,6 +178,9 @@ export function extractPageLinks(html, baseUrl) {
  */
 function extractCleanText(html) {
   const root = parseHtml(html);
+
+  // Capture promo strips before noise removal — banners often live in <header> or similar.
+  const promoStrips = extractPromoStrips(root);
 
   // Remove noise
   root.querySelectorAll(
@@ -169,7 +202,8 @@ function extractCleanText(html) {
     if (text.length > 20) lines.push(text);
   }
 
-  return lines.join("\n");
+  // Prepend promo strips so they appear early in the truncated text Haiku sees.
+  return [...promoStrips, ...lines].join("\n");
 }
 
 /**
