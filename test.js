@@ -118,6 +118,16 @@ import {
   getIdentityByPhone,
   getIdentityBySession,
 } from "./crossChannel.js";
+import {
+  isSmsIntent,
+  detectConsentReply,
+  detectPhoneInMessage,
+  buildConsentPrompt,
+  buildConsentConfirmReply,
+  buildPhoneCapturedReply,
+  buildDeclineReply,
+  buildSmsFirstTouchOpener,
+} from "./smsOptIn.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEST RUNNER FRAMEWORK
@@ -12412,6 +12422,110 @@ async function testCrossChannel() {
 }
 
 await testCrossChannel();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint Prompt 7B — Progressive SMS Opt-In
+// ─────────────────────────────────────────────────────────────────────────────
+async function testSmsOptIn() {
+  console.log("\n[testSmsOptIn] Progressive SMS opt-in");
+
+  // ── isSmsIntent: positive signals fire ─────────────────────────────────────
+  const positives = [
+    "text me when spots open",
+    "Can you notify me when something opens up?",
+    "let me know if a slot opens",
+    "send me an alert when there's space",
+    "shoot me a text",
+    "call me back tomorrow",
+    "ping me when ready",
+  ];
+  for (const m of positives) {
+    isSmsIntent(m)
+      ? pass(`smsOptIn: isSmsIntent fires on "${m}"`)
+      : fail(`smsOptIn: isSmsIntent missed`, m);
+  }
+
+  // ── isSmsIntent: ambient mentions stay quiet ───────────────────────────────
+  const negatives = [
+    "what's your phone number?",
+    "what are your hours today",
+    "how much does it cost",
+    "do you have updates on snow conditions",
+    "",
+    null,
+  ];
+  for (const m of negatives) {
+    !isSmsIntent(m)
+      ? pass(`smsOptIn: isSmsIntent quiet on ${JSON.stringify(m)}`)
+      : fail(`smsOptIn: isSmsIntent false-positive`, JSON.stringify(m));
+  }
+
+  // ── detectConsentReply ─────────────────────────────────────────────────────
+  const yesCases   = ["yes", "ya", "yeah please", "sure", "ok", "sounds good", "sign me up", "absolutely"];
+  const noCases    = ["no", "nah", "not now", "no thanks", "I'm good", "skip"];
+  const unknownCases = ["maybe", "what time?", "tell me more first", "🤔"];
+  for (const m of yesCases) {
+    detectConsentReply(m) === "yes"
+      ? pass(`smsOptIn: detectConsentReply "${m}" → yes`)
+      : fail(`smsOptIn: detectConsentReply yes`, m);
+  }
+  for (const m of noCases) {
+    detectConsentReply(m) === "no"
+      ? pass(`smsOptIn: detectConsentReply "${m}" → no`)
+      : fail(`smsOptIn: detectConsentReply no`, m);
+  }
+  for (const m of unknownCases) {
+    detectConsentReply(m) === "unknown"
+      ? pass(`smsOptIn: detectConsentReply "${m}" → unknown`)
+      : fail(`smsOptIn: detectConsentReply unknown`, m);
+  }
+
+  // ── detectPhoneInMessage delegates to E.164 normalizer ─────────────────────
+  detectPhoneInMessage("call me at (720) 289-2483 thanks") === "+17202892483"
+    ? pass("smsOptIn: detectPhoneInMessage normalizes to E.164")
+    : fail("smsOptIn: detectPhoneInMessage", detectPhoneInMessage("call me at (720) 289-2483 thanks"));
+  detectPhoneInMessage("just thinking about it") === null
+    ? pass("smsOptIn: detectPhoneInMessage returns null when absent")
+    : fail("smsOptIn: detectPhoneInMessage non-null", "should be null");
+
+  // ── Reply builders include compliance + brand copy ─────────────────────────
+  const sampleClient = { name: "Above & Beyond 4x4 Guides", botName: "Scout" };
+  const consent = buildConsentPrompt(sampleClient);
+  consent.includes("Above & Beyond 4x4 Guides") && consent.includes("STOP")
+    ? pass("smsOptIn: buildConsentPrompt brands + compliance present")
+    : fail("smsOptIn: buildConsentPrompt missing pieces", consent);
+  consent.includes("Msg") && consent.includes("data rates")
+    ? pass("smsOptIn: buildConsentPrompt has 30510-style disclosure")
+    : fail("smsOptIn: buildConsentPrompt missing disclosure", consent);
+
+  buildConsentConfirmReply().toLowerCase().includes("number")
+    ? pass("smsOptIn: buildConsentConfirmReply asks for number")
+    : fail("smsOptIn: buildConsentConfirmReply", buildConsentConfirmReply());
+
+  buildPhoneCapturedReply().toLowerCase().includes("list")
+    ? pass("smsOptIn: buildPhoneCapturedReply confirms")
+    : fail("smsOptIn: buildPhoneCapturedReply", buildPhoneCapturedReply());
+
+  buildDeclineReply().toLowerCase().includes("chat")
+    ? pass("smsOptIn: buildDeclineReply low-friction")
+    : fail("smsOptIn: buildDeclineReply", buildDeclineReply());
+
+  // ── First-touch SMS opener: brand + STOP, short ────────────────────────────
+  const opener = buildSmsFirstTouchOpener(sampleClient);
+  opener.includes("Above & Beyond 4x4 Guides") && opener.includes("STOP") && opener.length <= 320
+    ? pass("smsOptIn: buildSmsFirstTouchOpener branded + compliance + short")
+    : fail("smsOptIn: buildSmsFirstTouchOpener", opener);
+
+  // ── Edge: empty / null inputs don't crash ──────────────────────────────────
+  isSmsIntent(undefined) === false
+    ? pass("smsOptIn: isSmsIntent(undefined) safe")
+    : fail("smsOptIn: isSmsIntent undefined", "should be false");
+  detectConsentReply("") === "unknown"
+    ? pass("smsOptIn: detectConsentReply('') → unknown")
+    : fail("smsOptIn: detectConsentReply empty", "should be unknown");
+}
+
+await testSmsOptIn();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 11.9 — Monetization + Selling Features

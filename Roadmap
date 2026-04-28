@@ -265,6 +265,23 @@ Done when:
   booking-scheduling block) stays inline. index.js: -106 / +88 lines.
 - 1803/1805 tests pass (same 2 pre-existing campaign failures, no regressions).
 
+### Prompt 7B — Progressive SMS Opt-In (2026-04-28)
+- smsOptIn.js: pure helpers — isSmsIntent (detects "text me"/"notify me"/"call me"
+  while staying quiet on ambient phone mentions), detectConsentReply (yes/no/unknown),
+  detectPhoneInMessage, buildConsentPrompt/ConfirmReply/PhoneCapturedReply/DeclineReply,
+  buildSmsFirstTouchOpener.
+- webChat.js: runSmsOptInFlow state machine inserted after first-message gate, before
+  handoff/Claude. Consent pending → classify reply; opted-in + phone → saveLead +
+  CRM tag 'sms_lead' + trackWebEvent("sms_opt_in_captured") + linkSessionToLead;
+  not opted-in + isSmsIntent → ask for consent. Existing web→SMS bridgePhone path is
+  now gated on convo.smsOptedIn so unconsented phone mentions are ignored.
+- conversations row: 3 new columns persisted per session — sms_opted_in,
+  sms_opted_in_at, sms_consent_requested. Migration: db1_sms_consent.sql.
+- index.js: threads crmSupabase into sendMessageWeb so DB2 contact tagging works.
+- Tests: 41 new assertions in testSmsOptIn() — intent positives/negatives, yes/no/
+  unknown reply classifier, phone normalization, copy builders include brand + STOP +
+  "Msg & data rates may apply". 1969/1971 pass (same 2 pre-existing campaign failures).
+
 ### Sprint 7 — Self-Serve Signup + Streamlined Onboarding (2026-04-27)
 - selfSignup.js: validateSignupBody, handleSignup, runOnboardingCrawl, handleOnboardingStatus,
   handleOnboardingApprove. Reuses existing onboardingConfig.js pipeline (startAutoConfig,

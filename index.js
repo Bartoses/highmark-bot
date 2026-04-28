@@ -1500,6 +1500,7 @@ app.post("/web/chat", ipLimiter, async (req, res) => {
     const result = await sendMessageWeb(supabase, anthropic, client, sessionId, message.trim(), {
       pageHint: pageHint ?? null,
       pageUrl:  pageUrl  ?? null,
+      crmSupabase,
     });
 
     // Phase 11.8: Web→SMS bridge — send context SMS if visitor provided a phone number

@@ -37,6 +37,11 @@ import { saveLead, notifyBusinessOfLead } from "./leads.js";
 import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 import { trackWebEvent } from "./webEvents.js";
 import { linkPhoneToSession, extractPhoneFromMessage, buildSmsBridgeMessage } from "./crossChannel.js";
+import {
+  isSmsIntent, detectConsentReply, detectPhoneInMessage,
+  buildConsentPrompt, buildConsentConfirmReply, buildPhoneCapturedReply, buildDeclineReply,
+} from "./smsOptIn.js";
+import { upsertContact } from "./crm.js";
 
 // True if the text contains any http/https URL
 function containsUrl(text) {
@@ -82,6 +87,9 @@ export async function getWebConversation(supabase, sessionId, clientId) {
         leadCapturePendingName: bd._leadCapturePendingName ?? false,
         commercialState:        bd._commercialState        ?? { recommendationGiven: false, leadCaptureAttempts: 0 },
         conversionState:        bd._conversionState        ?? { last_intent: null, last_cta_type: null, urgency_used: false },
+        smsOptedIn:             data.sms_opted_in            ?? false,
+        smsOptedInAt:           data.sms_opted_in_at         ?? null,
+        smsConsentRequested:    data.sms_consent_requested   ?? false,
       },
     };
   }
@@ -102,6 +110,9 @@ export async function getWebConversation(supabase, sessionId, clientId) {
       leadCapturePendingName: false,
       commercialState:       { recommendationGiven: false, leadCaptureAttempts: 0 },
       conversionState:       { last_intent: null, last_cta_type: null, urgency_used: false },
+      smsOptedIn:            false,
+      smsOptedInAt:          null,
+      smsConsentRequested:   false,
     },
   };
 }
@@ -132,6 +143,9 @@ export async function saveWebConversation(supabase, from, to, convo, clientId) {
       lead_data:              convo.leadData,
       client_id:              clientId,
       channel:                "web",
+      sms_opted_in:           convo.smsOptedIn          ?? false,
+      sms_opted_in_at:        convo.smsOptedInAt        ?? null,
+      sms_consent_requested:  convo.smsConsentRequested ?? false,
       updated_at:             new Date().toISOString(),
     },
     { onConflict: "from_number,to_number" }
@@ -221,7 +235,7 @@ export function getWebClientConfig(client, embedConfig = null) {
 //
 // Returns { reply: string, isNew?: boolean }
 // ─────────────────────────────────────────────────────────────────────────────
-export async function sendMessageWeb(supabase, anthropic, client, sessionId, message, { pageHint = null, pageUrl = null } = {}) {
+export async function sendMessageWeb(supabase, anthropic, client, sessionId, message, { pageHint = null, pageUrl = null, crmSupabase = null } = {}) {
   // ── RESETNOW — clear conversation, return opener ──────────────────────────
   if (message.toUpperCase().trim() === "RESETNOW") {
     const from = webFromNumber(sessionId);
@@ -298,6 +312,20 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
 
   // Push user message
   convo.messages.push({ role: "user", content: message, timestamp: new Date().toISOString(), intent, sentiment });
+
+  // ── Progressive SMS opt-in state machine (Sprint Prompt 7B) ────────────────
+  // Runs BEFORE handoff/Claude so consent + phone capture short-circuit normal flow.
+  // Compliance: phone is never collected before explicit opt-in; STOP keyword is
+  // still handled by smsOrchestrator on the SMS channel.
+  {
+    const optInReply = await runSmsOptInFlow(supabase, crmSupabase, client, convo, sessionId, message, pageUrl);
+    if (optInReply) {
+      convo.messages.push({ role: "assistant", content: optInReply, timestamp: new Date().toISOString() });
+      await saveWebConversation(supabase, from, to, convo, client.id);
+      touchWebSession(supabase, sessionId).catch(() => {});
+      return { reply: optInReply };
+    }
+  }
 
   let replyText;
   let resolvedLink = null; // hoisted so conversionState update can reference it
@@ -411,9 +439,13 @@ export async function sendMessageWeb(supabase, anthropic, client, sessionId, mes
   // When a visitor mentions their phone number, link their session to that phone
   // so the conversation can continue via SMS. Returns bridgePhone so the caller
   // (index.js) can send the SMS bridge without needing Twilio here.
+  //
+  // Compliance gate: only fire the SMS bridge when the visitor has explicitly
+  // opted in via the consent flow. Phones mentioned in passing without opt-in
+  // are ignored on the SMS side.
   let bridgePhone = null;
   const detectedPhone = extractPhoneFromMessage(message);
-  if (detectedPhone && !convo.bookingData?._phoneBridgeSent) {
+  if (detectedPhone && convo.smsOptedIn && !convo.bookingData?._phoneBridgeSent) {
     const identity = await linkPhoneToSession(supabase, client.id, detectedPhone, sessionId).catch(() => null);
     if (identity) {
       // Build bridge context from recent conversation
@@ -468,6 +500,95 @@ async function passiveLeadCapture(supabase, client, convo, sessionId, message, p
     }
   } catch (err) {
     console.error("[WEB_CHAT] passiveLeadCapture failed:", err.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// runSmsOptInFlow — progressive consent state machine for web chat (Prompt 7B)
+//
+// Returns a string reply when this turn should short-circuit normal bot flow,
+// or null when the message should fall through to Claude / handoff / etc.
+//
+// Order of checks:
+//   1. Consent already pending → classify yes/no/unknown
+//   2. Already opted in + phone present → save lead, tag CRM, confirm
+//   3. Not opted in + SMS intent → ask for consent (compliance copy embedded)
+//   4. Otherwise → null (normal flow continues)
+// ─────────────────────────────────────────────────────────────────────────────
+async function runSmsOptInFlow(supabase, crmSupabase, client, convo, sessionId, message, pageUrl) {
+  // 1. Pending consent → look for yes/no
+  if (convo.smsConsentRequested === true) {
+    const verdict = detectConsentReply(message);
+    if (verdict === "yes") {
+      convo.smsOptedIn          = true;
+      convo.smsOptedInAt        = new Date().toISOString();
+      convo.smsConsentRequested = false;
+      logOptIn(`consent granted — session=${sessionId} client=${client.id}`);
+      return buildConsentConfirmReply();
+    }
+    if (verdict === "no") {
+      convo.smsOptedIn          = false;
+      convo.smsConsentRequested = false;
+      logOptIn(`consent declined — session=${sessionId} client=${client.id}`);
+      return buildDeclineReply();
+    }
+    // Unknown reply — clear the pending flag so the user isn't trapped in a
+    // consent loop, and let normal bot flow handle the message.
+    convo.smsConsentRequested = false;
+    return null;
+  }
+
+  // 2. Already opted in + phone in this message → capture
+  if (convo.smsOptedIn === true) {
+    const phone = detectPhoneInMessage(message);
+    if (phone && !convo.bookingData?._smsLeadCaptured) {
+      try {
+        const lead = await saveLead(supabase, {
+          clientId:     client.id,
+          contactPhone: phone,
+          leadType:     "sms_opt_in",
+          source:       "web_chat",
+        });
+        if (lead) {
+          linkSessionToLead(supabase, sessionId, lead.id).catch(() => {});
+          trackWebEvent(supabase, {
+            clientId: client.id, sessionId, eventType: "sms_opt_in_captured", pageUrl,
+            metadata: { phone },
+          }).catch(() => {});
+        }
+        // Tag the CRM contact (DB2). Best-effort; only when CRM is enabled.
+        if (crmSupabase && client.crmEnabled) {
+          await upsertContact(phone, { tags: ["sms_lead"], source: "web_chat_opt_in" }, crmSupabase)
+            .catch((err) => console.error("[OPT-IN] CRM tag failed:", err.message));
+        }
+      } catch (err) {
+        console.error("[OPT-IN] saveLead failed:", err.message);
+      }
+      convo.bookingData = { ...(convo.bookingData ?? {}), _smsLeadCaptured: true };
+      logOptIn(`phone captured — session=${sessionId} phone=${phone}`);
+      return buildPhoneCapturedReply();
+    }
+    // Already opted in but no phone yet — fall through (Claude can prompt naturally)
+    return null;
+  }
+
+  // 3. Not yet opted in → only ask if user expressed intent.
+  //    Edge case: a phone in this message without prior consent is IGNORED
+  //    here; treating it as intent would skip the consent step.
+  if (isSmsIntent(message)) {
+    convo.smsConsentRequested = true;
+    logOptIn(`consent requested — session=${sessionId} client=${client.id}`);
+    return buildConsentPrompt(client);
+  }
+
+  return null;
+}
+
+function logOptIn(detail) {
+  if (process.env.TEST_MODE === "true") {
+    console.log(`[OPT-IN] ${detail}`);
+  } else {
+    console.log(`[OPT-IN] ${detail}`);
   }
 }
 

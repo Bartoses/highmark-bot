@@ -57,6 +57,7 @@ adminLeads.js          — admin lead management: list, get, update, summary rou
 adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages
 adminClients.js        — client provisioning: create/update/list/readiness routes
 selfSignup.js          — Sprint 7: public self-serve signup + onboarding status/approve handlers
+smsOptIn.js            — Progressive SMS opt-in (Prompt 7B): isSmsIntent, detectConsentReply, copy builders
 onboardingConfig.js    — auto-config pipeline: startAutoConfig, commitDraftToDb, getDraft, slugifyName, buildNextSteps
 virtual-test.sh        — Twilio Virtual Phone test runner (10 scenarios)
 verticals.js           — Sprint 6: vertical landing pages (/tour-operators, /snowmobile-rentals, /service-businesses) — VERTICALS config + renderVerticalPage(slug)
@@ -74,7 +75,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`
 
 ---
 
@@ -291,6 +292,22 @@ Enable: `crawlSettings: { enabled: true, primaryUrl: "https://..." }` in `client
 3. HELP → compliance response (works even for opted-out numbers)
 4. Opted-out gate → silently drop message
 5. All other processing
+
+### Progressive SMS Opt-In on Web Chat (smsOptIn.js — Prompt 7B)
+Web chat does NOT show consent on open. The state machine in `runSmsOptInFlow`
+(webChat.js) runs after the first-message gate, before handoff/Claude:
+1. **Consent pending** (`sms_consent_requested=true`) → `detectConsentReply` classifies
+   yes/no/unknown. Yes → flips `sms_opted_in=true`, asks for phone. No → low-friction
+   "I'll keep everything here in chat." Unknown → clears the flag, falls through.
+2. **Already opted in + phone present** → `saveLead({ leadType: "sms_opt_in" })`,
+   `linkSessionToLead`, `trackWebEvent("sms_opt_in_captured")`, and CRM
+   `upsertContact(phone, { tags: ["sms_lead"] })` (DB2, only when `client.crmEnabled`).
+3. **Not opted in + `isSmsIntent(message)`** → sets `sms_consent_requested=true`, sends
+   `buildConsentPrompt(client)` (benefit-led with "Msg & data rates may apply. Reply STOP").
+The existing web→SMS bridgePhone path is now gated on `convo.smsOptedIn`, so a phone
+mentioned in passing without consent is ignored on the SMS side. Persisted on the
+`conversations` row via columns `sms_opted_in`, `sms_opted_in_at`, `sms_consent_requested`
+(migration: `db1_sms_consent.sql`).
 
 ### Message Length
 Default 320 chars (2 texts). `enforceLength(text, max=320)` — never truncates URLs.
