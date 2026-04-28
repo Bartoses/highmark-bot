@@ -86,6 +86,7 @@ import {
   extractPageLinks,
   extractPageTitle,
   buildCrawlerContext,
+  buildFactExtractionPrompt,
 } from "./crawler.js";
 import {
   detectIntent as agentDetectIntent,
@@ -122,6 +123,7 @@ import {
   isSmsIntent,
   detectConsentReply,
   detectPhoneInMessage,
+  extractNameFromMessage,
   buildConsentPrompt,
   buildConsentConfirmReply,
   buildPhoneCapturedReply,
@@ -6533,6 +6535,32 @@ async function test48() {
       ? pass("test48: buildCrawlerContext returns empty when no pages")
       : fail("test48: buildCrawlerContext empty pages", `got "${ctx}"`);
   }
+
+  // ── buildFactExtractionPrompt: always instructs Haiku to capture dates ─────
+  {
+    const types = ["homepage", "services", "pricing", "booking", "faq", "policies", "hours", "contact", "seasonal", "other"];
+    let allMention = true;
+    for (const pt of types) {
+      const prompt = buildFactExtractionPrompt(
+        { pageType: pt, title: "test", text: "Steamboat opens May 25 • Kremmling opens Apr 18" },
+        "Test Co"
+      );
+      if (!/opening dates/i.test(prompt) || !/regardless of page type/i.test(prompt)) {
+        allMention = false; break;
+      }
+    }
+    allMention
+      ? pass("test48: buildFactExtractionPrompt always asks for opening dates")
+      : fail("test48: buildFactExtractionPrompt missing opening-date instruction");
+  }
+
+  // ── buildFactExtractionPrompt: homepage hint widened to include promo banners ─
+  {
+    const prompt = buildFactExtractionPrompt({ pageType: "homepage", title: "x", text: "x" }, "X");
+    /promo banners/i.test(prompt)
+      ? pass("test48: buildFactExtractionPrompt homepage hint includes promo banners")
+      : fail("test48: homepage hint missing promo banners");
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -12498,13 +12526,41 @@ async function testSmsOptIn() {
     ? pass("smsOptIn: buildConsentPrompt has 30510-style disclosure")
     : fail("smsOptIn: buildConsentPrompt missing disclosure", consent);
 
-  buildConsentConfirmReply().toLowerCase().includes("number")
-    ? pass("smsOptIn: buildConsentConfirmReply asks for number")
-    : fail("smsOptIn: buildConsentConfirmReply", buildConsentConfirmReply());
+  {
+    const reply = buildConsentConfirmReply().toLowerCase();
+    reply.includes("number") && reply.includes("name")
+      ? pass("smsOptIn: buildConsentConfirmReply asks for name + number")
+      : fail("smsOptIn: buildConsentConfirmReply", buildConsentConfirmReply());
+  }
 
   buildPhoneCapturedReply().toLowerCase().includes("list")
     ? pass("smsOptIn: buildPhoneCapturedReply confirms")
     : fail("smsOptIn: buildPhoneCapturedReply", buildPhoneCapturedReply());
+
+  // ── extractNameFromMessage ─────────────────────────────────────────────────
+  {
+    const cases = [
+      { in: "I'm Sean, 720-289-2483",          want: "Sean" },
+      { in: "my name is Sean Bartosewcz",      want: "Sean Bartosewcz" },
+      { in: "this is John 7202892483",         want: "John" },
+      { in: "call me Sara at 7202892483",      want: "Sara" },
+      { in: "Sean Bartosewcz - 720-289-2483",  want: "Sean Bartosewcz" },
+      { in: "Sean, 7202892483",                want: "Sean" },
+    ];
+    for (const c of cases) {
+      const got = extractNameFromMessage(c.in);
+      got === c.want
+        ? pass(`smsOptIn: extractNameFromMessage "${c.in}" → ${got}`)
+        : fail(`smsOptIn: extractNameFromMessage "${c.in}"`, `got=${got} want=${c.want}`);
+    }
+    // Negatives: don't pull a name out of a bare phone or affirmation
+    const nullCases = ["7202892483", "(720) 289-2483", "yes please", "ok", "", null, undefined];
+    for (const m of nullCases) {
+      extractNameFromMessage(m) === null
+        ? pass(`smsOptIn: extractNameFromMessage(${JSON.stringify(m)}) → null`)
+        : fail(`smsOptIn: extractNameFromMessage non-null`, JSON.stringify(m));
+    }
+  }
 
   buildDeclineReply().toLowerCase().includes("chat")
     ? pass("smsOptIn: buildDeclineReply low-friction")

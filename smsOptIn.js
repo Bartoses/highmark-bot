@@ -80,6 +80,69 @@ export function detectPhoneInMessage(message) {
   return extractPhoneFromMessage(message);
 }
 
+// ── Name extraction ───────────────────────────────────────────────────────────
+// Pulls a plausible first/last name out of a message that may also contain a
+// phone number. Strips the phone digits first so we don't read "720" as a name.
+//
+// Returns the captured name as a string ("John" or "John Smith"), or null when
+// nothing name-like is present. Conservative on purpose — false positives go
+// into the leads table and look terrible to the operator.
+
+const NAME_INTRO_RE =
+  /(?:^|[\s,.;:!?-])(?:i'?m|i am|my name(?:'s| is)?|this is|it'?s|call me|name'?s|name is)\s+([A-Za-z][A-Za-z'-]+(?:\s+[A-Za-z][A-Za-z'-]+)?)/i;
+
+const STANDALONE_NAME_RE =
+  /^\s*([A-Z][a-z'-]{1,}(?:\s+[A-Z][a-z'-]{1,})?)\s*(?:[,.\-—]|$)/;
+
+const NAME_STOPWORDS = new Set([
+  "yes", "yeah", "yep", "no", "nope", "ok", "okay", "sure", "thanks",
+  "thank", "hi", "hey", "hello", "please", "sounds", "good", "great",
+  "fine", "cool", "awesome", "perfect", "absolutely",
+]);
+
+// Tokens that look like a name word but are really prepositions/conjunctions.
+// We drop these from the tail of a captured name so "Sara at" → "Sara".
+const NAME_TAIL_NOISE = new Set([
+  "at", "on", "by", "in", "from", "via", "to", "and", "or", "but",
+  "with", "for", "the", "a", "an", "of", "is", "im",
+]);
+
+export function extractNameFromMessage(message) {
+  if (!message || typeof message !== "string") return null;
+  // Strip out anything that looks like a phone number first so digit runs
+  // don't confuse the name patterns.
+  const stripped = message
+    .replace(/\+?\d[\d\s().-]{6,}\d/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!stripped) return null;
+
+  const intro = stripped.match(NAME_INTRO_RE);
+  if (intro?.[1]) return cleanName(intro[1]);
+
+  const standalone = stripped.match(STANDALONE_NAME_RE);
+  if (standalone?.[1]) {
+    const candidate = cleanName(standalone[1]);
+    if (candidate && !NAME_STOPWORDS.has(candidate.toLowerCase())) return candidate;
+  }
+  return null;
+}
+
+function cleanName(raw) {
+  const trimmed = raw.trim().replace(/\s+/g, " ");
+  if (!trimmed) return null;
+  // Drop trailing prepositions/conjunctions that look like name tokens
+  // (e.g. "Sara at" → "Sara") before title-casing.
+  const tokens = trimmed.split(" ").filter(Boolean);
+  while (tokens.length > 1 && NAME_TAIL_NOISE.has(tokens[tokens.length - 1].toLowerCase())) {
+    tokens.pop();
+  }
+  if (!tokens.length) return null;
+  return tokens
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
 // ── Reply builders ────────────────────────────────────────────────────────────
 // All copy is benefit-led, compliance-secondary. Brand name interpolated from
 // client.name so the message reads as the business, not Highmark.
@@ -100,7 +163,7 @@ export function buildConsentPrompt(client) {
 }
 
 export function buildConsentConfirmReply() {
-  return "Perfect 🙌 What's the best number to text you?";
+  return "Perfect 🙌 What's your name and the best number to text you?";
 }
 
 export function buildPhoneCapturedReply() {

@@ -1855,10 +1855,11 @@ app.post("/portal/api/crawl-now",   requirePortalAuth, async (req, res) => {
   const client = getAllClients()[clientId];
   if (!client)  return res.status(404).json({ error: "Client not found" });
   if (!client.crawlSettings?.enabled) return res.status(400).json({ error: "Crawler not enabled for this client" });
-  runCrawlerForClient(supabase, anthropic, client).catch((err) =>
+  const forceReextract = req.body?.force === true || req.query?.force === "true";
+  runCrawlerForClient(supabase, anthropic, client, { forceReextract }).catch((err) =>
     console.error(`[CRAWLER] Portal-triggered crawl failed for ${clientId}:`, err.message)
   );
-  res.json({ ok: true, message: "Crawl started — check back in a few minutes" });
+  res.json({ ok: true, message: "Crawl started — check back in a few minutes", forceReextract });
 });
 // Portal invite + user management — requirePortalAuth (internal_admin role enforced inside handlers)
 app.get(  "/portal/api/users",               requirePortalAuth, (req, res) => handlePortalUsers(req, res, supabase));

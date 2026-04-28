@@ -265,6 +265,25 @@ Done when:
   booking-scheduling block) stays inline. index.js: -106 / +88 lines.
 - 1803/1805 tests pass (same 2 pre-existing campaign failures, no regressions).
 
+### Opt-In Name Capture + Crawler Opening Dates (2026-04-28)
+- smsOptIn.js: extractNameFromMessage helper (regex + stopword filter) — handles
+  "I'm Sean", "my name is Sean Bartosewcz", "call me Sara at 720…", "Sean, 720…".
+  buildConsentConfirmReply now asks "What's your name and the best number to text you?"
+  so a single reply yields both. Trailing-stopword filter drops "Sara at" → "Sara".
+- webChat.js runSmsOptInFlow: extracts name from current turn, falls back to prior
+  user turn (visitor often says name, then sends number on its own). Passes `name`
+  into saveLead and (firstName/lastName) into upsertContact for CRM.
+- crawler.js buildFactExtractionPrompt: now exported; appended ALWAYS-capture
+  instruction for opening/closing/season-launch dates regardless of page type.
+  Homepage hint widened to include promo banners. New forceReextract option on
+  runCrawlerForClient bypasses content_hash so prompt updates can be applied
+  without waiting for site content to drift.
+- index.js: /portal/api/crawl-now accepts {force:true} body/query → forceReextract.
+- Tests: extractNameFromMessage positives/negatives, buildConsentConfirmReply
+  asserts name+number, buildFactExtractionPrompt always mentions opening dates +
+  homepage hint mentions promo banners. 1984/1986 pass (same 2 pre-existing
+  send_campaign failures, no regressions).
+
 ### Prompt 7B — Progressive SMS Opt-In (2026-04-28)
 - smsOptIn.js: pure helpers — isSmsIntent (detects "text me"/"notify me"/"call me"
   while staying quiet on ambient phone mentions), detectConsentReply (yes/no/unknown),

@@ -38,7 +38,7 @@ import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 import { trackWebEvent } from "./webEvents.js";
 import { linkPhoneToSession, extractPhoneFromMessage, buildSmsBridgeMessage } from "./crossChannel.js";
 import {
-  isSmsIntent, detectConsentReply, detectPhoneInMessage,
+  isSmsIntent, detectConsentReply, detectPhoneInMessage, extractNameFromMessage,
   buildConsentPrompt, buildConsentConfirmReply, buildPhoneCapturedReply, buildDeclineReply,
 } from "./smsOptIn.js";
 import { upsertContact } from "./crm.js";
@@ -542,6 +542,12 @@ async function runSmsOptInFlow(supabase, crmSupabase, client, convo, sessionId, 
   if (convo.smsOptedIn === true) {
     const phone = detectPhoneInMessage(message);
     if (phone && !convo.bookingData?._smsLeadCaptured) {
+      // Try this turn first; fall back to the prior user turn (where they
+      // may have written "Sean Bartosewcz" before sending the number on its own).
+      const priorUserMsg = [...convo.messages]
+        .reverse()
+        .find((m) => m.role === "user" && m.content !== message)?.content ?? "";
+      const name = extractNameFromMessage(message) ?? extractNameFromMessage(priorUserMsg);
       try {
         const lead = await saveLead(supabase, {
           clientId:     client.id,
@@ -549,6 +555,7 @@ async function runSmsOptInFlow(supabase, crmSupabase, client, convo, sessionId, 
           // the row links back to the conversation in the portal.
           fromNumber:   webFromNumber(sessionId),
           contactPhone: phone,
+          name,
           leadType:     "sms_opt_in",
           source:       "web_chat",
         });
@@ -561,7 +568,13 @@ async function runSmsOptInFlow(supabase, crmSupabase, client, convo, sessionId, 
         }
         // Tag the CRM contact (DB2). Best-effort; only when CRM is enabled.
         if (crmSupabase && client.crmEnabled) {
-          await upsertContact(phone, { tags: ["sms_lead"], source: "web_chat_opt_in" }, crmSupabase)
+          const [firstName = null, ...rest] = (name ?? "").split(/\s+/).filter(Boolean);
+          const lastName = rest.length ? rest.join(" ") : null;
+          await upsertContact(phone, {
+            tags:      ["sms_lead"],
+            source:    "web_chat_opt_in",
+            firstName, lastName,
+          }, crmSupabase)
             .catch((err) => console.error("[OPT-IN] CRM tag failed:", err.message));
         }
       } catch (err) {

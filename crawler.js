@@ -241,9 +241,9 @@ export function classifyPageType(url, title, text) {
 // FACT EXTRACTION
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildFactExtractionPrompt(page, clientName) {
+export function buildFactExtractionPrompt(page, clientName) {
   const typeHints = {
-    homepage:  "main offerings, business overview, unique value proposition",
+    homepage:  "main offerings, business overview, unique value proposition; current promo banners; any visible opening or season-launch dates",
     services:  "specific services, tours, rentals; what is included; group sizes; capacity; which season or location each offering runs in",
     pricing:   "exact prices, rates, what is included, deposits, payment terms",
     booking:   "how to book, minimum notice, requirements, lead time needed",
@@ -263,6 +263,7 @@ Return ONLY a JSON object — no other text:
   "key_facts": ["most important guest-facing fact (max 70 chars)", "second fact if present", "third fact if present"]
 }
 Focus on: ${hint}. Omit fields that are empty. Max 3 key_facts.
+ALWAYS capture (regardless of page type) any text indicating CURRENT operating status — opening dates, closing dates, season launch dates, "opens [date]", "closed for the season", per-location launch windows, or any specific dates printed on banners or promo strips. Quote the date verbatim when shown.
 Page title: ${page.title ?? ""}
 Page content:
 ${page.text.slice(0, 2000)}`;
@@ -455,10 +456,16 @@ export async function crawlSite(primaryUrl, options = {}) {
  *   2. For each page: check hash, run Haiku extraction only if content changed
  *   3. Upsert page records to client_pages table
  *
+ * Options:
+ *   forceReextract — when true, ignore the stored content_hash and re-run Haiku
+ *     extraction on every page. Use after the extraction prompt changes so the
+ *     stored facts pick up the new instructions without waiting for content to
+ *     drift. Surfaced via the portal "Crawl now (force)" button.
+ *
  * Skips silently if crawlSettings.enabled is falsy or no primaryUrl configured.
  * Never throws — all errors are logged and swallowed.
  */
-export async function runCrawlerForClient(supabase, anthropic, client) {
+export async function runCrawlerForClient(supabase, anthropic, client, { forceReextract = false } = {}) {
   const crawlSettings = client?.crawlSettings ?? {};
   if (!crawlSettings.enabled) return;
 
@@ -511,7 +518,7 @@ export async function runCrawlerForClient(supabase, anthropic, client) {
       let extractedFacts = null;
       let pageSummary    = null;
 
-      if (existing?.content_hash === page.hash && existing?.extracted_facts) {
+      if (!forceReextract && existing?.content_hash === page.hash && existing?.extracted_facts) {
         // Content unchanged — reuse stored facts
         extractedFacts = existing.extracted_facts;
         pageSummary    = existing.summary;
