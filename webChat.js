@@ -545,6 +545,9 @@ async function runSmsOptInFlow(supabase, crmSupabase, client, convo, sessionId, 
       try {
         const lead = await saveLead(supabase, {
           clientId:     client.id,
+          // leads.from_number is NOT NULL — use the web session pseudo-phone so
+          // the row links back to the conversation in the portal.
+          fromNumber:   webFromNumber(sessionId),
           contactPhone: phone,
           leadType:     "sms_opt_in",
           source:       "web_chat",
