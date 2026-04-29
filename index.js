@@ -74,7 +74,7 @@ import { detectOwner } from "./ownerMode.js";
 import { callClaudeForChannel } from "./messageEngine.js";
 import { sendOperatorBriefing, buildOperatorApiData } from "./operatorBriefing.js";
 import { handleSmsRequest } from "./smsOrchestrator.js";
-import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, formatHours } from "./promptParts.js";
+import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, formatHours } from "./promptParts.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -272,6 +272,7 @@ Do NOT pretend live scheduling exists. Do NOT invent appointment times or availa
     }),
 
     faqHelper(client.faq),
+    operatingStatusBlock(),
     liveDataBlock(knowledgeContext),
   ].filter(Boolean);
 
@@ -359,6 +360,7 @@ ${bookingRef}`,
     `━━━ WEATHER + CONDITIONS RULES ━━━
 LIVE DATA IS YOUR SOURCE OF TRUTH. If the LIVE DATA block below has weather, snow, or other operational data → quote it directly. Never redirect guests to an external site when you already have the answer. Never fabricate conditions not shown in LIVE DATA.`,
 
+    operatingStatusBlock(),
     liveDataBlock(knowledgeContext),
   ].filter(Boolean);
 
@@ -561,6 +563,8 @@ AVALANCHE: If LIVE DATA has "Avalanche danger (Steamboat zone)" → quote it dir
 ONLY if the LIVE DATA section below has NO SNOW CONDITIONS block at all → say "Rabbit Ears SNOTEL (snotel.nrcs.usda.gov) has the latest snowpack."
 - Steamboat Ski Resort summit (Storm Peak) weather comes from OpenWeather. Base snow depth from Dry Lake SNOTEL (8,240 ft).
 - Never invent snow depth, grooming status, or conditions not in LIVE DATA.
+
+${operatingStatusBlock()}
 
 ${liveDataBlock(knowledgeContext)}`;
 }

@@ -80,6 +80,21 @@ export function liveDataBlock(knowledgeContext) {
   return `━━━ LIVE DATA ━━━\n${knowledgeContext}`;
 }
 
+// Operating-status rule — opening dates, closing dates, season launches.
+// Crawler-extracted facts land in the LIVE DATA block under "WEBSITE KNOWLEDGE:".
+// Without this rule the bot tends to fall back to training-data assumptions
+// (e.g. "RZR season typically opens late June") instead of quoting the
+// website's specific date (e.g. "Kremmling opens Apr 18"). The website is
+// always more current than training data.
+export function operatingStatusBlock() {
+  return [
+    "━━━ OPERATING STATUS / SEASON DATES ━━━",
+    "If the LIVE DATA block contains explicit opening dates, closing dates, season-launch dates, or operating-status text (under WEBSITE KNOWLEDGE, BUSINESS INFO, or anywhere else) — quote those dates verbatim. The website is always more current than your training data.",
+    "NEVER replace a specific date with vague phrasing like \"typically opens late June\", \"usually around X\", or \"once the snow clears\" when the data states a specific date. Don't hedge a real date with assumed conditions.",
+    "Only when LIVE DATA has NO opening/closing date for the location asked about → say \"I'll need to check with the team on exact dates\" and hand off, or invite them to share more.",
+  ].join("\n");
+}
+
 // Hours formatter — accepts either a string or a {weekdays, weekends} object.
 // Returns a single-line summary or a generic fallback.
 export function formatHours(hours) {
