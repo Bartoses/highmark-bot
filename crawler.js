@@ -72,7 +72,29 @@ const JUNK_PATTERNS = [
 const MAX_CLEAN_TEXT_CHARS = 3000;
 
 // Max assembled crawler context string (injected into bot system prompt)
-const MAX_CRAWLER_CONTEXT_CHARS = 1500;
+const MAX_CRAWLER_CONTEXT_CHARS = 2500;
+
+// URL patterns for pages that classify as "services" but typically carry no
+// service-specific info (contact, about, blog index, privacy, newsletter, …).
+// Bumping these out frees context budget for actual location/product pages.
+const LOW_VALUE_URL_PATTERNS = [
+  /\/contact(-us)?\/?$/i,
+  /\/about(-us)?\/?$/i,
+  /\/privacy/i,
+  /\/terms/i,
+  /\/policy|policies/i,
+  /\/newsletter/i,
+  /\/blog\/?$/i,
+  /\/blog\//i,
+  /\/login|\/signin|\/signup/i,
+  /\/sitemap/i,
+  /\/cart|\/checkout/i,
+];
+
+// Title/summary tokens that indicate a comparison or hub page (e.g.
+// "Best RZR Rentals — Compare All Locations"). These pages frequently
+// enumerate every distinct offering in one spot, so we boost them.
+const HUB_PAGE_RE = /\b(compare|comparison|all locations|all options|best|overview|differences?|vs\b|guide to)\b/i;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // URL UTILITIES
@@ -347,12 +369,58 @@ function buildPageSnippet(pageType, facts, summary) {
   return `${label}: ${parts.join(" — ")}`;
 }
 
+// Slug-based dedup: pull meaningful tokens (>3 chars) from a URL's last
+// path segment so /kremmling-rzr-rentals and /kremmling-summer share token
+// "kremmling" and the second one is dropped as a near-dup.
+function urlTokens(url) {
+  try {
+    const path = new URL(url).pathname.replace(/\/+$/, "").toLowerCase();
+    const last = path.split("/").filter(Boolean).pop() ?? "_root";
+    return new Set(last.split(/[^a-z0-9]+/).filter((t) => t.length > 3));
+  } catch { return new Set(); }
+}
+
+function isNearDup(tokensA, tokensB) {
+  let shared = 0;
+  for (const t of tokensA) if (tokensB.has(t)) shared++;
+  return shared >= 2; // 2+ shared meaningful tokens → same topic
+}
+
+// Score a page for inclusion ranking. Higher = more useful.
+// Rough heuristics — designed to surface comparison/hub pages and
+// info-dense content over thin contact/blog/policy stubs.
+function scorePage(page, snippet) {
+  let score = 0;
+  const url     = page.url ?? "";
+  const title   = page.title ?? "";
+  const summary = page.extracted_facts?.summary ?? page.summary ?? "";
+
+  if (LOW_VALUE_URL_PATTERNS.some((re) => re.test(url))) score -= 50;
+  if (HUB_PAGE_RE.test(title) || HUB_PAGE_RE.test(summary))  score += 25;
+
+  // Reward enumeration: snippets with several commas usually list multiple items.
+  const commas = (snippet.match(/[,;]/g) ?? []).length;
+  score += Math.min(commas, 6) * 2;
+
+  // Reward density (longer snippets carry more info, capped).
+  score += Math.min(snippet.length / 60, 10);
+
+  // Reward explicit numeric callouts ("4 locations", "3 tour types", etc.).
+  if (/\b\d+\s+(locations?|tours?|options?|trails?|areas?|services?)\b/i.test(snippet)) score += 15;
+
+  return score;
+}
+
 /**
  * Assembles a compact knowledge string from the client_pages table.
- * Pages are ordered by type priority. Total output is capped at
- * MAX_CRAWLER_CONTEXT_CHARS to stay within system prompt budget.
  *
- * Returns empty string if no pages found or supabase is unavailable.
+ * Selection strategy:
+ *   1. Dedupe by page_type (keep best of each non-services type)
+ *   2. Within services/other, score by hub-ness + density - low-value penalty
+ *   3. URL-token dedup so we don't burn budget on /kremmling-rzr + /kremmling-summer
+ *   4. Pack greedy until MAX_CRAWLER_CONTEXT_CHARS
+ *
+ * Returns "" if no pages found or supabase is unavailable.
  */
 export async function buildCrawlerContext(clientId, supabase) {
   if (!supabase || !clientId) return "";
@@ -360,36 +428,59 @@ export async function buildCrawlerContext(clientId, supabase) {
   try {
     const { data: pages } = await supabase
       .from("client_pages")
-      .select("page_type, title, extracted_facts, summary")
+      .select("url, page_type, title, extracted_facts, summary")
       .eq("client_id", clientId)
       .eq("status", "ok");
 
     if (!pages?.length) return "";
 
-    // Sort by page type priority; de-duplicate by type (keep first/best of each type)
-    const seen = new Set();
-    const ordered = pages
-      .sort(
-        (a, b) =>
-          PAGE_TYPE_PRIORITY.indexOf(a.page_type ?? "other") -
-          PAGE_TYPE_PRIORITY.indexOf(b.page_type ?? "other")
-      )
-      .filter((p) => {
-        const t = p.page_type ?? "other";
-        if (seen.has(t) && t !== "other" && t !== "services") return false; // allow multiple services/other
-        seen.add(t);
-        return true;
-      });
-
-    const snippets = [];
-    let totalLen   = 0;
-
-    for (const page of ordered) {
+    // Build snippets up front so scoring sees the actual text.
+    const candidates = [];
+    for (const page of pages) {
       const snippet = buildPageSnippet(page.page_type, page.extracted_facts, page.summary);
       if (!snippet) continue;
-      if (totalLen + snippet.length + 1 > MAX_CRAWLER_CONTEXT_CHARS) break;
-      snippets.push(snippet);
-      totalLen += snippet.length + 1;
+      candidates.push({ page, snippet, score: 0 });
+    }
+    for (const c of candidates) c.score = scorePage(c.page, c.snippet);
+
+    // Group by page_type so homepage/faq/etc. each contribute at most one,
+    // but services/other can contribute multiple ranked hits.
+    const byType = new Map();
+    for (const c of candidates) {
+      const t = c.page.page_type ?? "other";
+      if (!byType.has(t)) byType.set(t, []);
+      byType.get(t).push(c);
+    }
+    for (const list of byType.values()) list.sort((a, b) => b.score - a.score);
+
+    const ordered = [];
+    for (const t of PAGE_TYPE_PRIORITY) {
+      const list = byType.get(t);
+      if (!list?.length) continue;
+      if (t === "services" || t === "other") {
+        ordered.push(...list);          // many allowed
+      } else {
+        ordered.push(list[0]);          // one each — homepage, faq, hours, contact, …
+      }
+    }
+
+    // URL-token dedup pass — drop later candidates that share 2+ tokens with
+    // an already-kept candidate. Higher-scored pages keep their slot.
+    const kept = [];
+    const keptTokens = [];
+    for (const c of ordered) {
+      const tokens = urlTokens(c.page.url ?? "");
+      if (keptTokens.some((t) => isNearDup(tokens, t))) continue;
+      kept.push(c);
+      keptTokens.push(tokens);
+    }
+
+    const snippets = [];
+    let totalLen = 0;
+    for (const c of kept) {
+      if (totalLen + c.snippet.length + 1 > MAX_CRAWLER_CONTEXT_CHARS) break;
+      snippets.push(c.snippet);
+      totalLen += c.snippet.length + 1;
     }
 
     return snippets.length ? `WEBSITE KNOWLEDGE:\n${snippets.join("\n")}` : "";

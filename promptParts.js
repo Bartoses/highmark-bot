@@ -95,6 +95,21 @@ export function operatingStatusBlock() {
   ].join("\n");
 }
 
+// Completeness rule — when a guest asks "what locations / tours / options
+// / services do you offer", the bot should enumerate every distinct named
+// item from WEBSITE KNOWLEDGE / BUSINESS INFO / FAQ rather than collapsing
+// to the most prominent one or two. Bot writing style still local-guide
+// (warm, specific, one clear next step) — this just forces coverage.
+export function completenessBlock() {
+  return [
+    "━━━ COVERAGE — list every distinct option ━━━",
+    "When the guest asks \"what locations / tours / options / services / packages do you offer?\" or any open-ended menu question — list ALL distinct named items found in WEBSITE KNOWLEDGE, BUSINESS INFO, FAQ, or DYNAMIC BOOKING LINKS. Do not collapse 4 locations into \"a couple\", do not skip a named offering because it sounds similar to another.",
+    "Format: name each item, then one short distinguishing detail (terrain, duration, level, address — whatever makes it different from the others). End with one clear next step: ask which fits, or send the relevant booking link.",
+    "Still write like a local guide, not a brochure: confident, conversational, one detail per item — never bullet-dump generic marketing copy.",
+    "If the same place appears under different names in your data (e.g. a trail area and a shop address) — explain the relationship in one beat, don't list both as if they were separate offerings.",
+  ].join("\n");
+}
+
 // Hours formatter — accepts either a string or a {weekdays, weekends} object.
 // Returns a single-line summary or a generic fallback.
 export function formatHours(hours) {
