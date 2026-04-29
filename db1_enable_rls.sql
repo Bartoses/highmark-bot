@@ -40,6 +40,11 @@ ALTER TABLE public.site_content          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_scrape_sources  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_booking_options ENABLE ROW LEVEL SECURITY;
 
+-- Sprint 4A / 4B / Sprint 5 tables (added after initial RLS pass)
+ALTER TABLE public.operator_briefings    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.campaign_sends        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.partner_activities    ENABLE ROW LEVEL SECURITY;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- No policies added — service role bypasses RLS, anon/public access blocked.
 -- If you ever need direct PostgREST access from the browser for a specific

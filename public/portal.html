@@ -3388,7 +3388,7 @@ async function loadSettings() {
     const btn = document.getElementById('crawlNowBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
     const crawlQp = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
-    const r = await apiFetch(`/crawl-now${crawlQp}`, { method: 'POST' });
+    const r = await apiFetch(`/crawl-now${crawlQp}`, { method: 'POST', body: JSON.stringify({ force: true }) });
     if (btn) { btn.disabled = false; btn.textContent = 'Crawl now'; }
     const msgEl = document.getElementById('settingsMsg') ?? document.getElementById('crawlMsg');
     if (r?.ok) {
@@ -4477,7 +4477,7 @@ async function knTriggerCrawl() {
   msgEl.style.display = 'block'; msgEl.style.color = 'var(--text2)'; msgEl.textContent = 'Crawling your website… this may take 30–60 seconds.';
 
   const crawlQp = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
-  const r = await apiFetch(`/crawl-now${crawlQp}`, { method: 'POST' });
+  const r = await apiFetch(`/crawl-now${crawlQp}`, { method: 'POST', body: JSON.stringify({ force: true }) });
 
   btn.disabled = false; btn.textContent = '↺ Crawl now';
 
