@@ -1465,8 +1465,54 @@ tr:hover td { background: var(--panel2); }
           <option value="missed_leads">Missed leads (7+ days, no engagement)</option>
           <option value="crm_contacts">CRM contacts (FareHarbor customers)</option>
           <option value="all_contacts">All contacts (leads + CRM customers)</option>
+          <option value="past_guests">Past guests (filter by activity / season)</option>
         </select>
         <div id="audiencePreview" class="form-hint" style="margin-top:4px;min-height:16px;"></div>
+      </div>
+
+      <!-- Past guests filter panel — shown only when past_guests is selected -->
+      <div id="pastGuestsFilters" style="display:none;border:1px solid var(--border2);border-radius:8px;padding:12px 14px;background:var(--bg2);margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px;letter-spacing:.04em;">GUEST FILTERS</div>
+        <div class="two-col" style="gap:10px;">
+          <div class="form-group" style="margin-bottom:8px;">
+            <label style="font-size:12px;">Activity (partial match)</label>
+            <input type="text" id="filterActivity" class="form-input" placeholder="e.g. Snowmobile" oninput="fetchAudiencePreview()">
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label style="font-size:12px;">Category</label>
+            <input type="text" id="filterCategory" class="form-input" placeholder="e.g. snowmobile" oninput="fetchAudiencePreview()">
+          </div>
+        </div>
+        <div class="two-col" style="gap:10px;">
+          <div class="form-group" style="margin-bottom:8px;">
+            <label style="font-size:12px;">Season</label>
+            <select id="filterSeason" class="form-input" onchange="fetchAudiencePreview()">
+              <option value="all">All time</option>
+              <option value="winter">This winter (Dec–Mar)</option>
+              <option value="last_winter">Last winter</option>
+              <option value="summer">This summer (Jun–Oct)</option>
+              <option value="last_summer">Last summer</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label style="font-size:12px;">Company</label>
+            <input type="text" id="filterCompany" class="form-input" placeholder="e.g. rabbit-ears" oninput="fetchAudiencePreview()">
+          </div>
+        </div>
+        <div class="two-col" style="gap:10px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label style="font-size:12px;">Booked after</label>
+            <input type="date" id="filterBookedAfter" class="form-input" onchange="fetchAudiencePreview()">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label style="font-size:12px;">Booked before</label>
+            <input type="date" id="filterBookedBefore" class="form-input" onchange="fetchAudiencePreview()">
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;">Min group size (pax)</label>
+          <input type="number" id="filterMinPax" class="form-input" placeholder="e.g. 2" min="1" style="max-width:80px;" oninput="fetchAudiencePreview()">
+        </div>
       </div>
       <div class="form-group">
         <label style="display:flex;justify-content:space-between;align-items:center;">
@@ -2705,16 +2751,45 @@ function applyCampaignTemplate(type) {
   if (tpl) document.getElementById('campMessage').value = tpl;
 }
 
+function buildFilterConfig() {
+  const activity   = document.getElementById('filterActivity')?.value.trim();
+  const category   = document.getElementById('filterCategory')?.value.trim();
+  const season     = document.getElementById('filterSeason')?.value;
+  const company    = document.getElementById('filterCompany')?.value.trim();
+  const after      = document.getElementById('filterBookedAfter')?.value;
+  const before     = document.getElementById('filterBookedBefore')?.value;
+  const minPax     = document.getElementById('filterMinPax')?.value;
+  const cfg = {};
+  if (activity) cfg.activity = activity;
+  if (category) cfg.category = category;
+  if (season && season !== 'all') cfg.season = season;
+  if (company)  cfg.company  = company;
+  if (after)    cfg.booked_after  = after;
+  if (before)   cfg.booked_before = before;
+  if (minPax)   cfg.min_pax = Number(minPax);
+  return Object.keys(cfg).length ? cfg : null;
+}
+
 let audiencePreviewTimer = null;
 async function fetchAudiencePreview() {
   const audienceType = document.getElementById('campAudience').value;
   const el = document.getElementById('audiencePreview');
+
+  // Show/hide past_guests filter panel
+  const panel = document.getElementById('pastGuestsFilters');
+  if (panel) panel.style.display = audienceType === 'past_guests' ? '' : 'none';
+
   if (!el) return;
   el.textContent = 'Checking…';
   clearTimeout(audiencePreviewTimer);
   audiencePreviewTimer = setTimeout(async () => {
     const clientParam = me?.isAdmin && me.clientId ? `&client_id=${me.clientId}` : '';
-    const d = await apiFetch(`/campaigns/audience-preview?audience_type=${audienceType}${clientParam}`);
+    let url = `/campaigns/audience-preview?audience_type=${audienceType}${clientParam}`;
+    if (audienceType === 'past_guests') {
+      const fc = buildFilterConfig();
+      if (fc) url += `&filter_config=${encodeURIComponent(JSON.stringify(fc))}`;
+    }
+    const d = await apiFetch(url);
     if (!d) { el.textContent = ''; return; }
     const names = d.sample_names?.length ? ` (e.g. ${d.sample_names.join(', ')})` : '';
     el.textContent = `${d.count} recipient${d.count !== 1 ? 's' : ''}${names}`;
@@ -2728,6 +2803,13 @@ function openCampaignModal() {
   document.getElementById('campAudience').value = 'all_leads';
   document.getElementById('audiencePreview').textContent = '';
   document.getElementById('campaignModalError').style.display = 'none';
+  // Reset past_guests filters
+  ['filterActivity','filterCategory','filterCompany','filterBookedAfter','filterBookedBefore','filterMinPax'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const seasonEl = document.getElementById('filterSeason');
+  if (seasonEl) seasonEl.value = 'all';
+  document.getElementById('pastGuestsFilters').style.display = 'none';
   setCampType('manual');
   document.getElementById('campaignModal').classList.add('open');
   fetchAudiencePreview();
@@ -2790,6 +2872,7 @@ async function saveCampaignDraft() {
   btn.disabled = true; btn.textContent = 'Saving…';
   const isEvent = document.getElementById('campTypeEventCard').querySelector('input').checked;
   const audience = document.getElementById('campAudience').value;
+  const filterConfig = audience === 'past_guests' ? buildFilterConfig() : null;
   const body = {
     name:            document.getElementById('campName').value.trim(),
     message_body:    document.getElementById('campMessage').value.trim(),
@@ -2797,6 +2880,7 @@ async function saveCampaignDraft() {
     audience_filter: audience,
     campaign_type:   isEvent ? 'event_triggered' : 'manual',
     scheduled_at:    isEvent ? null : (document.getElementById('campScheduled').value || null),
+    ...(filterConfig ? { filter_config: filterConfig } : {}),
     ...(isEvent ? {
       trigger_type:   document.getElementById('campTriggerType').value,
       trigger_config: buildTriggerConfig(),

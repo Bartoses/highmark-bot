@@ -28,6 +28,7 @@ const VALID_AUDIENCE_TYPES = [
   "all_leads", "engaged_leads", "new_leads", "missed_leads",
   "crm_contacts",  // DB2 opted-in CRM contacts (FareHarbor customers)
   "all_contacts",  // DB1 leads + DB2 CRM contacts merged & deduped
+  "past_guests",   // DB2 daily_manifest filtered by activity/season/category/company/pax
 ];
 const VALID_STATUSES       = ["draft", "scheduled", "sending", "sent", "failed"];
 const PACE_MS              = 200; // ms between messages to avoid Twilio rate limits
@@ -92,17 +93,26 @@ export async function createCampaign(supabase, {
 // ── selectAudience ────────────────────────────────────────────────────────────
 // Returns the list of contacts to target for a given campaign.
 // Result shape: [{ id, contact_phone, contact_name, source }]
-//   source: "lead" (DB1) | "crm" (DB2)
+//   source: "lead" (DB1) | "crm" (DB2) | "manifest" (DB2 daily_manifest)
 //
 // audience_type values:
 //   all_leads / engaged_leads / new_leads / missed_leads — DB1 leads only
 //   crm_contacts   — DB2 opted-in CRM contacts (FareHarbor customers)
 //   all_contacts   — DB1 leads + DB2 CRM contacts, merged & deduped by phone
+//   past_guests    — DB2 daily_manifest filtered by activity/season/category/company/pax
+//
+// filterConfig (only used for past_guests):
+//   { activity, category, company, season, booked_after, booked_before, min_pax }
 
-export async function selectAudience(supabase, { clientId, audienceType }, crmSupabase = null) {
+export async function selectAudience(supabase, { clientId, audienceType, filterConfig = {} }, crmSupabase = null) {
   // ── DB2 CRM contacts only ──────────────────────────────────────────────────
   if (audienceType === "crm_contacts") {
     return fetchCrmContacts(crmSupabase);
+  }
+
+  // ── DB2 past guests from daily_manifest with filters ───────────────────────
+  if (audienceType === "past_guests") {
+    return fetchPastGuests(crmSupabase, filterConfig);
   }
 
   // ── DB1 leads query ────────────────────────────────────────────────────────
@@ -175,6 +185,116 @@ function mergeByPhone(db1Leads, crmContacts) {
   return [...db1Leads, ...newFromCrm];
 }
 
+// Maps a season keyword to { after, before } ISO date strings.
+// Targets the most recently completed or current season.
+function seasonToDateRange(season) {
+  const now   = new Date();
+  const year  = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1; // 1-12
+
+  switch (season) {
+    case "winter": {
+      // Current/most-recent winter: Dec (year-1) – Mar year if Jan-May, else Dec year – Mar (year+1)
+      const wy = month <= 5 ? year - 1 : year;
+      return { after: `${wy}-12-01`, before: `${wy + 1}-03-31` };
+    }
+    case "last_winter": {
+      const wy = month <= 5 ? year - 2 : year - 1;
+      return { after: `${wy}-12-01`, before: `${wy + 1}-03-31` };
+    }
+    case "summer": {
+      // Current/most-recent summer: Jun-Oct
+      const sy = (month >= 6 && month <= 10) ? year : year - 1;
+      return { after: `${sy}-06-01`, before: `${sy}-10-31` };
+    }
+    case "last_summer": {
+      const sy = (month >= 6 && month <= 10) ? year - 1 : year - 2;
+      return { after: `${sy}-06-01`, before: `${sy}-10-31` };
+    }
+    default:
+      return null;
+  }
+}
+
+// Queries DB2 daily_manifest with optional filters, deduplicates by phone,
+// then joins contacts to get names and exclude opted-out numbers.
+async function fetchPastGuests(crmSupabase, filterConfig = {}) {
+  if (!crmSupabase) {
+    console.warn("[CAMPAIGNS] past_guests requested but CRM_SUPABASE_URL is not configured");
+    return [];
+  }
+
+  let query = crmSupabase
+    .from("daily_manifest")
+    .select("phone, customer_name, activity, category, company, start_at, pax")
+    .not("phone", "is", null);
+
+  if (filterConfig.activity) {
+    query = query.ilike("activity", `%${filterConfig.activity}%`);
+  }
+  if (filterConfig.category) {
+    query = query.ilike("category", `%${filterConfig.category}%`);
+  }
+  if (filterConfig.company) {
+    query = query.ilike("company", `%${filterConfig.company}%`);
+  }
+  // Season preset → date range (explicit dates override if also provided)
+  if (filterConfig.season && filterConfig.season !== "all") {
+    const range = seasonToDateRange(filterConfig.season);
+    if (range) {
+      query = query.gte("start_at", range.after).lte("start_at", range.before);
+    }
+  }
+  if (filterConfig.booked_after)  query = query.gte("start_at", filterConfig.booked_after);
+  if (filterConfig.booked_before) query = query.lte("start_at", filterConfig.booked_before + "T23:59:59");
+  if (filterConfig.min_pax)       query = query.gte("pax", Number(filterConfig.min_pax));
+
+  const { data, error } = await query;
+  if (error) throw new Error(`[CAMPAIGNS] fetchPastGuests failed: ${error.message}`);
+
+  // Deduplicate by phone — first occurrence wins
+  const phoneMap = new Map();
+  for (const row of data ?? []) {
+    if (row.phone && !phoneMap.has(row.phone)) {
+      phoneMap.set(row.phone, {
+        id:            null,
+        contact_phone: row.phone,
+        contact_name:  row.customer_name ?? null,
+        source:        "manifest",
+      });
+    }
+  }
+  if (phoneMap.size === 0) return [];
+
+  // Join contacts to get better names and filter opted-out numbers
+  const phones = [...phoneMap.keys()];
+  try {
+    const { data: contacts } = await crmSupabase
+      .from("contacts")
+      .select("phone, first_name, last_name, opted_in")
+      .in("phone", phones);
+
+    const contactMap = new Map((contacts ?? []).map((c) => [c.phone, c]));
+
+    return [...phoneMap.values()]
+      .filter((p) => {
+        const c = contactMap.get(p.contact_phone);
+        return !c || c.opted_in !== false; // exclude only explicitly opted-out
+      })
+      .map((p) => {
+        const c = contactMap.get(p.contact_phone);
+        if (c) {
+          const fullName = [c.first_name, c.last_name].filter(Boolean).join(" ");
+          if (fullName) p.contact_name = fullName;
+        }
+        return p;
+      });
+  } catch {
+    // Contacts join unavailable — return manifest data without opt-in filtering
+    return [...phoneMap.values()];
+  }
+}
+
 // ── enqueueCampaign ───────────────────────────────────────────────────────────
 // Core send function:
 //   1. Select audience
@@ -188,10 +308,11 @@ function mergeByPhone(db1Leads, crmContacts) {
 export async function enqueueCampaign(supabase, campaign, fromPhone, crmSupabase) {
   const now = Date.now();
 
-  // 1. Select audience (pass crmSupabase so crm_contacts / all_contacts types work)
+  // 1. Select audience (filterConfig from metadata supports past_guests filters)
   const leads = await selectAudience(supabase, {
     clientId:     campaign.client_id,
     audienceType: campaign.audience_type,
+    filterConfig: campaign.metadata?.filter_config ?? {},
   }, crmSupabase);
 
   if (leads.length === 0) {

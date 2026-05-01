@@ -465,8 +465,12 @@ export async function handlePortalAudiencePreview(req, res, supabase, crmSupabas
   if (!clientId) return res.status(400).json({ error: "client_id is required" });
 
   const audienceType = req.query.audience_type ?? "all_leads";
+  let filterConfig = {};
+  if (req.query.filter_config) {
+    try { filterConfig = JSON.parse(req.query.filter_config); } catch { /* ignore malformed */ }
+  }
   try {
-    const leads = await selectAudience(supabase, { clientId, audienceType }, crmSupabase);
+    const leads = await selectAudience(supabase, { clientId, audienceType, filterConfig }, crmSupabase);
     const names = leads
       .map(l => (l.contact_name ?? "").split(" ")[0])
       .filter(Boolean)
@@ -506,7 +510,7 @@ export async function handlePortalCreateCampaign(req, res, supabase) {
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id is required" });
 
-  const { name, message_body, audience_type, scheduled_at } = req.body;
+  const { name, message_body, audience_type, scheduled_at, filter_config } = req.body;
   if (!name)         return res.status(400).json({ error: "name is required" });
   if (!message_body) return res.status(400).json({ error: "message_body is required" });
 
@@ -517,6 +521,7 @@ export async function handlePortalCreateCampaign(req, res, supabase) {
       messageBody:  message_body,
       audienceType: audience_type,
       scheduledAt:  scheduled_at ?? null,
+      metadata:     filter_config ? { filter_config } : {},
     });
     return res.status(201).json({ campaign });
   } catch (err) {
