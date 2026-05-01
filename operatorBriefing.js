@@ -170,7 +170,30 @@ export async function getRecentLeads(clientId, supabase, hours = 24) {
   }
 }
 
-export async function getWeeklyRevenueEstimate(clientId, supabase) {
+export async function getWeeklyRevenueEstimate(clientId, supabase, crmSupabase = null) {
+  // Prefer DB2 daily_manifest (real FH revenue data)
+  if (crmSupabase) {
+    try {
+      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: rows } = await crmSupabase
+        .from("daily_manifest")
+        .select("fareharbor_pk, total")
+        .gte("start_at", since);
+      if (rows?.length) {
+        const seenPks = new Set();
+        let totalRev = 0;
+        for (const r of rows) {
+          if (r.fareharbor_pk != null) seenPks.add(r.fareharbor_pk);
+          if (r.total != null) totalRev += Number(r.total) || 0;
+        }
+        const bookings = seenPks.size || rows.length;
+        return { bookings, estimated: Math.round(totalRev), period: "7 days", source: "manifest" };
+      }
+    } catch {
+      // fall through to estimate
+    }
+  }
+  // Fallback: estimate from DB1 leads
   try {
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data } = await supabase
@@ -180,9 +203,9 @@ export async function getWeeklyRevenueEstimate(clientId, supabase) {
       .in("status", ["converted", "engaged"])
       .gte("created_at", since);
     const count = data?.length ?? 0;
-    return { bookings: count, estimated: count * 175, period: "7 days" };
+    return { bookings: count, estimated: count * 175, period: "7 days", source: "estimate" };
   } catch {
-    return { bookings: 0, estimated: 0, period: "7 days" };
+    return { bookings: 0, estimated: 0, period: "7 days", source: "estimate" };
   }
 }
 
@@ -357,9 +380,9 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     return formatWeatherResponse(snap);
   }
 
-  // REVENUE / EARNINGS
-  if (msg.match(/\brevenue\b/) || msg.match(/\bearnings?\b/)) {
-    const rev = await getWeeklyRevenueEstimate(client.id, supabase);
+  // REVENUE / EARNINGS — skip when message has booking context (intent parser routes that correctly)
+  if ((msg.match(/\brevenue\b/) || msg.match(/\bearnings?\b/)) && !msg.match(/\bbookings?\b/)) {
+    const rev = await getWeeklyRevenueEstimate(client.id, supabase, crmSupabase);
     return formatRevenueResponse(rev);
   }
 
@@ -540,6 +563,9 @@ function formatWeatherResponse(snap) {
 }
 
 function formatRevenueResponse(rev) {
+  if (rev.source === "manifest") {
+    return `Revenue (${rev.period}): $${rev.estimated.toLocaleString()} across ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""} (FareHarbor).`;
+  }
   return `Est. revenue (${rev.period}): $${rev.estimated.toLocaleString()} (~${rev.bookings} converted leads × $175 avg).\nFor exact figures, check FareHarbor reports.`;
 }
 

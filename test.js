@@ -13103,7 +13103,8 @@ async function testOperatorMode() {
     if (m.match(/^leads?$/) || m.match(/\bmy\s+leads?\b/) || m.match(/^show\s+(me\s+)?leads?$/)) return "LEADS";
     if (m.match(/\bnew\s+leads?\b/) || m.match(/\brecent\s+leads?\b/)) return "NEW_LEADS";
     if (m.match(/^weather$/) || m.match(/\bconditions?\b/) || m.match(/^snow$/)) return "WEATHER";
-    if (m.match(/\brevenue\b/) || m.match(/\bearnings?\b/)) return "REVENUE";
+    // Guard: skip revenue early-exit when message also contains bookings context
+    if ((m.match(/\brevenue\b/) || m.match(/\bearnings?\b/)) && !m.match(/\bbookings?\b/)) return "REVENUE";
     return null;
   }
   chk("4a: detectCommand('bookings today')", detectCommand("bookings today") === "BOOKINGS_TODAY");
@@ -13120,6 +13121,7 @@ async function testOperatorMode() {
   chk("4a: detectCommand('what are current conditions')", detectCommand("what are current conditions") === "WEATHER");
   chk("4a: detectCommand('revenue')", detectCommand("revenue") === "REVENUE");
   chk("4a: detectCommand('revenue this week')", detectCommand("revenue this week") === "REVENUE");
+  chk("4a: detectCommand('bookings in feb 2026\\nrevenue') → null (bookings guard)", detectCommand("bookings in feb 2026\nrevenue") === null);
   chk("4a: detectCommand('hello how are you') → null", detectCommand("hello how are you") === null);
   chk("4a: detectCommand('can I book for tomorrow') → null (not bookings-tomorrow cmd)", detectCommand("can I book for tomorrow") === null);
 
@@ -13398,6 +13400,17 @@ async function testOperatorBotUpgrade() {
     const nullReply = await detectAndHandleOperatorCommand("random nonsense xyzzy", mockClient, mockSupabase);
     chk("opbot: unmatched message returns null (Claude fallthrough)",
         nullReply === null, JSON.stringify(nullReply));
+
+    // 'bookings in feb 2026 + revenue' multi-intent should NOT hit early revenue check.
+    // With no DB the bookings intent fires and returns the DB-unavailable message (not the leads estimate).
+    const multiIntentReply = await detectAndHandleOperatorCommand(
+      "bookings in feb 2026\nlocations\nitems\nrevenue",
+      mockClient,
+      mockSupabase
+    );
+    chk("opbot: 'bookings + revenue' multi-intent bypasses early revenue check (no revenue estimate)",
+        typeof multiIntentReply === "string" && !multiIntentReply.includes("converted leads × $175"),
+        JSON.stringify(multiIntentReply));
   }
 }
 
