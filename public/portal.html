@@ -1466,13 +1466,36 @@ tr:hover td { background: var(--panel2); }
           <option value="crm_contacts">CRM contacts (FareHarbor customers)</option>
           <option value="all_contacts">All contacts (leads + CRM customers)</option>
           <option value="past_guests">Past guests (filter by activity / season)</option>
+          <option value="custom_phones">Custom phone list (testing / one-off)</option>
         </select>
         <div id="audiencePreview" class="form-hint" style="margin-top:4px;min-height:16px;"></div>
+      </div>
+
+      <!-- Custom phones panel -->
+      <div id="customPhonesPanel" style="display:none;border:1px solid var(--border2);border-radius:8px;padding:12px 14px;background:var(--bg2);margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;letter-spacing:.04em;">PHONE NUMBERS</div>
+        <textarea id="customPhones" class="form-input" rows="4" placeholder="+17205551234&#10;+13035559876&#10;one per line or comma-separated" oninput="fetchAudiencePreview()" style="font-family:monospace;font-size:13px;resize:vertical;"></textarea>
+        <div class="form-hint" style="margin-top:4px;">E.164 format preferred. Numbers are normalized and deduplicated automatically.</div>
       </div>
 
       <!-- Past guests filter panel — shown only when past_guests is selected -->
       <div id="pastGuestsFilters" style="display:none;border:1px solid var(--border2);border-radius:8px;padding:12px 14px;background:var(--bg2);margin-bottom:12px;">
         <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px;letter-spacing:.04em;">GUEST FILTERS</div>
+
+        <!-- Booking date quick-select -->
+        <div class="form-group" style="margin-bottom:10px;">
+          <label style="font-size:12px;">Booking date</label>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="setStartDatePreset(null)">Any date</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="setStartDatePreset(0)">Today</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="setStartDatePreset(1)">Tomorrow</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="setStartDatePreset(2)">+2 days</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="setStartDatePreset('custom')">Custom…</button>
+          </div>
+          <input type="date" id="filterStartDate" class="form-input" style="display:none;margin-top:6px;max-width:180px;" onchange="fetchAudiencePreview()">
+          <div id="startDateLabel" class="form-hint" style="margin-top:4px;"></div>
+        </div>
+
         <div class="two-col" style="gap:10px;">
           <div class="form-group" style="margin-bottom:8px;">
             <label style="font-size:12px;">Activity (partial match)</label>
@@ -2751,7 +2774,43 @@ function applyCampaignTemplate(type) {
   if (tpl) document.getElementById('campMessage').value = tpl;
 }
 
+function dateOffsetISO(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+function setStartDatePreset(preset) {
+  const input = document.getElementById('filterStartDate');
+  const label = document.getElementById('startDateLabel');
+  if (!input) return;
+  if (preset === null) {
+    input.value = ''; input.style.display = 'none';
+    if (label) label.textContent = '';
+  } else if (preset === 'custom') {
+    input.style.display = '';
+    input.focus();
+    if (label) label.textContent = '';
+  } else {
+    const iso = dateOffsetISO(Number(preset));
+    input.value = iso; input.style.display = 'none';
+    const names = ['Today', 'Tomorrow', 'In 2 days'];
+    if (label) label.textContent = `→ ${names[preset] ?? iso} (${iso})`;
+  }
+  fetchAudiencePreview();
+}
+
 function buildFilterConfig() {
+  const audienceType = document.getElementById('campAudience').value;
+
+  if (audienceType === 'custom_phones') {
+    const raw = document.getElementById('customPhones')?.value ?? '';
+    const phones = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    return phones.length ? { phones } : null;
+  }
+
+  // past_guests filters
+  const startDate  = document.getElementById('filterStartDate')?.value;
   const activity   = document.getElementById('filterActivity')?.value.trim();
   const category   = document.getElementById('filterCategory')?.value.trim();
   const season     = document.getElementById('filterSeason')?.value;
@@ -2760,13 +2819,14 @@ function buildFilterConfig() {
   const before     = document.getElementById('filterBookedBefore')?.value;
   const minPax     = document.getElementById('filterMinPax')?.value;
   const cfg = {};
-  if (activity) cfg.activity = activity;
-  if (category) cfg.category = category;
+  if (startDate) cfg.start_date = startDate;
+  if (activity)  cfg.activity   = activity;
+  if (category)  cfg.category   = category;
   if (season && season !== 'all') cfg.season = season;
-  if (company)  cfg.company  = company;
-  if (after)    cfg.booked_after  = after;
-  if (before)   cfg.booked_before = before;
-  if (minPax)   cfg.min_pax = Number(minPax);
+  if (company)   cfg.company    = company;
+  if (after)     cfg.booked_after  = after;
+  if (before)    cfg.booked_before = before;
+  if (minPax)    cfg.min_pax = Number(minPax);
   return Object.keys(cfg).length ? cfg : null;
 }
 
@@ -2775,11 +2835,24 @@ async function fetchAudiencePreview() {
   const audienceType = document.getElementById('campAudience').value;
   const el = document.getElementById('audiencePreview');
 
-  // Show/hide past_guests filter panel
-  const panel = document.getElementById('pastGuestsFilters');
-  if (panel) panel.style.display = audienceType === 'past_guests' ? '' : 'none';
+  // Show/hide filter panels
+  const guestsPanel  = document.getElementById('pastGuestsFilters');
+  const phonesPanel  = document.getElementById('customPhonesPanel');
+  if (guestsPanel) guestsPanel.style.display  = audienceType === 'past_guests'    ? '' : 'none';
+  if (phonesPanel) phonesPanel.style.display   = audienceType === 'custom_phones'  ? '' : 'none';
 
   if (!el) return;
+
+  // custom_phones: count locally — no API call needed
+  if (audienceType === 'custom_phones') {
+    clearTimeout(audiencePreviewTimer);
+    const raw    = document.getElementById('customPhones')?.value ?? '';
+    const phones = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    const unique = [...new Set(phones)];
+    el.textContent = unique.length ? `${unique.length} recipient${unique.length !== 1 ? 's' : ''}` : 'Enter phone numbers above';
+    return;
+  }
+
   el.textContent = 'Checking…';
   clearTimeout(audiencePreviewTimer);
   audiencePreviewTimer = setTimeout(async () => {
@@ -2803,13 +2876,18 @@ function openCampaignModal() {
   document.getElementById('campAudience').value = 'all_leads';
   document.getElementById('audiencePreview').textContent = '';
   document.getElementById('campaignModalError').style.display = 'none';
-  // Reset past_guests filters
-  ['filterActivity','filterCategory','filterCompany','filterBookedAfter','filterBookedBefore','filterMinPax'].forEach(id => {
+  // Reset filter panels
+  ['filterActivity','filterCategory','filterCompany','filterBookedAfter','filterBookedBefore','filterMinPax','filterStartDate','customPhones'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
   const seasonEl = document.getElementById('filterSeason');
   if (seasonEl) seasonEl.value = 'all';
+  const startDateInput = document.getElementById('filterStartDate');
+  if (startDateInput) startDateInput.style.display = 'none';
+  const startDateLabel = document.getElementById('startDateLabel');
+  if (startDateLabel) startDateLabel.textContent = '';
   document.getElementById('pastGuestsFilters').style.display = 'none';
+  document.getElementById('customPhonesPanel').style.display = 'none';
   setCampType('manual');
   document.getElementById('campaignModal').classList.add('open');
   fetchAudiencePreview();
@@ -2872,7 +2950,7 @@ async function saveCampaignDraft() {
   btn.disabled = true; btn.textContent = 'Saving…';
   const isEvent = document.getElementById('campTypeEventCard').querySelector('input').checked;
   const audience = document.getElementById('campAudience').value;
-  const filterConfig = audience === 'past_guests' ? buildFilterConfig() : null;
+  const filterConfig = ['past_guests', 'custom_phones'].includes(audience) ? buildFilterConfig() : null;
   const body = {
     name:            document.getElementById('campName').value.trim(),
     message_body:    document.getElementById('campMessage').value.trim(),

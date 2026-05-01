@@ -23,12 +23,14 @@
 
 import { scheduleMessage } from "./scheduler.js";
 import { trackDemoEvent }  from "./demoAnalytics.js";
+import { normalizePhone }  from "./phoneUtils.js";
 
 const VALID_AUDIENCE_TYPES = [
   "all_leads", "engaged_leads", "new_leads", "missed_leads",
-  "crm_contacts",  // DB2 opted-in CRM contacts (FareHarbor customers)
-  "all_contacts",  // DB1 leads + DB2 CRM contacts merged & deduped
-  "past_guests",   // DB2 daily_manifest filtered by activity/season/category/company/pax
+  "crm_contacts",    // DB2 opted-in CRM contacts (FareHarbor customers)
+  "all_contacts",    // DB1 leads + DB2 CRM contacts merged & deduped
+  "past_guests",     // DB2 daily_manifest filtered by activity/season/category/company/pax/start_date
+  "custom_phones",   // Manually entered phone numbers (testing or one-off sends)
 ];
 const VALID_STATUSES       = ["draft", "scheduled", "sending", "sent", "failed"];
 const PACE_MS              = 200; // ms between messages to avoid Twilio rate limits
@@ -93,24 +95,32 @@ export async function createCampaign(supabase, {
 // ── selectAudience ────────────────────────────────────────────────────────────
 // Returns the list of contacts to target for a given campaign.
 // Result shape: [{ id, contact_phone, contact_name, source }]
-//   source: "lead" (DB1) | "crm" (DB2) | "manifest" (DB2 daily_manifest)
+//   source: "lead" | "crm" | "manifest" | "manual"
 //
 // audience_type values:
 //   all_leads / engaged_leads / new_leads / missed_leads — DB1 leads only
 //   crm_contacts   — DB2 opted-in CRM contacts (FareHarbor customers)
 //   all_contacts   — DB1 leads + DB2 CRM contacts, merged & deduped by phone
-//   past_guests    — DB2 daily_manifest filtered by activity/season/category/company/pax
+//   past_guests    — DB2 daily_manifest with filters (activity/season/category/company/pax/start_date)
+//   custom_phones  — manually supplied phone list (filterConfig.phones[])
 //
-// filterConfig (only used for past_guests):
-//   { activity, category, company, season, booked_after, booked_before, min_pax }
+// filterConfig for past_guests:
+//   { activity, category, company, season, start_date, booked_after, booked_before, min_pax }
+// filterConfig for custom_phones:
+//   { phones: ["+15550001234", ...] }
 
 export async function selectAudience(supabase, { clientId, audienceType, filterConfig = {} }, crmSupabase = null) {
+  // ── Manually entered phones ────────────────────────────────────────────────
+  if (audienceType === "custom_phones") {
+    return parsePhoneList(filterConfig.phones ?? []);
+  }
+
   // ── DB2 CRM contacts only ──────────────────────────────────────────────────
   if (audienceType === "crm_contacts") {
     return fetchCrmContacts(crmSupabase);
   }
 
-  // ── DB2 past guests from daily_manifest with filters ───────────────────────
+  // ── DB2 past/upcoming guests from daily_manifest with filters ─────────────
   if (audienceType === "past_guests") {
     return fetchPastGuests(crmSupabase, filterConfig);
   }
@@ -153,6 +163,26 @@ export async function selectAudience(supabase, { clientId, audienceType, filterC
   }
 
   return db1Leads;
+}
+
+// Parse a raw phone list (array or comma/newline-separated string) into contact rows.
+// Normalizes each number; silently drops blanks and unparseable entries.
+function parsePhoneList(rawPhones) {
+  const lines = Array.isArray(rawPhones)
+    ? rawPhones
+    : String(rawPhones).split(/[\n,]+/);
+
+  const seen = new Set();
+  const result = [];
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const normalized = normalizePhone(trimmed) ?? trimmed;
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push({ id: null, contact_phone: normalized, contact_name: null, source: "manual" });
+  }
+  return result;
 }
 
 // Fetch opted-in contacts from DB2 CRM.
@@ -238,16 +268,21 @@ async function fetchPastGuests(crmSupabase, filterConfig = {}) {
   if (filterConfig.company) {
     query = query.ilike("company", `%${filterConfig.company}%`);
   }
-  // Season preset → date range (explicit dates override if also provided)
-  if (filterConfig.season && filterConfig.season !== "all") {
-    const range = seasonToDateRange(filterConfig.season);
-    if (range) {
-      query = query.gte("start_at", range.after).lte("start_at", range.before);
+  // Specific day takes full precedence — used for "tomorrow's bookings" etc.
+  if (filterConfig.start_date) {
+    query = query
+      .gte("start_at", filterConfig.start_date + "T00:00:00")
+      .lte("start_at", filterConfig.start_date + "T23:59:59");
+  } else {
+    // Season preset → date range (explicit dates can further narrow)
+    if (filterConfig.season && filterConfig.season !== "all") {
+      const range = seasonToDateRange(filterConfig.season);
+      if (range) query = query.gte("start_at", range.after).lte("start_at", range.before);
     }
+    if (filterConfig.booked_after)  query = query.gte("start_at", filterConfig.booked_after);
+    if (filterConfig.booked_before) query = query.lte("start_at", filterConfig.booked_before + "T23:59:59");
   }
-  if (filterConfig.booked_after)  query = query.gte("start_at", filterConfig.booked_after);
-  if (filterConfig.booked_before) query = query.lte("start_at", filterConfig.booked_before + "T23:59:59");
-  if (filterConfig.min_pax)       query = query.gte("pax", Number(filterConfig.min_pax));
+  if (filterConfig.min_pax) query = query.gte("pax", Number(filterConfig.min_pax));
 
   const { data, error } = await query;
   if (error) throw new Error(`[CAMPAIGNS] fetchPastGuests failed: ${error.message}`);
