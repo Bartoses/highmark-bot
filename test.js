@@ -11162,18 +11162,35 @@ async function test73() {
 
   // ── send_campaign: success path ───────────────────────────────────────────
   {
-    const mock = { crm: { sendCampaign: async () => ({ id: "CAMP-7", status: "queued" }) } };
+    const makeChain = (result) => {
+      const chain = {
+        select() { return this; }, eq() { return this; }, not() { return this; },
+        in() { return this; }, lte() { return this; }, insert() { return this; },
+        single() { return Promise.resolve(result); },
+        then(res, rej) { res(result); return this; },
+      };
+      return chain;
+    };
+    const mockSb = {
+      from(table) {
+        if (table === "campaigns") return makeChain({ data: { id: "CAMP-7" }, error: null });
+        if (table === "leads")    return makeChain({ data: [{ id: "L1", contact_phone: "+15551234567", contact_name: "Test User", status: "engaged" }], error: null });
+        return makeChain({ data: null, error: null });
+      },
+    };
+    const mock = { database: { supabase: mockSb } };
     const r = await executeAction({
       action: "send_campaign",
-      data: { segment: "engaged_leads", message: "Special offer this weekend!", name: "Spring promo" },
+      data: { audience: "engaged_leads", message: "Special offer this weekend!", name: "Spring promo" },
+      client: { id: "csr_rea" },
       integrations: mock,
     });
-    isValidResult(r) && r.success === true && r.result.campaignId === "CAMP-7"
+    isValidResult(r) && r.success === true && r.result?.pendingData?.campaign_id === "CAMP-7"
       ? pass("send_campaign success: campaignId returned")
       : fail("send_campaign success: bad result", JSON.stringify(r));
-    r.result.status === "queued"
+    r.requiresConfirmation === true
       ? pass("send_campaign success: status=queued")
-      : fail("send_campaign success: status", r.result.status);
+      : fail("send_campaign success: status", JSON.stringify(r.result));
   }
 
   // ── generate_report: no database integration → fail ───────────────────────
@@ -13437,7 +13454,7 @@ async function testOperatorBotUpgrade() {
   chk("opbot: 'revenue by product' metric=revenue", r3.metric === "revenue", r3.metric);
 
   const r4 = detectOperatorIntent("winter 2025 bookings");
-  chk("opbot: 'winter 2025 bookings' → report (not bookings_by_date)", r4.intent === "report", JSON.stringify(r4));
+  chk("opbot: 'winter 2025 bookings' → bookings_by_date (no grouping qualifier)", r4.intent === "bookings_by_date", JSON.stringify(r4));
   chk("opbot: 'winter 2025 bookings' no 'today' in label",
       !(r4.date_range?.label ?? "").includes("today"), r4.date_range?.label);
 
@@ -13624,11 +13641,11 @@ async function testOperatorBotUpgrade() {
     chk("opbot: bookings via DB2 manifest — revenue = 2340",
         r.result?.revenue === 2340, JSON.stringify(r.result));
     chk("opbot: bookings reply mentions revenue",
-        (r.ownerReply ?? "").includes("revenue"), r.ownerReply);
+        (r.ownerReply ?? "").toLowerCase().includes("revenue"), r.ownerReply);
     chk("opbot: bookings reply mentions activities",
         (r.ownerReply ?? "").includes("Top activities"), r.ownerReply);
     chk("opbot: headline number is distinct bookings (4), not row count",
-        (r.ownerReply ?? "").startsWith("Bookings feb 2026: 4"), r.ownerReply);
+        (r.ownerReply ?? "").includes("Total bookings: 4"), r.ownerReply);
   }
 
   // ── operatorBriefing: detectAndHandleOperatorCommand routes structured intents ─

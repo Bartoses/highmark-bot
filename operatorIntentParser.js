@@ -415,6 +415,17 @@ export function detectOperatorIntent(message) {
     }
   }
 
+  // Company-specific follow-up: "just for rabbitearsadventures", "REA only", "filter to CSR", etc.
+  // Catches refinement messages that have no other intent keywords.
+  const companyFilter = extractCompanyFilter(msg);
+  if (companyFilter) {
+    const range  = parseSeasonRange(msg) ?? parseDateRange(msg) ?? parseSeasonRange("this winter");
+    const metric = /\brevenue\b|\bearnings?\b/.test(msg) ? "revenue"
+                 : /\bpax\b|\bguests?\b/.test(msg)      ? "pax"
+                 : "bookings";
+    return { intent: "bookings_by_date", date_range: range, metric, company_filter: companyFilter, raw };
+  }
+
   // pax / guest count — "total pax this winter", "guided guests CSR", "how many guests did we have"
   // Must come BEFORE bookings to capture pax-specific intent with metric tag.
   if (
@@ -487,4 +498,48 @@ export function detectOperatorIntent(message) {
   }
 
   return { intent: "unknown", date_range: null, metric: null, raw };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// extractCompanyFilter — pull a company name from refinement messages like
+// "just for rabbitearsadventures", "REA only", "filter to CSR", "for rabbit ears"
+// Returns the raw extracted string (caller normalizes against client config).
+// Returns null when no company-filter pattern is found.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SKIP_WORDS = new Set(["me", "us", "them", "it", "this", "that", "all", "now", "you", "we"]);
+
+function cleanCompanyExtract(raw) {
+  return raw
+    .replace(/^(?:show\s+(?:me\s+)?|tell\s+me\s+|give\s+me\s+)/, "")
+    .replace(/\b(revenue|earnings?|sales|bookings?|pax|guests?)\s*$/, "")
+    .replace(/\b(this|last)\s+(winter|summer|month|week|year)\s*$/, "")
+    .replace(/\bin\s+\w+\s*\d{4}\s*$/, "")
+    .trim();
+}
+
+export function extractCompanyFilter(msg) {
+  if (!msg || typeof msg !== "string") return null;
+  const lower = msg.toLowerCase().trim();
+
+  const patterns = [
+    /^just\s+for\s+(.+)$/,
+    /^only\s+for\s+(.+)$/,
+    /^for\s+(.+?)\s+only$/,
+    /^filter\s+(?:by|to)\s+(.+)$/,
+    /^show\s+(?:me\s+)?(?:just\s+)?(.+?)\s+only$/,
+    /^(.+?)\s+only$/,
+    /^(?:just\s+)?(.+?)\s+data$/,
+  ];
+
+  for (const p of patterns) {
+    const m = lower.match(p);
+    if (m) {
+      const company = cleanCompanyExtract(m[1].trim().replace(/['"]/g, ""));
+      if (company.length >= 2 && !SKIP_WORDS.has(company)) {
+        return company;
+      }
+    }
+  }
+  return null;
 }
