@@ -677,7 +677,10 @@ function resolveBookingSource(integrations) {
   return null;
 }
 
-function summarizeBookingRows(rows, src) {
+// ── aggregateBookings (exported) ──────────────────────────────────────────────
+// Aggregate daily_manifest (or confirmations_sent) rows into summary stats.
+// Exported so callers and tests can call it directly.
+export function aggregateBookings(rows, src) {
   const byCompany = {};
   const byItem    = {};
   const seenPks   = src.dedupKey ? new Set() : null;
@@ -704,6 +707,38 @@ function summarizeBookingRows(rows, src) {
     byCompany,
     byItem,
   };
+}
+
+// Internal alias kept for backward compatibility inside this file
+function summarizeBookingRows(rows, src) { return aggregateBookings(rows, src); }
+
+// ── buildBookingQuery (exported) ──────────────────────────────────────────────
+// Constructs a Supabase query against the resolved booking source.
+// Filters: { company: string|string[], activity: string, location: string }
+export function buildBookingQuery(src, { start, end, filters = {} }) {
+  let query = src.supabase
+    .from(src.table)
+    .select(src.columns)
+    .gte("start_at", start)
+    .lte("start_at", end)
+    .order("start_at", { ascending: true });
+
+  if (Array.isArray(filters.company) && filters.company.length) {
+    query = query.in("company", filters.company);
+  } else if (typeof filters.company === "string" && filters.company) {
+    query = query.ilike("company", `%${filters.company}%`);
+  }
+  if (filters.activity) query = query.ilike(src.itemField, `%${filters.activity}%`);
+  if (filters.location) query = query.ilike("location", `%${filters.location}%`);
+
+  return query;
+}
+
+// Top-N entries from a { name: count } map, sorted by count desc.
+function limitTopResults(entries, n = 5) {
+  return Object.entries(entries)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, n);
 }
 
 // ── get_bookings_by_date_range ────────────────────────────────────────────────
@@ -741,34 +776,40 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
       return fail("Couldn't retrieve bookings right now.");
     }
 
-    const list  = rows ?? [];
-    const label = range.label ?? "that range";
+    const list   = rows ?? [];
+    const label  = range.label ?? "that range";
+    const metric = data.metric ?? "bookings";
 
     if (!list.length) {
-      return ownerOk({ total: 0, range, source: src.source }, `No bookings found for ${label}.`);
+      return ownerOk(
+        { total: 0, range, source: src.source },
+        `I couldn't find any records in your CRM for ${label}.\n\nTry adjusting the timeframe or filters.`
+      );
     }
 
-    const sum = summarizeBookingRows(list, src);
-    // Headline number: distinct bookings when we have fareharbor_pk, otherwise rows.
+    const sum      = aggregateBookings(list, src);
     const headline = src.dedupKey ? sum.distinctBookings : sum.totalRows;
+    const capLabel = label.charAt(0).toUpperCase() + label.slice(1);
 
-    const companyLines = Object.entries(sum.byCompany)
-      .sort(([, a], [, b]) => b - a)
-      .map(([c, n]) => `  • ${c}: ${n}`);
-    const topItems = Object.entries(sum.byItem)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 3)
-      .map(([n, c]) => `  • ${n} (${c})`);
+    const lines = [`${capLabel}:`, `Total bookings: ${headline.toLocaleString()}`];
 
-    const lines = [
-      `Bookings ${label}: ${headline}`,
-    ];
     if (src.source === "manifest") {
-      lines.push(`(${sum.totalRows} line items, ${sum.totalPax} pax, $${sum.totalRev.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue)`);
+      if (sum.totalPax > 0) lines.push(`Total pax: ${sum.totalPax.toLocaleString()}`);
+      if (sum.totalRev > 0) lines.push(`Revenue: $${Math.round(sum.totalRev).toLocaleString()}`);
     }
-    lines.push("", "By company:", ...companyLines);
-    if (topItems.length) {
-      lines.push("", "Top activities:", ...topItems);
+
+    // Top activities (limit 5)
+    const topItems = limitTopResults(sum.byItem, 5).map(([n, c]) => {
+      const entry = list.find(r => (r[src.itemField] ?? "unspecified") === n);
+      const paxPart = src.paxField && entry ? ` (${sum.byItem[n]} bookings)` : ` (${c})`;
+      return `- ${n}${paxPart}`;
+    });
+    if (topItems.length) lines.push("", "Top activities:", ...topItems);
+
+    // By company (only when >1 company)
+    const companySorted = limitTopResults(sum.byCompany);
+    if (companySorted.length > 1) {
+      lines.push("", "By company:", ...companySorted.map(([c, n]) => `- ${c}: ${n}`));
     }
 
     return ownerOk(
@@ -782,6 +823,7 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         byItem:            sum.byItem,
         range,
         source:            src.source,
+        metric,
       },
       lines.join("\n")
     );
@@ -937,7 +979,7 @@ async function handleReport(data, context, client, integrations) {
     if (!list.length) {
       return ownerOk(
         { total: 0, groups: {}, range, source: src.source },
-        `No bookings found for ${label} — try another range.`
+        `I couldn't find any records in your CRM for ${label}.\n\nTry adjusting the timeframe or filters.`
       );
     }
 

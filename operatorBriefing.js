@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getAllClients } from "./clients.js";
-import { detectOperatorIntent } from "./operatorIntentParser.js";
+import { detectOperatorIntent, parseDateRange, parseSeasonRange } from "./operatorIntentParser.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -542,10 +542,16 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     return formatWeatherResponse(snap);
   }
 
-  // REVENUE / EARNINGS — skip when message has booking context (intent parser routes that correctly)
+  // REVENUE / EARNINGS — only intercept bare revenue (no date range).
+  // Date-specific queries ("revenue in Feb 2026", "revenue this winter") fall through to
+  // the intent parser which routes them to the full DB aggregation engine.
   if ((msg.match(/\brevenue\b/) || msg.match(/\bearnings?\b/)) && !msg.match(/\bbookings?\b/)) {
-    const rev = await getWeeklyRevenueEstimate(client.id, supabase, crmSupabase);
-    return formatRevenueResponse(rev);
+    const hasDateRange = !!(parseDateRange(msg) ?? parseSeasonRange(msg));
+    if (!hasDateRange) {
+      const rev = await getWeeklyRevenueEstimate(client.id, supabase, crmSupabase);
+      return formatRevenueResponse(rev);
+    }
+    // Has date range → fall through to structured intent routing below
   }
 
   // ── Structured intent parser (date-aware, action-routed) ──────────────────
@@ -579,11 +585,11 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     return res.ownerReply ?? res.fallbackMessage ?? "Couldn't build daily summary right now.";
   }
 
-  if (intent.intent === "bookings_by_date" && intent.date_range) {
+  if ((intent.intent === "bookings_by_date" || intent.intent === "revenue") && intent.date_range) {
     const res = await executeAction({
-      action:       "get_bookings_by_date_range",
-      data:         { date_range: intent.date_range },
-      context:      {},
+      action:  "get_bookings_by_date_range",
+      data:    { date_range: intent.date_range, metric: intent.metric ?? "bookings" },
+      context: {},
       client,
       integrations,
     });

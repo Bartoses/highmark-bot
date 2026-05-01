@@ -397,56 +397,93 @@ export function detectOperatorIntent(message) {
       const isItemQuery  = /\bitems?\s+sold\b|\btop\s+(products?|activities?|items?)\b/.test(msg);
       const hasByRevenue = /\brevenue\s+by\s+(product|activity|item|company)\b/.test(msg);
 
-      if (seasonRange || hasGrouping || hasByCompany || isItemQuery || hasByRevenue) {
+      // Report requires an explicit grouping/aggregation qualifier — season alone is not enough.
+      // Bare season queries ("bookings this winter", "total pax this winter") go to bookings_by_date.
+      if (hasGrouping || hasByCompany || isItemQuery || hasByRevenue) {
         const dateRange = seasonRange ?? parseDateRange(msg) ?? parseDateRange("this month");
 
         let groupBy = "activity";
         if (hasByCompany) groupBy = "company";
 
         let metric = "bookings";
-        if (/\brevenue\b/.test(msg))               metric = "revenue";
+        if (/\brevenue\b/.test(msg))                    metric = "revenue";
         else if (/\bunits?\b|\bitems?\s+sold\b/.test(msg)) metric = "units";
-        else if (/\bpax\b/.test(msg))               metric = "pax";
+        else if (/\bpax\b/.test(msg))                   metric = "pax";
 
         return { intent: "report", date_range: dateRange, metric, group_by: groupBy, raw };
       }
     }
   }
 
-  // bookings (with optional date range)
+  // pax / guest count — "total pax this winter", "guided guests CSR", "how many guests did we have"
+  // Must come BEFORE bookings to capture pax-specific intent with metric tag.
+  if (
+    /\b(total\s+)?pax\b/.test(msg) ||
+    /\bguided\s+guests?\b/.test(msg) ||
+    /\bhow\s+many\s+(guided\s+|total\s+)?guests?\b/.test(msg) ||
+    /\btotal\s+guests?\b/.test(msg) ||
+    /\bguest\s+count\b/.test(msg)
+  ) {
+    const range = parseSeasonRange(msg) ?? parseDateRange(msg);
+    return {
+      intent:     "bookings_by_date",
+      date_range: range ?? parseDateRange("this month"),
+      metric:     "pax",
+      raw,
+    };
+  }
+
+  // "how many bookings/tours/trips did we have [period]"
+  if (/\bhow\s+many\s+(bookings?|tours?|trips?|reservations?|rentals?)\b/.test(msg)) {
+    const range = parseSeasonRange(msg) ?? parseDateRange(msg);
+    return {
+      intent:     "bookings_by_date",
+      date_range: range ?? parseDateRange("this month"),
+      metric:     "bookings",
+      raw,
+    };
+  }
+
+  // revenue / earnings — with date range → route to full DB aggregation;
+  // bare revenue → "revenue" intent, caught by early check in operatorBriefing
+  if (/\brevenue\b|\bearnings?\b|\bsales\b/.test(msg)) {
+    const range = parseSeasonRange(msg) ?? parseDateRange(msg);
+    if (range) {
+      return { intent: "bookings_by_date", date_range: range, metric: "revenue", raw };
+    }
+    return { intent: "revenue", date_range: null, metric: "revenue", raw };
+  }
+
+  // bookings (with optional date range — includes season language)
   if (/\bbookings?\b|\breservations?\b|\bappointments?\b/.test(msg)) {
-    const range = parseDateRange(msg);
+    const range = parseSeasonRange(msg) ?? parseDateRange(msg);
     if (range) {
       return { intent: "bookings_by_date", date_range: range, metric: "bookings", raw };
     }
     // bare "bookings" with no date → default to today
     return {
-      intent: "bookings_by_date",
+      intent:     "bookings_by_date",
       date_range: parseDateRange("today"),
-      metric: "bookings",
+      metric:     "bookings",
       raw,
     };
   }
 
-  // revenue / earnings (with optional date range)
-  if (/\brevenue\b|\bearnings?\b|\bsales\b/.test(msg)) {
-    const range = parseDateRange(msg);
-    return {
-      intent: "revenue",
-      date_range: range ?? parseDateRange("this week"),
-      metric: "revenue",
-      raw,
-    };
-  }
-
-  // weather / conditions
-  if (/^weather$|\bconditions?\b|^snow$|\bforecast\b/.test(msg)) {
+  // weather / conditions (use \bweather\b so "winter weather" is caught, not just bare "weather")
+  if (/\bweather\b|\bconditions?\b|^snow$|\bforecast\b/.test(msg)) {
     return { intent: "weather", date_range: null, metric: null, raw };
   }
 
   // generic leads — last to avoid swallowing "missed/new" leads
   if (/^leads?$|\bmy\s+leads?\b|^show\s+(me\s+)?leads?$|\bhot\s+leads?\b/.test(msg)) {
     return { intent: "leads", date_range: null, metric: null, raw };
+  }
+
+  // Season range with no other keyword match → treat as a booking summary request
+  // e.g. "winter 2025/2026" alone, "this summer" alone
+  const seasonOnly = parseSeasonRange(msg);
+  if (seasonOnly) {
+    return { intent: "bookings_by_date", date_range: seasonOnly, metric: "bookings", raw };
   }
 
   return { intent: "unknown", date_range: null, metric: null, raw };
