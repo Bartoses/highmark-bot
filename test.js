@@ -13185,6 +13185,137 @@ async function testOperatorMode() {
     const r = await httpGet("/portal/api/operator");
     chk("4a: GET /portal/api/operator — 401 without auth", r.status === 401, `got ${r.status}`);
   }
+
+  // ── buildBriefingText with extras — revenue + issues ─────────────────────
+  {
+    const { buildBriefingText: bbt } = await import("./operatorBriefing.js");
+    const mc = { id: "csr_rea", name: "Colorado Sled Rentals", owner_phone: "+17202892483", inboundPhones: ["+18335786496"] };
+
+    const briefingWithExtras = bbt(mc, [], [],  null, {
+      revenue: { estimated: 3500, bookings: 20, period: "7 days", source: "manifest" },
+      issues:  ["Confirmation texts are OFF", "2 new leads uncontacted >4h"],
+    });
+    chk("4a: briefingText with extras ≤ 960 chars",
+        briefingWithExtras.length <= 960, `got ${briefingWithExtras.length}`);
+    chk("4a: briefingText includes REVENUE section",
+        briefingWithExtras.includes("REVENUE (7d):"), briefingWithExtras);
+    chk("4a: briefingText includes $3,500",
+        briefingWithExtras.includes("$3,500"), briefingWithExtras);
+    chk("4a: briefingText includes ALERTS section",
+        briefingWithExtras.includes("ALERTS"), briefingWithExtras);
+    chk("4a: briefingText includes alert text",
+        briefingWithExtras.includes("Confirmation texts"), briefingWithExtras);
+
+    // Estimate (not manifest) shows "EST. REVENUE"
+    const briefingEstimate = bbt(mc, [], [], null, {
+      revenue: { estimated: 350, bookings: 2, period: "7 days", source: "estimate" },
+    });
+    chk("4a: briefingText estimate source shows EST. REVENUE",
+        briefingEstimate.includes("EST. REVENUE"), briefingEstimate);
+  }
+
+  // ── detectOperationalIssues — unit tests ──────────────────────────────────
+  {
+    const { detectOperationalIssues } = await import("./operatorBriefing.js");
+    const mc = { id: "csr_rea" };
+
+    // With no DB — should still return issues array (confirmations flag)
+    const issues = await detectOperationalIssues(mc, null, null);
+    chk("2b: detectOperationalIssues returns array", Array.isArray(issues), JSON.stringify(issues));
+    // CONFIRMATIONS_ENABLED is not set in TEST_MODE, so this issue should appear
+    const hasConfirmationIssue = issues.some(i => i.toLowerCase().includes("confirmation"));
+    chk("2b: detectOperationalIssues flags confirmation system status",
+        hasConfirmationIssue, JSON.stringify(issues));
+
+    // With mock DB2 showing booking drop (4 this week vs 12 last week = 67% drop)
+    const buildManifestStub = (rows) => ({
+      from: () => ({
+        select: () => ({
+          gte: (col, val) => ({
+            lt: () => Promise.resolve({ data: rows.filter(r => r.start_at < val), error: null }),
+            then: (res) => { res({ data: rows.filter(r => r.start_at >= val), error: null }); return Promise.resolve(); },
+          }),
+        }),
+      }),
+    });
+
+    // Simpler stub that always returns configured data based on call order
+    let crmCallCount = 0;
+    const stub7 = [
+      { fareharbor_pk: "A" }, { fareharbor_pk: "B" }, { fareharbor_pk: "C" }, { fareharbor_pk: "D" },
+    ];
+    const stub14 = [
+      { fareharbor_pk: "E" }, { fareharbor_pk: "F" }, { fareharbor_pk: "G" }, { fareharbor_pk: "H" },
+      { fareharbor_pk: "I" }, { fareharbor_pk: "J" }, { fareharbor_pk: "K" }, { fareharbor_pk: "L" },
+      { fareharbor_pk: "M" }, { fareharbor_pk: "N" }, { fareharbor_pk: "O" }, { fareharbor_pk: "P" },
+    ];
+    const mockCrmSb = {
+      from: () => ({
+        select: () => ({
+          gte: () => ({
+            lt: () => Promise.resolve({ data: stub14, error: null }),      // prior 7d
+            then: (res) => { res({ data: stub7, error: null }); return Promise.resolve(); }, // this 7d
+          }),
+        }),
+      }),
+    };
+    const issuesWithDrop = await detectOperationalIssues(mc, null, mockCrmSb);
+    const hasDropIssue = issuesWithDrop.some(i => i.includes("down") || i.toLowerCase().includes("booking"));
+    chk("2b: detectOperationalIssues detects booking velocity drop",
+        hasDropIssue, JSON.stringify(issuesWithDrop));
+  }
+
+  // ── generateDailyBriefing — no-duplicate guard ────────────────────────────
+  {
+    const { generateDailyBriefing } = await import("./operatorBriefing.js");
+    const mc = { id: "csr_rea", name: "Test", owner_phone: "+15550001234", inboundPhones: ["+18335786496"] };
+
+    // Stub supabase: returns a recent briefing → should skip
+    const sbWithRecent = {
+      from: () => ({
+        select: () => ({
+          eq:  function() { return this; },
+          in:  function() { return this; },
+          gte: function() { return this; },
+          limit: () => Promise.resolve({ data: [{ id: "existing-row" }], error: null }),
+        }),
+      }),
+    };
+    const result = await generateDailyBriefing(mc, sbWithRecent, null, null);
+    chk("2b: generateDailyBriefing skips when already sent today",
+        result.success === false && result.reason === "already_sent_today",
+        JSON.stringify(result));
+
+    // Stub supabase: no recent briefing → proceeds to build (fails on Twilio but that's expected)
+    let insertCalled = false;
+    const sbNoRecent = {
+      from: (table) => ({
+        select: () => ({
+          eq:  function() { return this; },
+          in:  function() { return this; },
+          gte: function() { return this; },
+          lte: function() { return this; },
+          order: function() { return this; },
+          limit: () => Promise.resolve({ data: [], error: null }),
+          then: (res) => { res({ data: [], error: null }); return Promise.resolve(); },
+        }),
+        insert: () => { insertCalled = true; return Promise.resolve({ error: null }); },
+      }),
+    };
+    // In TEST_MODE the Twilio send is skipped, so this should succeed without a real client
+    const origTestMode = process.env.TEST_MODE;
+    process.env.TEST_MODE = "true";
+    const result2 = await generateDailyBriefing(mc, sbNoRecent, null, null);
+    process.env.TEST_MODE = origTestMode;
+    chk("2b: generateDailyBriefing proceeds when no recent briefing",
+        result2.success === true, JSON.stringify(result2));
+    chk("2b: generateDailyBriefing returns preview string",
+        typeof result2.preview === "string" && result2.preview.length > 0, result2.preview);
+    chk("2b: generateDailyBriefing returns issues array",
+        Array.isArray(result2.issues), JSON.stringify(result2));
+    chk("2b: generateDailyBriefing persists to DB",
+        insertCalled, "insert was not called");
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

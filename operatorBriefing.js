@@ -1,9 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // operatorBriefing.js — Operator Mode: Morning Briefing + SMS Command Handling
-// Highmark by Whiteout Solutions — Sprint 4A
+// Highmark by Whiteout Solutions — Sprint 4A / 2B
 //
 // Exports:
-//   sendOperatorBriefing(client, supabase, twilioClient)     → send/preview briefing
+//   generateDailyBriefing(client, supabase, twilioClient, crmSupabase) → send daily briefing (dedup + issues)
+//   sendOperatorBriefing(client, supabase, twilioClient)     → legacy send (no dedup)
+//   detectOperationalIssues(client, supabase, crmSupabase)   → string[] of flagged issues
 //   detectAndHandleOperatorCommand(msg, client, supabase)    → command string | null
 //   buildOperatorApiData(clientId, supabase)                 → { bookings, hot_leads, weather, kb_synced_at }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -213,7 +215,7 @@ export async function getWeeklyRevenueEstimate(clientId, supabase, crmSupabase =
 // BRIEFING TEXT BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap) {
+export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap, extras = {}) {
   const biz      = client.name ?? "Your business";
   const dateStr  = new Date().toLocaleDateString("en-US", {
     timeZone: "America/Denver", weekday: "short", month: "short", day: "numeric",
@@ -248,6 +250,27 @@ export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap) {
   lines.push("");
   const condLine = buildConditionsLine(weatherSnap);
   lines.push(`CONDITIONS: ${condLine}`);
+
+  // Revenue section (real from DB2, or estimated from leads)
+  const rev = extras.revenue ?? null;
+  if (rev && (rev.estimated > 0 || rev.bookings > 0)) {
+    lines.push("");
+    if (rev.source === "manifest") {
+      lines.push(`REVENUE (7d): $${rev.estimated.toLocaleString()} — ${rev.bookings} bookings`);
+    } else {
+      lines.push(`EST. REVENUE (7d): $${rev.estimated.toLocaleString()}`);
+    }
+  }
+
+  // Alerts section
+  const issues = extras.issues ?? [];
+  if (issues.length) {
+    lines.push("");
+    lines.push(`ALERTS (${issues.length}):`);
+    for (const issue of issues.slice(0, 3)) {
+      lines.push(`! ${issue}`);
+    }
+  }
 
   lines.push("");
   lines.push("Reply: LEADS, BOOKINGS, WEATHER for details.");
@@ -340,6 +363,145 @@ export async function sendOperatorBriefing(client, supabase, twilioClient) {
 
   console.log(`[BRIEFING] Sent to ${ownerPhone} for ${client.id} (${briefing.length} chars)`);
   return { success: true, preview: briefing, sent: true, chars: briefing.length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OPERATIONAL ISSUE DETECTION
+// Returns string[] of human-readable alerts. All checks are independent;
+// a failure in one never blocks the others.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function detectOperationalIssues(client, supabase, crmSupabase = null) {
+  const issues = [];
+  const clientId = client?.id ?? null;
+
+  // 1. Booking velocity drop — compare this 7 days vs prior 7 days (DB2)
+  if (crmSupabase) {
+    try {
+      const since7  = new Date(Date.now() -  7 * 24 * 60 * 60 * 1000).toISOString();
+      const since14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+      const [thisRes, lastRes] = await Promise.all([
+        crmSupabase.from("daily_manifest").select("fareharbor_pk").gte("start_at", since7),
+        crmSupabase.from("daily_manifest").select("fareharbor_pk").gte("start_at", since14).lt("start_at", since7),
+      ]);
+      const thisCount = new Set((thisRes.data ?? []).map(r => r.fareharbor_pk).filter(Boolean)).size;
+      const lastCount = new Set((lastRes.data ?? []).map(r => r.fareharbor_pk).filter(Boolean)).size;
+      if (lastCount > 5 && thisCount < lastCount * 0.7) {
+        const pct = Math.round((1 - thisCount / lastCount) * 100);
+        issues.push(`Bookings down ${pct}% vs prior week (${thisCount} vs ${lastCount})`);
+      }
+    } catch { /* silent — don't block briefing */ }
+  }
+
+  // 2. Confirmation texts disabled
+  if (process.env.CONFIRMATIONS_ENABLED !== "true") {
+    issues.push("Confirmation texts are OFF — guests not receiving auto-confirmations");
+  }
+
+  // 3. Stale FH knowledge base (>6h since last sync)
+  if (supabase && clientId) {
+    try {
+      const fhRows = await getFhDataForClient(clientId, supabase);
+      if (fhRows.length) {
+        const latestSync = fhRows.reduce((latest, r) =>
+          (!latest || (r.fetched_at ?? "") > latest ? (r.fetched_at ?? "") : latest), null);
+        if (latestSync) {
+          const ageHours = (Date.now() - new Date(latestSync).getTime()) / (60 * 60 * 1000);
+          if (ageHours > 6) {
+            issues.push(`FH knowledge base last synced ${Math.round(ageHours)}h ago — may be stale`);
+          }
+        }
+      }
+    } catch { /* silent */ }
+  }
+
+  // 4. New leads uncontacted >4h
+  if (supabase && clientId) {
+    try {
+      const cutoff = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+      const { data: staleleads } = await supabase
+        .from("leads")
+        .select("id", { count: "exact" })
+        .eq("client_id", clientId)
+        .eq("status", "new")
+        .lte("created_at", cutoff);
+      const count = staleleads?.length ?? 0;
+      if (count > 0) {
+        issues.push(`${count} new lead${count !== 1 ? "s" : ""} uncontacted >4h`);
+      }
+    } catch { /* silent */ }
+  }
+
+  return issues;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GENERATE DAILY BRIEFING
+// Enhanced version of sendOperatorBriefing with:
+//   • No-duplicate guard (skips if already sent in last 20h)
+//   • Real 7-day revenue from DB2 daily_manifest when available
+//   • Operational issues surfaced as ALERTS section
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateDailyBriefing(client, supabase, twilioClient, crmSupabase = null) {
+  const ownerPhone = client.owner_phone ?? client.ownerPhone ?? null;
+  if (!ownerPhone) {
+    console.warn(`[BRIEFING] No owner_phone for ${client.id} — skipping`);
+    return { success: false, reason: "no_owner_phone" };
+  }
+
+  const twilioNumber = client.twilio_number ?? client.inboundPhones?.[0] ?? null;
+  if (!twilioNumber) {
+    console.warn(`[BRIEFING] No twilio number for ${client.id} — skipping`);
+    return { success: false, reason: "no_twilio_number" };
+  }
+
+  // No-duplicate guard: skip if a briefing was already persisted in the last 20h
+  try {
+    const since = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString();
+    const { data: recent } = await supabase
+      .from("operator_briefings")
+      .select("id")
+      .eq("client_id", client.id)
+      .in("status", ["sent", "test"])
+      .gte("sent_at", since)
+      .limit(1);
+    if (recent?.length) {
+      console.log(`[BRIEFING] Already sent today for ${client.id} — skipping`);
+      return { success: false, reason: "already_sent_today" };
+    }
+  } catch { /* proceed if dedup check fails */ }
+
+  // Gather all data in parallel
+  const [todaySlots, hotLeads, weatherSnap, revenue, issues] = await Promise.all([
+    getTodaysAvailability(client.id, supabase),
+    getHotLeads(client.id, supabase, 3),
+    getWeatherSnapshot(supabase, client.id),
+    getWeeklyRevenueEstimate(client.id, supabase, crmSupabase),
+    detectOperationalIssues(client, supabase, crmSupabase),
+  ]);
+
+  const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, { revenue, issues });
+
+  const status = process.env.TEST_MODE === "true" ? "test" : "sent";
+  try {
+    await supabase.from("operator_briefings").insert({
+      client_id: client.id,
+      content:   briefing,
+      sent_at:   new Date().toISOString(),
+      status,
+    });
+  } catch (err) {
+    console.warn(`[BRIEFING] Could not persist briefing for ${client.id}:`, err.message);
+  }
+
+  if (process.env.TEST_MODE === "true") {
+    return { success: true, preview: briefing, sent: false, chars: briefing.length, issues };
+  }
+
+  await twilioClient.messages.create({ from: twilioNumber, to: ownerPhone, body: briefing });
+  console.log(`[BRIEFING] Sent to ${ownerPhone} for ${client.id} (${briefing.length} chars, ${issues.length} alerts)`);
+  return { success: true, preview: briefing, sent: true, chars: briefing.length, issues };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

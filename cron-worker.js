@@ -14,7 +14,7 @@ import "dotenv/config";
 import twilio from "twilio";
 import { createClient } from "@supabase/supabase-js";
 import { processScheduledMessages } from "./scheduler.js";
-import { sendOperatorBriefing } from "./operatorBriefing.js";
+import { generateDailyBriefing } from "./operatorBriefing.js";
 import { evaluateEventCampaigns } from "./campaignTriggers.js";
 import { getAllClients } from "./clients.js";
 
@@ -70,7 +70,7 @@ async function sendOperatorBriefings() {
   let skipped = 0;
   for (const client of clients) {
     try {
-      const result = await sendOperatorBriefing(client, supabase, twilioClient);
+      const result = await generateDailyBriefing(client, supabase, twilioClient, crmSupabase);
       if (result.success) sent++;
       else skipped++;
     } catch (err) {
