@@ -139,10 +139,12 @@ ACTIONS you can take:
 - get_lead_summary: query lead counts by status for a timeframe — set data.timeframe to "today", "week", "month", or "all"
 - get_recent_leads: return the N most recent leads — set data.limit (default 5)
 - get_missed_leads: surface new/contacted leads with no activity in 24h — high follow-up priority
+- get_bookings_by_date_range: count confirmed bookings in a window — set data.date_range to { start, end, label } (ISO timestamps)
+- daily_summary: today + tomorrow bookings, new leads (24h), pipeline, confirmation status — no params
 - analyze_performance: return 30-day conversion rate, weekly velocity, and top-performing services
 - generate_report: produce a structured summary of bookings, leads, or activity
 - check_schedule: return upcoming availability or operational windows
-- flag_issue: surface a data gap or operational problem for review`;
+- flag_issue: log a data gap or operational problem for review — set data.description with what to flag`;
 
 export const MARKETING_AGENT_PROMPT = `You are the Marketing Agent.
 

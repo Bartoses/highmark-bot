@@ -603,6 +603,210 @@ async function handleSendCampaign(data, context, client, integrations) {
   }
 }
 
+// ── flag_issue ────────────────────────────────────────────────────────────────
+// Log an operator-flagged issue. We persist a record to operator_briefings
+// (existing table, repurposed with status='flag') when the table is available;
+// otherwise we just acknowledge so the owner never sees a raw error.
+async function handleFlagIssue(data, context, client, integrations) {
+  try {
+    const description = data.description ?? data.message ?? data.body ?? data.note ?? null;
+
+    if (!description) {
+      return ownerOk({ logged: false, awaiting: "description" }, "Got it — what should I flag? I’ll log it for review.");
+    }
+
+    const supabase = integrations?.database?.supabase;
+    if (supabase) {
+      try {
+        await supabase.from("operator_briefings").insert({
+          client_id: client?.id ?? null,
+          content:   `[FLAG] ${description}`,
+          sent_at:   new Date().toISOString(),
+          status:    "flag",
+        });
+      } catch (dbErr) {
+        // Schema may not allow status='flag' — degrade gracefully
+        console.warn("[actionEngine] flag_issue persist failed:", dbErr.message);
+      }
+    }
+
+    return ownerOk(
+      { logged: true, description, clientId: client?.id ?? null },
+      `Flagged for review: "${description}". I’ll keep an eye on it.`
+    );
+  } catch (e) {
+    console.error("[actionEngine] flag_issue error:", e.message);
+    return ownerOk({ logged: false }, "Got it — I’ll flag that for review.");
+  }
+}
+
+// ── get_bookings_by_date_range ────────────────────────────────────────────────
+// Counts confirmed bookings (rows in confirmations_sent) for a date window and
+// breaks them down by company + top item_name. confirmations_sent has no
+// client_id column, so we filter by the client's fareharborCompanies shortnames.
+async function handleGetBookingsByDateRange(data, context, client, integrations) {
+  try {
+    const supabase = integrations?.database?.supabase;
+    if (!supabase) return fail("Database unavailable for bookings.");
+
+    const range = data.date_range ?? null;
+    if (!range?.start || !range?.end) {
+      return fail("I need a date range to look up bookings. Try \"bookings today\" or \"bookings in Feb 2026\".");
+    }
+
+    const shortnames = (client?.fareharborCompanies ?? [])
+      .map(c => c?.shortname)
+      .filter(Boolean);
+
+    let query = supabase
+      .from("confirmations_sent")
+      .select("company, item_name, start_at, guest_name")
+      .gte("start_at", range.start)
+      .lte("start_at", range.end)
+      .order("start_at", { ascending: true });
+
+    if (shortnames.length) {
+      query = query.in("company", shortnames);
+    }
+
+    const { data: rows, error } = await query;
+    if (error) {
+      console.error("[actionEngine] get_bookings_by_date_range DB error:", error.message);
+      return fail("Couldn't retrieve bookings right now.");
+    }
+
+    const list = rows ?? [];
+    const total = list.length;
+    const label = range.label ?? "that range";
+
+    if (!total) {
+      return ownerOk({ total: 0, range }, `No bookings found for ${label}.`);
+    }
+
+    const byCompany = {};
+    const byItem    = {};
+    for (const r of list) {
+      const c = r.company ?? "unknown";
+      byCompany[c] = (byCompany[c] ?? 0) + 1;
+      const it = r.item_name ?? "unspecified";
+      byItem[it] = (byItem[it] ?? 0) + 1;
+    }
+
+    const companyLines = Object.entries(byCompany)
+      .sort(([, a], [, b]) => b - a)
+      .map(([c, n]) => `  • ${c}: ${n}`);
+    const topItems = Object.entries(byItem)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 3)
+      .map(([n, c]) => `  • ${n} (${c})`);
+
+    const lines = [
+      `Bookings ${label}: ${total}`,
+      "",
+      "By company:",
+      ...companyLines,
+    ];
+    if (topItems.length) {
+      lines.push("", "Top items:", ...topItems);
+    }
+
+    return ownerOk(
+      { total, byCompany, byItem, range },
+      lines.join("\n")
+    );
+  } catch (e) {
+    console.error("[actionEngine] get_bookings_by_date_range error:", e.message);
+    return fail("Couldn't retrieve bookings right now.");
+  }
+}
+
+// ── daily_summary ─────────────────────────────────────────────────────────────
+// Bookings today + tomorrow + new leads (24h) + open-lead pipeline status.
+// Cached for 60s per client to stay snappy on repeated hits.
+const DAILY_SUMMARY_CACHE = new Map();
+const DAILY_SUMMARY_TTL_MS = 60 * 1000;
+
+async function handleDailySummary(data, context, client, integrations) {
+  try {
+    const supabase = integrations?.database?.supabase;
+    if (!supabase) return fail("Database unavailable for daily summary.");
+
+    const clientId = client?.id ?? null;
+    const cacheKey = `summary:${clientId}`;
+    const cached   = DAILY_SUMMARY_CACHE.get(cacheKey);
+    if (cached && Date.now() - cached.at < DAILY_SUMMARY_TTL_MS) {
+      return ownerOk(cached.data, cached.reply);
+    }
+
+    const { parseDateRange } = await import("./operatorIntentParser.js");
+    const todayRange    = parseDateRange("today");
+    const tomorrowRange = parseDateRange("tomorrow");
+    const since24h      = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    const shortnames = (client?.fareharborCompanies ?? [])
+      .map(c => c?.shortname)
+      .filter(Boolean);
+
+    const baseBooking = () => {
+      let q = supabase.from("confirmations_sent").select("id, item_name, start_at", { count: "exact" });
+      if (shortnames.length) q = q.in("company", shortnames);
+      return q;
+    };
+
+    const [todayRes, tomorrowRes, newLeadsRes, pipelineRes] = await Promise.all([
+      baseBooking().gte("start_at", todayRange.start).lte("start_at", todayRange.end),
+      baseBooking().gte("start_at", tomorrowRange.start).lte("start_at", tomorrowRange.end),
+      clientId
+        ? supabase
+            .from("leads")
+            .select("id, status, created_at", { count: "exact" })
+            .eq("client_id", clientId)
+            .gte("created_at", since24h)
+        : Promise.resolve({ data: [], count: 0 }),
+      clientId
+        ? supabase
+            .from("leads")
+            .select("status")
+            .eq("client_id", clientId)
+            .in("status", ["new", "contacted", "engaged"])
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const todayCount    = todayRes.count    ?? (todayRes.data?.length    ?? 0);
+    const tomorrowCount = tomorrowRes.count ?? (tomorrowRes.data?.length ?? 0);
+    const newLeads      = newLeadsRes.count ?? (newLeadsRes.data?.length ?? 0);
+    const pipeline      = (pipelineRes.data ?? []).length;
+
+    const confirmStatus = (process.env.CONFIRMATIONS_ENABLED === "true")
+      ? "live"
+      : "test mode";
+
+    const lines = [
+      "Daily Summary:",
+      `• Bookings today: ${todayCount}`,
+      `• Bookings tomorrow: ${tomorrowCount}`,
+      `• New leads (24h): ${newLeads}`,
+      `• Open pipeline: ${pipeline}`,
+      `• Confirmations: ${confirmStatus}`,
+    ];
+    const reply = lines.join("\n");
+
+    const result = {
+      bookings_today:    todayCount,
+      bookings_tomorrow: tomorrowCount,
+      new_leads_24h:     newLeads,
+      pipeline,
+      confirm_status:    confirmStatus,
+    };
+
+    DAILY_SUMMARY_CACHE.set(cacheKey, { at: Date.now(), data: result, reply });
+    return ownerOk(result, reply);
+  } catch (e) {
+    console.error("[actionEngine] daily_summary error:", e.message);
+    return fail("Couldn't build daily summary right now.");
+  }
+}
+
 // ── execute_campaign ──────────────────────────────────────────────────────────
 // Called after owner confirms with YES. Enqueues the draft campaign for real send.
 async function handleExecuteCampaign(data, context, client, integrations) {
@@ -709,9 +913,27 @@ export async function executeAction(params) {
       case "execute_campaign":
         return await handleExecuteCampaign(data, context, client, integrations);
 
+      case "flag_issue":
+      case "log_issue":
+      case "report_issue":
+        return await handleFlagIssue(data, context, client, integrations);
+
+      case "get_bookings_by_date_range":
+      case "bookings_by_date":
+      case "bookings_in_range":
+        return await handleGetBookingsByDateRange(data, context, client, integrations);
+
+      case "daily_summary":
+      case "morning_summary":
+      case "today_summary":
+        return await handleDailySummary(data, context, client, integrations);
+
       default:
         console.warn(`[actionEngine] Unknown action: "${action}"`);
-        return fail(`Action "${action}" is not supported.`);
+        return ownerOk(
+          { unknown_action: action },
+          "Try asking:\n• bookings today\n• bookings this weekend\n• revenue this month\n• daily summary"
+        );
     }
   } catch (e) {
     console.error("[actionEngine] executeAction fatal error:", e.message);

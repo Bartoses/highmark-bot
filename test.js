@@ -3230,6 +3230,7 @@ async function main() {
     await testLeadsUpgrade();     // Phase 3A: leads filter/PATCH fields, channel column
     await testSettingsPolish();   // Phase 3B: hours/timezone fields, preview-opener, usage endpoints
     await testOperatorMode();     // Sprint 4A: operator briefing, commands, portal
+    await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
     await testDateExtract();      // Deterministic date parser (replaces per-message Claude call)
@@ -10915,11 +10916,18 @@ async function test73() {
       : fail(`executeAction(${JSON.stringify(val)}): bad return shape`, JSON.stringify(r));
   }
 
-  // ── executeAction: unknown action ─────────────────────────────────────────
+  // ── executeAction: unknown action — never raw "not supported" ─────────────
+  // Operator-bot contract: unknown actions return a friendly try-asking hint,
+  // not a "not supported" error. success=true so the orchestrator forwards
+  // ownerReply to the operator instead of leaking dispatcher internals.
   {
     const r = await executeAction({ action: "do_the_thing" });
-    isValidResult(r) && r.success === false
-      ? pass(`executeAction unknown action: returns fail result`)
+    const reply = (r.ownerReply ?? "").toLowerCase();
+    isValidResult(r) && r.success === true
+      && typeof r.ownerReply === "string"
+      && reply.includes("try asking")
+      && !reply.includes("not supported")
+      ? pass(`executeAction unknown action: returns friendly hint`)
       : fail(`executeAction unknown action: bad shape`, JSON.stringify(r));
   }
 
@@ -13174,6 +13182,174 @@ async function testOperatorMode() {
   {
     const r = await httpGet("/portal/api/operator");
     chk("4a: GET /portal/api/operator — 401 without auth", r.status === 401, `got ${r.status}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Operator Bot Upgrade — date parsing, daily summary, flag_issue, fallback
+// ─────────────────────────────────────────────────────────────────────────────
+async function testOperatorBotUpgrade() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const { detectOperatorIntent, parseDateRange } = await import("./operatorIntentParser.js");
+  const { executeAction } = await import("./actionEngine.js");
+
+  // ── parseDateRange ───────────────────────────────────────────────────────
+  const today = parseDateRange("today");
+  chk("opbot: parseDateRange('today') returns range",
+      today && today.start && today.end, JSON.stringify(today));
+  chk("opbot: parseDateRange('today') label is 'today'", today?.label === "today");
+
+  const tomorrow = parseDateRange("tomorrow");
+  chk("opbot: parseDateRange('tomorrow') returns range", tomorrow && tomorrow.start);
+
+  const feb2026 = parseDateRange("Feb 2026");
+  chk("opbot: parseDateRange('Feb 2026') starts in February 2026",
+      feb2026 && feb2026.start.startsWith("2026-02"), JSON.stringify(feb2026));
+  chk("opbot: parseDateRange('Feb 2026') ends in March 1 boundary",
+      feb2026 && feb2026.end.startsWith("2026-03"), JSON.stringify(feb2026));
+
+  const february2026 = parseDateRange("February 2026");
+  chk("opbot: parseDateRange('February 2026') matches",
+      february2026 && february2026.start.startsWith("2026-02"));
+
+  const lastMonth = parseDateRange("last month");
+  chk("opbot: parseDateRange('last month') returns range", lastMonth && lastMonth.start);
+
+  const thisWeekend = parseDateRange("this weekend");
+  chk("opbot: parseDateRange('this weekend') returns range", thisWeekend && thisWeekend.start);
+
+  const garbage = parseDateRange("hello world");
+  chk("opbot: parseDateRange('hello world') → null", garbage === null);
+
+  // ── detectOperatorIntent ─────────────────────────────────────────────────
+  const i1 = detectOperatorIntent("bookings in Feb 2026");
+  chk("opbot: detectOperatorIntent('bookings in Feb 2026') → bookings_by_date",
+      i1.intent === "bookings_by_date", JSON.stringify(i1));
+  chk("opbot: detectOperatorIntent('bookings in Feb 2026') has date_range",
+      i1.date_range?.start?.startsWith("2026-02"), JSON.stringify(i1.date_range));
+
+  const i2 = detectOperatorIntent("daily summary");
+  chk("opbot: detectOperatorIntent('daily summary') → daily_summary",
+      i2.intent === "daily_summary", JSON.stringify(i2));
+
+  const i3 = detectOperatorIntent("flag an issue");
+  chk("opbot: detectOperatorIntent('flag an issue') → flag_issue",
+      i3.intent === "flag_issue", JSON.stringify(i3));
+
+  const i4 = detectOperatorIntent("flag the booking page is broken");
+  chk("opbot: detectOperatorIntent('flag the booking page is broken') → flag_issue",
+      i4.intent === "flag_issue", JSON.stringify(i4));
+
+  const i5 = detectOperatorIntent("xyzzyqq nonsense");
+  chk("opbot: detectOperatorIntent random nonsense → unknown",
+      i5.intent === "unknown", JSON.stringify(i5));
+
+  const i6 = detectOperatorIntent("bookings today");
+  chk("opbot: detectOperatorIntent('bookings today') → bookings_by_date",
+      i6.intent === "bookings_by_date" && i6.date_range?.label === "today");
+
+  const i7 = detectOperatorIntent("missed leads");
+  chk("opbot: detectOperatorIntent('missed leads') → missed_leads", i7.intent === "missed_leads");
+
+  const i8 = detectOperatorIntent("help");
+  chk("opbot: detectOperatorIntent('help') → help", i8.intent === "help");
+
+  // ── executeAction: flag_issue ────────────────────────────────────────────
+  {
+    const res = await executeAction({
+      action:       "flag_issue",
+      data:         { description: "test flag from suite" },
+      client:       { id: "csr_rea" },
+      integrations: {},
+    });
+    chk("opbot: executeAction('flag_issue') succeeds", res.success === true, JSON.stringify(res));
+    chk("opbot: executeAction('flag_issue') returns ownerReply",
+        typeof res.ownerReply === "string" && res.ownerReply.length > 0,
+        JSON.stringify(res));
+  }
+
+  // ── executeAction: flag_issue with no description prompts for one ────────
+  {
+    const res = await executeAction({
+      action:       "flag_issue",
+      data:         {},
+      client:       { id: "csr_rea" },
+      integrations: {},
+    });
+    chk("opbot: flag_issue without description still succeeds (no error)",
+        res.success === true, JSON.stringify(res));
+  }
+
+  // ── executeAction: get_bookings_by_date_range with no DB → graceful fail ─
+  {
+    const res = await executeAction({
+      action:       "get_bookings_by_date_range",
+      data:         { date_range: parseDateRange("Feb 2026") },
+      client:       { id: "csr_rea", fareharborCompanies: [{ shortname: "coloradosledrentals" }] },
+      integrations: {},
+    });
+    chk("opbot: get_bookings_by_date_range without DB → fallbackMessage set",
+        typeof res.fallbackMessage === "string" && res.fallbackMessage.length > 0,
+        JSON.stringify(res));
+    chk("opbot: get_bookings_by_date_range never throws raw 'not supported'",
+        !((res.fallbackMessage ?? "").includes("not supported")),
+        JSON.stringify(res));
+  }
+
+  // ── executeAction: daily_summary without DB → graceful fail ──────────────
+  {
+    const res = await executeAction({
+      action:       "daily_summary",
+      data:         {},
+      client:       { id: "csr_rea" },
+      integrations: {},
+    });
+    chk("opbot: daily_summary without DB → graceful fallback",
+        typeof res.fallbackMessage === "string" && res.fallbackMessage.length > 0,
+        JSON.stringify(res));
+  }
+
+  // ── executeAction: random nonsense action → friendly fallback ────────────
+  {
+    const res = await executeAction({
+      action:       "totally_made_up_action",
+      data:         {},
+      client:       { id: "csr_rea" },
+      integrations: {},
+    });
+    chk("opbot: unknown action returns success=true (no raw error)",
+        res.success === true, JSON.stringify(res));
+    chk("opbot: unknown action ownerReply is a try-asking hint",
+        typeof res.ownerReply === "string" && res.ownerReply.toLowerCase().includes("try asking"),
+        JSON.stringify(res));
+    chk("opbot: unknown action never says 'not supported'",
+        !((res.ownerReply ?? "").toLowerCase().includes("not supported")),
+        JSON.stringify(res));
+  }
+
+  // ── operatorBriefing: detectAndHandleOperatorCommand routes structured intents ─
+  {
+    const { detectAndHandleOperatorCommand } = await import("./operatorBriefing.js");
+    const mockClient = { id: "csr_rea", fareharborCompanies: [] };
+    const mockSupabase = null;
+
+    // legacy path still works
+    const legacyReply = await detectAndHandleOperatorCommand("weather", mockClient, mockSupabase);
+    chk("opbot: legacy 'weather' command still returns a string",
+        typeof legacyReply === "string" && legacyReply.length > 0);
+
+    // 'help' goes through the new parser
+    const helpReply = await detectAndHandleOperatorCommand("help", mockClient, mockSupabase);
+    chk("opbot: 'help' returns command list",
+        typeof helpReply === "string" && helpReply.toLowerCase().includes("daily summary"),
+        helpReply);
+
+    // 'random nonsense' → null (so orchestrator falls through to Claude)
+    const nullReply = await detectAndHandleOperatorCommand("random nonsense xyzzy", mockClient, mockSupabase);
+    chk("opbot: unmatched message returns null (Claude fallthrough)",
+        nullReply === null, JSON.stringify(nullReply));
   }
 }
 

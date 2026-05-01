@@ -9,6 +9,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getAllClients } from "./clients.js";
+import { detectOperatorIntent } from "./operatorIntentParser.js";
+import { executeAction, buildIntegrations } from "./actionEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL HELPERS — KB data accessors
@@ -361,7 +363,106 @@ export async function detectAndHandleOperatorCommand(message, client, supabase) 
     return formatRevenueResponse(rev);
   }
 
+  // ── Structured intent parser (date-aware, action-routed) ──────────────────
+  const intent = detectOperatorIntent(message);
+  const integrations = buildIntegrations({ supabase, client });
+
+  if (intent.intent === "help") {
+    return formatHelpResponse();
+  }
+
+  if (intent.intent === "flag_issue") {
+    const description = stripFlagKeywords(message);
+    const res = await executeAction({
+      action:       "flag_issue",
+      data:         { description },
+      context:      {},
+      client,
+      integrations,
+    });
+    return res.ownerReply ?? res.fallbackMessage ?? "Got it — I’ll flag that for review.";
+  }
+
+  if (intent.intent === "daily_summary") {
+    const res = await executeAction({
+      action:       "daily_summary",
+      data:         {},
+      context:      {},
+      client,
+      integrations,
+    });
+    return res.ownerReply ?? res.fallbackMessage ?? "Couldn't build daily summary right now.";
+  }
+
+  if (intent.intent === "bookings_by_date" && intent.date_range) {
+    const res = await executeAction({
+      action:       "get_bookings_by_date_range",
+      data:         { date_range: intent.date_range },
+      context:      {},
+      client,
+      integrations,
+    });
+    return res.ownerReply ?? res.fallbackMessage ?? "Couldn't retrieve bookings.";
+  }
+
+  if (intent.intent === "performance") {
+    const res = await executeAction({
+      action:       "analyze_performance",
+      data:         {},
+      context:      {},
+      client,
+      integrations,
+    });
+    return res.ownerReply ?? res.fallbackMessage ?? null;
+  }
+
+  if (intent.intent === "missed_leads") {
+    const res = await executeAction({
+      action:       "get_missed_leads",
+      data:         {},
+      context:      {},
+      client,
+      integrations,
+    });
+    return res.ownerReply ?? res.fallbackMessage ?? null;
+  }
+
+  if (intent.intent === "campaigns") {
+    const res = await executeAction({
+      action:       "get_campaign_stats",
+      data:         {},
+      context:      {},
+      client,
+      integrations,
+    });
+    return res.ownerReply ?? res.fallbackMessage ?? null;
+  }
+
+  // No deterministic match → return null so the orchestrator can fall through
+  // to Claude. Claude is always cheaper than confusion.
   return null;
+}
+
+function formatHelpResponse() {
+  return [
+    "Operator commands you can try:",
+    "• bookings today / tomorrow / this weekend",
+    "• bookings in Feb 2026",
+    "• daily summary",
+    "• new leads / missed leads",
+    "• weather / conditions",
+    "• revenue this week",
+    "• performance",
+    "• flag <issue>",
+  ].join("\n");
+}
+
+function stripFlagKeywords(message) {
+  if (!message) return "";
+  return message
+    .replace(/^\s*(please\s+)?(flag|log|report)\s+(an?\s+)?(issue|problem|bug)?\s*[:\-]?\s*/i, "")
+    .replace(/^\s*flag\s*[:\-]?\s*/i, "")
+    .trim();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
