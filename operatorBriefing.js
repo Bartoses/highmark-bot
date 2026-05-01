@@ -428,6 +428,17 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     return res.ownerReply ?? res.fallbackMessage ?? "Couldn't retrieve bookings.";
   }
 
+  if (intent.intent === "report") {
+    const res = await executeAction({
+      action:       "report",
+      data:         { date_range: intent.date_range, metric: intent.metric, group_by: intent.group_by },
+      context:      {},
+      client,
+      integrations,
+    });
+    return res.ownerReply ?? res.fallbackMessage ?? "Couldn't generate report right now.";
+  }
+
   if (intent.intent === "performance") {
     const res = await executeAction({
       action:       "analyze_performance",

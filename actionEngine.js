@@ -897,6 +897,127 @@ async function handleDailySummary(data, context, client, integrations) {
   }
 }
 
+// ── report ────────────────────────────────────────────────────────────────────
+// Season-aware grouped report: bookings/revenue/pax by activity or company.
+// Prefers DB2 daily_manifest (real FH data); falls back to confirmations_sent.
+async function handleReport(data, context, client, integrations) {
+  try {
+    const src = resolveBookingSource(integrations);
+    if (!src) return fail("Database unavailable for this report.");
+
+    const range = data.date_range ?? null;
+    if (!range?.start || !range?.end) {
+      return fail("Need a date range for this report. Try: 'bookings in winter 2025/2026 by activity'.");
+    }
+
+    const metric     = data.metric   ?? "bookings";
+    const groupBy    = data.group_by ?? "activity";
+    const groupField = groupBy === "company" ? "company" : src.itemField;
+
+    const shortnames = (client?.fareharborCompanies ?? [])
+      .map(c => c?.shortname).filter(Boolean);
+
+    let query = src.supabase
+      .from(src.table)
+      .select(src.columns)
+      .gte("start_at", range.start)
+      .lte("start_at", range.end)
+      .order("start_at", { ascending: true });
+    if (shortnames.length) query = query.in("company", shortnames);
+
+    const { data: rows, error } = await query;
+    if (error) {
+      console.error(`[actionEngine] report ${src.table} error:`, error.message);
+      return fail("Couldn't retrieve report data right now.");
+    }
+
+    const list  = rows ?? [];
+    const label = range.label ?? "that period";
+
+    if (!list.length) {
+      return ownerOk(
+        { total: 0, groups: {}, range, source: src.source },
+        `No bookings found for ${label} — try another range.`
+      );
+    }
+
+    // Aggregate in memory — one pass
+    const groups  = {};
+    const seenPks = src.dedupKey ? new Set() : null;
+    let totalPax = 0, totalRev = 0;
+
+    for (const r of list) {
+      const key = r[groupField] ?? "unknown";
+      if (!groups[key]) groups[key] = { count: 0, pax: 0, revenue: 0 };
+      groups[key].count += 1;
+
+      if (src.paxField && typeof r[src.paxField] === "number") {
+        groups[key].pax += r[src.paxField];
+        totalPax += r[src.paxField];
+      }
+      if (src.totalField && r[src.totalField] != null) {
+        const rev = Number(r[src.totalField]) || 0;
+        groups[key].revenue += rev;
+        totalRev += rev;
+      }
+      if (seenPks && r[src.dedupKey] != null) seenPks.add(r[src.dedupKey]);
+    }
+
+    const totalDistinct = seenPks ? seenPks.size : list.length;
+    const sorted = Object.entries(groups).sort(([, a], [, b]) => b.count - a.count);
+
+    // Format response
+    const capLabel = label.charAt(0).toUpperCase() + label.slice(1);
+    const lines = [`${capLabel}:`, `Total bookings: ${totalDistinct}`];
+    if (src.source === "manifest" && totalPax  > 0) lines.push(`Total pax: ${totalPax}`);
+    if (src.source === "manifest" && totalRev  > 0) lines.push(`Revenue: $${Math.round(totalRev).toLocaleString()}`);
+
+    const groupLabel = groupBy === "company" ? "By company:" : "Top activities:";
+    lines.push("", groupLabel);
+
+    for (const [name, g] of sorted.slice(0, 8)) {
+      let line = `• ${name}: ${g.count}`;
+      if (metric === "revenue" && g.revenue > 0) {
+        line += ` ($${Math.round(g.revenue).toLocaleString()})`;
+      } else if (src.source === "manifest" && g.pax > 0) {
+        line += ` (${g.pax} pax)`;
+      }
+      lines.push(line);
+    }
+    if (sorted.length > 8) lines.push(`…and ${sorted.length - 8} more.`);
+
+    // Company breakdown (only when grouping by activity and multiple companies present)
+    if (groupBy === "activity") {
+      const byCompany = {};
+      for (const r of list) {
+        const c = r.company ?? "unknown";
+        byCompany[c] = (byCompany[c] ?? 0) + 1;
+      }
+      const compEntries = Object.entries(byCompany).sort(([, a], [, b]) => b - a);
+      if (compEntries.length > 1) {
+        lines.push("", "By company:", ...compEntries.map(([c, n]) => `  • ${c}: ${n}`));
+      }
+    }
+
+    return ownerOk(
+      {
+        total:    totalDistinct,
+        pax:      totalPax,
+        revenue:  Math.round(totalRev),
+        groups:   Object.fromEntries(sorted),
+        range,
+        source:   src.source,
+        metric,
+        group_by: groupBy,
+      },
+      lines.join("\n")
+    );
+  } catch (e) {
+    console.error("[actionEngine] report error:", e.message);
+    return fail("Couldn't generate report right now.");
+  }
+}
+
 // ── execute_campaign ──────────────────────────────────────────────────────────
 // Called after owner confirms with YES. Enqueues the draft campaign for real send.
 async function handleExecuteCampaign(data, context, client, integrations) {
@@ -1012,6 +1133,11 @@ export async function executeAction(params) {
       case "bookings_by_date":
       case "bookings_in_range":
         return await handleGetBookingsByDateRange(data, context, client, integrations);
+
+      case "report":
+      case "grouped_report":
+      case "season_report":
+        return await handleReport(data, context, client, integrations);
 
       case "daily_summary":
       case "morning_summary":

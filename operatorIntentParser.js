@@ -232,6 +232,88 @@ export function parseDateRange(message) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// parseSeasonRange — pull a { start, end, label } window from season language.
+// Handles: "winter 2025/2026", "summer 2025", "this winter", "last summer", etc.
+// Returns null when no season phrase is found.
+//
+// Season boundaries (MT):
+//   winter: Dec 1 (startYear) → Mar 31 (startYear+1)
+//   summer: Jun 1 → Sep 30 (same year)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function parseSeasonRange(message) {
+  if (!message || typeof message !== "string") return null;
+  const msg = message.toLowerCase().trim();
+  const now  = new Date();
+  const today = mtParts(now);
+
+  const winterRange = (startYear) => ({
+    start: startOfDayMT(startYear, 11, 1),
+    end:   endOfDayMT(startYear + 1, 2, 31),
+    label: `winter ${startYear}/${startYear + 1}`,
+  });
+
+  const summerRange = (year) => ({
+    start: startOfDayMT(year, 5, 1),
+    end:   endOfDayMT(year, 8, 30),
+    label: `summer ${year}`,
+  });
+
+  // ── "winter 2025/2026" or "winter 2025-2026" ─────────────────────────────
+  const winterSlash = msg.match(/\bwinter\s+(\d{4})\s*[\/\-]\s*\d{2,4}\b/);
+  if (winterSlash) return winterRange(parseInt(winterSlash[1], 10));
+
+  // ── "this winter" ─────────────────────────────────────────────────────────
+  if (/\bthis\s+winter\b/.test(msg)) {
+    let sy;
+    if (today.month === 11)    sy = today.year;
+    else if (today.month <= 5) sy = today.year - 1;
+    else                        sy = today.year;
+    return winterRange(sy);
+  }
+
+  // ── "last winter" ─────────────────────────────────────────────────────────
+  if (/\blast\s+winter\b/.test(msg)) {
+    let sy;
+    if (today.month === 11)    sy = today.year - 1; // Dec: just entered new winter
+    else if (today.month <= 5) sy = today.year - 2; // Jan-May: in/just-past this winter, last = one before
+    else                        sy = today.year - 1; // Jun-Oct: last = the winter that ended this spring
+    return winterRange(sy);
+  }
+
+  // ── "winter 2025" (bare year — ski-industry convention: year = end year) ──
+  const winterYear = msg.match(/\bwinter\s+(\d{4})\b/);
+  if (winterYear) return winterRange(parseInt(winterYear[1], 10) - 1);
+
+  // ── bare "winter" (no year/this/last) → most recent winter ───────────────
+  if (/\bwinter\b/.test(msg) && !/\b(this|last|next)\b/.test(msg)) {
+    const sy = today.month <= 2 ? today.year - 1 : today.year - 1;
+    return winterRange(sy);
+  }
+
+  // ── "this summer" ─────────────────────────────────────────────────────────
+  if (/\bthis\s+summer\b/.test(msg)) {
+    return summerRange(today.month >= 9 ? today.year + 1 : today.year);
+  }
+
+  // ── "last summer" ─────────────────────────────────────────────────────────
+  if (/\blast\s+summer\b/.test(msg)) {
+    return summerRange(today.month <= 4 ? today.year - 1 : today.year);
+  }
+
+  // ── "summer 2025" ─────────────────────────────────────────────────────────
+  const summerYear = msg.match(/\bsummer\s+(\d{4})\b/);
+  if (summerYear) return summerRange(parseInt(summerYear[1], 10));
+
+  // ── bare "summer" ─────────────────────────────────────────────────────────
+  if (/\bsummer\b/.test(msg) && !/\b(this|last|next)\b/.test(msg)) {
+    return summerRange(today.month <= 4 ? today.year - 1 : today.year);
+  }
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // detectOperatorIntent — classify an operator SMS into a structured intent.
 // Returns { intent, date_range, metric, raw } where intent is one of:
 //   bookings_by_date    — needs date_range
@@ -301,6 +383,34 @@ export function detectOperatorIntent(message) {
   // new / recent leads
   if (/\bnew\s+leads?\b|\brecent\s+leads?\b/.test(msg)) {
     return { intent: "new_leads", date_range: null, metric: null, raw };
+  }
+
+  // report — season-aware, grouped aggregation (before bookings to intercept seasonal queries)
+  // Triggered by: season language, grouping qualifiers ("by activity"), aggregation phrases.
+  // Guard: skip when message is clearly about weather, not data.
+  {
+    const isWeatherQuery = /^weather$|\bweather\b|\bconditions?\b|^snow$|\bforecast\b/.test(msg);
+    if (!isWeatherQuery) {
+      const seasonRange  = parseSeasonRange(msg);
+      const hasGrouping  = /\bby\s+(activity|activities|product|item|service)\b/.test(msg);
+      const hasByCompany = /\bby\s+company\b/.test(msg);
+      const isItemQuery  = /\bitems?\s+sold\b|\btop\s+(products?|activities?|items?)\b/.test(msg);
+      const hasByRevenue = /\brevenue\s+by\s+(product|activity|item|company)\b/.test(msg);
+
+      if (seasonRange || hasGrouping || hasByCompany || isItemQuery || hasByRevenue) {
+        const dateRange = seasonRange ?? parseDateRange(msg) ?? parseDateRange("this month");
+
+        let groupBy = "activity";
+        if (hasByCompany) groupBy = "company";
+
+        let metric = "bookings";
+        if (/\brevenue\b/.test(msg))               metric = "revenue";
+        else if (/\bunits?\b|\bitems?\s+sold\b/.test(msg)) metric = "units";
+        else if (/\bpax\b/.test(msg))               metric = "pax";
+
+        return { intent: "report", date_range: dateRange, metric, group_by: groupBy, raw };
+      }
+    }
   }
 
   // bookings (with optional date range)

@@ -13258,6 +13258,127 @@ async function testOperatorBotUpgrade() {
   const i8 = detectOperatorIntent("help");
   chk("opbot: detectOperatorIntent('help') → help", i8.intent === "help");
 
+  // ── parseSeasonRange unit tests ───────────────────────────────────────────
+  const { parseSeasonRange } = await import("./operatorIntentParser.js");
+
+  const s1 = parseSeasonRange("winter 2025/2026");
+  chk("opbot: parseSeasonRange('winter 2025/2026') returns range", s1 !== null, JSON.stringify(s1));
+  chk("opbot: parseSeasonRange('winter 2025/2026') label correct", s1?.label === "winter 2025/2026", s1?.label);
+  chk("opbot: parseSeasonRange('winter 2025/2026') starts Dec 2025",
+      s1?.start?.includes("2025-12-01"), s1?.start);
+  chk("opbot: parseSeasonRange('winter 2025/2026') ends in April 2026 UTC (=Mar 31 MT)",
+      s1?.end?.startsWith("2026-04-01"), s1?.end);
+
+  const s2 = parseSeasonRange("summer 2025");
+  chk("opbot: parseSeasonRange('summer 2025') returns range", s2 !== null);
+  chk("opbot: parseSeasonRange('summer 2025') starts Jun 2025", s2?.start?.includes("2025-06-01"), s2?.start);
+  chk("opbot: parseSeasonRange('summer 2025') ends in Oct 2025 UTC (=Sep 30 MT)",
+      s2?.end?.startsWith("2025-10-01"), s2?.end);
+
+  const s3 = parseSeasonRange("winter 2025");
+  chk("opbot: parseSeasonRange('winter 2025') → Dec 2024 – Mar 2025 (end-year convention)",
+      s3?.start?.includes("2024-12-01") && s3?.label === "winter 2024/2025", JSON.stringify(s3));
+
+  const s4 = parseSeasonRange("this winter");
+  chk("opbot: parseSeasonRange('this winter') returns range", s4 !== null);
+
+  const s5 = parseSeasonRange("last winter");
+  chk("opbot: parseSeasonRange('last winter') returns range", s5 !== null);
+  chk("opbot: parseSeasonRange('last winter') is before this winter",
+      new Date(s5?.end) < new Date(s4?.start), `last=${s5?.label} this=${s4?.label}`);
+
+  chk("opbot: parseSeasonRange('hello world') → null", parseSeasonRange("hello world") === null);
+  chk("opbot: parseSeasonRange(null) → null", parseSeasonRange(null) === null);
+
+  // ── detectOperatorIntent: report intent ───────────────────────────────────
+  const r1 = detectOperatorIntent("bookings in winter 2025/2026 by activity");
+  chk("opbot: 'bookings in winter 2025/2026 by activity' → report", r1.intent === "report", JSON.stringify(r1));
+  chk("opbot: report intent has date_range", r1.date_range !== null, JSON.stringify(r1));
+  chk("opbot: report intent group_by=activity", r1.group_by === "activity", r1.group_by);
+  chk("opbot: report intent has winter label", (r1.date_range?.label ?? "").includes("winter"), r1.date_range?.label);
+
+  const r2 = detectOperatorIntent("items sold this winter");
+  chk("opbot: 'items sold this winter' → report", r2.intent === "report", JSON.stringify(r2));
+  chk("opbot: 'items sold this winter' metric=units", r2.metric === "units", r2.metric);
+
+  const r3 = detectOperatorIntent("revenue by product last month");
+  chk("opbot: 'revenue by product last month' → report", r3.intent === "report", JSON.stringify(r3));
+  chk("opbot: 'revenue by product' metric=revenue", r3.metric === "revenue", r3.metric);
+
+  const r4 = detectOperatorIntent("winter 2025 bookings");
+  chk("opbot: 'winter 2025 bookings' → report (not bookings_by_date)", r4.intent === "report", JSON.stringify(r4));
+  chk("opbot: 'winter 2025 bookings' no 'today' in label",
+      !(r4.date_range?.label ?? "").includes("today"), r4.date_range?.label);
+
+  const r5 = detectOperatorIntent("bookings in feb 2026");
+  chk("opbot: 'bookings in feb 2026' still → bookings_by_date (no grouping)", r5.intent === "bookings_by_date", JSON.stringify(r5));
+
+  const r6 = detectOperatorIntent("weather conditions in winter");
+  chk("opbot: 'weather conditions in winter' → weather (not report)", r6.intent === "weather", JSON.stringify(r6));
+
+  const r7 = detectOperatorIntent("top activities last month");
+  chk("opbot: 'top activities last month' → report", r7.intent === "report", JSON.stringify(r7));
+
+  // ── executeAction: report with DB2 mock ───────────────────────────────────
+  {
+    const manifestRows = [
+      { fareharbor_pk: "W-1", company: "coloradosledrentals", activity: "Polaris 850 Khaos", start_at: "2026-01-10T15:00:00Z", pax: 2, total: 500 },
+      { fareharbor_pk: "W-2", company: "coloradosledrentals", activity: "Fuel Steamboat",    start_at: "2026-01-12T16:00:00Z", pax: 1, total: 80  },
+      { fareharbor_pk: "W-3", company: "rabbitearsadventures", activity: "First Tracks Tour",  start_at: "2026-02-05T17:00:00Z", pax: 4, total: 1200},
+      { fareharbor_pk: "W-3", company: "rabbitearsadventures", activity: "First Tracks Tour",  start_at: "2026-02-05T17:00:00Z", pax: 4, total: 1200}, // dup pk
+      { fareharbor_pk: "W-4", company: "coloradosledrentals", activity: "Polaris 850 Khaos", start_at: "2026-02-20T18:00:00Z", pax: 2, total: 500 },
+    ];
+    const stubQ = {
+      select() { return this; }, gte() { return this; }, lte() { return this; },
+      order() { return this; }, in() { return this; },
+      then(resolve) { resolve({ data: manifestRows, error: null }); return this; },
+    };
+    const stubCrm = { from: () => stubQ };
+    const intgCrm = { crmDatabase: { supabase: stubCrm } };
+    const { parseSeasonRange: psr } = await import("./operatorIntentParser.js");
+
+    const rpt = await executeAction({
+      action:       "report",
+      data:         { date_range: psr("winter 2025/2026"), metric: "bookings", group_by: "activity" },
+      client:       { id: "csr_rea", fareharborCompanies: [{ shortname: "coloradosledrentals" }, { shortname: "rabbitearsadventures" }] },
+      integrations: intgCrm,
+    });
+    chk("opbot: report action succeeds", rpt.success === true, JSON.stringify(rpt));
+    chk("opbot: report source=manifest", rpt.result?.source === "manifest", rpt.result?.source);
+    chk("opbot: report total distinct bookings = 4 (deduped W-3)",
+        rpt.result?.total === 4, JSON.stringify(rpt.result));
+    chk("opbot: report reply includes 'Top activities'",
+        (rpt.ownerReply ?? "").includes("Top activities"), rpt.ownerReply);
+    chk("opbot: report reply includes 'Polaris 850 Khaos'",
+        (rpt.ownerReply ?? "").includes("Polaris 850 Khaos"), rpt.ownerReply);
+    chk("opbot: report reply includes revenue",
+        (rpt.ownerReply ?? "").includes("Revenue:"), rpt.ownerReply);
+    chk("opbot: report reply does NOT include 'today'",
+        !(rpt.ownerReply ?? "").toLowerCase().includes("today"), rpt.ownerReply);
+  }
+
+  // ── report: no DB → graceful fail ─────────────────────────────────────────
+  {
+    const res = await executeAction({
+      action: "report", data: { date_range: { start: "2026-01-01T07:00:00Z", end: "2026-04-01T06:59:59Z", label: "winter 2025/2026" } },
+      client: { id: "csr_rea" }, integrations: {},
+    });
+    chk("opbot: report without DB → fail with message", typeof res.fallbackMessage === "string" && res.fallbackMessage.length > 0, JSON.stringify(res));
+  }
+
+  // ── detectAndHandleOperatorCommand: report intent end-to-end ─────────────
+  {
+    const { detectAndHandleOperatorCommand } = await import("./operatorBriefing.js");
+    const mc = { id: "csr_rea", fareharborCompanies: [] };
+
+    // No DB → returns the "no data" message (not revenue estimate, not "today")
+    const reply = await detectAndHandleOperatorCommand("bookings in winter 2025/2026 by activity", mc, null);
+    chk("opbot: 'bookings in winter 2025/2026 by activity' routed to report (not revenue estimate)",
+        typeof reply === "string" && !reply.includes("converted leads × $175"), reply);
+    chk("opbot: 'winter 2025 bookings' no 'today' in response",
+        !(await detectAndHandleOperatorCommand("winter 2025 bookings", mc, null) ?? "").includes("today"));
+  }
+
   // ── executeAction: flag_issue ────────────────────────────────────────────
   {
     const res = await executeAction({
