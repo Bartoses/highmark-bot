@@ -13329,6 +13329,54 @@ async function testOperatorBotUpgrade() {
         JSON.stringify(res));
   }
 
+  // ── daily_manifest source: bookings handler prefers DB2 over DB1 ─────────
+  // Build a stub crmSupabase that returns 6 manifest rows (4 distinct bookings,
+  // 2 line items shared, ~$2400 revenue, 9 pax). Bot should pick this source.
+  {
+    const manifestRows = [
+      { fareharbor_pk: "B-1", company: "coloradosledrentals", activity: "Fuel Steamboat",          start_at: "2026-02-10T15:00:00Z", pax: 1, total: 80   },
+      { fareharbor_pk: "B-1", company: "coloradosledrentals", activity: "Fuel Steamboat",          start_at: "2026-02-10T15:00:00Z", pax: 1, total: 80   },
+      { fareharbor_pk: "B-2", company: "coloradosledrentals", activity: "Beginner Backcountry",    start_at: "2026-02-12T17:00:00Z", pax: 2, total: 600  },
+      { fareharbor_pk: "B-3", company: "rabbitearsadventures", activity: "First Tracks Tour",      start_at: "2026-02-14T16:00:00Z", pax: 4, total: 1200 },
+      { fareharbor_pk: "B-4", company: "coloradosledrentals", activity: "Beginner Backcountry",    start_at: "2026-02-20T18:00:00Z", pax: 1, total: 300  },
+      { fareharbor_pk: "B-4", company: "coloradosledrentals", activity: "Fuel Steamboat",          start_at: "2026-02-20T18:00:00Z", pax: 1, total: 80   },
+    ];
+    const stubQuery = {
+      _filters: [],
+      select() { return this; },
+      gte()    { return this; },
+      lte()    { return this; },
+      order()  { return this; },
+      in()     { return this; },
+      then(resolve) { resolve({ data: manifestRows, error: null }); return this; },
+    };
+    const stubCrmSb = { from: () => stubQuery };
+
+    const integrationsWithCrm = { crmDatabase: { supabase: stubCrmSb } };
+    const r = await executeAction({
+      action:       "get_bookings_by_date_range",
+      data:         { date_range: parseDateRange("Feb 2026") },
+      client:       { id: "csr_rea", fareharborCompanies: [{ shortname: "coloradosledrentals" }, { shortname: "rabbitearsadventures" }] },
+      integrations: integrationsWithCrm,
+    });
+    chk("opbot: bookings via DB2 manifest — source=manifest",
+        r.result?.source === "manifest", JSON.stringify(r));
+    chk("opbot: bookings via DB2 manifest — distinct bookings = 4",
+        r.result?.distinct_bookings === 4, JSON.stringify(r.result));
+    chk("opbot: bookings via DB2 manifest — line items = 6",
+        r.result?.line_items === 6, JSON.stringify(r.result));
+    chk("opbot: bookings via DB2 manifest — pax = 10",
+        r.result?.pax === 10, JSON.stringify(r.result));
+    chk("opbot: bookings via DB2 manifest — revenue = 2340",
+        r.result?.revenue === 2340, JSON.stringify(r.result));
+    chk("opbot: bookings reply mentions revenue",
+        (r.ownerReply ?? "").includes("revenue"), r.ownerReply);
+    chk("opbot: bookings reply mentions activities",
+        (r.ownerReply ?? "").includes("Top activities"), r.ownerReply);
+    chk("opbot: headline number is distinct bookings (4), not row count",
+        (r.ownerReply ?? "").startsWith("Bookings feb 2026: 4"), r.ownerReply);
+  }
+
   // ── operatorBriefing: detectAndHandleOperatorCommand routes structured intents ─
   {
     const { detectAndHandleOperatorCommand } = await import("./operatorBriefing.js");

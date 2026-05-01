@@ -324,7 +324,7 @@ export async function sendOperatorBriefing(client, supabase, twilioClient) {
 // Call before Claude in owner mode. Returns formatted string or null.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function detectAndHandleOperatorCommand(message, client, supabase) {
+export async function detectAndHandleOperatorCommand(message, client, supabase, crmSupabase = null) {
   const msg = (message ?? "").toLowerCase().trim();
 
   // BOOKINGS TODAY
@@ -365,7 +365,7 @@ export async function detectAndHandleOperatorCommand(message, client, supabase) 
 
   // ── Structured intent parser (date-aware, action-routed) ──────────────────
   const intent = detectOperatorIntent(message);
-  const integrations = buildIntegrations({ supabase, client });
+  const integrations = buildIntegrations({ supabase, crmSupabase, client });
 
   if (intent.intent === "help") {
     return formatHelpResponse();

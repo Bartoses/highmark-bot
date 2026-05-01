@@ -640,14 +640,80 @@ async function handleFlagIssue(data, context, client, integrations) {
   }
 }
 
+// ── Booking source resolver ───────────────────────────────────────────────────
+// Prefers DB2 daily_manifest (real FH manifest mirror with fareharbor_pk + pax +
+// total) when crmDatabase is available. Falls back to DB1 confirmations_sent
+// (bot-sent confirmations only — incomplete until CONFIRMATIONS_ENABLED=true).
+//
+// Returns { source, supabase, table, columns, dedupKey, paxField, totalField,
+//           itemField } so the caller can fetch + summarize uniformly.
+function resolveBookingSource(integrations) {
+  const crmSb = integrations?.crmDatabase?.supabase ?? null;
+  if (crmSb) {
+    return {
+      source:     "manifest",
+      supabase:   crmSb,
+      table:      "daily_manifest",
+      columns:    "fareharbor_pk, company, activity, start_at, pax, total",
+      dedupKey:   "fareharbor_pk",
+      paxField:   "pax",
+      totalField: "total",
+      itemField:  "activity",
+    };
+  }
+  const sb = integrations?.database?.supabase ?? null;
+  if (sb) {
+    return {
+      source:     "confirmations",
+      supabase:   sb,
+      table:      "confirmations_sent",
+      columns:    "company, item_name, start_at",
+      dedupKey:   null,
+      paxField:   null,
+      totalField: null,
+      itemField:  "item_name",
+    };
+  }
+  return null;
+}
+
+function summarizeBookingRows(rows, src) {
+  const byCompany = {};
+  const byItem    = {};
+  const seenPks   = src.dedupKey ? new Set() : null;
+  let totalRows   = 0;
+  let totalPax    = 0;
+  let totalRev    = 0;
+
+  for (const r of rows) {
+    totalRows += 1;
+    const c = r.company ?? "unknown";
+    byCompany[c] = (byCompany[c] ?? 0) + 1;
+    const it = r[src.itemField] ?? "unspecified";
+    byItem[it] = (byItem[it] ?? 0) + 1;
+    if (seenPks && r[src.dedupKey] != null) seenPks.add(r[src.dedupKey]);
+    if (src.paxField   && typeof r[src.paxField]   === "number") totalPax += r[src.paxField];
+    if (src.totalField && r[src.totalField] != null) totalRev += Number(r[src.totalField]) || 0;
+  }
+
+  return {
+    totalRows,
+    distinctBookings: seenPks ? seenPks.size : totalRows,
+    totalPax,
+    totalRev,
+    byCompany,
+    byItem,
+  };
+}
+
 // ── get_bookings_by_date_range ────────────────────────────────────────────────
-// Counts confirmed bookings (rows in confirmations_sent) for a date window and
-// breaks them down by company + top item_name. confirmations_sent has no
-// client_id column, so we filter by the client's fareharborCompanies shortnames.
+// Counts bookings for a date window; breaks down by company + top activity.
+// Uses DB2 daily_manifest when available (real numbers + revenue + pax),
+// otherwise falls back to DB1 confirmations_sent (bot-sent confirmations only).
 async function handleGetBookingsByDateRange(data, context, client, integrations) {
   try {
-    const supabase = integrations?.database?.supabase;
-    if (!supabase) return fail("Database unavailable for bookings.");
+    const src = resolveBookingSource(integrations);
+    if (!src) return fail("Database unavailable for bookings.");
 
     const range = data.date_range ?? null;
     if (!range?.start || !range?.end) {
@@ -658,9 +724,9 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
       .map(c => c?.shortname)
       .filter(Boolean);
 
-    let query = supabase
-      .from("confirmations_sent")
-      .select("company, item_name, start_at, guest_name")
+    let query = src.supabase
+      .from(src.table)
+      .select(src.columns)
       .gte("start_at", range.start)
       .lte("start_at", range.end)
       .order("start_at", { ascending: true });
@@ -671,47 +737,52 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
 
     const { data: rows, error } = await query;
     if (error) {
-      console.error("[actionEngine] get_bookings_by_date_range DB error:", error.message);
+      console.error(`[actionEngine] get_bookings_by_date_range ${src.table} error:`, error.message);
       return fail("Couldn't retrieve bookings right now.");
     }
 
-    const list = rows ?? [];
-    const total = list.length;
+    const list  = rows ?? [];
     const label = range.label ?? "that range";
 
-    if (!total) {
-      return ownerOk({ total: 0, range }, `No bookings found for ${label}.`);
+    if (!list.length) {
+      return ownerOk({ total: 0, range, source: src.source }, `No bookings found for ${label}.`);
     }
 
-    const byCompany = {};
-    const byItem    = {};
-    for (const r of list) {
-      const c = r.company ?? "unknown";
-      byCompany[c] = (byCompany[c] ?? 0) + 1;
-      const it = r.item_name ?? "unspecified";
-      byItem[it] = (byItem[it] ?? 0) + 1;
-    }
+    const sum = summarizeBookingRows(list, src);
+    // Headline number: distinct bookings when we have fareharbor_pk, otherwise rows.
+    const headline = src.dedupKey ? sum.distinctBookings : sum.totalRows;
 
-    const companyLines = Object.entries(byCompany)
+    const companyLines = Object.entries(sum.byCompany)
       .sort(([, a], [, b]) => b - a)
       .map(([c, n]) => `  • ${c}: ${n}`);
-    const topItems = Object.entries(byItem)
+    const topItems = Object.entries(sum.byItem)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 3)
       .map(([n, c]) => `  • ${n} (${c})`);
 
     const lines = [
-      `Bookings ${label}: ${total}`,
-      "",
-      "By company:",
-      ...companyLines,
+      `Bookings ${label}: ${headline}`,
     ];
+    if (src.source === "manifest") {
+      lines.push(`(${sum.totalRows} line items, ${sum.totalPax} pax, $${sum.totalRev.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue)`);
+    }
+    lines.push("", "By company:", ...companyLines);
     if (topItems.length) {
-      lines.push("", "Top items:", ...topItems);
+      lines.push("", "Top activities:", ...topItems);
     }
 
     return ownerOk(
-      { total, byCompany, byItem, range },
+      {
+        total:             headline,
+        line_items:        sum.totalRows,
+        distinct_bookings: sum.distinctBookings,
+        pax:               sum.totalPax,
+        revenue:           sum.totalRev,
+        byCompany:         sum.byCompany,
+        byItem:            sum.byItem,
+        range,
+        source:            src.source,
+      },
       lines.join("\n")
     );
   } catch (e) {
@@ -728,11 +799,12 @@ const DAILY_SUMMARY_TTL_MS = 60 * 1000;
 
 async function handleDailySummary(data, context, client, integrations) {
   try {
-    const supabase = integrations?.database?.supabase;
-    if (!supabase) return fail("Database unavailable for daily summary.");
+    const dbSb = integrations?.database?.supabase ?? null;
+    const src  = resolveBookingSource(integrations);
+    if (!dbSb && !src) return fail("Database unavailable for daily summary.");
 
     const clientId = client?.id ?? null;
-    const cacheKey = `summary:${clientId}`;
+    const cacheKey = `summary:${clientId}:${src?.source ?? "none"}`;
     const cached   = DAILY_SUMMARY_CACHE.get(cacheKey);
     if (cached && Date.now() - cached.at < DAILY_SUMMARY_TTL_MS) {
       return ownerOk(cached.data, cached.reply);
@@ -747,24 +819,26 @@ async function handleDailySummary(data, context, client, integrations) {
       .map(c => c?.shortname)
       .filter(Boolean);
 
-    const baseBooking = () => {
-      let q = supabase.from("confirmations_sent").select("id, item_name, start_at", { count: "exact" });
+    const fetchRange = (range) => {
+      if (!src) return Promise.resolve({ data: [], error: null });
+      let q = src.supabase.from(src.table).select(src.columns)
+        .gte("start_at", range.start).lte("start_at", range.end);
       if (shortnames.length) q = q.in("company", shortnames);
       return q;
     };
 
     const [todayRes, tomorrowRes, newLeadsRes, pipelineRes] = await Promise.all([
-      baseBooking().gte("start_at", todayRange.start).lte("start_at", todayRange.end),
-      baseBooking().gte("start_at", tomorrowRange.start).lte("start_at", tomorrowRange.end),
-      clientId
-        ? supabase
+      fetchRange(todayRange),
+      fetchRange(tomorrowRange),
+      clientId && dbSb
+        ? dbSb
             .from("leads")
             .select("id, status, created_at", { count: "exact" })
             .eq("client_id", clientId)
             .gte("created_at", since24h)
         : Promise.resolve({ data: [], count: 0 }),
-      clientId
-        ? supabase
+      clientId && dbSb
+        ? dbSb
             .from("leads")
             .select("status")
             .eq("client_id", clientId)
@@ -772,31 +846,47 @@ async function handleDailySummary(data, context, client, integrations) {
         : Promise.resolve({ data: [] }),
     ]);
 
-    const todayCount    = todayRes.count    ?? (todayRes.data?.length    ?? 0);
-    const tomorrowCount = tomorrowRes.count ?? (tomorrowRes.data?.length ?? 0);
-    const newLeads      = newLeadsRes.count ?? (newLeadsRes.data?.length ?? 0);
-    const pipeline      = (pipelineRes.data ?? []).length;
+    const summarize = (res) => {
+      if (!src) return { distinctBookings: 0, totalPax: 0, totalRev: 0 };
+      return summarizeBookingRows(res.data ?? [], src);
+    };
+
+    const todaySum    = summarize(todayRes);
+    const tomorrowSum = summarize(tomorrowRes);
+    const newLeads    = newLeadsRes.count ?? (newLeadsRes.data?.length ?? 0);
+    const pipeline    = (pipelineRes.data ?? []).length;
+
+    const todayCount    = src?.dedupKey ? todaySum.distinctBookings    : (todayRes.data?.length    ?? 0);
+    const tomorrowCount = src?.dedupKey ? tomorrowSum.distinctBookings : (tomorrowRes.data?.length ?? 0);
 
     const confirmStatus = (process.env.CONFIRMATIONS_ENABLED === "true")
       ? "live"
       : "test mode";
 
-    const lines = [
-      "Daily Summary:",
-      `• Bookings today: ${todayCount}`,
-      `• Bookings tomorrow: ${tomorrowCount}`,
-      `• New leads (24h): ${newLeads}`,
-      `• Open pipeline: ${pipeline}`,
-      `• Confirmations: ${confirmStatus}`,
-    ];
+    const lines = ["Daily Summary:"];
+    if (src?.source === "manifest") {
+      lines.push(`• Bookings today: ${todayCount} (${todaySum.totalPax} pax, $${Math.round(todaySum.totalRev).toLocaleString()})`);
+      lines.push(`• Bookings tomorrow: ${tomorrowCount} (${tomorrowSum.totalPax} pax, $${Math.round(tomorrowSum.totalRev).toLocaleString()})`);
+    } else {
+      lines.push(`• Bookings today: ${todayCount}`);
+      lines.push(`• Bookings tomorrow: ${tomorrowCount}`);
+    }
+    lines.push(`• New leads (24h): ${newLeads}`);
+    lines.push(`• Open pipeline: ${pipeline}`);
+    lines.push(`• Confirmations: ${confirmStatus}`);
     const reply = lines.join("\n");
 
     const result = {
       bookings_today:    todayCount,
       bookings_tomorrow: tomorrowCount,
+      pax_today:         todaySum.totalPax,
+      pax_tomorrow:      tomorrowSum.totalPax,
+      revenue_today:     todaySum.totalRev,
+      revenue_tomorrow:  tomorrowSum.totalRev,
       new_leads_24h:     newLeads,
       pipeline,
       confirm_status:    confirmStatus,
+      source:            src?.source ?? "none",
     };
 
     DAILY_SUMMARY_CACHE.set(cacheKey, { at: Date.now(), data: result, reply });
