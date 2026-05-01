@@ -24,7 +24,11 @@
 import { scheduleMessage } from "./scheduler.js";
 import { trackDemoEvent }  from "./demoAnalytics.js";
 
-const VALID_AUDIENCE_TYPES = ["all_leads", "engaged_leads", "new_leads", "missed_leads"];
+const VALID_AUDIENCE_TYPES = [
+  "all_leads", "engaged_leads", "new_leads", "missed_leads",
+  "crm_contacts",  // DB2 opted-in CRM contacts (FareHarbor customers)
+  "all_contacts",  // DB1 leads + DB2 CRM contacts merged & deduped
+];
 const VALID_STATUSES       = ["draft", "scheduled", "sending", "sent", "failed"];
 const PACE_MS              = 200; // ms between messages to avoid Twilio rate limits
 
@@ -86,10 +90,22 @@ export async function createCampaign(supabase, {
 }
 
 // ── selectAudience ────────────────────────────────────────────────────────────
-// Returns the list of leads to target for a given campaign.
-// Filters: must have a contact_phone, must not have opted out (future).
+// Returns the list of contacts to target for a given campaign.
+// Result shape: [{ id, contact_phone, contact_name, source }]
+//   source: "lead" (DB1) | "crm" (DB2)
+//
+// audience_type values:
+//   all_leads / engaged_leads / new_leads / missed_leads — DB1 leads only
+//   crm_contacts   — DB2 opted-in CRM contacts (FareHarbor customers)
+//   all_contacts   — DB1 leads + DB2 CRM contacts, merged & deduped by phone
 
-export async function selectAudience(supabase, { clientId, audienceType }) {
+export async function selectAudience(supabase, { clientId, audienceType }, crmSupabase = null) {
+  // ── DB2 CRM contacts only ──────────────────────────────────────────────────
+  if (audienceType === "crm_contacts") {
+    return fetchCrmContacts(crmSupabase);
+  }
+
+  // ── DB1 leads query ────────────────────────────────────────────────────────
   let query = supabase
     .from("leads")
     .select("id, contact_phone, contact_name, status")
@@ -118,7 +134,45 @@ export async function selectAudience(supabase, { clientId, audienceType }) {
 
   const { data, error } = await query;
   if (error) throw new Error(`[CAMPAIGNS] selectAudience failed: ${error.message}`);
-  return data ?? [];
+  const db1Leads = (data ?? []).map((l) => ({ ...l, source: "lead" }));
+
+  // ── Merge DB2 contacts for all_contacts ───────────────────────────────────
+  if (audienceType === "all_contacts") {
+    const crmContacts = await fetchCrmContacts(crmSupabase);
+    return mergeByPhone(db1Leads, crmContacts);
+  }
+
+  return db1Leads;
+}
+
+// Fetch opted-in contacts from DB2 CRM.
+// Falls back to empty array if crmSupabase is not configured.
+async function fetchCrmContacts(crmSupabase) {
+  if (!crmSupabase) {
+    console.warn("[CAMPAIGNS] crm_contacts requested but CRM_SUPABASE_URL is not configured");
+    return [];
+  }
+  const { data, error } = await crmSupabase
+    .from("contacts")
+    .select("phone, first_name, last_name")
+    .eq("opted_in", true)
+    .not("phone", "is", null);
+
+  if (error) throw new Error(`[CAMPAIGNS] fetchCrmContacts failed: ${error.message}`);
+
+  return (data ?? []).map((c) => ({
+    id:            null,
+    contact_phone: c.phone,
+    contact_name:  [c.first_name, c.last_name].filter(Boolean).join(" ") || null,
+    source:        "crm",
+  }));
+}
+
+// Merge two contact arrays, deduplicating by phone. DB1 leads take precedence.
+function mergeByPhone(db1Leads, crmContacts) {
+  const seen = new Set(db1Leads.map((l) => l.contact_phone));
+  const newFromCrm = crmContacts.filter((c) => !seen.has(c.contact_phone));
+  return [...db1Leads, ...newFromCrm];
 }
 
 // ── enqueueCampaign ───────────────────────────────────────────────────────────
@@ -134,11 +188,11 @@ export async function selectAudience(supabase, { clientId, audienceType }) {
 export async function enqueueCampaign(supabase, campaign, fromPhone, crmSupabase) {
   const now = Date.now();
 
-  // 1. Select audience
+  // 1. Select audience (pass crmSupabase so crm_contacts / all_contacts types work)
   const leads = await selectAudience(supabase, {
     clientId:     campaign.client_id,
     audienceType: campaign.audience_type,
-  });
+  }, crmSupabase);
 
   if (leads.length === 0) {
     console.log(`[CAMPAIGNS] ${campaign.id} — no recipients for audience=${campaign.audience_type}`);

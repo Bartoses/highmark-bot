@@ -459,14 +459,14 @@ export async function handlePortalUpdateLead(req, res, supabase) {
 
 // ── GET /portal/api/campaigns/audience-preview ────────────────────────────────
 // Returns count + sample names for a given audience_type, without sending.
-export async function handlePortalAudiencePreview(req, res, supabase) {
+export async function handlePortalAudiencePreview(req, res, supabase, crmSupabase = null) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   const clientId = resolvePortalClientId(req);
   if (!clientId) return res.status(400).json({ error: "client_id is required" });
 
   const audienceType = req.query.audience_type ?? "all_leads";
   try {
-    const leads = await selectAudience(supabase, { clientId, audienceType });
+    const leads = await selectAudience(supabase, { clientId, audienceType }, crmSupabase);
     const names = leads
       .map(l => (l.contact_name ?? "").split(" ")[0])
       .filter(Boolean)
