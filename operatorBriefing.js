@@ -545,7 +545,7 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
   // REVENUE / EARNINGS — only intercept bare revenue (no date range).
   // Date-specific queries ("revenue in Feb 2026", "revenue this winter") fall through to
   // the intent parser which routes them to the full DB aggregation engine.
-  if ((msg.match(/\brevenue\b/) || msg.match(/\bearnings?\b/)) && !msg.match(/\bbookings?\b/)) {
+  if ((msg.match(/\brevenue\b/) || msg.match(/\brev\b/) || msg.match(/\bearnings?\b/)) && !msg.match(/\bbookings?\b/)) {
     const hasDateRange = !!(parseDateRange(msg) ?? parseSeasonRange(msg));
     if (!hasDateRange) {
       const rev = await getWeeklyRevenueEstimate(client.id, supabase, crmSupabase);
@@ -588,7 +588,11 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
   if ((intent.intent === "bookings_by_date" || intent.intent === "revenue") && intent.date_range) {
     const res = await executeAction({
       action:  "get_bookings_by_date_range",
-      data:    { date_range: intent.date_range, metric: intent.metric ?? "bookings" },
+      data:    {
+        date_range:     intent.date_range,
+        metric:         intent.metric        ?? "bookings",
+        company_filter: intent.company_filter ?? null,
+      },
       context: {},
       client,
       integrations,

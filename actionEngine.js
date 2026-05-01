@@ -741,6 +741,45 @@ function limitTopResults(entries, n = 5) {
     .slice(0, n);
 }
 
+// ── resolveCompanyShortname ───────────────────────────────────────────────────
+// Maps a free-text company filter to a known FH shortname from the client config.
+// Also handles common acronyms (REA, CSR) and partial name matches.
+// Returns { shortname, displayName, exact } or null if no usable match found.
+function resolveCompanyShortname(filter, fareharborCompanies = []) {
+  if (!filter) return null;
+  const lower = filter.toLowerCase().trim();
+
+  // Try to match against known client companies
+  for (const co of fareharborCompanies) {
+    const sn   = (co.shortname ?? "").toLowerCase();
+    const name = (co.name      ?? "").toLowerCase();
+    // Exact shortname or full name match
+    if (sn === lower || name === lower) {
+      return { shortname: co.shortname, displayName: co.name ?? co.shortname, exact: true };
+    }
+    // Shortname contains filter, or filter contains shortname
+    if (sn.includes(lower) || lower.includes(sn)) {
+      return { shortname: co.shortname, displayName: co.name ?? co.shortname, exact: true };
+    }
+    // Name word overlap
+    const nameWords = name.split(/\s+/);
+    if (nameWords.some(w => w.length > 2 && lower.includes(w))) {
+      return { shortname: co.shortname, displayName: co.name ?? co.shortname, exact: true };
+    }
+  }
+
+  // Common acronym fallbacks (client-agnostic)
+  const ACRONYMS = { rea: "rabbitearsadventures", csr: "coloradosledrentals" };
+  if (ACRONYMS[lower]) {
+    const matched = fareharborCompanies.find(c => c.shortname === ACRONYMS[lower]);
+    if (matched) return { shortname: matched.shortname, displayName: matched.name ?? matched.shortname, exact: true };
+    return { shortname: ACRONYMS[lower], displayName: ACRONYMS[lower], exact: true };
+  }
+
+  // Fall back to ilike on whatever text was given
+  return { shortname: filter, displayName: filter, exact: false };
+}
+
 // ── get_bookings_by_date_range ────────────────────────────────────────────────
 // Counts bookings for a date window; breaks down by company + top activity.
 // Uses DB2 daily_manifest when available (real numbers + revenue + pax),
@@ -759,6 +798,12 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
       .map(c => c?.shortname)
       .filter(Boolean);
 
+    // Company filter: explicit filter (from follow-up) overrides client-wide scope.
+    const companyFilter = data.company_filter ?? null;
+    const resolvedCompany = companyFilter
+      ? resolveCompanyShortname(companyFilter, client?.fareharborCompanies ?? [])
+      : null;
+
     let query = src.supabase
       .from(src.table)
       .select(src.columns)
@@ -766,7 +811,14 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
       .lte("start_at", range.end)
       .order("start_at", { ascending: true });
 
-    if (shortnames.length) {
+    if (resolvedCompany) {
+      // Exact match on resolved shortname, or ilike fallback for unknown companies
+      if (resolvedCompany.exact) {
+        query = query.eq("company", resolvedCompany.shortname);
+      } else {
+        query = query.ilike("company", `%${resolvedCompany.shortname}%`);
+      }
+    } else if (shortnames.length) {
       query = query.in("company", shortnames);
     }
 
@@ -779,17 +831,21 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
     const list   = rows ?? [];
     const label  = range.label ?? "that range";
     const metric = data.metric ?? "bookings";
+    // Prepend company scope to label when filtering to one company
+    const scopeLabel = resolvedCompany
+      ? `${resolvedCompany.displayName} — ${label}`
+      : label;
 
     if (!list.length) {
       return ownerOk(
         { total: 0, range, source: src.source },
-        `I couldn't find any records in your CRM for ${label}.\n\nTry adjusting the timeframe or filters.`
+        `I couldn't find any records in your CRM for ${scopeLabel}.\n\nTry adjusting the timeframe or filters.`
       );
     }
 
     const sum      = aggregateBookings(list, src);
     const headline = src.dedupKey ? sum.distinctBookings : sum.totalRows;
-    const capLabel = label.charAt(0).toUpperCase() + label.slice(1);
+    const capLabel = scopeLabel.charAt(0).toUpperCase() + scopeLabel.slice(1);
 
     const lines = [`${capLabel}:`, `Total bookings: ${headline.toLocaleString()}`];
 

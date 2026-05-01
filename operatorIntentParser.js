@@ -420,8 +420,8 @@ export function detectOperatorIntent(message) {
   const companyFilter = extractCompanyFilter(msg);
   if (companyFilter) {
     const range  = parseSeasonRange(msg) ?? parseDateRange(msg) ?? parseSeasonRange("this winter");
-    const metric = /\brevenue\b|\bearnings?\b/.test(msg) ? "revenue"
-                 : /\bpax\b|\bguests?\b/.test(msg)      ? "pax"
+    const metric = /\brevenue\b|\brev\b|\bearnings?\b/.test(msg) ? "revenue"
+                 : /\bpax\b|\bguests?\b/.test(msg)             ? "pax"
                  : "bookings";
     return { intent: "bookings_by_date", date_range: range, metric, company_filter: companyFilter, raw };
   }
@@ -457,7 +457,7 @@ export function detectOperatorIntent(message) {
 
   // revenue / earnings — with date range → route to full DB aggregation;
   // bare revenue → "revenue" intent, caught by early check in operatorBriefing
-  if (/\brevenue\b|\bearnings?\b|\bsales\b/.test(msg)) {
+  if (/\brevenue\b|\brev\b|\bearnings?\b|\bsales\b/.test(msg)) {
     const range = parseSeasonRange(msg) ?? parseDateRange(msg);
     if (range) {
       return { intent: "bookings_by_date", date_range: range, metric: "revenue", raw };
@@ -512,7 +512,7 @@ const SKIP_WORDS = new Set(["me", "us", "them", "it", "this", "that", "all", "no
 function cleanCompanyExtract(raw) {
   return raw
     .replace(/^(?:show\s+(?:me\s+)?|tell\s+me\s+|give\s+me\s+)/, "")
-    .replace(/\b(revenue|earnings?|sales|bookings?|pax|guests?)\s*$/, "")
+    .replace(/\b(rev|revenue|earnings?|sales|bookings?|pax|guests?)\s*$/, "")
     .replace(/\b(this|last)\s+(winter|summer|month|week|year)\s*$/, "")
     .replace(/\bin\s+\w+\s*\d{4}\s*$/, "")
     .trim();
@@ -541,5 +541,25 @@ export function extractCompanyFilter(msg) {
       }
     }
   }
+
+  // Contextual fallback: "COMPANY METRIC [DATE]" — company text precedes a metric keyword.
+  // E.g. "rabbit ears adventure rev in winter 2025/2026" → "rabbit ears adventure"
+  const METRIC_PAT = /\b(rev|revenue|earnings?|sales|pax|bookings?|tours?|trips?)\b/;
+  const FILLER_STARTS = new Set([
+    "let", "can", "what", "how", "when", "where", "show", "tell", "give", "get",
+    "find", "total", "all", "the", "our", "my", "your", "any", "some",
+  ]);
+  const mMetric = lower.match(METRIC_PAT);
+  if (mMetric) {
+    const cutoff = lower.indexOf(mMetric[0]);
+    if (cutoff >= 3) {
+      const candidate = cleanCompanyExtract(lower.slice(0, cutoff).trim().replace(/['"]/g, ""));
+      const firstWord = candidate.split(/\s+/)[0];
+      if (candidate.length >= 2 && !SKIP_WORDS.has(candidate) && !FILLER_STARTS.has(firstWord)) {
+        return candidate;
+      }
+    }
+  }
+
   return null;
 }
