@@ -233,13 +233,13 @@ function seasonToDateRange(season) {
       return { after: `${wy}-12-01`, before: `${wy + 1}-03-31` };
     }
     case "summer": {
-      // Current/most-recent summer: Jun-Oct
-      const sy = (month >= 6 && month <= 10) ? year : year - 1;
-      return { after: `${sy}-06-01`, before: `${sy}-10-31` };
+      // Current/most-recent summer: Apr-Oct (Kremmling opens April, Steamboat late May)
+      const sy = (month >= 4 && month <= 10) ? year : year - 1;
+      return { after: `${sy}-04-01`, before: `${sy}-10-31` };
     }
     case "last_summer": {
-      const sy = (month >= 6 && month <= 10) ? year - 1 : year - 2;
-      return { after: `${sy}-06-01`, before: `${sy}-10-31` };
+      const sy = (month >= 4 && month <= 10) ? year - 1 : year - 2;
+      return { after: `${sy}-04-01`, before: `${sy}-10-31` };
     }
     default:
       return null;

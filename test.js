@@ -13419,9 +13419,9 @@ async function testOperatorBotUpgrade() {
 
   const s2 = parseSeasonRange("summer 2025");
   chk("opbot: parseSeasonRange('summer 2025') returns range", s2 !== null);
-  chk("opbot: parseSeasonRange('summer 2025') starts Jun 2025", s2?.start?.includes("2025-06-01"), s2?.start);
-  chk("opbot: parseSeasonRange('summer 2025') ends in Oct 2025 UTC (=Sep 30 MT)",
-      s2?.end?.startsWith("2025-10-01"), s2?.end);
+  chk("opbot: parseSeasonRange('summer 2025') starts Apr 2025", s2?.start?.includes("2025-04-01"), s2?.start);
+  chk("opbot: parseSeasonRange('summer 2025') ends in Nov 2025 UTC (=Oct 31 MT)",
+      s2?.end?.startsWith("2025-11-01"), s2?.end);
 
   const s3 = parseSeasonRange("winter 2025");
   chk("opbot: parseSeasonRange('winter 2025') → Dec 2024 – Mar 2025 (end-year convention)",

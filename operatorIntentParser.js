@@ -238,7 +238,8 @@ export function parseDateRange(message) {
 //
 // Season boundaries (MT):
 //   winter: Dec 1 (startYear) → Mar 31 (startYear+1)
-//   summer: Jun 1 → Sep 30 (same year)
+//   summer: Apr 1 → Oct 31 (same year) — covers Kremmling (opens April) and
+//           Steamboat (opens late May) operating windows for CSR/REA.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function parseSeasonRange(message) {
@@ -254,8 +255,8 @@ export function parseSeasonRange(message) {
   });
 
   const summerRange = (year) => ({
-    start: startOfDayMT(year, 5, 1),
-    end:   endOfDayMT(year, 8, 30),
+    start: startOfDayMT(year, 3, 1),
+    end:   endOfDayMT(year, 9, 31),
     label: `summer ${year}`,
   });
 
@@ -292,13 +293,15 @@ export function parseSeasonRange(message) {
   }
 
   // ── "this summer" ─────────────────────────────────────────────────────────
+  // Apr-Oct: currently in summer → current year. Nov-Dec: past summer → next year.
   if (/\bthis\s+summer\b/.test(msg)) {
-    return summerRange(today.month >= 9 ? today.year + 1 : today.year);
+    return summerRange(today.month >= 10 ? today.year + 1 : today.year);
   }
 
   // ── "last summer" ─────────────────────────────────────────────────────────
+  // Jan-Oct: previous year's summer is most recent completed. Nov-Dec: current year's summer just ended.
   if (/\blast\s+summer\b/.test(msg)) {
-    return summerRange(today.month <= 4 ? today.year - 1 : today.year);
+    return summerRange(today.month <= 9 ? today.year - 1 : today.year);
   }
 
   // ── "summer 2025" ─────────────────────────────────────────────────────────
@@ -307,7 +310,7 @@ export function parseSeasonRange(message) {
 
   // ── bare "summer" ─────────────────────────────────────────────────────────
   if (/\bsummer\b/.test(msg) && !/\b(this|last|next)\b/.test(msg)) {
-    return summerRange(today.month <= 4 ? today.year - 1 : today.year);
+    return summerRange(today.month <= 9 ? today.year - 1 : today.year);
   }
 
   return null;
