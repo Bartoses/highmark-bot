@@ -425,19 +425,20 @@ export function detectOperatorIntent(message, seasonConfig = null) {
   {
     const isWeatherQuery = /^weather$|\bweather\b|\bconditions?\b|^snow$|\bforecast\b/.test(msg);
     if (!isWeatherQuery) {
-      const seasonRange  = ps(msg);
-      const hasGrouping  = /\bby\s+(activity|activities|product|item|service)\b/.test(msg);
-      const hasByCompany = /\bby\s+company\b/.test(msg);
-      const isItemQuery  = /\bitems?\s+sold\b|\btop\s+(products?|activities?|items?)\b/.test(msg);
-      const hasByRevenue = /\brevenue\s+by\s+(product|activity|item|company)\b/.test(msg);
+      const seasonRange   = ps(msg);
+      const hasGrouping   = /\bby\s+(activity|activities|product|item|service)\b/.test(msg);
+      const hasByCompany  = /\bby\s+company\b/.test(msg);
+      const hasByLocation = /\bby\s+location\b|\bsplit\s+by\s+location\b|\bper\s+location\b/.test(msg);
+      const isItemQuery   = /\bitems?\s+sold\b|\btop\s+(products?|activities?|items?)\b/.test(msg);
+      const hasByRevenue  = /\brevenue\s+by\s+(product|activity|item|company|location)\b/.test(msg);
 
       // Report requires an explicit grouping/aggregation qualifier — season alone is not enough.
-      // Bare season queries ("bookings this winter", "total pax this winter") go to bookings_by_date.
-      if (hasGrouping || hasByCompany || isItemQuery || hasByRevenue) {
+      if (hasGrouping || hasByCompany || hasByLocation || isItemQuery || hasByRevenue) {
         const dateRange = seasonRange ?? parseDateRange(msg) ?? parseDateRange("this month");
 
         let groupBy = "activity";
-        if (hasByCompany) groupBy = "company";
+        if (hasByCompany)  groupBy = "company";
+        if (hasByLocation) groupBy = "location";
 
         let metric = "bookings";
         if (/\brevenue\b/.test(msg))                    metric = "revenue";
@@ -447,6 +448,20 @@ export function detectOperatorIntent(message, seasonConfig = null) {
         return { intent: "report", date_range: dateRange, metric, group_by: groupBy, raw };
       }
     }
+  }
+
+  // List-mode: "info on each booking", "details on each", "list bookings", "show each"
+  // Returns individual rows instead of aggregated summary. Date range inherits from
+  // the message; falls back to most recent meaningful range if none.
+  if (/\b(info|details?|breakdown)\s+(on\s+)?each\b|\beach\s+booking\b|\blist\s+(bookings?|each)\b|\bshow\s+each\b/.test(msg)) {
+    const range = ps(msg) ?? parseDateRange(msg) ?? ps("this summer") ?? parseDateRange("this month");
+    return {
+      intent:     "bookings_by_date",
+      date_range: range,
+      metric:     "bookings",
+      list_mode:  true,
+      raw,
+    };
   }
 
   // Company-specific follow-up: "just for rabbitearsadventures", "REA only", "filter to CSR", etc.
@@ -549,6 +564,7 @@ function cleanCompanyExtract(raw) {
     .replace(/\b(rev|revenue|earnings?|sales|bookings?|pax|guests?)\s*$/, "")
     .replace(/\b(this|last)\s+(winter|summer|month|week|year)\s*$/, "")
     .replace(/\b(winter|summer|spring|fall|autumn)\s+\d{4}\s*$/, "")
+    .replace(/\b(winter|summer|spring|fall|autumn)\s*$/, "")
     .replace(/\bin\s+\w+\s*\d{4}\s*$/, "")
     .trim();
 }
@@ -585,6 +601,8 @@ export function extractCompanyFilter(msg) {
     "find", "total", "all", "the", "our", "my", "your", "any", "some",
     // Season/time words — not company names
     "summer", "winter", "spring", "fall", "autumn", "this", "last", "next",
+    // Drill-down/list keywords — not company names
+    "info", "details", "detail", "each", "list", "breakdown", "every", "split",
   ]);
   const mMetric = lower.match(METRIC_PAT);
   if (mMetric) {

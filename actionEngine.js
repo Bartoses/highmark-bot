@@ -651,14 +651,17 @@ function resolveBookingSource(integrations) {
   const crmSb = integrations?.crmDatabase?.supabase ?? null;
   if (crmSb) {
     return {
-      source:     "manifest",
-      supabase:   crmSb,
-      table:      "daily_manifest",
-      columns:    "fareharbor_pk, company, activity, start_at, pax, total",
-      dedupKey:   "fareharbor_pk",
-      paxField:   "pax",
-      totalField: "total",
-      itemField:  "activity",
+      source:        "manifest",
+      supabase:      crmSb,
+      table:         "daily_manifest",
+      columns:       "fareharbor_pk, company, location, activity, customer_name, phone, start_at, pax, total",
+      dedupKey:      "fareharbor_pk",
+      paxField:      "pax",
+      totalField:    "total",
+      itemField:     "activity",
+      locationField: "location",
+      nameField:     "customer_name",
+      phoneField:    "phone",
     };
   }
   const sb = integrations?.database?.supabase ?? null;
@@ -681,12 +684,13 @@ function resolveBookingSource(integrations) {
 // Aggregate daily_manifest (or confirmations_sent) rows into summary stats.
 // Exported so callers and tests can call it directly.
 export function aggregateBookings(rows, src) {
-  const byCompany = {};
-  const byItem    = {};
-  const seenPks   = src.dedupKey ? new Set() : null;
-  let totalRows   = 0;
-  let totalPax    = 0;
-  let totalRev    = 0;
+  const byCompany  = {};
+  const byItem     = {};
+  const byLocation = {};
+  const seenPks    = src.dedupKey ? new Set() : null;
+  let totalRows    = 0;
+  let totalPax     = 0;
+  let totalRev     = 0;
 
   for (const r of rows) {
     totalRows += 1;
@@ -694,6 +698,10 @@ export function aggregateBookings(rows, src) {
     byCompany[c] = (byCompany[c] ?? 0) + 1;
     const it = r[src.itemField] ?? "unspecified";
     byItem[it] = (byItem[it] ?? 0) + 1;
+    if (src.locationField) {
+      const loc = r[src.locationField] ?? "unspecified";
+      byLocation[loc] = (byLocation[loc] ?? 0) + 1;
+    }
     if (seenPks && r[src.dedupKey] != null) seenPks.add(r[src.dedupKey]);
     if (src.paxField   && typeof r[src.paxField]   === "number") totalPax += r[src.paxField];
     if (src.totalField && r[src.totalField] != null) totalRev += Number(r[src.totalField]) || 0;
@@ -706,6 +714,7 @@ export function aggregateBookings(rows, src) {
     totalRev,
     byCompany,
     byItem,
+    byLocation,
   };
 }
 
@@ -799,10 +808,16 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
       .filter(Boolean);
 
     // Company filter: explicit filter (from follow-up) overrides client-wide scope.
-    const companyFilter = data.company_filter ?? null;
-    const resolvedCompany = companyFilter
-      ? resolveCompanyShortname(companyFilter, client?.fareharborCompanies ?? [])
+    // If filter doesn't match a known company, treat it as a location filter (e.g. "kremmling").
+    const filterText = data.company_filter ?? null;
+    const locationFilter = data.location_filter ?? null;
+    const resolvedCompany = filterText
+      ? resolveCompanyShortname(filterText, client?.fareharborCompanies ?? [])
       : null;
+    // If resolution returned a non-exact match, the text might be a location instead
+    const useAsLocation = resolvedCompany && !resolvedCompany.exact;
+    const effectiveLocation = locationFilter ?? (useAsLocation ? filterText : null);
+    const effectiveCompany  = useAsLocation ? null : resolvedCompany;
 
     let query = src.supabase
       .from(src.table)
@@ -811,15 +826,13 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
       .lte("start_at", range.end)
       .order("start_at", { ascending: true });
 
-    if (resolvedCompany) {
-      // Exact match on resolved shortname, or ilike fallback for unknown companies
-      if (resolvedCompany.exact) {
-        query = query.eq("company", resolvedCompany.shortname);
-      } else {
-        query = query.ilike("company", `%${resolvedCompany.shortname}%`);
-      }
+    if (effectiveCompany) {
+      query = query.eq("company", effectiveCompany.shortname);
     } else if (shortnames.length) {
       query = query.in("company", shortnames);
+    }
+    if (effectiveLocation && src.locationField) {
+      query = query.ilike(src.locationField, `%${effectiveLocation}%`);
     }
 
     const { data: rows, error } = await query;
@@ -831,10 +844,13 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
     const list   = rows ?? [];
     const label  = range.label ?? "that range";
     const metric = data.metric ?? "bookings";
-    // Prepend company scope to label when filtering to one company
-    const scopeLabel = resolvedCompany
-      ? `${resolvedCompany.displayName} — ${label}`
-      : label;
+    const listMode = data.list_mode === true;
+    // Prepend scope to label when filtering
+    const scopeLabel = effectiveCompany
+      ? `${effectiveCompany.displayName} — ${label}`
+      : effectiveLocation
+        ? `${effectiveLocation} — ${label}`
+        : label;
 
     if (!list.length) {
       return ownerOk(
@@ -846,6 +862,35 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
     const sum      = aggregateBookings(list, src);
     const headline = src.dedupKey ? sum.distinctBookings : sum.totalRows;
     const capLabel = scopeLabel.charAt(0).toUpperCase() + scopeLabel.slice(1);
+
+    // List mode: dump up to 20 individual bookings instead of an aggregated summary
+    if (listMode) {
+      const seenPks = new Set();
+      const distinct = src.dedupKey
+        ? list.filter(r => {
+            const k = r[src.dedupKey];
+            if (k == null || seenPks.has(k)) return false;
+            seenPks.add(k);
+            return true;
+          })
+        : list;
+      const lines = [`${capLabel} (${distinct.length} booking${distinct.length === 1 ? "" : "s"}):`];
+      for (const r of distinct.slice(0, 20)) {
+        const date = r.start_at ? new Date(r.start_at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Denver" }) : "?";
+        const name = r[src.nameField] ?? "?";
+        const item = r[src.itemField] ?? "";
+        const loc  = r[src.locationField] ?? "";
+        const pax  = src.paxField   ? r[src.paxField] ?? "?" : null;
+        const rev  = src.totalField && r[src.totalField] != null ? `$${Math.round(Number(r[src.totalField])).toLocaleString()}` : null;
+        const parts = [`${date} · ${name}`, loc ? `(${loc})` : null, item, pax != null ? `${pax} pax` : null, rev].filter(Boolean);
+        lines.push(`- ${parts.join(" · ")}`);
+      }
+      if (distinct.length > 20) lines.push(`... +${distinct.length - 20} more`);
+      return ownerOk(
+        { total: headline, range, source: src.source, list_mode: true, count: distinct.length },
+        lines.join("\n")
+      );
+    }
 
     const lines = [`${capLabel}:`, `Total bookings: ${headline.toLocaleString()}`];
 
@@ -862,6 +907,12 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
     });
     if (topItems.length) lines.push("", "Top activities:", ...topItems);
 
+    // By location (only when >1 location)
+    const locSorted = limitTopResults(sum.byLocation ?? {});
+    if (locSorted.length > 1) {
+      lines.push("", "By location:", ...locSorted.map(([l, n]) => `- ${l}: ${n}`));
+    }
+
     // By company (only when >1 company)
     const companySorted = limitTopResults(sum.byCompany);
     if (companySorted.length > 1) {
@@ -877,6 +928,7 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         revenue:           sum.totalRev,
         byCompany:         sum.byCompany,
         byItem:            sum.byItem,
+        byLocation:        sum.byLocation,
         range,
         source:            src.source,
         metric,
@@ -1010,7 +1062,9 @@ async function handleReport(data, context, client, integrations) {
 
     const metric     = data.metric   ?? "bookings";
     const groupBy    = data.group_by ?? "activity";
-    const groupField = groupBy === "company" ? "company" : src.itemField;
+    const groupField = groupBy === "company"  ? "company"
+                     : groupBy === "location" ? (src.locationField ?? "location")
+                     : src.itemField;
 
     const shortnames = (client?.fareharborCompanies ?? [])
       .map(c => c?.shortname).filter(Boolean);
@@ -1070,7 +1124,9 @@ async function handleReport(data, context, client, integrations) {
     if (src.source === "manifest" && totalPax  > 0) lines.push(`Total pax: ${totalPax}`);
     if (src.source === "manifest" && totalRev  > 0) lines.push(`Revenue: $${Math.round(totalRev).toLocaleString()}`);
 
-    const groupLabel = groupBy === "company" ? "By company:" : "Top activities:";
+    const groupLabel = groupBy === "company"  ? "By company:"
+                     : groupBy === "location" ? "By location:"
+                     : "Top activities:";
     lines.push("", groupLabel);
 
     for (const [name, g] of sorted.slice(0, 8)) {
