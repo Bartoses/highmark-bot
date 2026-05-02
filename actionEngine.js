@@ -654,7 +654,7 @@ function resolveBookingSource(integrations) {
       source:        "manifest",
       supabase:      crmSb,
       table:         "daily_manifest",
-      columns:       "fareharbor_pk, company, location, activity, customer_name, phone, start_at, pax, total",
+      columns:       "fareharbor_pk, company, location, activity, customer_name, phone, start_at, arrival_display, pax, total",
       dedupKey:      "fareharbor_pk",
       paxField:      "pax",
       totalField:    "total",
@@ -662,6 +662,7 @@ function resolveBookingSource(integrations) {
       locationField: "location",
       nameField:     "customer_name",
       phoneField:    "phone",
+      arrivalField:  "arrival_display",
     };
   }
   const sb = integrations?.database?.supabase ?? null;
@@ -748,6 +749,51 @@ function limitTopResults(entries, n = 5) {
   return Object.entries(entries)
     .sort(([, a], [, b]) => b - a)
     .slice(0, n);
+}
+
+// Parse "9:00 AM" to minutes since midnight. Returns null if unparseable.
+function parseTimeToMinutes(s) {
+  const m = (s ?? "").match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const ap  = m[3].toUpperCase();
+  if (ap === "PM" && h !== 12) h += 12;
+  if (ap === "AM" && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+// Format the time window + duration from arrival_display. Examples:
+//   "9:00 AM - 1:00 PM on May 15, 2026"        → "9:00 AM - 1:00 PM (4hr)"
+//   "9:00 AM on July 03 to 5:00 PM on July 05" → "Jul 3 9:00 AM → Jul 5 5:00 PM"
+//   null / empty                                → ""
+function formatTimeWindow(arrivalDisplay) {
+  if (!arrivalDisplay || typeof arrivalDisplay !== "string") return "";
+  const s = arrivalDisplay.trim();
+
+  // Multi-day pattern: "<time> on <month> <day> to <time> on <month> <day>, <year>"
+  const multi = s.match(/(\d{1,2}:\d{2}\s*(?:AM|PM))\s+on\s+(\w+)\s+(\d{1,2})\s+to\s+(\d{1,2}:\d{2}\s*(?:AM|PM))\s+on\s+(\w+)\s+(\d{1,2})/i);
+  if (multi) {
+    const m1 = multi[2].slice(0, 3), d1 = parseInt(multi[3], 10);
+    const m2 = multi[5].slice(0, 3), d2 = parseInt(multi[6], 10);
+    return `${m1} ${d1} ${multi[1]} → ${m2} ${d2} ${multi[4]}`;
+  }
+
+  // Single-day pattern: "<time> - <time> on <month> <day>, <year>"
+  const single = s.match(/(\d{1,2}:\d{2}\s*(?:AM|PM))\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
+  if (single) {
+    const start = parseTimeToMinutes(single[1]);
+    const end   = parseTimeToMinutes(single[2]);
+    let dur = "";
+    if (start != null && end != null && end > start) {
+      const hrs = (end - start) / 60;
+      dur = ` (${hrs % 1 === 0 ? hrs : hrs.toFixed(1)}hr)`;
+    }
+    return `${single[1]} - ${single[2]}${dur}`;
+  }
+
+  // Fallback: strip trailing date (", YYYY" and "on <month> <day>")
+  return s.replace(/\s+on\s+.+$/i, "").trim();
 }
 
 // ── resolveCompanyShortname ───────────────────────────────────────────────────
@@ -882,7 +928,11 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         const loc  = r[src.locationField] ?? "";
         const pax  = src.paxField   ? r[src.paxField] ?? "?" : null;
         const rev  = src.totalField && r[src.totalField] != null ? `$${Math.round(Number(r[src.totalField])).toLocaleString()}` : null;
-        const parts = [`${date} · ${name}`, loc ? `(${loc})` : null, item, pax != null ? `${pax} pax` : null, rev].filter(Boolean);
+        const time = src.arrivalField ? formatTimeWindow(r[src.arrivalField]) : "";
+        // Time-window already encodes both dates for multi-day → drop the leading date prefix in that case
+        const isMultiDay = time.includes("→");
+        const head = isMultiDay ? time : `${date}${time ? ` · ${time}` : ""}`;
+        const parts = [head, name, loc ? `(${loc})` : null, item, pax != null ? `${pax} pax` : null, rev].filter(Boolean);
         lines.push(`- ${parts.join(" · ")}`);
       }
       if (distinct.length > 20) lines.push(`... +${distinct.length - 20} more`);
