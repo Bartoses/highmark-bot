@@ -109,7 +109,7 @@ export async function createCampaign(supabase, {
 // filterConfig for custom_phones:
 //   { phones: ["+15550001234", ...] }
 
-export async function selectAudience(supabase, { clientId, audienceType, filterConfig = {} }, crmSupabase = null) {
+export async function selectAudience(supabase, { clientId, audienceType, filterConfig = {}, seasonConfig = null }, crmSupabase = null) {
   // ── Manually entered phones ────────────────────────────────────────────────
   if (audienceType === "custom_phones") {
     return parsePhoneList(filterConfig.phones ?? []);
@@ -122,7 +122,7 @@ export async function selectAudience(supabase, { clientId, audienceType, filterC
 
   // ── DB2 past/upcoming guests from daily_manifest with filters ─────────────
   if (audienceType === "past_guests") {
-    return fetchPastGuests(crmSupabase, filterConfig);
+    return fetchPastGuests(crmSupabase, filterConfig, seasonConfig);
   }
 
   // ── DB1 leads query ────────────────────────────────────────────────────────
@@ -217,29 +217,37 @@ function mergeByPhone(db1Leads, crmContacts) {
 
 // Maps a season keyword to { after, before } ISO date strings.
 // Targets the most recently completed or current season.
-function seasonToDateRange(season) {
+const DEFAULT_SUMMER = { start: "04-01", end: "10-31" };
+const DEFAULT_WINTER = { start: "12-01", end: "03-31" };
+
+function seasonToDateRange(season, seasonConfig = null) {
   const now   = new Date();
   const year  = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1; // 1-12
 
+  const summer = seasonConfig?.summer ?? DEFAULT_SUMMER;
+  const winter = seasonConfig?.winter ?? DEFAULT_WINTER;
+  const [sStartM] = summer.start.split("-").map(Number);
+  const [sEndM]   = summer.end.split("-").map(Number);
+  const [wStartM] = winter.start.split("-").map(Number);
+
   switch (season) {
     case "winter": {
-      // Current/most-recent winter: Dec (year-1) – Mar year if Jan-May, else Dec year – Mar (year+1)
-      const wy = month <= 5 ? year - 1 : year;
-      return { after: `${wy}-12-01`, before: `${wy + 1}-03-31` };
+      // In winter: Jan-(wEnd month) belongs to winter that started prev Dec; (wStart)-Dec belongs to current
+      const wy = (month >= wStartM) ? year : year - 1;
+      return { after: `${wy}-${winter.start}`, before: `${wy + 1}-${winter.end}` };
     }
     case "last_winter": {
-      const wy = month <= 5 ? year - 2 : year - 1;
-      return { after: `${wy}-12-01`, before: `${wy + 1}-03-31` };
+      const wy = (month >= wStartM) ? year - 1 : year - 2;
+      return { after: `${wy}-${winter.start}`, before: `${wy + 1}-${winter.end}` };
     }
     case "summer": {
-      // Current/most-recent summer: Apr-Oct (Kremmling opens April, Steamboat late May)
-      const sy = (month >= 4 && month <= 10) ? year : year - 1;
-      return { after: `${sy}-04-01`, before: `${sy}-10-31` };
+      const sy = (month >= sStartM && month <= sEndM) ? year : year - 1;
+      return { after: `${sy}-${summer.start}`, before: `${sy}-${summer.end}` };
     }
     case "last_summer": {
-      const sy = (month >= 4 && month <= 10) ? year - 1 : year - 2;
-      return { after: `${sy}-04-01`, before: `${sy}-10-31` };
+      const sy = (month >= sStartM && month <= sEndM) ? year - 1 : year - 2;
+      return { after: `${sy}-${summer.start}`, before: `${sy}-${summer.end}` };
     }
     default:
       return null;
@@ -248,7 +256,7 @@ function seasonToDateRange(season) {
 
 // Queries DB2 daily_manifest with optional filters, deduplicates by phone,
 // then joins contacts to get names and exclude opted-out numbers.
-async function fetchPastGuests(crmSupabase, filterConfig = {}) {
+async function fetchPastGuests(crmSupabase, filterConfig = {}, seasonConfig = null) {
   if (!crmSupabase) {
     console.warn("[CAMPAIGNS] past_guests requested but CRM_SUPABASE_URL is not configured");
     return [];
@@ -276,7 +284,7 @@ async function fetchPastGuests(crmSupabase, filterConfig = {}) {
   } else {
     // Season preset → date range (explicit dates can further narrow)
     if (filterConfig.season && filterConfig.season !== "all") {
-      const range = seasonToDateRange(filterConfig.season);
+      const range = seasonToDateRange(filterConfig.season, seasonConfig);
       if (range) query = query.gte("start_at", range.after).lte("start_at", range.before);
     }
     if (filterConfig.booked_after)  query = query.gte("start_at", filterConfig.booked_after);
@@ -340,7 +348,7 @@ async function fetchPastGuests(crmSupabase, filterConfig = {}) {
 // fromPhone: the Twilio number to send from (stored in metadata for the worker)
 // Returns { recipientCount, enqueued, skipped }
 
-export async function enqueueCampaign(supabase, campaign, fromPhone, crmSupabase) {
+export async function enqueueCampaign(supabase, campaign, fromPhone, crmSupabase, seasonConfig = null) {
   const now = Date.now();
 
   // 1. Select audience (filterConfig from metadata supports past_guests filters)
@@ -348,6 +356,7 @@ export async function enqueueCampaign(supabase, campaign, fromPhone, crmSupabase
     clientId:     campaign.client_id,
     audienceType: campaign.audience_type,
     filterConfig: campaign.metadata?.filter_config ?? {},
+    seasonConfig,
   }, crmSupabase);
 
   if (leads.length === 0) {

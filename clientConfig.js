@@ -162,6 +162,11 @@ function applyDbOverrides(client, dbRow) {
     merged.conversationSettings = dbRow.conversation_settings;
   }
 
+  // Season config — db1_season_config.sql (per-client summer/winter boundaries)
+  if (dbRow.season_config != null) {
+    merged.seasonConfig = dbRow.season_config;
+  }
+
   // Feature toggles — preserve false values (explicit null/undefined check)
   if (dbRow.campaigns_enabled     != null) merged.campaignsEnabled    = dbRow.campaigns_enabled;
   if (dbRow.followups_enabled     != null) merged.followupsEnabled    = dbRow.followups_enabled;

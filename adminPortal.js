@@ -470,7 +470,9 @@ export async function handlePortalAudiencePreview(req, res, supabase, crmSupabas
     try { filterConfig = JSON.parse(req.query.filter_config); } catch { /* ignore malformed */ }
   }
   try {
-    const leads = await selectAudience(supabase, { clientId, audienceType, filterConfig }, crmSupabase);
+    const clients = getAllClients();
+    const seasonConfig = clients[clientId]?.seasonConfig ?? null;
+    const leads = await selectAudience(supabase, { clientId, audienceType, filterConfig, seasonConfig }, crmSupabase);
     const names = leads
       .map(l => (l.contact_name ?? "").split(" ")[0])
       .filter(Boolean)
@@ -722,6 +724,11 @@ export async function handlePortalSettings(req, res, supabase) {
     conversationSettings:    client.conversationSettings  ?? {},
     // Crawl settings
     crawlSettings:           client.crawlSettings         ?? {},
+    // Season config (per-client summer/winter boundaries)
+    seasonConfig:            client.seasonConfig          ?? {
+      summer: { start: "04-01", end: "10-31" },
+      winter: { start: "12-01", end: "03-31" },
+    },
     // Scrape sources + booking options
     scrapeSources,
     bookingLinks,
@@ -860,6 +867,29 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
       return res.status(400).json({ error: "crawl_settings must be a JSON object" });
     }
     updates.crawl_settings = req.body.crawl_settings;
+  }
+
+  // season_config — { summer: { start: MM-DD, end: MM-DD }, winter: { start, end } }
+  if (req.body.season_config !== undefined) {
+    const sc = req.body.season_config;
+    if (sc === null) {
+      updates.season_config = null;
+    } else if (typeof sc !== "object" || Array.isArray(sc)) {
+      return res.status(400).json({ error: "season_config must be a JSON object or null" });
+    } else {
+      const validMmDd = (v) => typeof v === "string" && /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(v);
+      for (const key of ["summer", "winter"]) {
+        if (sc[key] !== undefined) {
+          if (typeof sc[key] !== "object" || sc[key] === null) {
+            return res.status(400).json({ error: `season_config.${key} must be an object with start/end` });
+          }
+          if (!validMmDd(sc[key].start) || !validMmDd(sc[key].end)) {
+            return res.status(400).json({ error: `season_config.${key}.start/end must be MM-DD strings` });
+          }
+        }
+      }
+      updates.season_config = sc;
+    }
   }
 
   // fareharbor_companies — array of { id, name, shortname, user_key?, app_key? }

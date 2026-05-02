@@ -546,7 +546,7 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
   // Date-specific queries ("revenue in Feb 2026", "revenue this winter") fall through to
   // the intent parser which routes them to the full DB aggregation engine.
   if ((msg.match(/\brevenue\b/) || msg.match(/\brev\b/) || msg.match(/\bearnings?\b/)) && !msg.match(/\bbookings?\b/)) {
-    const hasDateRange = !!(parseDateRange(msg) ?? parseSeasonRange(msg));
+    const hasDateRange = !!(parseDateRange(msg) ?? parseSeasonRange(msg, client?.seasonConfig));
     if (!hasDateRange) {
       const rev = await getWeeklyRevenueEstimate(client.id, supabase, crmSupabase);
       return formatRevenueResponse(rev);
@@ -555,7 +555,7 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
   }
 
   // ── Structured intent parser (date-aware, action-routed) ──────────────────
-  const intent = detectOperatorIntent(message);
+  const intent = detectOperatorIntent(message, client?.seasonConfig);
   const integrations = buildIntegrations({ supabase, crmSupabase, client });
 
   if (intent.intent === "help") {

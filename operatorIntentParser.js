@@ -236,29 +236,59 @@ export function parseDateRange(message) {
 // Handles: "winter 2025/2026", "summer 2025", "this winter", "last summer", etc.
 // Returns null when no season phrase is found.
 //
-// Season boundaries (MT):
-//   winter: Dec 1 (startYear) → Mar 31 (startYear+1)
-//   summer: Apr 1 → Oct 31 (same year) — covers Kremmling (opens April) and
-//           Steamboat (opens late May) operating windows for CSR/REA.
+// Season boundaries are now per-client. Pass `seasonConfig` to override the
+// default (e.g. from `client.seasonConfig`). Format:
+//   { summer: { start: "MM-DD", end: "MM-DD" },
+//     winter: { start: "MM-DD", end: "MM-DD" } }
+// Defaults: summer Apr 1 – Oct 31 · winter Dec 1 – Mar 31.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function parseSeasonRange(message) {
+export const DEFAULT_SEASON_CONFIG = {
+  summer: { start: "04-01", end: "10-31" },
+  winter: { start: "12-01", end: "03-31" },
+};
+
+function parseMmDd(mmdd) {
+  const [m, d] = String(mmdd).split("-").map(Number);
+  return { month: m - 1, day: d };
+}
+
+function isPastDate(today, monthIdx, day) {
+  return today.month > monthIdx || (today.month === monthIdx && today.day > day);
+}
+
+function isAtOrPastDate(today, monthIdx, day) {
+  return today.month > monthIdx || (today.month === monthIdx && today.day >= day);
+}
+
+export function parseSeasonRange(message, seasonConfig = null) {
   if (!message || typeof message !== "string") return null;
   const msg = message.toLowerCase().trim();
   const now  = new Date();
   const today = mtParts(now);
 
+  const cfg         = seasonConfig ?? DEFAULT_SEASON_CONFIG;
+  const summerStart = parseMmDd(cfg.summer?.start ?? DEFAULT_SEASON_CONFIG.summer.start);
+  const summerEnd   = parseMmDd(cfg.summer?.end   ?? DEFAULT_SEASON_CONFIG.summer.end);
+  const winterStart = parseMmDd(cfg.winter?.start ?? DEFAULT_SEASON_CONFIG.winter.start);
+  const winterEnd   = parseMmDd(cfg.winter?.end   ?? DEFAULT_SEASON_CONFIG.winter.end);
+
   const winterRange = (startYear) => ({
-    start: startOfDayMT(startYear, 11, 1),
-    end:   endOfDayMT(startYear + 1, 2, 31),
+    start: startOfDayMT(startYear, winterStart.month, winterStart.day),
+    end:   endOfDayMT(startYear + 1, winterEnd.month, winterEnd.day),
     label: `winter ${startYear}/${startYear + 1}`,
   });
 
   const summerRange = (year) => ({
-    start: startOfDayMT(year, 3, 1),
-    end:   endOfDayMT(year, 9, 31),
+    start: startOfDayMT(year, summerStart.month, summerStart.day),
+    end:   endOfDayMT(year, summerEnd.month, summerEnd.day),
     label: `summer ${year}`,
   });
+
+  // Boundary helpers tied to the configured ranges
+  const isPastSummerEnd  = isPastDate(today, summerEnd.month, summerEnd.day);
+  const isAtOrPastWinterStart = isAtOrPastDate(today, winterStart.month, winterStart.day);
+  const isPastWinterEnd  = isPastDate(today, winterEnd.month, winterEnd.day);
 
   // ── "winter 2025/2026" or "winter 2025-2026" ─────────────────────────────
   const winterSlash = msg.match(/\bwinter\s+(\d{4})\s*[\/\-]\s*\d{2,4}\b/);
@@ -267,18 +297,18 @@ export function parseSeasonRange(message) {
   // ── "this winter" ─────────────────────────────────────────────────────────
   if (/\bthis\s+winter\b/.test(msg)) {
     let sy;
-    if (today.month === 11)    sy = today.year;
-    else if (today.month <= 5) sy = today.year - 1;
-    else                        sy = today.year;
+    if (isAtOrPastWinterStart) sy = today.year;          // Already in winter (started this year)
+    else if (!isPastWinterEnd) sy = today.year - 1;      // Still in winter that started last year
+    else                        sy = today.year;          // Between winters → upcoming
     return winterRange(sy);
   }
 
   // ── "last winter" ─────────────────────────────────────────────────────────
   if (/\blast\s+winter\b/.test(msg)) {
     let sy;
-    if (today.month === 11)    sy = today.year - 1; // Dec: just entered new winter
-    else if (today.month <= 5) sy = today.year - 2; // Jan-May: in/just-past this winter, last = one before
-    else                        sy = today.year - 1; // Jun-Oct: last = the winter that ended this spring
+    if (isAtOrPastWinterStart) sy = today.year - 1;      // In current winter → last started prev year
+    else if (!isPastWinterEnd) sy = today.year - 2;      // Continuing last year's winter → last = one before
+    else                        sy = today.year - 1;      // Past winter end → most recent completed
     return winterRange(sy);
   }
 
@@ -288,20 +318,17 @@ export function parseSeasonRange(message) {
 
   // ── bare "winter" (no year/this/last) → most recent winter ───────────────
   if (/\bwinter\b/.test(msg) && !/\b(this|last|next)\b/.test(msg)) {
-    const sy = today.month <= 2 ? today.year - 1 : today.year - 1;
-    return winterRange(sy);
+    return winterRange(today.year - 1);
   }
 
   // ── "this summer" ─────────────────────────────────────────────────────────
-  // Apr-Oct: currently in summer → current year. Nov-Dec: past summer → next year.
   if (/\bthis\s+summer\b/.test(msg)) {
-    return summerRange(today.month >= 10 ? today.year + 1 : today.year);
+    return summerRange(isPastSummerEnd ? today.year + 1 : today.year);
   }
 
   // ── "last summer" ─────────────────────────────────────────────────────────
-  // Jan-Oct: previous year's summer is most recent completed. Nov-Dec: current year's summer just ended.
   if (/\blast\s+summer\b/.test(msg)) {
-    return summerRange(today.month <= 9 ? today.year - 1 : today.year);
+    return summerRange(isPastSummerEnd ? today.year : today.year - 1);
   }
 
   // ── "summer 2025" ─────────────────────────────────────────────────────────
@@ -310,7 +337,7 @@ export function parseSeasonRange(message) {
 
   // ── bare "summer" ─────────────────────────────────────────────────────────
   if (/\bsummer\b/.test(msg) && !/\b(this|last|next)\b/.test(msg)) {
-    return summerRange(today.month <= 9 ? today.year - 1 : today.year);
+    return summerRange(isPastSummerEnd ? today.year : today.year - 1);
   }
 
   return null;
@@ -333,9 +360,10 @@ export function parseSeasonRange(message) {
 //   unknown             — no match
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function detectOperatorIntent(message) {
+export function detectOperatorIntent(message, seasonConfig = null) {
   const raw = (message ?? "").trim();
   const msg = raw.toLowerCase();
+  const ps  = (m) => parseSeasonRange(m, seasonConfig); // shorthand
 
   if (!msg) return { intent: "unknown", date_range: null, metric: null, raw };
 
@@ -394,7 +422,7 @@ export function detectOperatorIntent(message) {
   {
     const isWeatherQuery = /^weather$|\bweather\b|\bconditions?\b|^snow$|\bforecast\b/.test(msg);
     if (!isWeatherQuery) {
-      const seasonRange  = parseSeasonRange(msg);
+      const seasonRange  = ps(msg);
       const hasGrouping  = /\bby\s+(activity|activities|product|item|service)\b/.test(msg);
       const hasByCompany = /\bby\s+company\b/.test(msg);
       const isItemQuery  = /\bitems?\s+sold\b|\btop\s+(products?|activities?|items?)\b/.test(msg);
@@ -422,7 +450,7 @@ export function detectOperatorIntent(message) {
   // Catches refinement messages that have no other intent keywords.
   const companyFilter = extractCompanyFilter(msg);
   if (companyFilter) {
-    const range  = parseSeasonRange(msg) ?? parseDateRange(msg) ?? parseSeasonRange("this winter");
+    const range  = ps(msg) ?? parseDateRange(msg) ?? ps("this winter");
     const metric = /\brevenue\b|\brev\b|\bearnings?\b/.test(msg) ? "revenue"
                  : /\bpax\b|\bguests?\b/.test(msg)             ? "pax"
                  : "bookings";
@@ -438,7 +466,7 @@ export function detectOperatorIntent(message) {
     /\btotal\s+guests?\b/.test(msg) ||
     /\bguest\s+count\b/.test(msg)
   ) {
-    const range = parseSeasonRange(msg) ?? parseDateRange(msg);
+    const range = ps(msg) ?? parseDateRange(msg);
     return {
       intent:     "bookings_by_date",
       date_range: range ?? parseDateRange("this month"),
@@ -449,7 +477,7 @@ export function detectOperatorIntent(message) {
 
   // "how many bookings/tours/trips did we have [period]"
   if (/\bhow\s+many\s+(bookings?|tours?|trips?|reservations?|rentals?)\b/.test(msg)) {
-    const range = parseSeasonRange(msg) ?? parseDateRange(msg);
+    const range = ps(msg) ?? parseDateRange(msg);
     return {
       intent:     "bookings_by_date",
       date_range: range ?? parseDateRange("this month"),
@@ -461,7 +489,7 @@ export function detectOperatorIntent(message) {
   // revenue / earnings — with date range → route to full DB aggregation;
   // bare revenue → "revenue" intent, caught by early check in operatorBriefing
   if (/\brevenue\b|\brev\b|\bearnings?\b|\bsales\b/.test(msg)) {
-    const range = parseSeasonRange(msg) ?? parseDateRange(msg);
+    const range = ps(msg) ?? parseDateRange(msg);
     if (range) {
       return { intent: "bookings_by_date", date_range: range, metric: "revenue", raw };
     }
@@ -470,7 +498,7 @@ export function detectOperatorIntent(message) {
 
   // bookings (with optional date range — includes season language)
   if (/\bbookings?\b|\breservations?\b|\bappointments?\b/.test(msg)) {
-    const range = parseSeasonRange(msg) ?? parseDateRange(msg);
+    const range = ps(msg) ?? parseDateRange(msg);
     if (range) {
       return { intent: "bookings_by_date", date_range: range, metric: "bookings", raw };
     }
@@ -495,7 +523,7 @@ export function detectOperatorIntent(message) {
 
   // Season range with no other keyword match → treat as a booking summary request
   // e.g. "winter 2025/2026" alone, "this summer" alone
-  const seasonOnly = parseSeasonRange(msg);
+  const seasonOnly = ps(msg);
   if (seasonOnly) {
     return { intent: "bookings_by_date", date_range: seasonOnly, metric: "bookings", raw };
   }

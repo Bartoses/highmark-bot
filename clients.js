@@ -347,6 +347,8 @@ function dbRowToClient(row) {
     twilioAuthToken:       row.twilio_auth_token       ?? null,
     // Conversation settings added in db1_conversation_settings.sql
     conversationSettings:  row.conversation_settings  ?? {},
+    // Season config added in db1_season_config.sql — per-client summer/winter boundaries
+    seasonConfig:          row.season_config          ?? null,
     // Crawl settings added in db1_crawl_settings.sql — normalize snake_case → camelCase
     crawlSettings:         normalizeCrawlSettings(row.crawl_settings ?? {}),
     // Phase 3: industry classification + alternative offering routing

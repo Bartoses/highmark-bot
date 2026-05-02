@@ -3836,6 +3836,45 @@ async function loadSettings() {
       </div>
     </div>
 
+    <div class="card" style="margin-top:16px;" id="seasonCard">
+      <div class="card-title">Season Ranges</div>
+      <div class="form-hint" style="margin-bottom:14px;">
+        Boundaries used by operator queries ("bookings this summer") and the Past Guests campaign filter.
+        Defaults: Summer Apr 1 – Oct 31, Winter Dec 1 – Mar 31. Adjust to match your actual operating windows.
+      </div>
+      ${(() => {
+        const sc = d.seasonConfig ?? {};
+        const su = sc.summer ?? { start: '04-01', end: '10-31' };
+        const wi = sc.winter ?? { start: '12-01', end: '03-31' };
+        return `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div>
+            <div style="font-weight:600;margin-bottom:8px;">Summer</div>
+            <div class="form-group">
+              <label>Start (MM-DD)</label>
+              <input type="text" id="set_summer_start" value="${su.start}" placeholder="04-01" pattern="^(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$" ${canEdit ? '' : 'disabled'}>
+            </div>
+            <div class="form-group">
+              <label>End (MM-DD)</label>
+              <input type="text" id="set_summer_end" value="${su.end}" placeholder="10-31" pattern="^(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$" ${canEdit ? '' : 'disabled'}>
+            </div>
+          </div>
+          <div>
+            <div style="font-weight:600;margin-bottom:8px;">Winter</div>
+            <div class="form-group">
+              <label>Start (MM-DD)</label>
+              <input type="text" id="set_winter_start" value="${wi.start}" placeholder="12-01" pattern="^(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$" ${canEdit ? '' : 'disabled'}>
+              <div class="form-hint">Winter wraps year-end (e.g. Dec 1 → Mar 31)</div>
+            </div>
+            <div class="form-group">
+              <label>End (MM-DD)</label>
+              <input type="text" id="set_winter_end" value="${wi.end}" placeholder="03-31" pattern="^(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$" ${canEdit ? '' : 'disabled'}>
+            </div>
+          </div>
+        </div>`;
+      })()}
+    </div>
+
     <div class="card" style="margin-top:16px;" id="planUsageCard">
       <div class="card-title">Plan &amp; Usage</div>
       <div id="planUsageContent"><div class="loading">Loading…</div></div>
@@ -3923,6 +3962,18 @@ async function loadSettings() {
         enable_lead_prompts:     document.getElementById('conv_lead_prompts').checked,
         main_menu_options:       _convMenuItems.filter(o => o.label && o.key),
       },
+      season_config: (() => {
+        const ss = document.getElementById('set_summer_start')?.value?.trim();
+        const se = document.getElementById('set_summer_end')?.value?.trim();
+        const ws = document.getElementById('set_winter_start')?.value?.trim();
+        const we = document.getElementById('set_winter_end')?.value?.trim();
+        const mmDd = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+        if (!mmDd.test(ss) || !mmDd.test(se) || !mmDd.test(ws) || !mmDd.test(we)) return undefined; // skip on invalid
+        return {
+          summer: { start: ss, end: se },
+          winter: { start: ws, end: we },
+        };
+      })(),
     };
     if (me?.isAdmin) body.client_id = me.clientId;
 
