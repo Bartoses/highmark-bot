@@ -450,10 +450,19 @@ export function detectOperatorIntent(message, seasonConfig = null) {
     }
   }
 
-  // List-mode: "info on each booking", "details on each", "list bookings", "show each"
-  // Returns individual rows instead of aggregated summary. Date range inherits from
-  // the message; falls back to most recent meaningful range if none.
-  if (/\b(info|details?|breakdown)\s+(on\s+)?each\b|\beach\s+booking\b|\blist\s+(bookings?|each)\b|\bshow\s+each\b/.test(msg)) {
+  // List-mode: per-booking detail rather than aggregated summary.
+  // Catches: "info on each booking", "info per booking", "details for each booking",
+  // "list bookings", "show each", "each booking", "booking details", "dig into each", etc.
+  if (
+    /\b(info|details?|breakdown)\s+(on|per|for|of|about)?\s*(each|every|the)?\s*bookings?\b/.test(msg) ||
+    /\b(info|details?|breakdown)\s+(on\s+)?(each|every)\b/.test(msg) ||
+    /\b(each|every|individual)\s+bookings?\b/.test(msg) ||
+    /\blist\s+(bookings?|each|every)\b/.test(msg) ||
+    /\bshow\s+(each|every|me\s+each|me\s+every)\b/.test(msg) ||
+    /\bbookings?\s+(info|details?|breakdown|list)\b/.test(msg) ||
+    /\bper\s+booking\b/.test(msg) ||
+    /\b(drill|dig)\s+(into|down|in)\b/.test(msg)
+  ) {
     const range = ps(msg) ?? parseDateRange(msg) ?? ps("this summer") ?? parseDateRange("this month");
     return {
       intent:     "bookings_by_date",
