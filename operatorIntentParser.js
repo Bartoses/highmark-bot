@@ -336,8 +336,11 @@ export function parseSeasonRange(message, seasonConfig = null) {
   if (summerYear) return summerRange(parseInt(summerYear[1], 10));
 
   // ── bare "summer" ─────────────────────────────────────────────────────────
+  // Most relevant summer right now: in/past summer → current year; before summer → previous.
   if (/\bsummer\b/.test(msg) && !/\b(this|last|next)\b/.test(msg)) {
-    return summerRange(isPastSummerEnd ? today.year : today.year - 1);
+    const isBeforeSummerStart = today.month < summerStart.month
+      || (today.month === summerStart.month && today.day < summerStart.day);
+    return summerRange(isBeforeSummerStart ? today.year - 1 : today.year);
   }
 
   return null;
@@ -545,6 +548,7 @@ function cleanCompanyExtract(raw) {
     .replace(/^(?:show\s+(?:me\s+)?|tell\s+me\s+|give\s+me\s+)/, "")
     .replace(/\b(rev|revenue|earnings?|sales|bookings?|pax|guests?)\s*$/, "")
     .replace(/\b(this|last)\s+(winter|summer|month|week|year)\s*$/, "")
+    .replace(/\b(winter|summer|spring|fall|autumn)\s+\d{4}\s*$/, "")
     .replace(/\bin\s+\w+\s*\d{4}\s*$/, "")
     .trim();
 }
@@ -579,6 +583,8 @@ export function extractCompanyFilter(msg) {
   const FILLER_STARTS = new Set([
     "let", "can", "what", "how", "when", "where", "show", "tell", "give", "get",
     "find", "total", "all", "the", "our", "my", "your", "any", "some",
+    // Season/time words — not company names
+    "summer", "winter", "spring", "fall", "autumn", "this", "last", "next",
   ]);
   const mMetric = lower.match(METRIC_PAT);
   if (mMetric) {
