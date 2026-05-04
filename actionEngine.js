@@ -835,10 +835,171 @@ function resolveCompanyShortname(filter, fareharborCompanies = []) {
   return { shortname: filter, displayName: filter, exact: false };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE X — INSIGHT + FORMAT HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function capitalizeFirst(s) {
+  if (!s || typeof s !== "string") return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Pick a single one-line operator insight from aggregated booking data.
+ * Phase X requires every operator response to include exactly one insight.
+ * Strategy ladder: location dominance → company dominance → group-size pattern
+ * → top activity. Returns "" only when nothing meaningful surfaces.
+ *
+ * @param {object} sum  — output of aggregateBookings
+ * @param {object} src  — booking source descriptor (paxField etc.)
+ * @returns {string}
+ */
+export function buildOperatorInsight(sum, src) {
+  if (!sum) return "";
+  const total = src?.dedupKey ? (sum.distinctBookings ?? 0) : (sum.totalRows ?? 0);
+  if (!total) return "";
+
+  // Location dominance
+  if (sum.byLocation && Object.keys(sum.byLocation).length) {
+    const locs = Object.entries(sum.byLocation).sort(([, a], [, b]) => b - a);
+    if (locs.length === 1 && total >= 2) {
+      return `All bookings are concentrated in ${capitalizeFirst(locs[0][0])}.`;
+    }
+    if (locs.length > 1) {
+      const [topName, topCount] = locs[0];
+      const [secondName, secondCount] = locs[1];
+      const topShare    = topCount    / total;
+      const secondShare = secondCount / total;
+      if (topShare >= 0.6) {
+        const pct = Math.round(topShare * 100);
+        return `${capitalizeFirst(topName)} is driving ~${pct}% of bookings.`;
+      }
+      if (secondShare < 0.15 && topShare >= 0.5) {
+        return `${capitalizeFirst(secondName)} is barely contributing compared to ${capitalizeFirst(topName)}.`;
+      }
+    }
+  }
+
+  // Company dominance
+  if (sum.byCompany && Object.keys(sum.byCompany).length > 1) {
+    const cos = Object.entries(sum.byCompany).sort(([, a], [, b]) => b - a);
+    const [topName, topCount] = cos[0];
+    const topShare = topCount / total;
+    if (topShare >= 0.7) {
+      const pct = Math.round(topShare * 100);
+      return `${topName} is doing ~${pct}% of the volume.`;
+    }
+  }
+
+  // Group-size pattern
+  if (src?.paxField && sum.totalPax > 0) {
+    const avgPax = sum.totalPax / total;
+    if (avgPax <= 2.4) {
+      const rounded = Math.max(1, Math.round(avgPax));
+      return `Most bookings are small groups (~${rounded} guest${rounded === 1 ? "" : "s"}).`;
+    }
+    if (avgPax >= 5) {
+      return `Average group size is ~${avgPax.toFixed(1)} — bigger groups dominating.`;
+    }
+  }
+
+  // Top activity fallback
+  if (sum.byItem && Object.keys(sum.byItem).length > 1) {
+    const items = Object.entries(sum.byItem).sort(([, a], [, b]) => b - a);
+    const [topItem, topCount] = items[0];
+    const share = topCount / total;
+    if (share >= 0.4) {
+      const pct = Math.round(share * 100);
+      return `Top activity: ${topItem} (${pct}% of bookings).`;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Build the Phase-X formatted reply for a non-list-mode booking summary.
+ * Format:
+ *   {Capitalized scope}
+ *
+ *   • Bookings: X
+ *   • Guests: X
+ *   • Revenue: $X
+ *
+ *   {Insight sentence.}
+ *
+ *   By location: / By company: / Top activities: (optional)
+ */
+function formatPhaseXBookingReply({ scopeLabel, sum, src, headline }) {
+  const cap = capitalizeFirst(scopeLabel);
+  const lines = [cap, ""];
+
+  lines.push(`• Bookings: ${headline.toLocaleString()}`);
+  if (src.source === "manifest" && sum.totalPax > 0) {
+    lines.push(`• Guests: ${sum.totalPax.toLocaleString()}`);
+  }
+  if (src.source === "manifest" && sum.totalRev > 0) {
+    lines.push(`• Revenue: $${Math.round(sum.totalRev).toLocaleString()}`);
+  }
+
+  const insight = buildOperatorInsight(sum, src);
+  if (insight) {
+    lines.push("", insight);
+  }
+
+  // Optional groupings
+  const locSorted = limitTopResults(sum.byLocation ?? {});
+  if (locSorted.length > 1) {
+    lines.push("", "By location:", ...locSorted.map(([l, n]) => `• ${l}: ${n}`));
+  }
+
+  const companySorted = limitTopResults(sum.byCompany ?? {});
+  if (companySorted.length > 1) {
+    lines.push("", "By company:", ...companySorted.map(([c, n]) => `• ${c}: ${n}`));
+  }
+
+  const itemSorted = limitTopResults(sum.byItem ?? {}, 5);
+  if (itemSorted.length > 1) {
+    lines.push("", "Top activities:", ...itemSorted.map(([n, c]) => `• ${n}: ${c}`));
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Run a single Supabase query for booking rows. Reusable across initial query
+ * + fallback retries.
+ */
+async function fetchBookingRows(src, { range, shortnames = [], companyShortname = null, locationFilter = null }) {
+  let query = src.supabase
+    .from(src.table)
+    .select(src.columns)
+    .gte("start_at", range.start)
+    .lte("start_at", range.end)
+    .order("start_at", { ascending: true });
+
+  if (companyShortname) {
+    query = query.eq("company", companyShortname);
+  } else if (shortnames.length) {
+    query = query.in("company", shortnames);
+  }
+  if (locationFilter && src.locationField) {
+    query = query.ilike(src.locationField, `%${locationFilter}%`);
+  }
+
+  const { data, error } = await query;
+  return { rows: data ?? [], error };
+}
+
 // ── get_bookings_by_date_range ────────────────────────────────────────────────
 // Counts bookings for a date window; breaks down by company + top activity.
 // Uses DB2 daily_manifest when available (real numbers + revenue + pax),
 // otherwise falls back to DB1 confirmations_sent (bot-sent confirmations only).
+//
+// Phase X: when the initial query returns 0 rows, mentally simulate fallback —
+// drop location → drop company → broaden timeframe (last 90 days). The reply
+// includes a one-line note explaining the adjustment, and every reply carries
+// exactly one operator-facing insight.
 async function handleGetBookingsByDateRange(data, context, client, integrations) {
   try {
     const src = resolveBookingSource(integrations);
@@ -865,51 +1026,88 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
     const effectiveLocation = locationFilter ?? (useAsLocation ? filterText : null);
     const effectiveCompany  = useAsLocation ? null : resolvedCompany;
 
-    let query = src.supabase
-      .from(src.table)
-      .select(src.columns)
-      .gte("start_at", range.start)
-      .lte("start_at", range.end)
-      .order("start_at", { ascending: true });
-
-    if (effectiveCompany) {
-      query = query.eq("company", effectiveCompany.shortname);
-    } else if (shortnames.length) {
-      query = query.in("company", shortnames);
-    }
-    if (effectiveLocation && src.locationField) {
-      query = query.ilike(src.locationField, `%${effectiveLocation}%`);
-    }
-
-    const { data: rows, error } = await query;
-    if (error) {
-      console.error(`[actionEngine] get_bookings_by_date_range ${src.table} error:`, error.message);
-      return fail("Couldn't retrieve bookings right now.");
-    }
-
-    const list   = rows ?? [];
-    const label  = range.label ?? "that range";
-    const metric = data.metric ?? "bookings";
+    const label    = range.label ?? "that range";
+    const metric   = data.metric ?? "bookings";
     const listMode = data.list_mode === true;
-    // Prepend scope to label when filtering
-    const scopeLabel = effectiveCompany
+
+    // Original scope label — used in the relax-note when fallback fires
+    const originalScope = effectiveCompany
       ? `${effectiveCompany.displayName} — ${label}`
       : effectiveLocation
         ? `${effectiveLocation} — ${label}`
         : label;
 
-    if (!list.length) {
+    // ── Initial query ─────────────────────────────────────────────────────────
+    let { rows, error } = await fetchBookingRows(src, {
+      range,
+      shortnames,
+      companyShortname: effectiveCompany?.shortname ?? null,
+      locationFilter:   effectiveLocation,
+    });
+    if (error) {
+      console.error(`[actionEngine] get_bookings_by_date_range ${src.table} error:`, error.message);
+      return fail("Couldn't retrieve bookings right now.");
+    }
+
+    // Phase X fallback ladder: never return "no records" if a useful relaxation exists.
+    let usedRange    = range;
+    let usedCompany  = effectiveCompany;
+    let usedLocation = effectiveLocation;
+    let relaxNote    = null;
+
+    if (!rows.length && usedLocation) {
+      relaxNote = `I'm not seeing ${usedLocation} bookings in ${label} — here's the full ${label} picture instead:`;
+      usedLocation = null;
+      ({ rows, error } = await fetchBookingRows(src, {
+        range, shortnames,
+        companyShortname: usedCompany?.shortname ?? null,
+        locationFilter:   null,
+      }));
+    }
+    if (!rows.length && usedCompany) {
+      relaxNote = `I'm not seeing ${usedCompany.displayName} bookings in ${label} — here's the full ${label} picture instead:`;
+      usedCompany = null;
+      ({ rows } = await fetchBookingRows(src, {
+        range, shortnames,
+        companyShortname: null,
+        locationFilter:   null,
+      }));
+    }
+    if (!rows.length) {
+      const now = new Date();
+      const ago = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      const broadened = {
+        start: ago.toISOString(),
+        end:   now.toISOString(),
+        label: "the last 90 days",
+      };
+      relaxNote = `I'm not seeing ${label} data yet — here's the last 90 days instead:`;
+      usedRange = broadened;
+      ({ rows } = await fetchBookingRows(src, {
+        range: broadened, shortnames,
+        companyShortname: null,
+        locationFilter:   null,
+      }));
+    }
+
+    if (!rows.length) {
+      // Truly empty across every relaxation. Phase X: still useful, never raw "no data".
       return ownerOk(
-        { total: 0, range, source: src.source },
-        `I couldn't find any records in your CRM for ${scopeLabel}.\n\nTry adjusting the timeframe or filters.`
+        { total: 0, range, source: src.source, fallback_exhausted: true },
+        `Nothing booked across the last 90 days — quiet stretch.\n\nWant to set up a campaign to drive activity?`
       );
     }
 
-    const sum      = aggregateBookings(list, src);
-    const headline = src.dedupKey ? sum.distinctBookings : sum.totalRows;
-    const capLabel = scopeLabel.charAt(0).toUpperCase() + scopeLabel.slice(1);
+    const list      = rows;
+    const sum       = aggregateBookings(list, src);
+    const headline  = src.dedupKey ? sum.distinctBookings : sum.totalRows;
+    const usedScope = usedCompany
+      ? `${usedCompany.displayName} — ${usedRange.label}`
+      : usedLocation
+        ? `${usedLocation} — ${usedRange.label}`
+        : usedRange.label;
 
-    // List mode: dump up to 20 individual bookings instead of an aggregated summary
+    // ── List mode ─────────────────────────────────────────────────────────────
     if (listMode) {
       const seenPks = new Set();
       const distinct = src.dedupKey
@@ -920,7 +1118,8 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
             return true;
           })
         : list;
-      const lines = [`${capLabel} (${distinct.length} booking${distinct.length === 1 ? "" : "s"}):`];
+      const capScope = capitalizeFirst(usedScope);
+      const lines = [`${capScope} (${distinct.length} booking${distinct.length === 1 ? "" : "s"}):`];
       for (const r of distinct.slice(0, 20)) {
         const date = r.start_at ? new Date(r.start_at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Denver" }) : "?";
         const name = r[src.nameField] ?? "?";
@@ -929,45 +1128,27 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         const pax  = src.paxField   ? r[src.paxField] ?? "?" : null;
         const rev  = src.totalField && r[src.totalField] != null ? `$${Math.round(Number(r[src.totalField])).toLocaleString()}` : null;
         const time = src.arrivalField ? formatTimeWindow(r[src.arrivalField]) : "";
-        // Time-window already encodes both dates for multi-day → drop the leading date prefix in that case
         const isMultiDay = time.includes("→");
         const head = isMultiDay ? time : `${date}${time ? ` · ${time}` : ""}`;
         const parts = [head, name, loc ? `(${loc})` : null, item, pax != null ? `${pax} pax` : null, rev].filter(Boolean);
         lines.push(`- ${parts.join(" · ")}`);
       }
       if (distinct.length > 20) lines.push(`... +${distinct.length - 20} more`);
+      const body = lines.join("\n");
       return ownerOk(
-        { total: headline, range, source: src.source, list_mode: true, count: distinct.length },
-        lines.join("\n")
+        { total: headline, range: usedRange, source: src.source, list_mode: true, count: distinct.length, relaxed: !!relaxNote },
+        relaxNote ? `${relaxNote}\n\n${body}` : body
       );
     }
 
-    const lines = [`${capLabel}:`, `Total bookings: ${headline.toLocaleString()}`];
-
-    if (src.source === "manifest") {
-      if (sum.totalPax > 0) lines.push(`Total pax: ${sum.totalPax.toLocaleString()}`);
-      if (sum.totalRev > 0) lines.push(`Revenue: $${Math.round(sum.totalRev).toLocaleString()}`);
-    }
-
-    // Top activities (limit 5)
-    const topItems = limitTopResults(sum.byItem, 5).map(([n, c]) => {
-      const entry = list.find(r => (r[src.itemField] ?? "unspecified") === n);
-      const paxPart = src.paxField && entry ? ` (${sum.byItem[n]} bookings)` : ` (${c})`;
-      return `- ${n}${paxPart}`;
+    // ── Phase X: aggregated summary with bullets + insight ───────────────────
+    const body = formatPhaseXBookingReply({
+      scopeLabel: usedScope,
+      sum,
+      src,
+      headline,
     });
-    if (topItems.length) lines.push("", "Top activities:", ...topItems);
-
-    // By location (only when >1 location)
-    const locSorted = limitTopResults(sum.byLocation ?? {});
-    if (locSorted.length > 1) {
-      lines.push("", "By location:", ...locSorted.map(([l, n]) => `- ${l}: ${n}`));
-    }
-
-    // By company (only when >1 company)
-    const companySorted = limitTopResults(sum.byCompany);
-    if (companySorted.length > 1) {
-      lines.push("", "By company:", ...companySorted.map(([c, n]) => `- ${c}: ${n}`));
-    }
+    const reply = relaxNote ? `${relaxNote}\n\n${body}` : body;
 
     return ownerOk(
       {
@@ -979,11 +1160,13 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         byCompany:         sum.byCompany,
         byItem:            sum.byItem,
         byLocation:        sum.byLocation,
-        range,
+        range:             usedRange,
         source:            src.source,
         metric,
+        relaxed:           !!relaxNote,
+        insight:           buildOperatorInsight(sum, src),
       },
-      lines.join("\n")
+      reply
     );
   } catch (e) {
     console.error("[actionEngine] get_bookings_by_date_range error:", e.message);
@@ -1137,9 +1320,10 @@ async function handleReport(data, context, client, integrations) {
     const label = range.label ?? "that period";
 
     if (!list.length) {
+      // Phase X: never raw "no records". Suggest a useful next step.
       return ownerOk(
-        { total: 0, groups: {}, range, source: src.source },
-        `I couldn't find any records in your CRM for ${label}.\n\nTry adjusting the timeframe or filters.`
+        { total: 0, groups: {}, range, source: src.source, fallback_exhausted: true },
+        `Nothing booked across ${label} — quiet stretch.\n\nWant to set up a campaign to drive activity?`
       );
     }
 
@@ -1168,11 +1352,25 @@ async function handleReport(data, context, client, integrations) {
     const totalDistinct = seenPks ? seenPks.size : list.length;
     const sorted = Object.entries(groups).sort(([, a], [, b]) => b.count - a.count);
 
-    // Format response
-    const capLabel = label.charAt(0).toUpperCase() + label.slice(1);
-    const lines = [`${capLabel}:`, `Total bookings: ${totalDistinct}`];
-    if (src.source === "manifest" && totalPax  > 0) lines.push(`Total pax: ${totalPax}`);
-    if (src.source === "manifest" && totalRev  > 0) lines.push(`Revenue: $${Math.round(totalRev).toLocaleString()}`);
+    // Phase X format: scope header + bullet stats + insight + grouped rows
+    const capLabel = capitalizeFirst(label);
+    const lines = [capLabel, ""];
+    lines.push(`• Bookings: ${totalDistinct.toLocaleString()}`);
+    if (src.source === "manifest" && totalPax > 0) lines.push(`• Guests: ${totalPax.toLocaleString()}`);
+    if (src.source === "manifest" && totalRev > 0) lines.push(`• Revenue: $${Math.round(totalRev).toLocaleString()}`);
+
+    // Build a sum-shaped object the insight helper understands
+    const insightSum = {
+      totalRows:        list.length,
+      distinctBookings: totalDistinct,
+      totalPax,
+      totalRev,
+      byCompany:        groupBy === "company"  ? Object.fromEntries(sorted.map(([k, g]) => [k, g.count])) : null,
+      byLocation:       groupBy === "location" ? Object.fromEntries(sorted.map(([k, g]) => [k, g.count])) : null,
+      byItem:           groupBy === "activity" ? Object.fromEntries(sorted.map(([k, g]) => [k, g.count])) : null,
+    };
+    const insight = buildOperatorInsight(insightSum, src);
+    if (insight) lines.push("", insight);
 
     const groupLabel = groupBy === "company"  ? "By company:"
                      : groupBy === "location" ? "By location:"
@@ -1199,7 +1397,7 @@ async function handleReport(data, context, client, integrations) {
       }
       const compEntries = Object.entries(byCompany).sort(([, a], [, b]) => b - a);
       if (compEntries.length > 1) {
-        lines.push("", "By company:", ...compEntries.map(([c, n]) => `  • ${c}: ${n}`));
+        lines.push("", "By company:", ...compEntries.map(([c, n]) => `• ${c}: ${n}`));
       }
     }
 
@@ -1213,6 +1411,7 @@ async function handleReport(data, context, client, integrations) {
         source:   src.source,
         metric,
         group_by: groupBy,
+        insight,
       },
       lines.join("\n")
     );

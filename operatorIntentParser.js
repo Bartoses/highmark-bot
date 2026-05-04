@@ -608,6 +608,8 @@ export function extractCompanyFilter(msg) {
   const FILLER_STARTS = new Set([
     "let", "can", "what", "how", "when", "where", "show", "tell", "give", "get",
     "find", "total", "all", "the", "our", "my", "your", "any", "some",
+    // Conjunctions — never a company name on their own
+    "and", "or", "but", "&",
     // Season/time words — not company names
     "summer", "winter", "spring", "fall", "autumn", "this", "last", "next",
     // Drill-down/list keywords — not company names
@@ -626,4 +628,155 @@ export function extractCompanyFilter(msg) {
   }
 
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE X — OPERATOR CONTEXT MEMORY
+// Helpers that let detectAndHandleOperatorCommand inherit prior turn context
+// (timeframe / entity / metric / grouping) for vague follow-ups like
+// "tell me about kremmling", "what about steamboat?", "and revenue?", or a
+// bare "kremmling" after a "summer 2026 by location" turn.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FOLLOWUP_LEAD_RE  = /^(what|how|tell|show|and|just|for|about|drill|dig)\b/;
+const METRIC_WORD_RE    = /\b(rev|revenue|earnings?|sales|pax|guests?|bookings?|tours?|trips?|reservations?|rentals?|units?)\b/;
+const TIMEFRAME_WORD_RE = /\b(today|tomorrow|yesterday|weekend|week|month|year|summer|winter|spring|fall|autumn)\b/;
+
+/**
+ * Returns true when the message looks like a refinement of a prior operator
+ * query (short, no explicit timeframe/metric of its own beyond a single token).
+ * Used to decide whether to fall back to inherited context.
+ */
+export function isVagueFollowUp(message) {
+  const msg = (message ?? "").toLowerCase().trim();
+  if (!msg) return false;
+  if (msg.length > 80) return false;
+
+  // Single-line refinement starters: "what about X", "and revenue?", "tell me about X"
+  if (FOLLOWUP_LEAD_RE.test(msg)) return true;
+
+  // Bare entity-or-metric reference: 1-4 words, mostly letters, no number/punctuation
+  const words = msg.split(/\s+/);
+  if (words.length <= 4 && /^[a-z][a-z\s'\-]*$/.test(msg)) return true;
+
+  return false;
+}
+
+/**
+ * Strip refinement-lead phrases off a message so we're left with the entity
+ * the operator wants to swap to. Used when promoting an unknown intent to a
+ * filter against inherited context.
+ */
+function extractEntityCandidate(message) {
+  let s = (message ?? "").toLowerCase().trim();
+  s = s.replace(/[?!.,;]+$/g, "").trim();
+  s = s.replace(/^(?:what|how)\s+about\s+/, "");
+  s = s.replace(/^(?:tell|show|give|get)\s+(?:me\s+)?(?:about\s+)?/, "");
+  s = s.replace(/^(?:and|just|for|about|drill|dig)\s+(?:into\s+|down\s+|in\s+)?/, "");
+  s = s.replace(/^(?:into|down|in)\s+/, "");
+  s = s.replace(/^the\s+/, "");
+  return s.trim();
+}
+
+/**
+ * Map a metric word in the current message to a canonical metric value.
+ * Returns null if no metric word is found.
+ */
+function metricFromMessage(message) {
+  const msg = (message ?? "").toLowerCase();
+  if (/\brevenue\b|\brev\b|\bearnings?\b|\bsales\b/.test(msg))                return "revenue";
+  if (/\bpax\b|\bguests?\b/.test(msg))                                        return "pax";
+  if (/\bunits?\b/.test(msg))                                                 return "units";
+  if (/\bbookings?\b|\btours?\b|\btrips?\b|\breservations?\b|\brentals?\b/.test(msg)) return "bookings";
+  return null;
+}
+
+/**
+ * Merge a freshly-parsed intent with prior operator context for vague
+ * follow-ups. Always preserves explicit fields in the new intent. Fills
+ * missing fields from prior. Upgrades "unknown" intents whose message looks
+ * like an entity refinement to "bookings_by_date" against inherited context.
+ *
+ * @param {object} intent  — output of detectOperatorIntent
+ * @param {string} message — raw operator message
+ * @param {object} prior   — { date_range, metric, group_by, company_filter, location_filter, list_mode } | null
+ * @returns {object}       — new merged intent (does not mutate input)
+ */
+export function mergeOperatorContext(intent, message, prior) {
+  const base = intent && typeof intent === "object"
+    ? { ...intent }
+    : { intent: "unknown", date_range: null, metric: null, raw: message };
+
+  if (!prior || typeof prior !== "object") return base;
+
+  const msg          = (message ?? "").toLowerCase().trim();
+  const vague        = isVagueFollowUp(message);
+  const hasOwnDate   = !!base.date_range;
+  const hasOwnMetric = !!metricFromMessage(message);
+
+  // Fill missing date_range from prior whenever absent
+  if (!hasOwnDate && prior.date_range) {
+    base.date_range = prior.date_range;
+  }
+
+  // Promote an "unknown" vague follow-up to a structured bookings query.
+  // Anchors on inherited timeframe; treats the message as an entity filter.
+  if (base.intent === "unknown" && vague && (prior.date_range || prior.metric)) {
+    base.intent     = "bookings_by_date";
+    base.metric     = base.metric ?? prior.metric ?? "bookings";
+    base.date_range = base.date_range ?? prior.date_range ?? null;
+
+    if (!base.company_filter && !base.location_filter) {
+      const candidate = extractEntityCandidate(message);
+      // Don't treat pure metric/timeframe words as entity filters
+      if (
+        candidate.length >= 2 &&
+        candidate.length <= 40 &&
+        !METRIC_WORD_RE.test(candidate) &&
+        !TIMEFRAME_WORD_RE.test(candidate)
+      ) {
+        base.company_filter = candidate;
+      }
+    }
+  }
+
+  // Bare metric refinement ("and revenue?") — keep prior entity + grouping
+  if (vague && hasOwnMetric && !base.company_filter && !base.location_filter) {
+    if (prior.company_filter)  base.company_filter  = prior.company_filter;
+    if (prior.location_filter) base.location_filter = prior.location_filter;
+  }
+
+  // Inherit grouping for report-shaped follow-ups
+  if (base.intent === "report" && !base.group_by && prior.group_by) {
+    base.group_by = prior.group_by;
+  }
+
+  // Inherit list_mode if prior was a drill-down session and current msg is vague
+  if (vague && base.list_mode == null && prior.list_mode === true) {
+    base.list_mode = true;
+  }
+
+  return base;
+}
+
+/**
+ * Extract a compact context slot to persist on the conversation row after a
+ * successful operator command. This is what mergeOperatorContext reads on the
+ * NEXT turn.
+ *
+ * @param {object} intent
+ * @returns {object|null}
+ */
+export function extractOperatorContext(intent) {
+  if (!intent || typeof intent !== "object") return null;
+  return {
+    intent_name:     intent.intent          ?? null,
+    date_range:      intent.date_range      ?? null,
+    metric:          intent.metric          ?? null,
+    group_by:        intent.group_by        ?? null,
+    company_filter:  intent.company_filter  ?? null,
+    location_filter: intent.location_filter ?? null,
+    list_mode:       intent.list_mode === true,
+    saved_at:        new Date().toISOString(),
+  };
 }

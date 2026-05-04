@@ -11,7 +11,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getAllClients } from "./clients.js";
-import { detectOperatorIntent, parseDateRange, parseSeasonRange } from "./operatorIntentParser.js";
+import {
+  detectOperatorIntent,
+  parseDateRange,
+  parseSeasonRange,
+  mergeOperatorContext,
+  extractOperatorContext,
+} from "./operatorIntentParser.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -509,18 +515,29 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
 // Call before Claude in owner mode. Returns formatted string or null.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function detectAndHandleOperatorCommand(message, client, supabase, crmSupabase = null) {
+export async function detectAndHandleOperatorCommand(message, client, supabase, crmSupabase = null, convo = null) {
   const msg = (message ?? "").toLowerCase().trim();
+  const priorContext = convo?.bookingData?._operator ?? null;
+
+  // Persist a successful structured intent's context onto the convo so the
+  // next turn can inherit it. Mutates by reference — caller saves the convo.
+  const persist = (mergedIntent) => {
+    if (!convo) return;
+    convo.bookingData = convo.bookingData ?? {};
+    convo.bookingData._operator = extractOperatorContext(mergedIntent);
+  };
 
   // BOOKINGS TODAY
   if (msg.match(/\bbookings?\s+(today|for today)\b/) || msg === "bookings today" || msg === "today's bookings" || msg === "todays bookings") {
     const slots = await getTodaysAvailability(client.id, supabase);
+    persist({ intent: "bookings_by_date", date_range: parseDateRange("today"), metric: "bookings" });
     return formatBookingsResponse(slots, "today");
   }
 
   // BOOKINGS TOMORROW
   if (msg.match(/\bbookings?\s+(tomorrow|for tomorrow)\b/) || msg === "bookings tomorrow") {
     const slots = await getTomorrowsAvailability(client.id, supabase);
+    persist({ intent: "bookings_by_date", date_range: parseDateRange("tomorrow"), metric: "bookings" });
     return formatBookingsResponse(slots, "tomorrow");
   }
 
@@ -542,20 +559,23 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     return formatWeatherResponse(snap);
   }
 
-  // REVENUE / EARNINGS — only intercept bare revenue (no date range).
-  // Date-specific queries ("revenue in Feb 2026", "revenue this winter") fall through to
-  // the intent parser which routes them to the full DB aggregation engine.
+  // REVENUE / EARNINGS — only intercept bare revenue (no date range, no
+  // inheritable prior context). Date-specific queries ("revenue in Feb 2026",
+  // "revenue this winter") and follow-ups ("and revenue?") fall through to the
+  // structured parser which routes them to the full DB aggregation engine.
   if ((msg.match(/\brevenue\b/) || msg.match(/\brev\b/) || msg.match(/\bearnings?\b/)) && !msg.match(/\bbookings?\b/)) {
     const hasDateRange = !!(parseDateRange(msg) ?? parseSeasonRange(msg, client?.seasonConfig));
-    if (!hasDateRange) {
+    const hasPriorRange = !!priorContext?.date_range;
+    if (!hasDateRange && !hasPriorRange) {
       const rev = await getWeeklyRevenueEstimate(client.id, supabase, crmSupabase);
       return formatRevenueResponse(rev);
     }
-    // Has date range → fall through to structured intent routing below
+    // Has date range (current or inherited) → fall through to structured intent routing below
   }
 
   // ── Structured intent parser (date-aware, action-routed) ──────────────────
-  const intent = detectOperatorIntent(message, client?.seasonConfig);
+  const rawIntent = detectOperatorIntent(message, client?.seasonConfig);
+  const intent    = mergeOperatorContext(rawIntent, message, priorContext);
   const integrations = buildIntegrations({ supabase, crmSupabase, client });
 
   if (intent.intent === "help") {
@@ -589,15 +609,17 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     const res = await executeAction({
       action:  "get_bookings_by_date_range",
       data:    {
-        date_range:     intent.date_range,
-        metric:         intent.metric        ?? "bookings",
-        company_filter: intent.company_filter ?? null,
-        list_mode:      intent.list_mode      ?? false,
+        date_range:      intent.date_range,
+        metric:          intent.metric          ?? "bookings",
+        company_filter:  intent.company_filter  ?? null,
+        location_filter: intent.location_filter ?? null,
+        list_mode:       intent.list_mode       ?? false,
       },
       context: {},
       client,
       integrations,
     });
+    persist(intent);
     return res.ownerReply ?? res.fallbackMessage ?? "Couldn't retrieve bookings.";
   }
 
@@ -609,6 +631,7 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
       client,
       integrations,
     });
+    persist(intent);
     return res.ownerReply ?? res.fallbackMessage ?? "Couldn't generate report right now.";
   }
 

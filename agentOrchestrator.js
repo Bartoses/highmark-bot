@@ -186,7 +186,7 @@ export async function runOrchestrator(params) {
 
     // ── Owner command shortcut (deterministic, no Claude cost) ───────────────
     if (ownerMode && supabase && client) {
-      const commandReply = await detectAndHandleOperatorCommand(msg, client, supabase, crmSupabase).catch(() => null);
+      const commandReply = await detectAndHandleOperatorCommand(msg, client, supabase, crmSupabase, convo).catch(() => null);
       if (commandReply) {
         console.log(`[ORCHESTRATOR] owner command handled deterministically, reply_len=${commandReply.length}`);
         return { reply: commandReply, parsed: {}, actionResult: null, agent, intent, context, ownerMode };

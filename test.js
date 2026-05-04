@@ -11766,6 +11766,57 @@ async function test75() {
     fail("buildOwnerInstruction(null): threw exception", e.message);
   }
 
+  // ── buildOwnerInstruction: Phase X intelligence rules ─────────────────────
+  /\bPHASE X\b|\bphase x\b/i.test(instruction)
+    ? pass("buildOwnerInstruction: declares Phase X intelligence")
+    : fail("buildOwnerInstruction: missing Phase X marker");
+
+  /context\s+memory|inherit\s+prior\s+context|inherit.*context|reuse.*timeframe/i.test(instruction)
+    ? pass("buildOwnerInstruction: encodes context memory rules")
+    : fail("buildOwnerInstruction: missing context memory rules");
+
+  /never\s+default\s+to\s+winter/i.test(instruction)
+    ? pass("buildOwnerInstruction: warns against defaulting to winter")
+    : fail("buildOwnerInstruction: missing winter-default warning");
+
+  /never\s+say.*no\s+(records|data)|never.*adjust\s+filters|never\s+expose|do\s+not.*supabase|never.*supabase/i.test(instruction)
+    ? pass("buildOwnerInstruction: forbids 'no records' / DB references")
+    : fail("buildOwnerInstruction: missing empty-state hard rule");
+
+  /must\s+include.*insight|one\s+insight|operator-first\s+insight|insight\s+sentence/i.test(instruction)
+    ? pass("buildOwnerInstruction: requires one operator insight")
+    : fail("buildOwnerInstruction: missing insight requirement");
+
+  /kremmling.*location|location\s+filter.*kremmling|kremmling.*\(not\s+company\)/i.test(instruction)
+    ? pass("buildOwnerInstruction: maps kremmling → location filter")
+    : fail("buildOwnerInstruction: missing kremmling location mapping");
+
+  /REA|Rabbit\s+Ears/i.test(instruction) && /company/i.test(instruction)
+    ? pass("buildOwnerInstruction: maps REA / Rabbit Ears → company filter")
+    : fail("buildOwnerInstruction: missing REA company mapping");
+
+  /summer\s*→?\s*RZRs?|RZR.*summer/i.test(instruction)
+    ? pass("buildOwnerInstruction: encodes summer=RZRs business context")
+    : fail("buildOwnerInstruction: missing summer/RZR business context");
+
+  /winter\s*→?\s*snowmobiles?|snowmobile.*winter/i.test(instruction)
+    ? pass("buildOwnerInstruction: encodes winter=snowmobiles business context")
+    : fail("buildOwnerInstruction: missing winter/snowmobile business context");
+
+  /•\s*Bookings:\s*X|•\s*Guests:\s*X|•\s*Revenue:/i.test(instruction)
+    ? pass("buildOwnerInstruction: shows Phase-X bullet response template")
+    : fail("buildOwnerInstruction: missing Phase-X format template");
+
+  // Null fallback should still hide DB references
+  try {
+    const fb = buildOwnerInstruction(null);
+    /database|customer-facing/i.test(fb)
+      ? pass("buildOwnerInstruction(null): fallback still hides DB / blocks customer flows")
+      : fail("buildOwnerInstruction(null): fallback missing DB-hide / customer-flow note");
+  } catch (e) {
+    fail("buildOwnerInstruction(null) phase-x check: threw", e.message);
+  }
+
   // ── routeOwnerAgent: known intents → correct agent ────────────────────────
   const agentCases = [
     ["report",    "operations"],
@@ -13640,12 +13691,19 @@ async function testOperatorBotUpgrade() {
         r.result?.pax === 10, JSON.stringify(r.result));
     chk("opbot: bookings via DB2 manifest — revenue = 2340",
         r.result?.revenue === 2340, JSON.stringify(r.result));
-    chk("opbot: bookings reply mentions revenue",
+    chk("opbot: bookings reply mentions revenue (Phase X bullet)",
         (r.ownerReply ?? "").toLowerCase().includes("revenue"), r.ownerReply);
-    chk("opbot: bookings reply mentions activities",
+    chk("opbot: bookings reply lists activities under 'Top activities:'",
         (r.ownerReply ?? "").includes("Top activities"), r.ownerReply);
-    chk("opbot: headline number is distinct bookings (4), not row count",
-        (r.ownerReply ?? "").includes("Total bookings: 4"), r.ownerReply);
+    chk("opbot: headline uses Phase-X bullet format '• Bookings: 4'",
+        (r.ownerReply ?? "").includes("• Bookings: 4"), r.ownerReply);
+    chk("opbot: Phase-X format uses '• Guests:' bullet",
+        (r.ownerReply ?? "").includes("• Guests:"), r.ownerReply);
+    chk("opbot: Phase-X format uses '• Revenue: $' bullet",
+        (r.ownerReply ?? "").includes("• Revenue: $"), r.ownerReply);
+    chk("opbot: result.insight is non-empty string (Phase X requires one insight)",
+        typeof r.result?.insight === "string" && r.result.insight.length > 0,
+        JSON.stringify(r.result?.insight));
   }
 
   // ── operatorBriefing: detectAndHandleOperatorCommand routes structured intents ─
@@ -13680,6 +13738,377 @@ async function testOperatorBotUpgrade() {
     chk("opbot: 'bookings + revenue' multi-intent bypasses early revenue check (no revenue estimate)",
         typeof multiIntentReply === "string" && !multiIntentReply.includes("converted leads × $175"),
         JSON.stringify(multiIntentReply));
+  }
+
+  // ── Phase X: Operator Context Memory ─────────────────────────────────────
+  const {
+    isVagueFollowUp,
+    mergeOperatorContext,
+    extractOperatorContext,
+  } = await import("./operatorIntentParser.js");
+
+  // isVagueFollowUp
+  chk("opbot: isVagueFollowUp('kremmling') true",        isVagueFollowUp("kremmling") === true);
+  chk("opbot: isVagueFollowUp('what about steamboat?') true",
+      isVagueFollowUp("what about steamboat?") === true);
+  chk("opbot: isVagueFollowUp('and revenue?') true",     isVagueFollowUp("and revenue?") === true);
+  chk("opbot: isVagueFollowUp('tell me about kremmling') true",
+      isVagueFollowUp("tell me about kremmling") === true);
+  chk("opbot: isVagueFollowUp('bookings in feb 2026') false (length+digits)",
+      isVagueFollowUp("bookings in feb 2026 split by location and company") === false);
+  chk("opbot: isVagueFollowUp('') false",                isVagueFollowUp("") === false);
+  chk("opbot: isVagueFollowUp(null) false",              isVagueFollowUp(null) === false);
+
+  // extractOperatorContext
+  const ec = extractOperatorContext({
+    intent: "bookings_by_date",
+    date_range: { start: "2026-06-01", end: "2026-09-30", label: "summer 2026" },
+    metric: "bookings",
+    group_by: "location",
+    company_filter: null,
+    location_filter: "kremmling",
+    list_mode: false,
+  });
+  chk("opbot: extractOperatorContext returns intent_name",   ec?.intent_name === "bookings_by_date");
+  chk("opbot: extractOperatorContext keeps date_range",      ec?.date_range?.label === "summer 2026");
+  chk("opbot: extractOperatorContext keeps metric",          ec?.metric === "bookings");
+  chk("opbot: extractOperatorContext keeps group_by",        ec?.group_by === "location");
+  chk("opbot: extractOperatorContext keeps location_filter", ec?.location_filter === "kremmling");
+  chk("opbot: extractOperatorContext stamps saved_at",       typeof ec?.saved_at === "string");
+  chk("opbot: extractOperatorContext(null) → null",          extractOperatorContext(null) === null);
+
+  // mergeOperatorContext: prior summer 2026 + bare "kremmling" → bookings_by_date
+  const prior = {
+    date_range: { start: "2026-06-01", end: "2026-09-30", label: "summer 2026" },
+    metric: "bookings",
+    group_by: "location",
+  };
+  const m1 = mergeOperatorContext(detectOperatorIntent("kremmling"), "kremmling", prior);
+  chk("opbot: merge 'kremmling' after summer 2026 → bookings_by_date",
+      m1.intent === "bookings_by_date", JSON.stringify(m1));
+  chk("opbot: merge 'kremmling' inherits summer 2026 date_range",
+      m1.date_range?.label === "summer 2026", JSON.stringify(m1.date_range));
+  chk("opbot: merge 'kremmling' sets entity as company_filter",
+      m1.company_filter === "kremmling", JSON.stringify(m1));
+  chk("opbot: merge 'kremmling' inherits metric=bookings",
+      m1.metric === "bookings");
+
+  // mergeOperatorContext: 'what about steamboat?' inherits timeframe
+  const m2 = mergeOperatorContext(detectOperatorIntent("what about steamboat?"), "what about steamboat?", prior);
+  chk("opbot: merge 'what about steamboat?' → bookings_by_date",
+      m2.intent === "bookings_by_date", JSON.stringify(m2));
+  chk("opbot: merge 'what about steamboat?' strips lead phrase → 'steamboat'",
+      m2.company_filter === "steamboat", JSON.stringify(m2));
+  chk("opbot: merge 'what about steamboat?' inherits summer 2026",
+      m2.date_range?.label === "summer 2026");
+
+  // mergeOperatorContext: 'and revenue?' inherits date_range + entity
+  const priorWithEntity = {
+    ...prior,
+    company_filter: "kremmling",
+  };
+  const m3 = mergeOperatorContext(detectOperatorIntent("and revenue?"), "and revenue?", priorWithEntity);
+  chk("opbot: merge 'and revenue?' inherits summer 2026 date_range",
+      m3.date_range?.label === "summer 2026", JSON.stringify(m3));
+  chk("opbot: merge 'and revenue?' keeps revenue metric",
+      m3.metric === "revenue", JSON.stringify(m3));
+  chk("opbot: merge 'and revenue?' inherits prior entity",
+      m3.company_filter === "kremmling", JSON.stringify(m3));
+
+  // mergeOperatorContext: explicit timeframe in current msg overrides prior
+  const m4 = mergeOperatorContext(
+    detectOperatorIntent("winter 2024/2025 bookings"),
+    "winter 2024/2025 bookings",
+    prior,
+  );
+  chk("opbot: merge does not overwrite explicit current date_range",
+      m4.date_range?.label === "winter 2024/2025", JSON.stringify(m4));
+
+  // mergeOperatorContext: no prior context → returns input unchanged-ish
+  const m5 = mergeOperatorContext(detectOperatorIntent("kremmling"), "kremmling", null);
+  chk("opbot: merge with null prior → unknown intent unchanged",
+      m5.intent === "unknown", JSON.stringify(m5));
+
+  // mergeOperatorContext: handles null intent input safely
+  const m6 = mergeOperatorContext(null, "kremmling", prior);
+  chk("opbot: merge null intent + prior → upgraded to bookings_by_date",
+      m6.intent === "bookings_by_date" && m6.company_filter === "kremmling", JSON.stringify(m6));
+
+  // mergeOperatorContext: pure metric word in vague follow-up keeps prior entity
+  const m7 = mergeOperatorContext(
+    detectOperatorIntent("revenue"),
+    "revenue",
+    priorWithEntity,
+  );
+  chk("opbot: merge bare 'revenue' inherits prior entity",
+      m7.company_filter === "kremmling", JSON.stringify(m7));
+
+  // mergeOperatorContext: long sentence is NOT vague — does not promote to bookings_by_date
+  const m8 = mergeOperatorContext(
+    detectOperatorIntent("hey can you remind me what we discussed earlier about the launch event"),
+    "hey can you remind me what we discussed earlier about the launch event",
+    prior,
+  );
+  chk("opbot: merge long unrelated message stays unknown (not promoted)",
+      m8.intent === "unknown", JSON.stringify(m8));
+
+  // detectAndHandleOperatorCommand: convo persistence + inheritance round-trip
+  if (typeof detectAndHandleOperatorCommand === "function") {
+    const convo = { bookingData: {} };
+
+    // First turn: explicit "bookings in feb 2026" — should persist context.
+    // No DB available, but the structured branch still extracts intent and persists.
+    const r1 = await detectAndHandleOperatorCommand(
+      "bookings in feb 2026",
+      mockClient,
+      mockSupabase,
+      null,
+      convo,
+    );
+    chk("opbot: convo._operator persisted after structured query",
+        convo.bookingData?._operator?.date_range?.start?.startsWith("2026-02"),
+        JSON.stringify(convo.bookingData?._operator));
+    chk("opbot: convo._operator stamps intent_name",
+        convo.bookingData?._operator?.intent_name === "bookings_by_date",
+        JSON.stringify(convo.bookingData?._operator));
+    chk("opbot: turn 1 returned a string reply (or null on no-DB)",
+        typeof r1 === "string" || r1 === null);
+
+    // Second turn: bare "kremmling" — should inherit feb 2026 from convo
+    const convo2 = { bookingData: { _operator: {
+      intent_name: "bookings_by_date",
+      date_range: { start: "2026-02-01T07:00:00.000Z", end: "2026-03-01T06:59:59.999Z", label: "feb 2026" },
+      metric: "bookings",
+      group_by: null,
+    }}};
+    const r2 = await detectAndHandleOperatorCommand(
+      "kremmling",
+      mockClient,
+      mockSupabase,
+      null,
+      convo2,
+    );
+    chk("opbot: bare 'kremmling' after prior context returns a reply (not null)",
+        typeof r2 === "string" && r2.length > 0, JSON.stringify(r2));
+    chk("opbot: bare 'kremmling' updates persisted _operator with kremmling filter",
+        convo2.bookingData?._operator?.company_filter === "kremmling" ||
+        convo2.bookingData?._operator?.location_filter === "kremmling",
+        JSON.stringify(convo2.bookingData?._operator));
+
+    // Third turn variant: "and revenue?" should fall through to structured path
+    // when prior context has a date_range — NOT return the 7-day estimate.
+    const convo3 = { bookingData: { _operator: {
+      intent_name: "bookings_by_date",
+      date_range: { start: "2026-02-01T07:00:00.000Z", end: "2026-03-01T06:59:59.999Z", label: "feb 2026" },
+      metric: "bookings",
+    }}};
+    const r3 = await detectAndHandleOperatorCommand(
+      "and revenue?",
+      mockClient,
+      mockSupabase,
+      null,
+      convo3,
+    );
+    chk("opbot: 'and revenue?' with prior date_range avoids 7-day estimate fallback",
+        typeof r3 === "string" && !r3.includes("converted leads × $175"),
+        JSON.stringify(r3));
+    chk("opbot: 'and revenue?' updates persisted metric to revenue",
+        convo3.bookingData?._operator?.metric === "revenue",
+        JSON.stringify(convo3.bookingData?._operator));
+
+    // Backward-compat: omitting convo arg still works (no throw)
+    let threwWithoutConvo = false;
+    try {
+      await detectAndHandleOperatorCommand("bookings today", mockClient, mockSupabase);
+    } catch (e) {
+      threwWithoutConvo = true;
+    }
+    chk("opbot: detectAndHandleOperatorCommand without convo arg does not throw",
+        threwWithoutConvo === false);
+  }
+
+  // ── Phase X: buildOperatorInsight ─────────────────────────────────────────
+  const { buildOperatorInsight } = await import("./actionEngine.js");
+  const manifestSrc = { dedupKey: "fareharbor_pk", paxField: "pax", totalField: "total", itemField: "activity", locationField: "location", source: "manifest" };
+
+  // Top-location dominance (≥60%) — always preferred when present
+  const insLocDom = buildOperatorInsight({
+    distinctBookings: 20, totalRows: 20, totalPax: 40, totalRev: 5000,
+    byLocation: { kremmling: 17, steamboat: 3 },
+    byCompany:  { coloradosledrentals: 20 },
+    byItem:     { "Beginner Tour": 20 },
+  }, manifestSrc);
+  chk("opbot: insight detects location dominance (kremmling 85%)",
+      /kremmling/i.test(insLocDom) && /\d{2}%/.test(insLocDom),
+      insLocDom);
+
+  // Single location → "all concentrated in"
+  const insSingleLoc = buildOperatorInsight({
+    distinctBookings: 5, totalRows: 5, totalPax: 10, totalRev: 1000,
+    byLocation: { kremmling: 5 },
+    byCompany:  { coloradosledrentals: 5 },
+    byItem:     { Tour: 5 },
+  }, manifestSrc);
+  chk("opbot: insight detects single-location concentration",
+      /concentrated|all bookings/i.test(insSingleLoc), insSingleLoc);
+
+  // Top + tiny second → "barely contributing" branch
+  // Construct counts so kremmling is top at ~55% and steamboat is the 2nd-largest with <15%.
+  const insBarely = buildOperatorInsight({
+    distinctBookings: 20, totalRows: 20, totalPax: 40, totalRev: 5000,
+    byLocation: { kremmling: 11, steamboat: 2, granby: 1, vail: 1, eagle: 1, breck: 1, salida: 1, fort: 1, denver: 1 },
+    byCompany:  { coloradosledrentals: 20 },
+    byItem:     { Tour: 20 },
+  }, manifestSrc);
+  chk("opbot: insight surfaces 2nd-place underperformer when top is dominant-but-not-overwhelming",
+      /(barely contributing|driving)/i.test(insBarely), insBarely);
+
+  // Small-group pattern (no location dominance + low avg pax)
+  const insSmallGroups = buildOperatorInsight({
+    distinctBookings: 10, totalRows: 10, totalPax: 18, totalRev: 2000,
+    byLocation: { kremmling: 5, steamboat: 5 }, // even split
+    byCompany:  { rabbitearsadventures: 10 },
+    byItem:     { Tour: 10 },
+  }, manifestSrc);
+  chk("opbot: insight detects small-group pattern when locations even-split",
+      /small\s+group|guests?\)/i.test(insSmallGroups), insSmallGroups);
+
+  // Empty totals → empty string
+  chk("opbot: insight returns '' when total is 0",
+      buildOperatorInsight({ distinctBookings: 0, totalRows: 0 }, manifestSrc) === "");
+  chk("opbot: insight returns '' for null sum",
+      buildOperatorInsight(null, manifestSrc) === "");
+
+  // ── Phase X: handleGetBookingsByDateRange fallback retry ──────────────────
+  const { executeAction: execActionForFallback, parseDateRange: parseDateRangeForFallback } =
+    await import("./actionEngine.js").then(m => ({ executeAction: m.executeAction, parseDateRange: null }));
+  const { parseDateRange: parseDR } = await import("./operatorIntentParser.js");
+
+  // 1. Location filter "vail" — empty for vail, but kremmling has data → relax to no-location
+  {
+    let callCount = 0;
+    const fallbackQuery = {
+      _filters: [],
+      select() { return this; },
+      gte()    { return this; },
+      lte()    { return this; },
+      order()  { return this; },
+      in()     { return this; },
+      eq()     { return this; },
+      ilike(_field, val) {
+        // First call with the location filter returns empty
+        if (val.toLowerCase().includes("vail")) this._filters.push({ vail: true });
+        else this._filters.push({ vail: false });
+        return this;
+      },
+      then(resolve) {
+        callCount += 1;
+        const wasVail = this._filters.some(f => f.vail);
+        if (wasVail) {
+          resolve({ data: [], error: null });
+        } else {
+          resolve({ data: [
+            { fareharbor_pk: "B-1", company: "coloradosledrentals", activity: "Tour A", location: "Kremmling", start_at: "2026-02-10T15:00:00Z", pax: 2, total: 200 },
+            { fareharbor_pk: "B-2", company: "coloradosledrentals", activity: "Tour A", location: "Kremmling", start_at: "2026-02-12T15:00:00Z", pax: 1, total: 150 },
+          ], error: null });
+        }
+        // Reset for next chained call
+        this._filters = [];
+        return this;
+      },
+    };
+    const stubCrm = { from: () => fallbackQuery };
+
+    const r = await execActionForFallback({
+      action: "get_bookings_by_date_range",
+      data: {
+        date_range: parseDR("Feb 2026"),
+        location_filter: "vail",
+      },
+      client: { id: "csr_rea", fareharborCompanies: [{ shortname: "coloradosledrentals" }] },
+      integrations: { crmDatabase: { supabase: stubCrm } },
+    });
+
+    chk("opbot: fallback — empty location returns relaxed result, not 'no records'",
+        !((r.ownerReply ?? "").toLowerCase().includes("couldn't find any records")) &&
+        !((r.ownerReply ?? "").toLowerCase().includes("adjust the filters")) &&
+        !((r.ownerReply ?? "").toLowerCase().includes("no data")),
+        r.ownerReply);
+    chk("opbot: fallback — relax note prepended (mentions vail or full picture)",
+        /vail|full\s+\w+\s+picture/i.test(r.ownerReply ?? ""), r.ownerReply);
+    chk("opbot: fallback — result.relaxed=true",
+        r.result?.relaxed === true, JSON.stringify(r.result));
+    chk("opbot: fallback — non-zero distinct bookings after relax",
+        r.result?.distinct_bookings >= 1, JSON.stringify(r.result));
+  }
+
+  // 2. Truly empty everywhere — should NOT say "no records"; suggest a campaign
+  {
+    const emptyQuery = {
+      select() { return this; },
+      gte()    { return this; },
+      lte()    { return this; },
+      order()  { return this; },
+      in()     { return this; },
+      eq()     { return this; },
+      ilike()  { return this; },
+      then(resolve) { resolve({ data: [], error: null }); return this; },
+    };
+    const stubCrm = { from: () => emptyQuery };
+    const r = await execActionForFallback({
+      action: "get_bookings_by_date_range",
+      data: {
+        date_range: parseDR("Feb 2026"),
+        location_filter: "vail",
+      },
+      client: { id: "csr_rea", fareharborCompanies: [{ shortname: "coloradosledrentals" }] },
+      integrations: { crmDatabase: { supabase: stubCrm } },
+    });
+    chk("opbot: exhausted fallback never says 'no records' / 'adjust filters'",
+        !/couldn't find any records|adjust\s+(the\s+)?filters|no\s+data/i.test(r.ownerReply ?? ""),
+        r.ownerReply);
+    chk("opbot: exhausted fallback suggests a campaign next step",
+        /campaign/i.test(r.ownerReply ?? ""), r.ownerReply);
+    chk("opbot: exhausted fallback flags fallback_exhausted in result",
+        r.result?.fallback_exhausted === true, JSON.stringify(r.result));
+  }
+
+  // 3. handleReport: Phase X bullet format + insight in result
+  {
+    const reportRows = [
+      { fareharbor_pk: "B-1", company: "coloradosledrentals", activity: "Beginner Tour",  location: "Kremmling", start_at: "2026-02-10T15:00:00Z", pax: 2, total: 200 },
+      { fareharbor_pk: "B-2", company: "coloradosledrentals", activity: "Beginner Tour",  location: "Kremmling", start_at: "2026-02-11T15:00:00Z", pax: 1, total: 150 },
+      { fareharbor_pk: "B-3", company: "coloradosledrentals", activity: "Advanced Tour",  location: "Kremmling", start_at: "2026-02-12T15:00:00Z", pax: 4, total: 800 },
+      { fareharbor_pk: "B-4", company: "rabbitearsadventures", activity: "Guided Powder", location: "Steamboat", start_at: "2026-02-15T15:00:00Z", pax: 3, total: 600 },
+    ];
+    const stub = {
+      select() { return this; },
+      gte()    { return this; },
+      lte()    { return this; },
+      order()  { return this; },
+      in()     { return this; },
+      eq()     { return this; },
+      ilike()  { return this; },
+      then(resolve) { resolve({ data: reportRows, error: null }); return this; },
+    };
+    const stubCrm = { from: () => stub };
+    const r = await execActionForFallback({
+      action: "report",
+      data: {
+        date_range: parseDR("Feb 2026"),
+        metric: "bookings",
+        group_by: "location",
+      },
+      client: { id: "csr_rea", fareharborCompanies: [{ shortname: "coloradosledrentals" }, { shortname: "rabbitearsadventures" }] },
+      integrations: { crmDatabase: { supabase: stubCrm } },
+    });
+    chk("opbot: report uses Phase-X '• Bookings:' bullet",
+        (r.ownerReply ?? "").includes("• Bookings:"), r.ownerReply);
+    chk("opbot: report uses 'By location:' grouping label",
+        (r.ownerReply ?? "").includes("By location:"), r.ownerReply);
+    chk("opbot: report response carries insight in result",
+        typeof r.result?.insight === "string" && r.result.insight.length > 0,
+        JSON.stringify(r.result?.insight));
   }
 }
 
