@@ -67,6 +67,11 @@ public/portal-accept.html — invite acceptance page
 public/signup.html     — Sprint 7: public self-serve signup form (businessName, websiteUrl, email, password)
 public/portal-onboarding.html — Sprint 7: polling page for crawl status + draft preview + approve
 partnerActivities.js   — Sprint 5: partner distribution — scoring, season filter, /track/partner resolver (Source 5 in bookingLinks)
+ownerMode.js           — owner detection (detectOwner) + Phase X system prompt (buildOwnerInstruction) + pending-action confirmation gate
+operatorIntentParser.js — deterministic operator NLP: detectOperatorIntent, parseDateRange, parseSeasonRange, extractCompanyFilter, isVagueFollowUp, mergeOperatorContext, extractOperatorContext
+operatorBriefing.js    — operator command shortcut (detectAndHandleOperatorCommand), morning briefing builder, operational issue detection
+actionEngine.js        — owner BI action handlers: get_bookings_by_date_range, report, daily_summary, get_lead_summary, send_campaign + buildOperatorInsight + Phase-X format helpers
+agentOrchestrator.js   — multi-agent orchestrator (runOrchestrator); routes owner mode through detectAndHandleOperatorCommand before Claude
 db1_schema.sql         — DB1 migration (Supabase Project 1 SQL editor)
 db2_crm_schema.sql     — DB2 CRM schema (Supabase Project 2 SQL editor)
 railway.json           — Railway deployment config
@@ -263,6 +268,15 @@ Three industry pages render server-side from a single `VERTICAL_SLUGS` array: `/
 ### Whole-Site Crawler (crawler.js)
 BFS crawl from `crawlSettings.primaryUrl`, same-domain only, skips junk paths. Per-page: classify (10 types) → Haiku fact extraction (hash-gated). Output: `buildCrawlerContext()` assembles ≤1500 char `WEBSITE KNOWLEDGE:` block from `client_pages` table. Cron: Monday 4am.
 Enable: `crawlSettings: { enabled: true, primaryUrl: "https://..." }` in `clients.js` or via `crawl_settings` JSONB on DB-backed clients.
+
+### Operator/Owner Mode — Phase X Intelligence (ownerMode.js + operatorIntentParser.js + operatorBriefing.js + actionEngine.js)
+Two-layer system. **Layer 1** (deterministic, ~95% of operator queries): `detectOperatorIntent` parses intent + season/date range + grouping + metric + company/location filter. `detectAndHandleOperatorCommand` routes to action handlers in `actionEngine.js` (`get_bookings_by_date_range`, `report`, `daily_summary`, `get_lead_summary`, `analyze_performance`, `get_missed_leads`, `get_campaign_stats`, `send_campaign` w/ YES confirm, `flag_issue`). DB2 `daily_manifest` preferred (real pax + total + location); DB1 `confirmations_sent` fallback. **Layer 2** (Claude fallback): when Layer 1 returns null, `agentOrchestrator` calls Claude with `buildOwnerInstruction` (full Phase X rules) appended to the system prompt.
+
+**Context memory across turns** (Phase X b). `mergeOperatorContext` merges the freshly-parsed intent with the prior turn's `_operator` slot persisted on `convo.bookingData`. Vague follow-ups inherit timeframe + entity + metric: "kremmling" → swap entity, "what about steamboat?" → swap entity keep timeframe, "and revenue?" → swap metric keep entity + timeframe. `extractOperatorContext` is what gets stamped after each successful structured route; the orchestrator threads `convo` in so persistence is automatic via reference mutation. `FILLER_STARTS` includes `and / or / but / &` to stop spurious company_filter extraction.
+
+**Fallback intelligence on 0 rows** (Phase X c). `handleGetBookingsByDateRange` retry ladder: drop location → drop company → broaden to last 90 days. Each level prepends a one-line "I'm not seeing X — here's Y:" note. Truly-empty state suggests a campaign rather than emitting "no records". `buildOperatorInsight` (exported pure helper) picks one operator-facing insight per response from a strategy ladder: location dominance ≥60% → barely-contributing 2nd <15% with top 50–60% → company dominance ≥70% → small-group pattern (avg pax ≤2.4) → top activity ≥40%. `formatPhaseXBookingReply` renders the bullet template (• Bookings / Guests / Revenue + insight + optional By location: / By company: / Top activities:) for both `handleGetBookingsByDateRange` and `handleReport`.
+
+**Owner detection** (`ownerMode.detectOwner`). Matches `fromNumber` against `client.ownerPhone` (preferred) or `operatorPhones[]`, both normalized to E.164. When true, the orchestrator: (1) intercepts pending-action YES/NO confirmations, (2) tries `detectAndHandleOperatorCommand` for a deterministic reply, (3) falls through to Claude with `buildOwnerInstruction` appended. Customer-only actions (`capture_lead`, `escalate_to_human`) blocked via `isOwnerActionAllowed`.
 
 ### Knowledge Base Refresh
 | Data | Cron | Method |

@@ -349,6 +349,44 @@ Done when:
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Phase X — Operator Intelligence (2026-05-04)
+Three-part upgrade so the owner/operator interface acts like an ops assistant rather than
+a database tool. Every reply is fast, includes one operator-facing insight, and never
+exposes DB internals or "no records" copy.
+
+- (a) ownerMode.buildOwnerInstruction rewritten with the Phase X spec: two-layer
+  awareness, context-inheritance rules, intent mapping (kremmling → location;
+  REA / Rabbit Ears / CSR → company), empty-state hard rules (never "no records",
+  never expose Supabase / CRM / tables), required one-line insight, Phase-X bullet
+  template, seasonal business context (Summer=RZRs, Winter=snowmobiles, Kremmling
+  primary). Null-fallback also hides DB references.
+- (b) Operator context memory across turns. operatorIntentParser.js exports
+  isVagueFollowUp / mergeOperatorContext / extractOperatorContext. FILLER_STARTS
+  extended with and/or/but/& to fix spurious company_filter extraction on
+  metric-only refinements. operatorBriefing.detectAndHandleOperatorCommand
+  accepts an optional convo arg: reads prior context off booking_data._operator,
+  merges it into the parsed intent, persists the new context after each
+  successful structured route. Bare-revenue intercept defers to the structured
+  path when inherited context provides a date_range. agentOrchestrator.js threads
+  convo through. "kremmling" / "what about steamboat?" / "and revenue?" inherit
+  timeframe + entity + metric from the prior turn.
+- (c) Fallback intelligence + insight + Phase-X format (actionEngine.js).
+  buildOperatorInsight (exported pure helper) picks one insight per response from
+  a strategy ladder: location dominance → barely-contributing 2nd → company
+  dominance → small-group pattern → top activity. formatPhaseXBookingReply
+  renders {Scope} header, • Bookings / Guests / Revenue bullets, insight,
+  optional By location: / By company: / Top activities:. handleGetBookingsByDateRange
+  retry ladder on 0 rows: drop location → drop company → broaden to last 90 days,
+  each level prepending "I'm not seeing X — here's Y:". Truly-empty state suggests
+  a campaign instead of "no records". handleReport adopts the same bullet format
+  + insight in result.insight. All "I couldn't find any records … adjust the
+  timeframe or filters" copy removed.
+
+Tests: +62 assertions in test.js — 2138/2138 passing. Covers the new ownerMode
+rules, isVagueFollowUp / merge / extract, convo persistence + inheritance round-trip,
+buildOperatorInsight branches, fallback retry, Phase-X format on bookings + report
+handlers.
+
 ---
 
 ## NEXT 5 BUILDS (STRICT ORDER)
