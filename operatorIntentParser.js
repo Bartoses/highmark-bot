@@ -363,12 +363,61 @@ export function parseSeasonRange(message, seasonConfig = null) {
 //   unknown             — no match
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKING NOTICE PARSER
+// Detects forwarded booking notifications (e.g. from Polaris Adventures):
+//   "Notice: New Reservation Created For Maximo Santiago"
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function isBookingNotice(message) {
+  return /notice:\s*new reservation created for/i.test(message ?? "");
+}
+
+export function parseBookingNotice(text) {
+  const lines = (text ?? "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+  const getField = (label) => {
+    const re = new RegExp(`^${label}\\s*(.+)$`, "i");
+    for (const line of lines) {
+      const m = line.match(re);
+      if (m) return m[1].trim();
+    }
+    return null;
+  };
+
+  const headerLine = lines.find(l => /notice:\s*new reservation created for/i.test(l));
+  const customerName = headerLine
+    ? headerLine.replace(/notice:\s*new reservation created for\s*/i, "").trim()
+    : null;
+
+  const nameParts = (customerName ?? "").split(/\s+/).filter(Boolean);
+  const firstName = nameParts.length > 1 ? nameParts.slice(0, -1).join(" ") : nameParts[0] ?? null;
+  const lastName  = nameParts.length > 1 ? nameParts[nameParts.length - 1] : null;
+
+  return {
+    customerName,
+    firstName,
+    lastName,
+    email:            getField("Email:"),
+    phone:            getField("Phone:"),
+    adventureListing: getField("Adventure Listing:"),
+    vehicles:         getField("Vehicles:"),
+    beginDatetime:    getField("Begin Date/Time:"),
+    endDatetime:      getField("End Date/Time:"),
+  };
+}
+
 export function detectOperatorIntent(message, seasonConfig = null) {
   const raw = (message ?? "").trim();
   const msg = raw.toLowerCase();
   const ps  = (m) => parseSeasonRange(m, seasonConfig); // shorthand
 
   if (!msg) return { intent: "unknown", date_range: null, metric: null, raw };
+
+  // booking notice — operator forwarding a reservation from an external platform
+  if (isBookingNotice(raw)) {
+    return { intent: "import_booking", date_range: null, metric: null, raw };
+  }
 
   // help
   if (/^(help|commands|what can you do|menu|\?)$/.test(msg)) {

@@ -13457,6 +13457,41 @@ async function testOperatorBotUpgrade() {
   const i8 = detectOperatorIntent("help");
   chk("opbot: detectOperatorIntent('help') → help", i8.intent === "help");
 
+  // ── isBookingNotice + parseBookingNotice ─────────────────────────────────
+  const { isBookingNotice, parseBookingNotice } = await import("./operatorIntentParser.js");
+
+  const SAMPLE_NOTICE = [
+    "Notice: New Reservation Created For Maximo Santiago",
+    "Email: maxandmandy.santiago@gmail.com",
+    "Phone: 305-846-0645",
+    "Adventure Listing: Steamboat RZR Rentals | Explore Colorado Backcountry (Trailer Pickup)",
+    "Vehicles: GENERAL",
+    "Begin Date/Time: Jun 12, 2026 - 9:00 am",
+    "End Date/Time: Jun 12, 2026 - 5:00 pm",
+  ].join("\n");
+
+  chk("booking-import: isBookingNotice detects notice pattern",      isBookingNotice(SAMPLE_NOTICE));
+  chk("booking-import: isBookingNotice case-insensitive",            isBookingNotice("NOTICE: NEW RESERVATION CREATED FOR Bob"));
+  chk("booking-import: isBookingNotice rejects normal message",      !isBookingNotice("Hey what's the weather?"));
+  chk("booking-import: isBookingNotice rejects empty string",        !isBookingNotice(""));
+
+  const iImport = detectOperatorIntent(SAMPLE_NOTICE);
+  chk("booking-import: detectOperatorIntent → import_booking",       iImport.intent === "import_booking", JSON.stringify(iImport));
+
+  const parsed = parseBookingNotice(SAMPLE_NOTICE);
+  chk("booking-import: parseBookingNotice extracts customerName",    parsed.customerName === "Maximo Santiago", parsed.customerName);
+  chk("booking-import: parseBookingNotice extracts firstName",       parsed.firstName === "Maximo", parsed.firstName);
+  chk("booking-import: parseBookingNotice extracts lastName",        parsed.lastName  === "Santiago", parsed.lastName);
+  chk("booking-import: parseBookingNotice extracts email",           parsed.email === "maxandmandy.santiago@gmail.com", parsed.email);
+  chk("booking-import: parseBookingNotice extracts phone",           parsed.phone === "305-846-0645", parsed.phone);
+  chk("booking-import: parseBookingNotice extracts adventureListing", parsed.adventureListing?.includes("Steamboat RZR"), parsed.adventureListing);
+  chk("booking-import: parseBookingNotice extracts beginDatetime",   parsed.beginDatetime === "Jun 12, 2026 - 9:00 am", parsed.beginDatetime);
+  chk("booking-import: parseBookingNotice extracts endDatetime",     parsed.endDatetime   === "Jun 12, 2026 - 5:00 pm", parsed.endDatetime);
+
+  const parsedEmpty = parseBookingNotice("random text");
+  chk("booking-import: parseBookingNotice on non-notice returns nulls",
+      parsedEmpty.customerName === null && parsedEmpty.phone === null && parsedEmpty.email === null);
+
   // ── parseSeasonRange unit tests ───────────────────────────────────────────
   const { parseSeasonRange } = await import("./operatorIntentParser.js");
 

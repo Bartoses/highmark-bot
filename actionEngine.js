@@ -51,6 +51,78 @@ function ownerConfirm(result = {}, ownerReply = null) {
 const GLOBAL_FALLBACK = fail("Something went wrong — let me help another way.");
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BOOKING IMPORT HELPERS
+// Used by handleImportBooking to parse forwarded booking notifications.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ACTIVITY_IDS = {
+  steamboat_rzr: "45c66b1e-9c5d-4116-b4f7-3cafe3ad9e8c",
+  kremmling_rzr: "c028dc5b-e2ed-40ec-a209-4ef06a1d15ab",
+};
+
+function resolveActivityId(adventureListing) {
+  const a = adventureListing ?? "";
+  if (/kremmling.*rzr|rzr.*kremmling/i.test(a)) return ACTIVITY_IDS.kremmling_rzr;
+  if (/steamboat.*rzr|rzr.*steamboat/i.test(a)) return ACTIVITY_IDS.steamboat_rzr;
+  if (/\brzr\b/i.test(a)) return ACTIVITY_IDS.steamboat_rzr; // default RZR → steamboat
+  return null;
+}
+
+function resolveCompanyFromAdventure(adventureListing) {
+  if (/kremmling/i.test(adventureListing ?? "")) return "coloradosledrentals";
+  return "coloradosledrentals"; // all RZR bookings are CSR
+}
+
+function tagsFromAdventure(adventureListing) {
+  const a = adventureListing ?? "";
+  const tags = ["booked"];
+  if (/rzr|polaris|off.?road/i.test(a)) tags.push("rzr");
+  if (/snowmobile|sled/i.test(a)) tags.push("snowmobile");
+  if (/guided/i.test(a)) tags.push("guided");
+  if (/steamboat/i.test(a)) tags.push("steamboat");
+  if (/kremmling/i.test(a)) tags.push("kremmling");
+  return tags;
+}
+
+// "Jun 12, 2026 - 9:00 am" → UTC ISO string (Mountain time aware)
+function parseDatetimeMountain(str) {
+  if (!str) return null;
+  const m = str.match(/(\w{3,})\s+(\d+),\s+(\d{4})\s*-\s*(\d+):(\d+)\s*(am|pm)/i);
+  if (!m) return null;
+  const [, mon, day, year, hour12, min, ampm] = m;
+  const IDX = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+  const monthIdx = IDX[mon.slice(0, 3).toLowerCase()];
+  if (monthIdx === undefined) return null;
+  let h = parseInt(hour12, 10);
+  if (ampm.toLowerCase() === "pm" && h < 12) h += 12;
+  if (ampm.toLowerCase() === "am" && h === 12) h = 0;
+  // MDT (UTC-6) for Apr-Oct; MST (UTC-7) for Nov-Mar
+  const utcOffset = (monthIdx >= 3 && monthIdx <= 9) ? 6 : 7;
+  const d = new Date(Date.UTC(parseInt(year, 10), monthIdx, parseInt(day, 10), h + utcOffset, parseInt(min, 10), 0));
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+// Deterministic synthetic PK — same booking forwarded twice won't duplicate.
+function syntheticBookingPk(phone, beginDatetime) {
+  const key = `${phone ?? "noPhone"}|${beginDatetime ?? "noDate"}`;
+  let hash = 5381;
+  for (let i = 0; i < key.length; i++) {
+    hash = (((hash << 5) + hash) ^ key.charCodeAt(i)) >>> 0;
+  }
+  return `BOT-${hash.toString(36).toUpperCase().padStart(7, "0")}`;
+}
+
+function buildArrivalDisplay(beginStr, endStr) {
+  const fmtTime = (s) => {
+    const m = (s ?? "").match(/(\d+:\d+\s*[ap]m)/i);
+    return m ? m[1].toUpperCase().replace(/\s+/, "") : "?";
+  };
+  const dateM = (beginStr ?? "").match(/(\w{3,}\s+\d+,\s+\d{4})/);
+  const dateLabel = dateM ? dateM[1] : "";
+  return `${fmtTime(beginStr)} - ${fmtTime(endStr)} on ${dateLabel}`.trim();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GUEST ACTION HANDLERS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1463,6 +1535,111 @@ async function handleExecuteCampaign(data, context, client, integrations) {
   }
 }
 
+// ── import_booking ────────────────────────────────────────────────────────────
+// Parses a forwarded booking notification and upserts into DB2:
+//   contacts (CRM) + customers + bookings (manifest).
+// Idempotent — same text forwarded twice won't create a duplicate.
+async function handleImportBooking(data, context, client, integrations) {
+  try {
+    const { parseBookingNotice } = await import("./operatorIntentParser.js");
+    const { normalizePhone }     = await import("./phoneUtils.js");
+
+    const parsed = parseBookingNotice(data.raw ?? "");
+
+    if (!parsed.customerName && !parsed.phone && !parsed.email) {
+      return ownerOk({}, "Couldn't parse that booking. Expected format:\nNotice: New Reservation Created For {Name}\nPhone: ...\nAdventure Listing: ...");
+    }
+
+    const crmDb = integrations.crmDatabase?.supabase;
+    if (!crmDb) {
+      return ownerOk({}, "CRM database not connected — booking not saved.");
+    }
+
+    const normalizedPhone = parsed.phone ? (normalizePhone(parsed.phone) ?? parsed.phone) : null;
+    const tags    = tagsFromAdventure(parsed.adventureListing);
+    const company = resolveCompanyFromAdventure(parsed.adventureListing);
+    const clientId = client?.id ?? "csr_rea";
+
+    // 1. Upsert CRM contact (contacts table, DB2)
+    if (normalizedPhone) {
+      const { data: existing } = await crmDb
+        .from("contacts")
+        .select("tags, total_bookings")
+        .eq("phone", normalizedPhone)
+        .single();
+
+      await crmDb.from("contacts").upsert({
+        phone:          normalizedPhone,
+        first_name:     parsed.firstName ?? null,
+        last_name:      parsed.lastName  ?? null,
+        email:          parsed.email     ?? null,
+        source:         "operator_import",
+        tags:           [...new Set([...(existing?.tags ?? []), ...tags])],
+        last_activity:  new Date().toISOString(),
+        total_bookings: (existing?.total_bookings ?? 0) + 1,
+        client_id:      clientId,
+        opted_in:       true,
+      }, { onConflict: "phone" });
+    }
+
+    // 2. Upsert customer + booking into the manifest (DB2)
+    const activityId = resolveActivityId(parsed.adventureListing);
+    const startAt    = parseDatetimeMountain(parsed.beginDatetime);
+    const endAt      = parseDatetimeMountain(parsed.endDatetime);
+    let manifestSaved = false;
+
+    if (normalizedPhone && activityId && startAt) {
+      await crmDb.from("customers").upsert(
+        { name: parsed.customerName, normalized_phone: normalizedPhone, company },
+        { onConflict: "normalized_phone" }
+      );
+
+      const { data: custRow } = await crmDb
+        .from("customers")
+        .select("id")
+        .eq("normalized_phone", normalizedPhone)
+        .single();
+
+      if (custRow?.id) {
+        const pk = syntheticBookingPk(normalizedPhone, parsed.beginDatetime);
+        await crmDb.from("bookings").upsert({
+          fareharbor_pk:       pk,
+          customer_id:         custRow.id,
+          activity_id:         activityId,
+          start_at:            startAt,
+          end_at:              endAt ?? startAt,
+          status:              "booked",
+          customer_count:      1,
+          receipt_total_cents: 0,
+          amount_paid_cents:   0,
+          total_cents:         0,
+          total_paid_cents:    0,
+          arrival_time:        startAt,
+          arrival_display:     buildArrivalDisplay(parsed.beginDatetime, parsed.endDatetime),
+          company,
+        }, { onConflict: "fareharbor_pk" });
+        manifestSaved = true;
+      }
+    }
+
+    const name      = parsed.customerName ?? "Guest";
+    const activity  = (parsed.adventureListing ?? "booking").split("|")[0].trim();
+    const dateLabel = parsed.beginDatetime ?? "unknown date";
+    const lines = [
+      `✓ Booked: ${name}`,
+      `  ${activity}`,
+      `  ${dateLabel}`,
+      normalizedPhone ? `  ${normalizedPhone}` : null,
+      manifestSaved ? "Saved to CRM + manifest." : "Saved to CRM.",
+    ].filter(Boolean);
+
+    return ownerOk({ imported: true, phone: normalizedPhone, manifestSaved }, lines.join("\n"));
+  } catch (e) {
+    console.error("[actionEngine] handleImportBooking error:", e.message);
+    return ownerOk({}, "Error importing booking — try again or check the format.");
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN DISPATCHER
 // Routes action strings to their handlers. All paths are try/catch wrapped.
@@ -1531,6 +1708,9 @@ export async function executeAction(params) {
       case "log_issue":
       case "report_issue":
         return await handleFlagIssue(data, context, client, integrations);
+
+      case "import_booking":
+        return await handleImportBooking(data, context, client, integrations);
 
       case "get_bookings_by_date_range":
       case "bookings_by_date":

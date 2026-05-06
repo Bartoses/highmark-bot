@@ -668,6 +668,17 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     return res.ownerReply ?? res.fallbackMessage ?? null;
   }
 
+  if (intent.intent === "import_booking") {
+    const res = await executeAction({
+      action:  "import_booking",
+      data:    { raw: message },
+      context: {},
+      client,
+      integrations,
+    });
+    return res.ownerReply ?? res.fallbackMessage ?? "Booking import failed — check format.";
+  }
+
   // No deterministic match → return null so the orchestrator can fall through
   // to Claude. Claude is always cheaper than confusion.
   return null;
