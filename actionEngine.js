@@ -1560,6 +1560,22 @@ async function handleImportBooking(data, context, client, integrations) {
     const company = resolveCompanyFromAdventure(parsed.adventureListing);
     const clientId = client?.id ?? "csr_rea";
 
+    // Determine idempotency before writing contacts so total_bookings isn't double-counted.
+    // We need the synthetic PK here, but it requires normalizedPhone + beginDatetime.
+    // Compute it now; it will be reused in the manifest write below.
+    const preCheckPk = normalizedPhone && parsed.beginDatetime
+      ? syntheticBookingPk(normalizedPhone, parsed.beginDatetime)
+      : null;
+    let isNewBooking = true;
+    if (preCheckPk) {
+      const { data: preExisting } = await crmDb
+        .from("bookings")
+        .select("fareharbor_pk")
+        .eq("fareharbor_pk", preCheckPk)
+        .maybeSingle();
+      isNewBooking = !preExisting;
+    }
+
     // 1. Upsert CRM contact (contacts table, DB2)
     if (normalizedPhone) {
       const { data: existing } = await crmDb
@@ -1576,7 +1592,7 @@ async function handleImportBooking(data, context, client, integrations) {
         source:         "operator_import",
         tags:           [...new Set([...(existing?.tags ?? []), ...tags])],
         last_activity:  new Date().toISOString(),
-        total_bookings: (existing?.total_bookings ?? 0) + 1,
+        total_bookings: isNewBooking ? (existing?.total_bookings ?? 0) + 1 : (existing?.total_bookings ?? 0),
         client_id:      clientId,
         opted_in:       true,
       }, { onConflict: "phone" });
@@ -1589,6 +1605,8 @@ async function handleImportBooking(data, context, client, integrations) {
     let manifestSaved = false;
 
     if (normalizedPhone && activityId && startAt) {
+      const pk = preCheckPk ?? syntheticBookingPk(normalizedPhone, parsed.beginDatetime);
+
       await crmDb.from("customers").upsert(
         { name: parsed.customerName, normalized_phone: normalizedPhone, company },
         { onConflict: "normalized_phone" }
@@ -1601,7 +1619,6 @@ async function handleImportBooking(data, context, client, integrations) {
         .single();
 
       if (custRow?.id) {
-        const pk = syntheticBookingPk(normalizedPhone, parsed.beginDatetime);
         await crmDb.from("bookings").upsert({
           fareharbor_pk:       pk,
           customer_id:         custRow.id,
@@ -1625,12 +1642,15 @@ async function handleImportBooking(data, context, client, integrations) {
     const name      = parsed.customerName ?? "Guest";
     const activity  = (parsed.adventureListing ?? "booking").split("|")[0].trim();
     const dateLabel = parsed.beginDatetime ?? "unknown date";
+    const statusLine = !isNewBooking
+      ? "Already in CRM — no duplicate created."
+      : (manifestSaved ? "Saved to CRM + manifest." : "Saved to CRM.");
     const lines = [
       `✓ Booked: ${name}`,
       `  ${activity}`,
       `  ${dateLabel}`,
       normalizedPhone ? `  ${normalizedPhone}` : null,
-      manifestSaved ? "Saved to CRM + manifest." : "Saved to CRM.",
+      statusLine,
     ].filter(Boolean);
 
     return ownerOk({ imported: true, phone: normalizedPhone, manifestSaved }, lines.join("\n"));

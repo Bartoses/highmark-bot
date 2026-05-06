@@ -13492,6 +13492,22 @@ async function testOperatorBotUpgrade() {
   chk("booking-import: parseBookingNotice on non-notice returns nulls",
       parsedEmpty.customerName === null && parsedEmpty.phone === null && parsedEmpty.email === null);
 
+  // ── syntheticBookingPk idempotency (tested via parse behavior) ──────────
+  // Same phone + same begin datetime → same PK (no duplicate booking)
+  // Different phone or different datetime → different PK (new booking)
+  // Verify two different notices with different phones produce different intents (no false match)
+  const NOTICE_B = SAMPLE_NOTICE.replace("305-846-0645", "720-555-9999");
+  const parsedB = parseBookingNotice(NOTICE_B);
+  chk("booking-import: different phone parses to different number", parsedB.phone !== parsed.phone);
+  // Same notice twice → same parsed fields (idempotent parse)
+  const parsedDup = parseBookingNotice(SAMPLE_NOTICE);
+  chk("booking-import: duplicate notice parses identically",
+      parsedDup.phone === parsed.phone && parsedDup.beginDatetime === parsed.beginDatetime);
+  // Different date → different booking
+  const NOTICE_C = SAMPLE_NOTICE.replace("Jun 12, 2026", "Jun 13, 2026");
+  const parsedC = parseBookingNotice(NOTICE_C);
+  chk("booking-import: different date parses to different beginDatetime", parsedC.beginDatetime !== parsed.beginDatetime);
+
   // ── parseSeasonRange unit tests ───────────────────────────────────────────
   const { parseSeasonRange } = await import("./operatorIntentParser.js");
 
