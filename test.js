@@ -15018,6 +15018,74 @@ async function testOperationsDashboard() {
     const r = await fetch(`${BASE_URL}/public/api/operator-dashboard/notarealtoken/summary`);
     chk("public ops: unknown token API → 404", r.status === 404, `got ${r.status}`);
   }
+
+  // ── Phase 4A: revenue + forecast routes + date range parser ────────────
+  const {
+    handleOperationsRevenue,
+    handleOperationsForecast,
+    parseDateRangeQuery,
+  } = await import("./adminOperations.js");
+
+  // 503 when crmSupabase missing
+  {
+    const res = mockRes();
+    await handleOperationsRevenue({ portalUser: adminUser, query: {} }, res, null, null);
+    chk("ops4a: revenue 503 when crmSupabase missing", res.statusCode === 503);
+  }
+  {
+    const res = mockRes();
+    await handleOperationsForecast({ portalUser: adminUser, query: {} }, res, null, null);
+    chk("ops4a: forecast 503 when crmSupabase missing", res.statusCode === 503);
+  }
+
+  // parseDateRangeQuery — preset
+  {
+    const r = parseDateRangeQuery({ range: "last30" });
+    chk("ops4a: range preset 'last30' yields 30-day window", r.days === 30 && r.prev?.start && r.prev?.end);
+  }
+  // parseDateRangeQuery — custom
+  {
+    const r = parseDateRangeQuery({ start: "2026-05-01", end: "2026-05-15" });
+    chk("ops4a: custom range parses YYYY-MM-DD",
+        r.start.startsWith("2026-05-01") && r.end.startsWith("2026-05-16") && r.days === 15);
+  }
+  // parseDateRangeQuery — invalid custom falls back to preset
+  {
+    const r = parseDateRangeQuery({ start: "2026-13-99", end: "bad" });
+    chk("ops4a: invalid custom falls back to preset", r.start && r.end);
+  }
+  // prev window is equal length immediately before
+  {
+    const r = parseDateRangeQuery({ range: "last30" });
+    const cur = (new Date(r.end).getTime() - new Date(r.start).getTime());
+    const prev = (new Date(r.prev.end).getTime() - new Date(r.prev.start).getTime());
+    chk("ops4a: prev window is equal length", Math.abs(cur - prev) < 86_400_001);
+  }
+
+  // HTTP guard: new routes 401 without auth
+  {
+    let allOk = true;
+    for (const r of [
+      "/portal/api/operations/revenue",
+      "/portal/api/operations/forecast",
+    ]) {
+      const resp = await fetch(`${BASE_URL}${r}`);
+      if (resp.status !== 401) { allOk = false; console.log(`Expected 401 on ${r}, got ${resp.status}`); }
+    }
+    chk("ops4a: revenue + forecast routes 401 without token", allOk);
+  }
+  // Public routes for unknown token → 404
+  {
+    let allOk = true;
+    for (const r of [
+      "/public/api/operator-dashboard/notarealtoken/revenue",
+      "/public/api/operator-dashboard/notarealtoken/forecast",
+    ]) {
+      const resp = await fetch(`${BASE_URL}${r}`);
+      if (resp.status !== 404) { allOk = false; console.log(`Expected 404 on ${r}, got ${resp.status}`); }
+    }
+    chk("public ops4a: revenue + forecast unknown token → 404", allOk);
+  }
 }
 
 main().catch((e) => {

@@ -24,6 +24,8 @@ import {
   windowFor,
   summarize,
   computeAndSendAnalytics,
+  computeAndSendRevenue,
+  computeAndSendForecast,
 } from "./adminOperations.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -219,4 +221,21 @@ export async function handlePublicAnalytics(req, res, supabase, crmSupabase) {
   if (!auth) return;
   if (!crmSupabase) return res.status(503).json({ error: "CRM unavailable" });
   return computeAndSendAnalytics(req, res, crmSupabase, auth.clientId);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4A — public mirrors of revenue + forecast
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handlePublicRevenue(req, res, supabase, crmSupabase) {
+  const auth = await resolveShareToken(req, res, supabase);
+  if (!auth) return;
+  if (!crmSupabase) return res.status(503).json({ error: "CRM unavailable" });
+  return computeAndSendRevenue(req, res, crmSupabase, auth.clientId);
+}
+
+export async function handlePublicForecast(req, res, supabase, crmSupabase) {
+  const auth = await resolveShareToken(req, res, supabase);
+  if (!auth) return;
+  if (!crmSupabase) return res.status(503).json({ error: "CRM unavailable" });
+  return computeAndSendForecast(req, res, crmSupabase, auth.clientId);
 }

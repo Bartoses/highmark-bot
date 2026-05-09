@@ -74,6 +74,87 @@ export function windowFor(tab) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4A — Global date range parser
+// Accepts ?range=… preset OR ?start=YYYY-MM-DD&end=YYYY-MM-DD custom.
+// Returns { start, end, label, days, prev: { start, end } } where prev is the
+// equal-length window immediately before the current one.
+// ─────────────────────────────────────────────────────────────────────────────
+export function parseDateRangeQuery(query = {}) {
+  const customStart = String(query.start ?? "").trim();
+  const customEnd   = String(query.end   ?? "").trim();
+  const range       = String(query.range ?? "").toLowerCase().trim();
+
+  // 1. Custom range (start + end YYYY-MM-DD, both required)
+  if (customStart && customEnd && /^\d{4}-\d{2}-\d{2}$/.test(customStart) && /^\d{4}-\d{2}-\d{2}$/.test(customEnd)) {
+    const startMs = isoFromMtDate(customStart);
+    const endMs   = isoFromMtDate(customEnd, /*addDay*/ 1); // end-exclusive (add 1 day)
+    if (startMs && endMs && new Date(endMs).getTime() > new Date(startMs).getTime()) {
+      const days = Math.round((new Date(endMs).getTime() - new Date(startMs).getTime()) / 86400_000);
+      return {
+        start: startMs, end: endMs, label: `${customStart} → ${customEnd}`, days,
+        prev: prevWindow(startMs, days),
+      };
+    }
+  }
+
+  // 2. Named preset
+  const presets = {
+    "today":      { from: 0,   to: 1   },
+    "tomorrow":   { from: 1,   to: 2   },
+    "week":       { from: 0,   to: 7   },
+    "this_week":  { from: 0,   to: 7   },
+    "this_month": { from: 0,   to: daysLeftInMonth() },
+    "next7":      { from: 0,   to: 7   },
+    "next_7":     { from: 0,   to: 7   },
+    "last7":      { from: -7,  to: 0   },
+    "last_7":     { from: -7,  to: 0   },
+    "last30":     { from: -30, to: 0   },
+    "last_30":    { from: -30, to: 0   },
+    "last90":     { from: -90, to: 0   },
+    "last_90":    { from: -90, to: 0   },
+    "ytd":        { from: daysSinceYearStart() * -1, to: 0 },
+  };
+  const p = presets[range] ?? presets["last30"];
+  const start = startOfDayMtIso(p.from);
+  const end   = startOfDayMtIso(p.to);
+  const days  = Math.max(1, p.to - p.from);
+  return {
+    start, end, label: range || "last30", days,
+    prev: prevWindow(start, days),
+  };
+}
+
+function isoFromMtDate(yyyymmdd, addDays = 0) {
+  // Build an ISO instant for 00:00 Mountain on YYYY-MM-DD (+addDays)
+  try {
+    const [y, m, d] = yyyymmdd.split("-").map(Number);
+    const baseUtc = new Date(Date.UTC(y, m - 1, d));
+    baseUtc.setUTCDate(baseUtc.getUTCDate() + addDays);
+    const monthIdx = baseUtc.getUTCMonth();
+    const offsetHours = (monthIdx >= 3 && monthIdx <= 9) ? 6 : 7;
+    return new Date(baseUtc.getTime() + offsetHours * 3600_000).toISOString();
+  } catch { return null; }
+}
+
+function daysLeftInMonth() {
+  const now = new Date();
+  const last = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
+  return Math.max(1, last.getUTCDate() - now.getUTCDate() + 1);
+}
+
+function daysSinceYearStart() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+  return Math.floor((now.getTime() - start.getTime()) / 86400_000);
+}
+
+function prevWindow(currentStartIso, days) {
+  const startMs = new Date(currentStartIso).getTime() - days * 86400_000;
+  const endMs   = new Date(currentStartIso).getTime();
+  return { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DERIVED OPERATIONAL STATUS
 // Computed on-the-fly from existing fields. No DB column required.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,20 +241,31 @@ export async function handleOperationsSummary(req, res, _supabase, crmSupabase =
     });
   }
 
+  // If caller passed a range/start/end, the KPI block represents that range
+  // instead of "today"; the response shape stays the same so the legacy UI
+  // keeps working. arriving_next stays today-anchored regardless.
+  const hasRangeQuery = !!(req.query?.range || (req.query?.start && req.query?.end));
+  const range = hasRangeQuery ? parseDateRangeQuery(req.query) : null;
+
   try {
     const today    = windowFor("today");
     const tomorrow = windowFor("tomorrow");
+    const primary  = range ? { start: range.start, end: range.end } : today;
 
-    const [todayResult, tomorrowResult] = await Promise.all([
-      fetchBookingsInWindow(crmSupabase, companies, today.start, today.end, { limit: 500 }),
+    const fetches = [
+      fetchBookingsInWindow(crmSupabase, companies, primary.start, primary.end, { limit: 1000 }),
       fetchBookingsInWindow(crmSupabase, companies, tomorrow.start, tomorrow.end, { limit: 500 }),
-    ]);
+    ];
+    // Always pull "today" rows for the arriving-next list when a custom range is set
+    if (range) fetches.push(fetchBookingsInWindow(crmSupabase, companies, today.start, today.end, { limit: 500 }));
+    const [primaryResult, tomorrowResult, todayForArrivals] = await Promise.all(fetches);
 
-    const todayKpis    = summarize(todayResult.rows);
+    const primaryKpis  = summarize(primaryResult.rows);
     const tomorrowKpis = summarize(tomorrowResult.rows);
+    const arrivalsRows = (todayForArrivals?.rows ?? primaryResult.rows);
 
     const now = Date.now();
-    const arrivingNext = todayResult.rows
+    const arrivingNext = arrivalsRows
       .filter(b => {
         const t = new Date(b.start_at).getTime();
         return !b.checked_in && t >= now - 30 * 60_000;
@@ -192,7 +284,12 @@ export async function handleOperationsSummary(req, res, _supabase, crmSupabase =
         operational_status: b.operational_status,
       }));
 
-    return res.json({ today: todayKpis, tomorrow: tomorrowKpis, arriving_next: arrivingNext });
+    return res.json({
+      today: primaryKpis,           // Legacy field name; reflects ?range when provided
+      tomorrow: tomorrowKpis,
+      arriving_next: arrivingNext,
+      window: range ? { start: range.start, end: range.end, label: range.label, days: range.days } : null,
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -232,22 +329,30 @@ export async function handleOperationsBookings(req, res, _supabase, crmSupabase 
   const companies = resolveCompanyShortnames(clientId);
   if (!companies.length) return res.json({ bookings: [], total: 0 });
 
-  const tab    = String(req.query.tab ?? "today").toLowerCase();
   const search = String(req.query.search ?? "");
   const limit  = Math.min(Number(req.query.limit ?? 100), 500);
   const offset = Math.max(Number(req.query.offset ?? 0), 0);
 
-  const validTabs = new Set(["today", "tomorrow", "week", "past"]);
-  if (!validTabs.has(tab)) return res.status(400).json({ error: "invalid tab" });
+  // Two modes: legacy `tab=today|tomorrow|week|past` OR new `range=…|start=…&end=…`
+  const hasRangeQuery = !!(req.query?.range || (req.query?.start && req.query?.end));
+  let start, end, label, reverse = false;
+  if (hasRangeQuery) {
+    const r = parseDateRangeQuery(req.query);
+    start = r.start; end = r.end; label = r.label;
+  } else {
+    const tab = String(req.query.tab ?? "today").toLowerCase();
+    if (!new Set(["today", "tomorrow", "week", "past"]).has(tab)) return res.status(400).json({ error: "invalid tab" });
+    const w = windowFor(tab);
+    start = w.start; end = w.end; label = tab;
+    reverse = (tab === "past");
+  }
 
   try {
-    const { start, end } = windowFor(tab);
     const { rows, total } = await fetchBookingsInWindow(
       crmSupabase, companies, start, end, { search, limit, offset }
     );
-    // For past, sort newest first
-    if (tab === "past") rows.reverse();
-    return res.json({ bookings: rows, total, tab, window: { start, end } });
+    if (reverse) rows.reverse();
+    return res.json({ bookings: rows, total, tab: label, window: { start, end } });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -459,13 +564,20 @@ export async function handleOperationsGuides(req, res, _supabase, crmSupabase = 
   const companies = resolveCompanyShortnames(clientId);
   if (!companies.length) return res.json({ guides: [], unassigned: { bookings: 0, pax: 0 } });
 
-  const tab = String(req.query.tab ?? "today").toLowerCase();
-  if (!["today", "tomorrow", "week"].includes(tab)) {
-    return res.status(400).json({ error: "invalid tab" });
+  const hasRangeQuery = !!(req.query?.range || (req.query?.start && req.query?.end));
+  let start, end, tab;
+  if (hasRangeQuery) {
+    const r = parseDateRangeQuery(req.query);
+    start = r.start; end = r.end; tab = r.label;
+  } else {
+    tab = String(req.query.tab ?? "today").toLowerCase();
+    if (!["today", "tomorrow", "week"].includes(tab)) {
+      return res.status(400).json({ error: "invalid tab" });
+    }
+    const w = windowFor(tab); start = w.start; end = w.end;
   }
 
   try {
-    const { start, end } = windowFor(tab);
     const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500 });
 
     const byGuide = new Map();
@@ -637,5 +749,276 @@ function emptyAnalytics(extra = {}) {
     waiver_completion: 0, checkin_completion: 0,
     revenue_by_day: [], by_activity: [], by_location: [],
     ...extra,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4A — REVENUE INTELLIGENCE
+// GET /portal/api/operations/revenue?range=…|start=…&end=…&compare=prev
+// Returns aggregated revenue/booking/pax breakdowns + optional previous-period
+// comparison for delta indicators on KPI cards.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleOperationsRevenue(req, res, _supabase, crmSupabase = null) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id required" });
+  return computeAndSendRevenue(req, res, crmSupabase, clientId);
+}
+
+export async function computeAndSendRevenue(req, res, crmSupabase, clientId) {
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) return res.json(emptyRevenue());
+
+  const range = parseDateRangeQuery(req.query ?? {});
+  const wantCompare = String(req.query?.compare ?? "").toLowerCase() === "prev";
+
+  try {
+    const fetches = [fetchBookingsForRevenue(crmSupabase, companies, range.start, range.end)];
+    if (wantCompare) fetches.push(fetchBookingsForRevenue(crmSupabase, companies, range.prev.start, range.prev.end));
+    const [current, previous] = await Promise.all(fetches);
+
+    const totals  = totalsFor(current);
+    const prevTot = previous ? totalsFor(previous) : null;
+    const deltas  = prevTot ? deltasFor(totals, prevTot) : null;
+
+    return res.json({
+      window:      { start: range.start, end: range.end, days: range.days, label: range.label },
+      compare_window: prevTot ? range.prev : null,
+      totals,
+      compare_totals: prevTot,
+      deltas,
+      revenue_by_day:      groupByDay(current),
+      revenue_by_activity: groupBy(current, "activity"),
+      revenue_by_location: groupBy(current, "location"),
+      revenue_by_guide:    groupByGuide(current),
+      best_day_of_week:    bestDayOfWeek(current),
+      // Helpful for executive summary card client-side
+      top_activity: topByRevenue(groupBy(current, "activity")),
+      top_location: topByRevenue(groupBy(current, "location")),
+      top_guide:    topByRevenue(groupByGuide(current)),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+async function fetchBookingsForRevenue(crmSupabase, companies, start, end) {
+  // We pull from daily_manifest for revenue/pax/activity/location, then JOIN
+  // bookings for guide_name (manifest doesn't expose it).
+  const { data: manifest, error } = await crmSupabase
+    .from("daily_manifest")
+    .select("start_at,activity,location,pax,receipt_total_cents,balance_due_cents,fareharbor_pk,waiver_signed,checked_in")
+    .in("company", companies)
+    .gte("start_at", start)
+    .lt("start_at",  end)
+    .order("start_at", { ascending: true })
+    .limit(2000);
+  if (error) throw error;
+  const rows = manifest ?? [];
+  if (!rows.length) return rows;
+
+  const pks = rows.map(r => r.fareharbor_pk).filter(Boolean);
+  let guideMap = new Map();
+  if (pks.length) {
+    const { data: ops } = await crmSupabase
+      .from("bookings")
+      .select("fareharbor_pk,guide_name")
+      .in("fareharbor_pk", pks);
+    guideMap = new Map((ops ?? []).map(o => [o.fareharbor_pk, o.guide_name]));
+  }
+  return rows.map(r => ({ ...r, guide_name: guideMap.get(r.fareharbor_pk) ?? null }));
+}
+
+function totalsFor(rows) {
+  let bookings = 0, pax = 0, revenue = 0, unpaid = 0, waiversSigned = 0, checkedIn = 0;
+  for (const r of rows) {
+    bookings += 1;
+    pax      += Number(r.pax ?? 1);
+    revenue  += Number(r.receipt_total_cents ?? 0);
+    unpaid   += Number(r.balance_due_cents ?? 0);
+    if (r.waiver_signed) waiversSigned += 1;
+    if (r.checked_in)    checkedIn     += 1;
+  }
+  return {
+    bookings, pax,
+    revenue_cents:        revenue,
+    avg_booking_cents:    bookings ? Math.round(revenue / bookings) : 0,
+    unpaid_balance_cents: unpaid,
+    waiver_completion:    bookings ? Number((waiversSigned / bookings).toFixed(3)) : 0,
+    checkin_completion:   bookings ? Number((checkedIn   / bookings).toFixed(3)) : 0,
+  };
+}
+
+function deltasFor(cur, prev) {
+  const pct = (a, b) => {
+    if (!b) return a > 0 ? 1 : 0;
+    return Number(((a - b) / b).toFixed(3));
+  };
+  return {
+    bookings:      pct(cur.bookings,             prev.bookings),
+    pax:           pct(cur.pax,                  prev.pax),
+    revenue:       pct(cur.revenue_cents,        prev.revenue_cents),
+    avg_booking:   pct(cur.avg_booking_cents,    prev.avg_booking_cents),
+    waiver:        cur.waiver_completion  - prev.waiver_completion,
+    checkin:       cur.checkin_completion - prev.checkin_completion,
+  };
+}
+
+function groupByDay(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    const d = (r.start_at ?? "").slice(0, 10);
+    if (!d) continue;
+    if (!m.has(d)) m.set(d, { date: d, revenue_cents: 0, bookings: 0, pax: 0 });
+    m.get(d).revenue_cents += Number(r.receipt_total_cents ?? 0);
+    m.get(d).bookings      += 1;
+    m.get(d).pax           += Number(r.pax ?? 1);
+  }
+  return [...m.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function groupBy(rows, field) {
+  const m = new Map();
+  for (const r of rows) {
+    const k = r[field] ?? "—";
+    if (!m.has(k)) m.set(k, { name: k, bookings: 0, pax: 0, revenue_cents: 0 });
+    m.get(k).bookings      += 1;
+    m.get(k).pax           += Number(r.pax ?? 1);
+    m.get(k).revenue_cents += Number(r.receipt_total_cents ?? 0);
+  }
+  return [...m.values()].sort((a, b) => b.revenue_cents - a.revenue_cents);
+}
+
+function groupByGuide(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    const g = (r.guide_name ?? "").trim();
+    const k = g || "Unassigned";
+    if (!m.has(k)) m.set(k, { name: k, bookings: 0, pax: 0, revenue_cents: 0 });
+    m.get(k).bookings      += 1;
+    m.get(k).pax           += Number(r.pax ?? 1);
+    m.get(k).revenue_cents += Number(r.receipt_total_cents ?? 0);
+  }
+  return [...m.values()].sort((a, b) => b.revenue_cents - a.revenue_cents);
+}
+
+function bestDayOfWeek(rows) {
+  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const m = new Map(days.map(d => [d, { name: d, bookings: 0, pax: 0, revenue_cents: 0 }]));
+  for (const r of rows) {
+    const d = days[new Date(r.start_at).getUTCDay()];
+    if (!d) continue;
+    m.get(d).bookings      += 1;
+    m.get(d).pax           += Number(r.pax ?? 1);
+    m.get(d).revenue_cents += Number(r.receipt_total_cents ?? 0);
+  }
+  return [...m.values()].sort((a, b) => b.bookings - a.bookings)[0] ?? null;
+}
+
+function topByRevenue(arr) {
+  return arr?.[0] ?? null;
+}
+
+function emptyRevenue() {
+  return {
+    window: null, compare_window: null,
+    totals: { bookings: 0, pax: 0, revenue_cents: 0, avg_booking_cents: 0, unpaid_balance_cents: 0, waiver_completion: 0, checkin_completion: 0 },
+    compare_totals: null, deltas: null,
+    revenue_by_day: [], revenue_by_activity: [], revenue_by_location: [], revenue_by_guide: [],
+    best_day_of_week: null, top_activity: null, top_location: null, top_guide: null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /portal/api/operations/forecast
+// Simple pacing model: month-to-date totals × (days in month / days elapsed),
+// plus weekend load + unassigned-guide pressure.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleOperationsForecast(req, res, _supabase, crmSupabase = null) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id required" });
+  return computeAndSendForecast(req, res, crmSupabase, clientId);
+}
+
+export async function computeAndSendForecast(req, res, crmSupabase, clientId) {
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) return res.json(emptyForecast());
+
+  try {
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const monthEnd   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const daysInMonth = (monthEnd - monthStart) / 86400_000;
+    const daysElapsed = Math.max(1, Math.ceil((now - monthStart) / 86400_000));
+
+    // Pull all bookings in current month + last month for comparison
+    const lastMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    const [thisMonth, lastMonth] = await Promise.all([
+      fetchBookingsForRevenue(crmSupabase, companies, monthStart.toISOString(), monthEnd.toISOString()),
+      fetchBookingsForRevenue(crmSupabase, companies, lastMonthStart.toISOString(), monthStart.toISOString()),
+    ]);
+
+    const mtd      = totalsFor(thisMonth.filter(r => new Date(r.start_at) <= now));
+    const monthAll = totalsFor(thisMonth);                  // includes future bookings already on books
+    const last     = totalsFor(lastMonth);
+
+    // Projected revenue: max(MTD-paced, already-booked-in-month). Always at least
+    // what's already on the books — a calendar half-empty doesn't reduce booked
+    // future revenue.
+    const pacedRev = Math.round(mtd.revenue_cents * (daysInMonth / daysElapsed));
+    const projRev  = Math.max(pacedRev, monthAll.revenue_cents);
+    const projBookings = Math.max(
+      Math.round(mtd.bookings * (daysInMonth / daysElapsed)),
+      monthAll.bookings
+    );
+
+    // Weekend load (next 14 days, Sat+Sun bookings)
+    const today    = new Date();
+    const weekendEnd = new Date(today.getTime() + 14 * 86400_000);
+    const upcoming = thisMonth.concat(
+      lastMonth.length ? [] : [] // Only thisMonth in scope normally
+    ).filter(r => {
+      const t = new Date(r.start_at);
+      if (t < today || t > weekendEnd) return false;
+      const dow = t.getUTCDay();
+      return dow === 0 || dow === 6;
+    });
+    let weekendBookings = 0, weekendPax = 0, weekendUnassigned = 0;
+    for (const r of upcoming) {
+      weekendBookings += 1;
+      weekendPax      += Number(r.pax ?? 1);
+      if (!r.guide_name) weekendUnassigned += 1;
+    }
+
+    return res.json({
+      month: {
+        start: monthStart.toISOString(), end: monthEnd.toISOString(),
+        days_in_month: daysInMonth, days_elapsed: Math.min(daysElapsed, daysInMonth),
+      },
+      mtd,
+      booked_in_month:      monthAll,
+      last_month:           last,
+      projected_revenue_cents: projRev,
+      projected_bookings:    projBookings,
+      revenue_pacing_pct:   last.revenue_cents ? Number(((projRev - last.revenue_cents) / last.revenue_cents).toFixed(3)) : null,
+      bookings_pacing_pct:  last.bookings      ? Number(((projBookings - last.bookings) / last.bookings).toFixed(3)) : null,
+      weekend_load: {
+        next_14_days_bookings: weekendBookings,
+        next_14_days_pax:      weekendPax,
+        unassigned_guides:     weekendUnassigned,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+function emptyForecast() {
+  return {
+    month: null, mtd: null, booked_in_month: null, last_month: null,
+    projected_revenue_cents: 0, projected_bookings: 0,
+    revenue_pacing_pct: null, bookings_pacing_pct: null,
+    weekend_load: { next_14_days_bookings: 0, next_14_days_pax: 0, unassigned_guides: 0 },
   };
 }

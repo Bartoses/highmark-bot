@@ -55,8 +55,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
-import { handleOperationsSummary, handleOperationsBookings, handleOperationsBookingDetail, handleOperationsCheckIn, handleOperationsWaiver, handleOperationsNote, handleOperationsGuide, handleOperationsPrep, handleOperationsTomorrowPrep, handleOperationsGuides, handleCreateShareLink, handleListShareLinks, handleRevokeShareLink, handleOperationsAnalytics } from "./adminOperations.js";
-import { handlePublicSummary, handlePublicBookings, handlePublicTomorrowPrep, handlePublicGuides, handlePublicAnalytics } from "./publicOperations.js";
+import { handleOperationsSummary, handleOperationsBookings, handleOperationsBookingDetail, handleOperationsCheckIn, handleOperationsWaiver, handleOperationsNote, handleOperationsGuide, handleOperationsPrep, handleOperationsTomorrowPrep, handleOperationsGuides, handleCreateShareLink, handleListShareLinks, handleRevokeShareLink, handleOperationsAnalytics, handleOperationsRevenue, handleOperationsForecast } from "./adminOperations.js";
+import { handlePublicSummary, handlePublicBookings, handlePublicTomorrowPrep, handlePublicGuides, handlePublicAnalytics, handlePublicRevenue, handlePublicForecast } from "./publicOperations.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { renderVerticalPage, VERTICAL_SLUGS } from "./verticals.js";
@@ -1557,6 +1557,8 @@ app.get("/public/api/operator-dashboard/:token/bookings",       (req, res) => ha
 app.get("/public/api/operator-dashboard/:token/tomorrow-prep",  (req, res) => handlePublicTomorrowPrep(req, res, supabase, crmSupabase));
 app.get("/public/api/operator-dashboard/:token/guides",         (req, res) => handlePublicGuides(req, res, supabase, crmSupabase));
 app.get("/public/api/operator-dashboard/:token/analytics",      (req, res) => handlePublicAnalytics(req, res, supabase, crmSupabase));
+app.get("/public/api/operator-dashboard/:token/revenue",        (req, res) => handlePublicRevenue(req, res, supabase, crmSupabase));
+app.get("/public/api/operator-dashboard/:token/forecast",       (req, res) => handlePublicForecast(req, res, supabase, crmSupabase));
 app.get("/public/operator-dashboard/:token",                    (_req, res) => res.sendFile(path.join(__uiDir, "operator-dashboard.html")));
 
 app.use("/public", requireUiAccess, express.static(__uiDir));
@@ -1799,6 +1801,8 @@ app.post(  "/portal/api/operations/bookings/:pk/guide",       requirePortalAuth,
 app.post(  "/portal/api/operations/bookings/:pk/prep",        requirePortalAuth, (req, res) => handleOperationsPrep(req, res, supabase, crmSupabase));
 // Operations dashboard (Phase 3 — share links + analytics)
 app.get(   "/portal/api/operations/analytics",                requirePortalAuth, (req, res) => handleOperationsAnalytics(req, res, supabase, crmSupabase));
+app.get(   "/portal/api/operations/revenue",                  requirePortalAuth, (req, res) => handleOperationsRevenue(req, res, supabase, crmSupabase));
+app.get(   "/portal/api/operations/forecast",                 requirePortalAuth, (req, res) => handleOperationsForecast(req, res, supabase, crmSupabase));
 app.get(   "/portal/api/operations/share-links",              requirePortalAuth, (req, res) => handleListShareLinks(req, res, supabase));
 app.post(  "/portal/api/operations/share-links",              requirePortalAuth, (req, res) => handleCreateShareLink(req, res, supabase));
 app.delete("/portal/api/operations/share-links/:id",          requirePortalAuth, (req, res) => handleRevokeShareLink(req, res, supabase));
