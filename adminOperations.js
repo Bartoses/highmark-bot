@@ -112,7 +112,7 @@ export function parseDateRangeQuery(query = {}) {
     "last_30":    { from: -30, to: 0   },
     "last90":     { from: -90, to: 0   },
     "last_90":    { from: -90, to: 0   },
-    "ytd":        { from: daysSinceYearStart() * -1, to: 0 },
+    "ytd":        { from: daysSinceYearStart() * -1, to: daysUntilYearEnd() },
   };
   const p = presets[range] ?? presets["last30"];
   const start = startOfDayMtIso(p.from);
@@ -146,6 +146,12 @@ function daysSinceYearStart() {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
   return Math.floor((now.getTime() - start.getTime()) / 86400_000);
+}
+
+function daysUntilYearEnd() {
+  const now = new Date();
+  const end = new Date(Date.UTC(now.getUTCFullYear() + 1, 0, 1));
+  return Math.ceil((end.getTime() - now.getTime()) / 86400_000);
 }
 
 function prevWindow(currentStartIso, days) {

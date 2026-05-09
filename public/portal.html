@@ -5690,7 +5690,7 @@ function opsRangeLabel() {
     ? `${_opsRange.start} → ${_opsRange.end}`
     : (({
         today: "Today", this_week: "This week", this_month: "This month",
-        next7: "Next 7 days", last30: "Last 30 days", last90: "Last 90 days", ytd: "Year to date",
+        next7: "Next 7 days", last30: "Last 30 days", last90: "Last 90 days", ytd: "This year",
       })[_opsRange.preset] ?? _opsRange.preset);
   const dim = _opsDim === "booked" ? " (booked)" : "";
   const sn  = _opsSeason ? ` · ${_opsSeason}` : "";
