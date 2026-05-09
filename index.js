@@ -55,7 +55,7 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
-import { handleOperationsSummary, handleOperationsBookings, handleOperationsBookingDetail, handleOperationsCheckIn, handleOperationsWaiver, handleOperationsNote, handleOperationsGuide, handleOperationsPrep, handleOperationsTomorrowPrep, handleOperationsGuides, handleCreateShareLink, handleListShareLinks, handleRevokeShareLink, handleOperationsAnalytics, handleOperationsRevenue, handleOperationsForecast } from "./adminOperations.js";
+import { handleOperationsSummary, handleOperationsBookings, handleOperationsBookingDetail, handleOperationsCheckIn, handleOperationsWaiver, handleOperationsNote, handleOperationsGuide, handleOperationsPrep, handleOperationsTomorrowPrep, handleOperationsGuides, handleCreateShareLink, handleListShareLinks, handleRevokeShareLink, handleOperationsAnalytics, handleOperationsRevenue, handleOperationsForecast, handleOperationsFilterOptions } from "./adminOperations.js";
 import { handlePublicSummary, handlePublicBookings, handlePublicTomorrowPrep, handlePublicGuides, handlePublicAnalytics, handlePublicRevenue, handlePublicForecast } from "./publicOperations.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
@@ -1803,6 +1803,7 @@ app.post(  "/portal/api/operations/bookings/:pk/prep",        requirePortalAuth,
 app.get(   "/portal/api/operations/analytics",                requirePortalAuth, (req, res) => handleOperationsAnalytics(req, res, supabase, crmSupabase));
 app.get(   "/portal/api/operations/revenue",                  requirePortalAuth, (req, res) => handleOperationsRevenue(req, res, supabase, crmSupabase));
 app.get(   "/portal/api/operations/forecast",                 requirePortalAuth, (req, res) => handleOperationsForecast(req, res, supabase, crmSupabase));
+app.get(   "/portal/api/operations/filter-options",           requirePortalAuth, (req, res) => handleOperationsFilterOptions(req, res, supabase, crmSupabase));
 app.get(   "/portal/api/operations/share-links",              requirePortalAuth, (req, res) => handleListShareLinks(req, res, supabase));
 app.post(  "/portal/api/operations/share-links",              requirePortalAuth, (req, res) => handleCreateShareLink(req, res, supabase));
 app.delete("/portal/api/operations/share-links/:id",          requirePortalAuth, (req, res) => handleRevokeShareLink(req, res, supabase));

@@ -454,6 +454,10 @@ tr:hover td { background: var(--panel2); }
 .ops-kpi-delta.up   { color: #7ee2a8; }
 .ops-kpi-delta.down { color: #f57e7e; }
 .ops-kpi-delta.flat { color: var(--text3); }
+.ops-sort:hover { color: var(--text); }
+.ops-sort.sorted-asc  .ops-sort-ind::after { content: ' ↑'; color: var(--accent); }
+.ops-sort.sorted-desc .ops-sort-ind::after { content: ' ↓'; color: var(--accent); }
+#opsFiltersModal select[multiple] { background: var(--panel2); }
 .data-table { border-collapse:collapse; }
 .data-table th { text-align:left; padding:10px 8px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text3); border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--panel); }
 .data-table td { padding:10px 8px; font-size:12.5px; color:var(--text2); border-bottom:1px solid var(--border); }
@@ -1341,19 +1345,21 @@ tr:hover td { background: var(--panel2); }
               <button class="btn btn-ghost btn-sm ops-tab-btn" data-otab="past">Past 30d</button>
             </div>
             <div style="flex:1;"></div>
-            <input type="search" id="opsSearch" placeholder="Search name, phone, PK…" style="width:220px;max-width:100%;">
+            <input type="search" id="opsSearch" placeholder="Search name, phone, PK…" style="width:200px;max-width:100%;">
+            <button class="btn btn-ghost btn-sm" id="opsFiltersBtn" onclick="openOpsFilters()">⚙ Filters <span id="opsFilterBadge" style="display:none;background:var(--accent);color:#fff;border-radius:8px;padding:0 5px;font-size:10px;margin-left:4px;">0</span></button>
+            <button class="btn btn-ghost btn-sm" onclick="opsExportCsv()">⬇ CSV</button>
           </div>
           <div id="opsTableWrap" style="overflow-x:auto;">
             <table class="data-table ops-table" style="width:100%;font-size:12.5px;">
               <thead>
                 <tr>
-                  <th style="text-align:left;">Time</th>
-                  <th style="text-align:left;">Customer</th>
-                  <th style="text-align:left;">Activity</th>
-                  <th style="text-align:right;">Pax</th>
-                  <th style="text-align:left;">Location</th>
+                  <th class="ops-sort" data-sort="start_at" style="text-align:left;cursor:pointer;">Time <span class="ops-sort-ind"></span></th>
+                  <th class="ops-sort" data-sort="customer_name" style="text-align:left;cursor:pointer;">Customer <span class="ops-sort-ind"></span></th>
+                  <th class="ops-sort" data-sort="activity" style="text-align:left;cursor:pointer;">Activity <span class="ops-sort-ind"></span></th>
+                  <th class="ops-sort" data-sort="pax" style="text-align:right;cursor:pointer;">Pax <span class="ops-sort-ind"></span></th>
+                  <th class="ops-sort" data-sort="location" style="text-align:left;cursor:pointer;">Location <span class="ops-sort-ind"></span></th>
                   <th style="text-align:left;">Waiver</th>
-                  <th style="text-align:left;">Payment</th>
+                  <th class="ops-sort" data-sort="balance_due_cents" style="text-align:left;cursor:pointer;">Payment <span class="ops-sort-ind"></span></th>
                   <th style="text-align:left;">Check-in</th>
                   <th style="text-align:left;">Status</th>
                 </tr>
@@ -1931,6 +1937,71 @@ tr:hover td { background: var(--panel2); }
 </div>
 
 <!-- ── Booking option modal ───────────────────────────────────────────────────── -->
+<!-- ── Operations: filter drawer ────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="opsFiltersModal">
+  <div class="modal" style="max-width:540px;">
+    <div class="modal-title">Filter bookings</div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div class="form-group">
+          <label>Activity</label>
+          <select id="opsFilterActivity" multiple size="5" style="width:100%;font-size:12px;"></select>
+        </div>
+        <div class="form-group">
+          <label>Location</label>
+          <select id="opsFilterLocation" multiple size="5" style="width:100%;font-size:12px;"></select>
+        </div>
+        <div class="form-group">
+          <label>Guide</label>
+          <select id="opsFilterGuide" multiple size="5" style="width:100%;font-size:12px;"></select>
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="opsFilterStatus" multiple size="5" style="width:100%;font-size:12px;"></select>
+        </div>
+        <div class="form-group">
+          <label>Company</label>
+          <select id="opsFilterCompany" multiple size="3" style="width:100%;font-size:12px;"></select>
+        </div>
+        <div class="form-group">
+          <label>Affiliate</label>
+          <select id="opsFilterAffiliate" multiple size="3" style="width:100%;font-size:12px;"></select>
+        </div>
+        <div class="form-group">
+          <label>Waiver</label>
+          <select id="opsFilterWaiver" style="width:100%;">
+            <option value="">Any</option>
+            <option value="signed">Signed</option>
+            <option value="missing">Missing</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Payment</label>
+          <select id="opsFilterPayment" style="width:100%;">
+            <option value="">Any</option>
+            <option value="paid">Paid in full</option>
+            <option value="due">Balance due</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Min pax</label>
+          <input type="number" id="opsFilterMinPax" min="0" placeholder="—" style="width:100%;">
+        </div>
+        <div class="form-group">
+          <label>Max pax</label>
+          <input type="number" id="opsFilterMaxPax" min="0" placeholder="—" style="width:100%;">
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:10px;">Multi-select: Cmd/Ctrl-click to select multiple. Filters persist in the URL.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost"   onclick="opsResetFilters()">Reset</button>
+      <button class="btn btn-ghost"   onclick="document.getElementById('opsFiltersModal').classList.remove('open')">Cancel</button>
+      <button class="btn btn-primary" onclick="opsApplyFilters()">Apply filters</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Operations: share links modal ────────────────────────────────────────── -->
 <div class="modal-backdrop" id="opsShareLinksModal">
   <div class="modal" style="max-width:620px;">
@@ -2327,7 +2398,7 @@ function switchSection(name, tabParam) {
   if (name === 'partners')      loadPartners();
   if (name === 'onboarding')    resetOnboarding();
   if (name === 'operator')      loadOperator();
-  if (name === 'operations')    { opsHydrateRangeFromUrl(); loadOperations(); }
+  if (name === 'operations')    { opsHydrateRangeFromUrl(); opsHydrateFiltersFromUrl(); loadOperations(); }
 }
 
 function switchSettingsTab(tab) {
@@ -5878,29 +5949,174 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
-async function loadOperationsTable(tab) {
+// Phase 4B — filter + sort state
+let _opsFilters    = { activity:[], location:[], guide:[], company:[], status:[], affiliate:[], waiver:null, payment:null, min_pax:null, max_pax:null };
+let _opsSort       = { field: 'start_at', dir: 'asc' };
+let _opsLastRows   = [];          // keep last fetched rows for client-side re-sort
+
+function opsFilterCount() {
+  let n = 0;
+  for (const k of ['activity','location','guide','company','status','affiliate']) n += (_opsFilters[k] ?? []).length;
+  for (const k of ['waiver','payment','min_pax','max_pax']) if (_opsFilters[k] != null && _opsFilters[k] !== '') n += 1;
+  return n;
+}
+
+function opsFiltersToQuery() {
+  const p = new URLSearchParams();
+  for (const k of ['activity','location','guide','company','status','affiliate']) {
+    if (_opsFilters[k]?.length) p.set(k, _opsFilters[k].join(','));
+  }
+  if (_opsFilters.waiver)      p.set('waiver',  _opsFilters.waiver);
+  if (_opsFilters.payment)     p.set('payment', _opsFilters.payment);
+  if (_opsFilters.min_pax != null && _opsFilters.min_pax !== '') p.set('min_pax', _opsFilters.min_pax);
+  if (_opsFilters.max_pax != null && _opsFilters.max_pax !== '') p.set('max_pax', _opsFilters.max_pax);
+  return p;
+}
+
+function opsHydrateFiltersFromUrl() {
+  const u = new URLSearchParams(window.location.search);
+  for (const k of ['activity','location','guide','company','status','affiliate']) {
+    const v = u.get(k);
+    _opsFilters[k] = v ? v.split(',').filter(Boolean) : [];
+  }
+  _opsFilters.waiver  = u.get('waiver')  || null;
+  _opsFilters.payment = u.get('payment') || null;
+  _opsFilters.min_pax = u.get('min_pax') || null;
+  _opsFilters.max_pax = u.get('max_pax') || null;
+  updateOpsFilterBadge();
+}
+
+function opsPersistFiltersUrl() {
+  const params = new URLSearchParams(window.location.search);
+  for (const k of ['activity','location','guide','company','status','affiliate','waiver','payment','min_pax','max_pax']) params.delete(k);
+  for (const [k, v] of opsFiltersToQuery()) params.set(k, v);
+  history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
+}
+
+function updateOpsFilterBadge() {
+  const n = opsFilterCount();
+  const badge = document.getElementById('opsFilterBadge');
+  if (!badge) return;
+  if (n > 0) { badge.style.display = 'inline-block'; badge.textContent = n; }
+  else       { badge.style.display = 'none'; }
+}
+
+async function openOpsFilters() {
+  // Lazily fetch options the first time
+  const opts = await apiFetch('/operations/filter-options');
+  if (!opts) return;
+  const fill = (id, values, current = []) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = (values ?? []).map(v =>
+      `<option value="${escapeHtml(v)}" ${current.includes(v) ? 'selected' : ''}>${escapeHtml(v)}</option>`
+    ).join('');
+  };
+  fill('opsFilterActivity',  opts.activities,  _opsFilters.activity);
+  fill('opsFilterLocation',  opts.locations,   _opsFilters.location);
+  fill('opsFilterGuide',     opts.guides,      _opsFilters.guide);
+  fill('opsFilterCompany',   opts.companies,   _opsFilters.company);
+  fill('opsFilterStatus',    opts.statuses,    _opsFilters.status);
+  fill('opsFilterAffiliate', opts.affiliates,  _opsFilters.affiliate);
+  document.getElementById('opsFilterWaiver').value  = _opsFilters.waiver  ?? '';
+  document.getElementById('opsFilterPayment').value = _opsFilters.payment ?? '';
+  document.getElementById('opsFilterMinPax').value  = _opsFilters.min_pax ?? '';
+  document.getElementById('opsFilterMaxPax').value  = _opsFilters.max_pax ?? '';
+  document.getElementById('opsFiltersModal').classList.add('open');
+}
+
+function opsApplyFilters() {
+  const sel = (id) => Array.from(document.getElementById(id).selectedOptions).map(o => o.value);
+  _opsFilters.activity  = sel('opsFilterActivity');
+  _opsFilters.location  = sel('opsFilterLocation');
+  _opsFilters.guide     = sel('opsFilterGuide');
+  _opsFilters.company   = sel('opsFilterCompany');
+  _opsFilters.status    = sel('opsFilterStatus');
+  _opsFilters.affiliate = sel('opsFilterAffiliate');
+  _opsFilters.waiver    = document.getElementById('opsFilterWaiver').value || null;
+  _opsFilters.payment   = document.getElementById('opsFilterPayment').value || null;
+  _opsFilters.min_pax   = document.getElementById('opsFilterMinPax').value  || null;
+  _opsFilters.max_pax   = document.getElementById('opsFilterMaxPax').value  || null;
+  document.getElementById('opsFiltersModal').classList.remove('open');
+  updateOpsFilterBadge();
+  opsPersistFiltersUrl();
+  loadOperationsTable(_opsTab);
+}
+
+function opsResetFilters() {
+  _opsFilters = { activity:[], location:[], guide:[], company:[], status:[], affiliate:[], waiver:null, payment:null, min_pax:null, max_pax:null };
+  updateOpsFilterBadge();
+  opsPersistFiltersUrl();
+  document.getElementById('opsFiltersModal').classList.remove('open');
+  loadOperationsTable(_opsTab);
+}
+
+async function opsExportCsv() {
+  const params = opsFiltersToQuery();
+  params.set('tab', _opsTab);
+  params.set('format', 'csv');
+  const search = document.getElementById('opsSearch')?.value?.trim();
+  if (search) params.set('search', search);
+  // Fetch with token, then trigger download from blob (apiFetch returns JSON; do raw fetch here)
+  const url = `${API}/operations/bookings?${params}${me?.isAdmin && me?.clientId ? `&client_id=${encodeURIComponent(me.clientId)}` : ''}`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) { alert(`Export failed (${res.status})`); return; }
+    const blob = await res.blob();
+    const dl   = document.createElement('a');
+    dl.href    = URL.createObjectURL(blob);
+    dl.download = `bookings_${_opsTab}_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(dl);
+    dl.click();
+    dl.remove();
+  } catch (e) {
+    alert(`Export failed: ${e?.message ?? e}`);
+  }
+}
+
+function applyOpsClientSort(rows) {
+  const f = _opsSort.field, d = _opsSort.dir === 'desc' ? -1 : 1;
+  return rows.slice().sort((a, b) => {
+    const av = a[f], bv = b[f];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; if (bv == null) return -1;
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * d;
+    return String(av).localeCompare(String(bv)) * d;
+  });
+}
+
+function setupOpsSortHandlers() {
+  document.querySelectorAll('#sec-operations .ops-sort').forEach(th => {
+    th.onclick = () => {
+      const field = th.dataset.sort;
+      if (_opsSort.field === field) {
+        _opsSort.dir = _opsSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        _opsSort = { field, dir: 'asc' };
+      }
+      // Re-render from cached rows — no network round-trip
+      renderOpsTableRows();
+    };
+  });
+}
+
+function renderOpsTableRows() {
   const tbody = document.getElementById('opsTableBody');
   const meta  = document.getElementById('opsTableMeta');
-  tbody.innerHTML = '<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text3);">Loading…</td></tr>';
-  const search = document.getElementById('opsSearch')?.value ?? '';
-  // Bookings table uses its own tab UI (today/tomorrow/week/past) BUT also
-  // accepts the global range when a custom range is set, so behavior stays
-  // intuitive: tab clicks override the range; using the range filter narrows
-  // the existing tab.
-  const params = new URLSearchParams({ tab, limit: '200' });
-  if (search.trim()) params.set('search', search.trim());
-
-  const data = await apiFetch(`/operations/bookings?${params}`);
-  if (!data) return;
-
-  const rows = data.bookings ?? [];
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3);">No bookings in this window.</td></tr>';
+  // Update sort indicators
+  document.querySelectorAll('#sec-operations .ops-sort').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    if (th.dataset.sort === _opsSort.field) {
+      th.classList.add(_opsSort.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+    }
+  });
+  const sorted = applyOpsClientSort(_opsLastRows);
+  if (!sorted.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3);">No bookings match the current filters.</td></tr>';
     meta.textContent = '';
     return;
   }
-
-  tbody.innerHTML = rows.map(b => `
+  tbody.innerHTML = sorted.map(b => `
     <tr style="cursor:pointer;" onclick="openOpsBooking('${(b.fareharbor_pk ?? '').replace(/'/g, '\\\'')}')">
       <td style="white-space:nowrap;">${fmtDateTime(b.start_at)}</td>
       <td>
@@ -5917,8 +6133,27 @@ async function loadOperationsTable(tab) {
       <td>${boolPill(b.checked_in, 'In', 'Pending')}</td>
       <td>${statusPill(b.operational_status)}</td>
     </tr>`).join('');
+  meta.textContent = `${sorted.length} booking${sorted.length === 1 ? '' : 's'}${opsFilterCount() > 0 ? ' · filtered' : ''}`;
+}
 
-  meta.textContent = `${rows.length} of ${data.total ?? rows.length} booking${rows.length === 1 ? '' : 's'}`;
+async function loadOperationsTable(tab) {
+  const tbody = document.getElementById('opsTableBody');
+  tbody.innerHTML = '<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text3);">Loading…</td></tr>';
+  const search = document.getElementById('opsSearch')?.value ?? '';
+  // Bookings table uses its own tab UI (today/tomorrow/week/past). The global
+  // date range bar above governs the analytics + KPI block. Apply filters on
+  // top of whichever tab is selected.
+  const params = opsFiltersToQuery();
+  params.set('tab', tab);
+  params.set('limit', '500');
+  if (search.trim()) params.set('search', search.trim());
+
+  const data = await apiFetch(`/operations/bookings?${params}`);
+  if (!data) return;
+
+  _opsLastRows = data.bookings ?? [];
+  setupOpsSortHandlers();
+  renderOpsTableRows();
 }
 
 async function openOpsBooking(pk) {
@@ -5963,7 +6198,9 @@ async function openOpsBooking(pk) {
       <div style="color:var(--text3);">Guide</div><div>${escapeHtml(b.guide_name ?? '—')}</div>
       <div style="color:var(--text3);">FH PK</div><div style="font-family:monospace;font-size:12px;">${escapeHtml(b.fareharbor_pk ?? '—')}</div>
       ${b.booking_notes ? `<div style="color:var(--text3);">Notes</div><div>${escapeHtml(b.booking_notes)}</div>` : ''}
-    </div>`;
+    </div>
+    ${renderRevenueBreakdown(b)}
+    ${renderGuestIntel(b)}`;
 
   // Show + populate action controls (admins only — server enforces, UI guards too)
   if (me?.isClientAdmin) {
@@ -5974,6 +6211,64 @@ async function openOpsBooking(pk) {
     document.getElementById('opsGuideInput').value          = b.guide_name     ?? '';
     document.getElementById('opsNoteInput').value           = b.internal_notes ?? '';
   }
+}
+
+function renderRevenueBreakdown(b) {
+  const rb = b.revenue_breakdown;
+  if (!rb) return '';
+  const row = (label, cents, opts = {}) => {
+    if (cents == null) return '';
+    return `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12.5px;${opts.bold ? 'font-weight:600;color:var(--text);' : ''}">
+      <span style="color:${opts.bold ? 'var(--text)' : 'var(--text3)'};">${escapeHtml(label)}</span>
+      <span>${fmtCents(cents)}</span>
+    </div>`;
+  };
+  const payments = (rb.payments ?? []).map(p => `
+    <div style="font-size:11px;color:var(--text3);padding:2px 0;display:flex;justify-content:space-between;">
+      <span>${escapeHtml(p.type ?? 'payment')} ${p.status ? `· ${escapeHtml(p.status)}` : ''}</span>
+      <span>${fmtCents(p.amount_paid)}</span>
+    </div>`).join('');
+
+  return `
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Revenue breakdown</div>
+      ${row('Subtotal',  rb.subtotal_cents)}
+      ${row('Taxes',     rb.tax_cents)}
+      ${row('Fees',      rb.fees_cents)}
+      ${row('Total',     rb.total_cents, { bold: true })}
+      ${row('Paid',      rb.paid_cents)}
+      ${rb.due_cents > 0
+        ? `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12.5px;color:#f5c14a;font-weight:600;"><span>Due</span><span>${fmtCents(rb.due_cents)}</span></div>`
+        : `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12.5px;color:#7ee2a8;font-weight:600;"><span>Due</span><span>Paid in full</span></div>`}
+      ${payments ? `<div style="margin-top:8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);font-weight:700;">Payments</div>${payments}` : ''}
+    </div>`;
+}
+
+function renderGuestIntel(b) {
+  const sms = b.sms_history;
+  const prevCount = b.previous_bookings_count ?? 0;
+  const prev = b.previous_bookings ?? [];
+  if (!sms && !prevCount) return '';
+  const prevRows = prev.slice(0, 3).map(p => `
+    <div style="font-size:11.5px;color:var(--text2);padding:2px 0;">
+      ${escapeHtml((p.start_at ?? '').slice(0, 10))} · ${fmtCents(p.receipt_total_cents)} · ${escapeHtml(p.fareharbor_pk)}
+    </div>`).join('');
+  const smsRows = (sms?.recent ?? []).map(m => `
+    <div style="font-size:11.5px;padding:3px 0;border-bottom:1px solid var(--border);">
+      <span style="color:${m.role === 'user' ? '#7ec0f5' : 'var(--text3)'};font-weight:600;">${m.role === 'user' ? 'Guest' : 'Bot'}:</span>
+      <span style="color:var(--text2);">${escapeHtml(m.content)}</span>
+    </div>`).join('');
+
+  return `
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Guest intelligence</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--text2);margin-bottom:8px;">
+        <span>${b.is_repeat_guest ? '<b style="color:#7ee2a8;">Repeat guest</b>' : '<span style="color:var(--text3);">First-time guest</span>'}</span>
+        ${prevCount ? `<span>Previous bookings: <b style="color:var(--text);">${prevCount}</b></span>` : ''}
+      </div>
+      ${prevRows ? `<div style="margin-bottom:10px;">${prevRows}</div>` : ''}
+      ${smsRows ? `<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);font-weight:700;margin-bottom:4px;">Recent SMS</div>${smsRows}` : (sms ? '' : '<div style="font-size:11.5px;color:var(--text3);">No SMS conversation yet.</div>')}
+    </div>`;
 }
 
 async function opsToggleField(action, fieldName) {

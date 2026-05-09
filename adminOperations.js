@@ -172,6 +172,51 @@ export function deriveOperationalStatus(b) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4B — Filter param parsing
+// Accepts multi-select filters from the operations bookings list. All optional.
+// activity / location / guide / company:   comma-separated values
+// waiver:    'signed' | 'missing'
+// payment:   'paid' | 'due'
+// status:    comma-separated booking statuses
+// affiliate: comma-separated affiliate names
+// min_pax / max_pax: integers
+// ─────────────────────────────────────────────────────────────────────────────
+export function parseBookingFilters(query = {}) {
+  const csv = (s) => String(s ?? "").split(",").map(v => v.trim()).filter(Boolean);
+  return {
+    activity:  csv(query.activity),
+    location:  csv(query.location),
+    guide:     csv(query.guide),
+    company:   csv(query.company),
+    status:    csv(query.status),
+    affiliate: csv(query.affiliate),
+    waiver:    query.waiver  === "signed" || query.waiver  === "missing" ? query.waiver  : null,
+    payment:   query.payment === "paid"   || query.payment === "due"     ? query.payment : null,
+    min_pax:   Number.isFinite(Number(query.min_pax)) ? Number(query.min_pax) : null,
+    max_pax:   Number.isFinite(Number(query.max_pax)) ? Number(query.max_pax) : null,
+  };
+}
+
+function applyFilters(rows, f) {
+  if (!f) return rows;
+  return rows.filter(r => {
+    if (f.activity?.length  && !f.activity.includes(r.activity))   return false;
+    if (f.location?.length  && !f.location.includes(r.location))   return false;
+    if (f.guide?.length     && !f.guide.includes(r.guide_name))    return false;
+    if (f.company?.length   && !f.company.includes(r.company))     return false;
+    if (f.status?.length    && !f.status.includes(r.status))       return false;
+    if (f.affiliate?.length && !f.affiliate.includes(r.affiliate)) return false;
+    if (f.waiver  === "signed"  && r.waiver_signed !== true)       return false;
+    if (f.waiver  === "missing" && r.waiver_signed === true)       return false;
+    if (f.payment === "paid"    && Number(r.balance_due_cents ?? 0) > 0)  return false;
+    if (f.payment === "due"     && Number(r.balance_due_cents ?? 0) <= 0) return false;
+    if (f.min_pax != null && Number(r.pax ?? 0) < f.min_pax)       return false;
+    if (f.max_pax != null && Number(r.pax ?? 0) > f.max_pax)       return false;
+    return true;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FETCH BOOKINGS — daily_manifest view + bookings join for ops columns
 // ─────────────────────────────────────────────────────────────────────────────
 export async function fetchBookingsInWindow(crmSupabase, companies, start, end, opts = {}) {
@@ -347,21 +392,64 @@ export async function handleOperationsBookings(req, res, _supabase, crmSupabase 
     reverse = (tab === "past");
   }
 
+  const filters = parseBookingFilters(req.query);
+  const format  = String(req.query.format ?? "json").toLowerCase();
+
   try {
+    // For filtered views we need a wider initial pull because the manifest-side
+    // count is post-DB-filter only on company/start_at. We then apply filters
+    // in-memory on the returned page.
+    const pullLimit = format === "csv" ? 2000 : Math.max(limit, 500);
     const { rows, total } = await fetchBookingsInWindow(
-      crmSupabase, companies, start, end, { search, limit, offset }
+      crmSupabase, companies, start, end, { search, limit: pullLimit, offset: 0 }
     );
-    if (reverse) rows.reverse();
-    return res.json({ bookings: rows, total, tab: label, window: { start, end } });
+    let filtered = applyFilters(rows, filters);
+    if (reverse) filtered = filtered.slice().reverse();
+
+    if (format === "csv") {
+      const csv = bookingsToCsv(filtered);
+      const fname = `bookings_${(label || "range").replace(/[^a-z0-9]+/gi, "_")}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+      return res.send(csv);
+    }
+
+    // JSON: paginate the filtered set client-side-style
+    const page = filtered.slice(offset, offset + limit);
+    return res.json({
+      bookings: page,
+      total: filtered.length,
+      total_unfiltered: total,
+      tab: label,
+      window: { start, end },
+      filters,
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 }
 
+function bookingsToCsv(rows) {
+  const headers = [
+    "start_at", "arrival_display", "customer_name", "phone", "activity",
+    "location", "company", "pax", "guide_name", "operational_status",
+    "waiver_signed", "checked_in", "receipt_total_cents", "amount_paid_cents",
+    "balance_due_cents", "agent", "affiliate", "fareharbor_pk",
+  ];
+  const escape = (v) => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.join(",")];
+  for (const r of rows) lines.push(headers.map(h => escape(r[h])).join(","));
+  return lines.join("\n");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /portal/api/operations/bookings/:pk
 // ─────────────────────────────────────────────────────────────────────────────
-export async function handleOperationsBookingDetail(req, res, _supabase, crmSupabase = null) {
+export async function handleOperationsBookingDetail(req, res, supabase = null, crmSupabase = null) {
   if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
   const clientId = resolvePortalClientId(req);
   if (!clientId)  return res.status(400).json({ error: "client_id required" });
@@ -384,7 +472,7 @@ export async function handleOperationsBookingDetail(req, res, _supabase, crmSupa
 
     const { data: opsRow } = await crmSupabase
       .from("bookings")
-      .select("guide_name,internal_notes,prep_completed,booked_at,end_at,line_items,raw_payload,booking_notes")
+      .select("guide_name,internal_notes,prep_completed,booked_at,end_at,line_items,raw_payload,booking_notes,customer_id")
       .eq("fareharbor_pk", pk)
       .maybeSingle();
 
@@ -399,10 +487,94 @@ export async function handleOperationsBookingDetail(req, res, _supabase, crmSupa
       booking_notes:  opsRow?.booking_notes  ?? manifestRow.booking_notes ?? null,
     };
     booking.operational_status = deriveOperationalStatus(booking);
+
+    // Phase 4B — guest intelligence + revenue breakdown
+    const phone = manifestRow.phone ?? null;
+    const customerId = opsRow?.customer_id ?? null;
+    const [prevBookings, smsHistory] = await Promise.all([
+      // Previous bookings for the same customer (excluding this one)
+      customerId
+        ? crmSupabase.from("bookings")
+            .select("fareharbor_pk,start_at,activity_id,receipt_total_cents,status", { count: "exact" })
+            .eq("customer_id", customerId)
+            .neq("fareharbor_pk", pk)
+            .order("start_at", { ascending: false })
+            .limit(5)
+            .then(r => ({ count: r.count ?? 0, rows: r.data ?? [] }))
+        : Promise.resolve({ count: 0, rows: [] }),
+      // Recent SMS messages from the customer's phone (DB1 conversations)
+      (supabase && phone)
+        ? supabase.from("conversations")
+            .select("messages,updated_at,client_id")
+            .eq("from_number", phone)
+            .eq("client_id", clientId)
+            .order("updated_at", { ascending: false })
+            .limit(1)
+            .then(r => {
+              const conv = r.data?.[0];
+              if (!conv?.messages?.length) return null;
+              const recent = conv.messages.slice(-5).map(m => ({
+                role: m.role, content: String(m.content ?? "").slice(0, 220), timestamp: m.timestamp,
+              }));
+              return { last_at: conv.updated_at, recent };
+            })
+        : Promise.resolve(null),
+    ]);
+
+    booking.previous_bookings_count = prevBookings.count;
+    booking.previous_bookings       = prevBookings.rows;
+    booking.is_repeat_guest         = prevBookings.count > 0;
+    booking.sms_history             = smsHistory;
+    booking.revenue_breakdown       = buildRevenueBreakdown(opsRow?.raw_payload, manifestRow);
+
     return res.json({ booking });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+}
+
+function buildRevenueBreakdown(raw, manifestRow) {
+  // Default fallback: just the totals we already have on the manifest row
+  const fallback = {
+    subtotal_cents:        null,
+    tax_cents:             null,
+    fees_cents:            null,
+    affiliate_fee_cents:   null,
+    total_cents:           Number(manifestRow?.receipt_total_cents ?? 0),
+    paid_cents:            Number(manifestRow?.amount_paid_cents   ?? 0),
+    due_cents:             Number(manifestRow?.balance_due_cents   ?? 0),
+    payments:              [],
+  };
+  if (!raw || typeof raw !== "object") return fallback;
+
+  // FareHarbor raw_payload shape: customers[].total_cost.{tax,price,total,fees,...}
+  let subtotal = 0, tax = 0, fees = 0;
+  try {
+    for (const c of raw.customers ?? []) {
+      const t = c?.total_cost ?? {};
+      subtotal += Number(t.price ?? 0);
+      tax      += Number(t.tax   ?? 0);
+      // FH stores per-customer fees inside cost_breakdown / fees if present
+      const lineFees = (t.line_items ?? []).filter(li => /fee|surcharge/i.test(li?.name ?? ""));
+      for (const li of lineFees) fees += Number(li?.amount ?? 0);
+    }
+  } catch { /* leave at 0 */ }
+
+  const payments = Array.isArray(raw.payments) ? raw.payments.map(p => ({
+    type:        p?.type ?? null,
+    status:      p?.status ?? null,
+    amount_paid: Number(p?.amount_paid ?? 0),
+    created_at:  p?.created_at ?? null,
+  })) : [];
+
+  return {
+    ...fallback,
+    subtotal_cents:      subtotal || null,
+    tax_cents:           tax      || null,
+    fees_cents:          fees     || null,
+    affiliate_fee_cents: null,
+    payments,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1012,6 +1184,60 @@ export async function computeAndSendForecast(req, res, crmSupabase, clientId) {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /portal/api/operations/filter-options
+// Returns distinct values for the filter drawer (activity, location, guide,
+// status, affiliate, company). Computed from the last 90 days of bookings.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleOperationsFilterOptions(req, res, _supabase, crmSupabase = null) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id required" });
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) return res.json(emptyFilterOptions());
+
+  try {
+    // Pull a 90-day window — wide enough to surface all common activities/guides
+    const start = startOfDayMtIso(-90);
+    const end   = startOfDayMtIso(7);  // include upcoming week so future-only guides surface too
+
+    const [{ data: manifest, error: mErr }, { data: opsRows, error: oErr }] = await Promise.all([
+      crmSupabase.from("daily_manifest")
+        .select("activity,location,company,fareharbor_pk,affiliate")
+        .in("company", companies)
+        .gte("start_at", start)
+        .lt("start_at",  end)
+        .limit(2000),
+      crmSupabase.from("bookings")
+        .select("guide_name,status,fareharbor_pk")
+        .in("company", companies)
+        .gte("start_at", start)
+        .lt("start_at",  end)
+        .limit(2000),
+    ]);
+    if (mErr) throw mErr;
+    if (oErr) throw oErr;
+
+    const activities = uniqSorted((manifest ?? []).map(r => r.activity));
+    const locations  = uniqSorted((manifest ?? []).map(r => r.location));
+    const compsOut   = uniqSorted((manifest ?? []).map(r => r.company));
+    const affiliates = uniqSorted((manifest ?? []).map(r => r.affiliate));
+    const guides     = uniqSorted((opsRows  ?? []).map(r => (r.guide_name ?? "").trim()).filter(Boolean));
+    const statuses   = uniqSorted((opsRows  ?? []).map(r => r.status));
+    return res.json({ activities, locations, companies: compsOut, affiliates, guides, statuses });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+function uniqSorted(arr) {
+  return [...new Set((arr ?? []).filter(v => v != null && v !== ""))].sort((a, b) => String(a).localeCompare(String(b)));
+}
+
+function emptyFilterOptions() {
+  return { activities: [], locations: [], companies: [], affiliates: [], guides: [], statuses: [] };
 }
 
 function emptyForecast() {

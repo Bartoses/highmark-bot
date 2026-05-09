@@ -15086,6 +15086,41 @@ async function testOperationsDashboard() {
     }
     chk("public ops4a: revenue + forecast unknown token → 404", allOk);
   }
+
+  // ── Phase 4B: filter parsing + filter-options + CSV export ──────────────
+  const {
+    parseBookingFilters,
+    handleOperationsFilterOptions,
+  } = await import("./adminOperations.js");
+
+  // Filter parsing — multi-select CSVs + booleans
+  {
+    const f = parseBookingFilters({ activity: "RZR,Snowmobile", waiver: "missing", min_pax: "2" });
+    chk("ops4b: filter activity multi", f.activity.length === 2 && f.activity.includes("RZR"));
+    chk("ops4b: filter waiver=missing accepted", f.waiver === "missing");
+    chk("ops4b: filter min_pax parsed as number", f.min_pax === 2);
+  }
+  {
+    const f = parseBookingFilters({ waiver: "garbage", payment: "neither" });
+    chk("ops4b: filter waiver invalid → null", f.waiver === null && f.payment === null);
+  }
+
+  // filter-options 503 when crmSupabase missing
+  {
+    const res = mockRes();
+    await handleOperationsFilterOptions({ portalUser: adminUser, query: {} }, res, null, null);
+    chk("ops4b: filter-options 503 when crmSupabase missing", res.statusCode === 503);
+  }
+
+  // HTTP guards: new routes 401
+  {
+    let allOk = true;
+    for (const r of ["/portal/api/operations/filter-options", "/portal/api/operations/bookings?format=csv&tab=today"]) {
+      const resp = await fetch(`${BASE_URL}${r}`);
+      if (resp.status !== 401) { allOk = false; console.log(`Expected 401 on ${r}, got ${resp.status}`); }
+    }
+    chk("ops4b: filter-options + CSV export require auth", allOk);
+  }
 }
 
 main().catch((e) => {
