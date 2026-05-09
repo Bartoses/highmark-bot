@@ -15171,6 +15171,40 @@ async function testOperationsDashboard() {
     }
     chk("ops4c: intelligence + ai-insights require auth", allOk);
   }
+
+  // ── Phase 4D: dim + season parsers + applySeasonFilter ────────────────
+  const {
+    parseDateDim,
+    parseSeasonFilter,
+    applySeasonFilter,
+  } = await import("./adminOperations.js");
+
+  chk("ops4d: parseDateDim default = 'start'",     parseDateDim({}) === "start");
+  chk("ops4d: parseDateDim 'booked' accepted",     parseDateDim({ dim: "booked" }) === "booked");
+  chk("ops4d: parseDateDim 'created' alias",       parseDateDim({ dim: "created" }) === "booked");
+  chk("ops4d: parseDateDim garbage = 'start'",     parseDateDim({ dim: "yesterday" }) === "start");
+
+  chk("ops4d: parseSeasonFilter null default",     parseSeasonFilter({}) === null);
+  chk("ops4d: parseSeasonFilter summer accepted",  parseSeasonFilter({ season: "summer" }) === "summer");
+  chk("ops4d: parseSeasonFilter winter accepted",  parseSeasonFilter({ season: "winter" }) === "winter");
+  chk("ops4d: parseSeasonFilter shoulder accepted", parseSeasonFilter({ season: "shoulder" }) === "shoulder");
+  chk("ops4d: parseSeasonFilter garbage rejected", parseSeasonFilter({ season: "fall" }) === null);
+
+  // applySeasonFilter — Apr-Oct = summer, Nov-Mar = winter
+  const sample = [
+    { fareharbor_pk: "A", start_at: "2026-07-15T10:00:00Z" }, // July → summer
+    { fareharbor_pk: "B", start_at: "2026-12-20T10:00:00Z" }, // Dec → winter
+    { fareharbor_pk: "C", start_at: "2026-04-05T10:00:00Z" }, // April → summer + shoulder
+    { fareharbor_pk: "D", start_at: "2026-02-10T10:00:00Z" }, // Feb → winter
+  ];
+  chk("ops4d: applySeasonFilter summer keeps July+April",
+      applySeasonFilter(sample, "summer").map(r => r.fareharbor_pk).sort().join() === "A,C");
+  chk("ops4d: applySeasonFilter winter keeps Dec+Feb",
+      applySeasonFilter(sample, "winter").map(r => r.fareharbor_pk).sort().join() === "B,D");
+  chk("ops4d: applySeasonFilter shoulder keeps only April",
+      applySeasonFilter(sample, "shoulder").map(r => r.fareharbor_pk).join() === "C");
+  chk("ops4d: applySeasonFilter null = pass-through",
+      applySeasonFilter(sample, null).length === 4);
 }
 
 main().catch((e) => {

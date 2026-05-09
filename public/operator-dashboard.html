@@ -52,6 +52,14 @@ table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
 th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text3); font-weight: 700; }
 .refreshing { opacity: .65; transition: opacity .15s; }
+.pf-btn {
+  background: transparent; border: 1px solid var(--border); color: var(--text2);
+  border-radius: 14px; padding: 3px 10px; font-size: 11.5px; cursor: pointer;
+  transition: all .12s;
+}
+.pf-btn:hover { border-color: var(--text3); color: var(--text); }
+.pf-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+body.tv #filterBar { display: none !important; }
 
 /* TV mode: oversize text, full-bleed, kiosk styling */
 body.tv .wrap { max-width: none; padding: 28px 32px; }
@@ -113,13 +121,34 @@ body.tv .tv-late {
     </div>
   </div>
 
+  <!-- Filter bar (hidden in TV mode for clean kiosk display) -->
+  <div id="filterBar" class="card" style="margin-bottom:14px;padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;">
+    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);margin-right:2px;">Range</span>
+    <button class="pf-btn" data-prange="today">Today</button>
+    <button class="pf-btn" data-prange="this_week">This week</button>
+    <button class="pf-btn" data-prange="this_month">This month</button>
+    <button class="pf-btn" data-prange="last30">Last 30d</button>
+    <button class="pf-btn" data-prange="last90">Last 90d</button>
+    <button class="pf-btn" data-prange="ytd">YTD</button>
+    <span style="color:var(--text3);margin:0 6px;">·</span>
+    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);">Dim</span>
+    <button class="pf-btn" data-pdim="start">Start date</button>
+    <button class="pf-btn" data-pdim="booked">Booked date</button>
+    <span style="color:var(--text3);margin:0 6px;">·</span>
+    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);">Season</span>
+    <button class="pf-btn" data-pseason="">All</button>
+    <button class="pf-btn" data-pseason="summer">Summer</button>
+    <button class="pf-btn" data-pseason="winter">Winter</button>
+    <button class="pf-btn" data-pseason="shoulder">Shoulder</button>
+  </div>
+
   <div id="errorBanner" class="error" style="display:none;"></div>
 
   <!-- KPI grid -->
   <div class="kpi-grid" id="kpiGrid">
-    <div class="card"><div class="kpi-label">Today bookings</div><div class="kpi-value" id="kBookings">—</div></div>
-    <div class="card"><div class="kpi-label">Today guests</div><div class="kpi-value" id="kPax">—</div></div>
-    <div class="card"><div class="kpi-label">Today revenue</div><div class="kpi-value" id="kRevenue">—</div></div>
+    <div class="card"><div class="kpi-label" id="kBookingsLbl">Today bookings</div><div class="kpi-value" id="kBookings">—</div></div>
+    <div class="card"><div class="kpi-label" id="kPaxLbl">Today guests</div><div class="kpi-value" id="kPax">—</div></div>
+    <div class="card"><div class="kpi-label" id="kRevenueLbl">Today revenue</div><div class="kpi-value" id="kRevenue">—</div></div>
     <div class="card"><div class="kpi-label">Missing waivers</div><div class="kpi-value" id="kWaivers">—</div></div>
     <div class="card"><div class="kpi-label">Pending check-ins</div><div class="kpi-value" id="kCheckins">—</div></div>
     <div class="card"><div class="kpi-label">Unpaid balance</div><div class="kpi-value" id="kUnpaid">—</div></div>
@@ -169,7 +198,8 @@ body.tv .tv-late {
   const path  = window.location.pathname;
   const m     = path.match(/^\/public\/operator-dashboard\/([^\/?#]+)/);
   const token = m ? m[1] : null;
-  const tv    = new URLSearchParams(window.location.search).get('tv') === '1';
+  const params0 = new URLSearchParams(window.location.search);
+  const tv    = params0.get('tv') === '1';
   if (tv) document.body.classList.add('tv');
 
   if (!token) {
@@ -180,6 +210,45 @@ body.tv .tv-late {
 
   const API = `/public/api/operator-dashboard/${encodeURIComponent(token)}`;
   const refreshMs = tv ? 30_000 : 60_000;
+
+  // ── Filter state hydrated from URL params ────────────────────────────────
+  const ALLOWED_RANGES   = ['today','this_week','this_month','next7','last30','last90','ytd'];
+  const ALLOWED_SEASONS  = ['summer','winter','shoulder'];
+  let curRange  = ALLOWED_RANGES.includes(params0.get('range')) ? params0.get('range') : 'last30';
+  let curDim    = (params0.get('dim') === 'booked') ? 'booked' : 'start';
+  let curSeason = ALLOWED_SEASONS.includes(params0.get('season')) ? params0.get('season') : null;
+
+  function persistUrl() {
+    const p = new URLSearchParams(window.location.search);
+    p.set('range', curRange);
+    if (curDim === 'booked') p.set('dim', 'booked'); else p.delete('dim');
+    if (curSeason) p.set('season', curSeason); else p.delete('season');
+    history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`);
+  }
+
+  function paintFilterButtons() {
+    document.querySelectorAll('[data-prange]').forEach(b => b.classList.toggle('active', b.dataset.prange === curRange));
+    document.querySelectorAll('[data-pdim]').forEach(b   => b.classList.toggle('active', b.dataset.pdim === curDim));
+    document.querySelectorAll('[data-pseason]').forEach(b => b.classList.toggle('active', (b.dataset.pseason || null) === (curSeason || null)));
+    const labelEl = document.getElementById('windowLabel');
+    if (labelEl) {
+      const rangeNames = { today:'Today', this_week:'This week', this_month:'This month', next7:'Next 7', last30:'Last 30 days', last90:'Last 90 days', ytd:'YTD' };
+      labelEl.textContent = (rangeNames[curRange] ?? curRange) + (curDim === 'booked' ? ' (booked)' : '') + (curSeason ? ` · ${curSeason}` : '');
+    }
+  }
+  paintFilterButtons();
+
+  document.querySelectorAll('[data-prange]').forEach(b => b.onclick = () => { curRange = b.dataset.prange; persistUrl(); paintFilterButtons(); refresh(); });
+  document.querySelectorAll('[data-pdim]').forEach(b   => b.onclick = () => { curDim   = b.dataset.pdim;   persistUrl(); paintFilterButtons(); refresh(); });
+  document.querySelectorAll('[data-pseason]').forEach(b => b.onclick = () => { curSeason = b.dataset.pseason || null; persistUrl(); paintFilterButtons(); refresh(); });
+
+  function ctxQs() {
+    const p = new URLSearchParams();
+    p.set('range', curRange);
+    if (curDim === 'booked') p.set('dim', 'booked');
+    if (curSeason) p.set('season', curSeason);
+    return p.toString();
+  }
 
   function fmtCents(c) { if (c == null) return '—'; return (c/100).toLocaleString('en-US', { style:'currency', currency:'USD', maximumFractionDigits: 0 }); }
   function fmtTime(iso) { if (!iso) return '—'; try { return new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Denver'}); } catch { return '—'; } }
@@ -202,15 +271,21 @@ body.tv .tv-late {
   async function refresh() {
     document.body.classList.add('refreshing');
     try {
+      const ctx = ctxQs();
       const [summary, bookings, prep, analytics] = await Promise.all([
-        fetchJson(`${API}/summary`),
-        fetchJson(`${API}/bookings?tab=today&limit=200`),
-        fetchJson(`${API}/tomorrow-prep`),
-        fetchJson(`${API}/analytics?days=30`),
+        fetchJson(`${API}/summary?${ctx}`),
+        fetchJson(`${API}/bookings?tab=today&limit=200${curDim === 'booked' ? '&dim=booked' : ''}${curSeason ? `&season=${encodeURIComponent(curSeason)}` : ''}`),
+        fetchJson(`${API}/tomorrow-prep${curSeason ? `?season=${encodeURIComponent(curSeason)}` : ''}`),
+        fetchJson(`${API}/analytics?days=30&${ctx}`),
       ]);
 
       const t  = summary.today    ?? {};
       const tm = summary.tomorrow ?? {};
+      const rangeNames = { today:'Today', this_week:'This week', this_month:'This month', next7:'Next 7', last30:'Last 30 days', last90:'Last 90 days', ytd:'YTD' };
+      const lbl = rangeNames[curRange] ?? 'Range';
+      document.getElementById('kBookingsLbl').textContent = `${lbl} bookings`;
+      document.getElementById('kPaxLbl').textContent      = `${lbl} guests`;
+      document.getElementById('kRevenueLbl').textContent  = `${lbl} revenue`;
       document.getElementById('kBookings').textContent     = t.bookings ?? 0;
       document.getElementById('kPax').textContent          = t.pax ?? 0;
       document.getElementById('kRevenue').textContent      = fmtCents(t.revenue_cents ?? 0);

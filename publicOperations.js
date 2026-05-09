@@ -26,6 +26,9 @@ import {
   computeAndSendAnalytics,
   computeAndSendRevenue,
   computeAndSendForecast,
+  parseDateDim,
+  parseSeasonFilter,
+  parseDateRangeQuery,
 } from "./adminOperations.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,11 +67,17 @@ export async function handlePublicSummary(req, res, supabase, crmSupabase) {
     return res.json({ today: emptyKpis(), tomorrow: emptyKpis(), arriving_next: [] });
   }
 
+  const dim    = parseDateDim(req.query ?? {});
+  const season = parseSeasonFilter(req.query ?? {});
+  const hasRange = !!(req.query?.range || (req.query?.start && req.query?.end));
+  const range  = hasRange ? parseDateRangeQuery(req.query) : null;
+
   try {
     const today    = windowFor("today");
     const tomorrow = windowFor("tomorrow");
+    const primary  = range ? { start: range.start, end: range.end } : today;
     const [t, tm]  = await Promise.all([
-      fetchBookingsInWindow(crmSupabase, companies, today.start, today.end, { limit: 500 }),
+      fetchBookingsInWindow(crmSupabase, companies, primary.start, primary.end, { limit: 1000, dim, season }),
       fetchBookingsInWindow(crmSupabase, companies, tomorrow.start, tomorrow.end, { limit: 500 }),
     ]);
 
@@ -120,11 +129,13 @@ export async function handlePublicBookings(req, res, supabase, crmSupabase) {
   const search = String(req.query.search ?? "");
   const limit  = Math.min(Number(req.query.limit ?? 100), 500);
   const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const dim    = parseDateDim(req.query ?? {});
+  const season = parseSeasonFilter(req.query ?? {});
 
   try {
     const { start, end } = windowFor(tab);
     const { rows, total } = await fetchBookingsInWindow(
-      crmSupabase, companies, start, end, { search, limit, offset }
+      crmSupabase, companies, start, end, { search, limit, offset, dim, season }
     );
     if (tab === "past") rows.reverse();
     return res.json({ bookings: rows, total, tab, window: { start, end } });
@@ -144,9 +155,11 @@ export async function handlePublicTomorrowPrep(req, res, supabase, crmSupabase) 
   const companies = resolveCompanyShortnames(auth.clientId);
   if (!companies.length) return res.json({ total_bookings: 0, total_pax: 0, by_activity: [], by_location: [], open_issues: { missing_waivers: 0, unpaid_bookings: 0, unassigned_guides: 0 }, prep_completed: 0, prep_remaining: 0 });
 
+  const season = parseSeasonFilter(req.query ?? {});
+
   try {
     const { start, end } = windowFor("tomorrow");
-    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500 });
+    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500, season });
 
     const byActivity = new Map(), byLocation = new Map();
     let totalPax = 0, missingW = 0, unpaid = 0, unassigned = 0, prepDone = 0;
@@ -192,9 +205,12 @@ export async function handlePublicGuides(req, res, supabase, crmSupabase) {
     return res.status(400).json({ error: "invalid tab" });
   }
 
+  const dim    = parseDateDim(req.query ?? {});
+  const season = parseSeasonFilter(req.query ?? {});
+
   try {
     const { start, end } = windowFor(tab);
-    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500 });
+    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500, dim, season });
     const byGuide = new Map();
     let unBookings = 0, unPax = 0;
     for (const b of rows) {

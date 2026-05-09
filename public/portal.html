@@ -449,6 +449,8 @@ tr:hover td { background: var(--panel2); }
 .ops-kpi-value { font-size:22px; font-weight:700; color:var(--text); }
 .ops-tab-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
 .ops-range-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.ops-dim-btn.active   { background:var(--accent); color:#fff; border-color:var(--accent); }
+.ops-season-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
 .ops-range-bar { background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%); border: 1px solid var(--border); }
 .ops-kpi-delta { font-size: 10.5px; font-weight: 600; margin-top: 4px; }
 .ops-kpi-delta.up   { color: #7ee2a8; }
@@ -1233,25 +1235,41 @@ tr:hover td { background: var(--panel2); }
           </div>
         </div>
 
-        <!-- GLOBAL DATE RANGE FILTER -->
-        <div class="card ops-range-bar" style="margin-bottom:14px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;position:sticky;top:0;z-index:5;">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);margin-right:4px;">Range</div>
-          <button class="btn btn-ghost btn-sm ops-range-btn" data-range="today">Today</button>
-          <button class="btn btn-ghost btn-sm ops-range-btn" data-range="this_week">This week</button>
-          <button class="btn btn-ghost btn-sm ops-range-btn" data-range="this_month">This month</button>
-          <button class="btn btn-ghost btn-sm ops-range-btn" data-range="next7">Next 7</button>
-          <button class="btn btn-ghost btn-sm ops-range-btn active" data-range="last30">Last 30d</button>
-          <button class="btn btn-ghost btn-sm ops-range-btn" data-range="last90">Last 90d</button>
-          <button class="btn btn-ghost btn-sm ops-range-btn" data-range="ytd">YTD</button>
-          <button class="btn btn-ghost btn-sm" onclick="opsToggleCustomRange()">Custom…</button>
-          <div id="opsCustomRange" style="display:none;gap:6px;align-items:center;">
-            <input type="date" id="opsCustomStart" style="font-size:12px;">
-            <span style="color:var(--text3);">→</span>
-            <input type="date" id="opsCustomEnd" style="font-size:12px;">
-            <button class="btn btn-primary btn-sm" onclick="opsApplyCustomRange()">Apply</button>
+        <!-- GLOBAL DATE RANGE FILTER + DIMENSION + SEASON -->
+        <div class="card ops-range-bar" style="margin-bottom:14px;padding:10px 14px;display:flex;flex-direction:column;gap:8px;position:sticky;top:0;z-index:5;">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);margin-right:4px;">Range</div>
+            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="today">Today</button>
+            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="this_week">This week</button>
+            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="this_month">This month</button>
+            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="next7">Next 7</button>
+            <button class="btn btn-ghost btn-sm ops-range-btn active" data-range="last30">Last 30d</button>
+            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="last90">Last 90d</button>
+            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="ytd">YTD</button>
+            <button class="btn btn-ghost btn-sm" onclick="opsToggleCustomRange()">Custom…</button>
+            <div id="opsCustomRange" style="display:none;gap:6px;align-items:center;">
+              <input type="date" id="opsCustomStart" style="font-size:12px;">
+              <span style="color:var(--text3);">→</span>
+              <input type="date" id="opsCustomEnd" style="font-size:12px;">
+              <button class="btn btn-primary btn-sm" onclick="opsApplyCustomRange()">Apply</button>
+            </div>
+            <div style="flex:1;"></div>
+            <div style="font-size:11px;color:var(--text3);" id="opsRangeLabel">—</div>
           </div>
-          <div style="flex:1;"></div>
-          <div style="font-size:11px;color:var(--text3);" id="opsRangeLabel">—</div>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;border-top:1px solid var(--border);padding-top:8px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);">Dim</span>
+              <button class="btn btn-ghost btn-sm ops-dim-btn active" data-dim="start"  title="Filter on the trip date">Start date</button>
+              <button class="btn btn-ghost btn-sm ops-dim-btn"        data-dim="booked" title="Filter on when the booking was created">Booked date</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);">Season</span>
+              <button class="btn btn-ghost btn-sm ops-season-btn active" data-season="">All</button>
+              <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="summer" title="Apr–Oct trips">Summer</button>
+              <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="winter" title="Nov–Mar trips">Winter</button>
+              <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="shoulder" title="Apr–May trips">Shoulder</button>
+            </div>
+          </div>
         </div>
 
         <!-- EXECUTIVE SUMMARY (collapsible — primary headline metrics) -->
@@ -5653,21 +5671,30 @@ let _opsCountdownInterval = null;
 let _opsCurrentBooking = null;
 
 let _opsAnalyticsDays = 30;
-let _opsRange = { mode: "preset", preset: "last30", start: null, end: null };
+let _opsRange  = { mode: "preset", preset: "last30", start: null, end: null };
+let _opsDim    = "start";       // 'start' or 'booked'
+let _opsSeason = null;          // 'summer' | 'winter' | 'shoulder' | null
 
 function opsRangeQS() {
-  if (_opsRange.mode === "custom" && _opsRange.start && _opsRange.end) {
-    return `start=${_opsRange.start}&end=${_opsRange.end}`;
-  }
-  return `range=${encodeURIComponent(_opsRange.preset)}`;
+  const base = _opsRange.mode === "custom" && _opsRange.start && _opsRange.end
+    ? `start=${_opsRange.start}&end=${_opsRange.end}`
+    : `range=${encodeURIComponent(_opsRange.preset)}`;
+  let qs = base;
+  if (_opsDim === "booked") qs += `&dim=booked`;
+  if (_opsSeason)           qs += `&season=${encodeURIComponent(_opsSeason)}`;
+  return qs;
 }
 
 function opsRangeLabel() {
-  if (_opsRange.mode === "custom") return `${_opsRange.start} → ${_opsRange.end}`;
-  return ({
-    today: "Today", this_week: "This week", this_month: "This month",
-    next7: "Next 7 days", last30: "Last 30 days", last90: "Last 90 days", ytd: "Year to date",
-  })[_opsRange.preset] ?? _opsRange.preset;
+  const base = _opsRange.mode === "custom"
+    ? `${_opsRange.start} → ${_opsRange.end}`
+    : (({
+        today: "Today", this_week: "This week", this_month: "This month",
+        next7: "Next 7 days", last30: "Last 30 days", last90: "Last 90 days", ytd: "Year to date",
+      })[_opsRange.preset] ?? _opsRange.preset);
+  const dim = _opsDim === "booked" ? " (booked)" : "";
+  const sn  = _opsSeason ? ` · ${_opsSeason}` : "";
+  return base + dim + sn;
 }
 
 function opsPersistRangeUrl() {
@@ -5680,6 +5707,8 @@ function opsPersistRangeUrl() {
     params.delete("start"); params.delete("end");
     params.set("range", _opsRange.preset);
   }
+  if (_opsDim === "booked") params.set("dim", "booked"); else params.delete("dim");
+  if (_opsSeason) params.set("season", _opsSeason); else params.delete("season");
   history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
 }
 
@@ -5698,6 +5727,14 @@ function opsHydrateRangeFromUrl() {
     document.querySelectorAll("#sec-operations .ops-range-btn").forEach(b =>
       b.classList.toggle("active", b.dataset.range === r));
   }
+  const dim = params.get("dim");
+  _opsDim = (dim === "booked" || dim === "created") ? "booked" : "start";
+  document.querySelectorAll("#sec-operations .ops-dim-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.dim === _opsDim));
+  const season = params.get("season");
+  _opsSeason = ["summer","winter","shoulder"].includes(season) ? season : null;
+  document.querySelectorAll("#sec-operations .ops-season-btn").forEach(b =>
+    b.classList.toggle("active", (b.dataset.season || null) === (_opsSeason || null)));
 }
 
 function opsToggleCustomRange() {
@@ -5777,6 +5814,32 @@ function setupOperationsHandlers() {
       document.querySelectorAll('#sec-operations .ops-range-btn').forEach(b =>
         b.classList.toggle('active', b.dataset.range === preset));
       document.getElementById("opsCustomRange").style.display = "none";
+      opsPersistRangeUrl();
+      loadOperations();
+    };
+  });
+
+  // Date dimension toggle (start vs booked)
+  document.querySelectorAll('#sec-operations .ops-dim-btn').forEach(btn => {
+    btn.onclick = () => {
+      const dim = btn.dataset.dim;
+      if (!dim || dim === _opsDim) return;
+      _opsDim = dim;
+      document.querySelectorAll('#sec-operations .ops-dim-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.dim === dim));
+      opsPersistRangeUrl();
+      loadOperations();
+    };
+  });
+
+  // Season filter (summer / winter / shoulder / all)
+  document.querySelectorAll('#sec-operations .ops-season-btn').forEach(btn => {
+    btn.onclick = () => {
+      const season = btn.dataset.season || null;
+      if (season === _opsSeason) return;
+      _opsSeason = season;
+      document.querySelectorAll('#sec-operations .ops-season-btn').forEach(b =>
+        b.classList.toggle('active', (b.dataset.season || null) === season));
       opsPersistRangeUrl();
       loadOperations();
     };
@@ -5924,7 +5987,8 @@ async function loadOpsTomorrowPrep() {
   const wrap = document.getElementById('opsTomorrowPrep');
   if (!wrap) return;
   wrap.innerHTML = 'Loading…';
-  const data = await apiFetch('/operations/tomorrow-prep');
+  const extra = _opsSeason ? `?season=${encodeURIComponent(_opsSeason)}` : '';
+  const data = await apiFetch('/operations/tomorrow-prep' + extra);
   if (!data) return;
   if (!data.total_bookings) {
     wrap.innerHTML = '<span style="color:var(--text3);">No bookings tomorrow yet.</span>';
@@ -5965,7 +6029,8 @@ async function loadOpsGuides(tab) {
   const wrap = document.getElementById('opsGuides');
   if (!wrap) return;
   wrap.innerHTML = 'Loading…';
-  const data = await apiFetch(`/operations/guides?tab=${encodeURIComponent(tab)}`);
+  const extra = (_opsDim === 'booked' ? '&dim=booked' : '') + (_opsSeason ? `&season=${encodeURIComponent(_opsSeason)}` : '');
+  const data = await apiFetch(`/operations/guides?tab=${encodeURIComponent(tab)}${extra}`);
   if (!data) return;
   const guides = data.guides ?? [];
   const un = data.unassigned ?? { bookings: 0, pax: 0 };
@@ -6096,6 +6161,8 @@ async function opsExportCsv() {
   const params = opsFiltersToQuery();
   params.set('tab', _opsTab);
   params.set('format', 'csv');
+  if (_opsDim === 'booked') params.set('dim', 'booked');
+  if (_opsSeason)           params.set('season', _opsSeason);
   const search = document.getElementById('opsSearch')?.value?.trim();
   if (search) params.set('search', search);
   // Fetch with token, then trigger download from blob (apiFetch returns JSON; do raw fetch here)
@@ -6187,6 +6254,8 @@ async function loadOperationsTable(tab) {
   const params = opsFiltersToQuery();
   params.set('tab', tab);
   params.set('limit', '500');
+  if (_opsDim === 'booked') params.set('dim', 'booked');
+  if (_opsSeason)           params.set('season', _opsSeason);
   if (search.trim()) params.set('search', search.trim());
 
   const data = await apiFetch(`/operations/bookings?${params}`);
@@ -6541,7 +6610,8 @@ async function loadOpsAiInsights(force) {
 async function loadOpsIntelligence() {
   const wrap = document.getElementById('opsIntel');
   if (!wrap) return;
-  const data = await apiFetch('/operations/intelligence');
+  const extra = _opsSeason ? `?season=${encodeURIComponent(_opsSeason)}` : '';
+  const data = await apiFetch('/operations/intelligence' + extra);
   if (!data) return;
 
   const wr  = data.waiver_risk?.count ?? 0;
@@ -6578,7 +6648,8 @@ async function loadOpsAnalytics(days) {
   const wrap = document.getElementById('opsAnalytics');
   if (!wrap) return;
   wrap.innerHTML = 'Loading…';
-  const data = await apiFetch(`/operations/analytics?days=${days}`);
+  const extra = (_opsDim === 'booked' ? '&dim=booked' : '') + (_opsSeason ? `&season=${encodeURIComponent(_opsSeason)}` : '');
+  const data = await apiFetch(`/operations/analytics?days=${days}${extra}`);
   if (!data) return;
   if (!data.total_bookings) {
     wrap.innerHTML = '<span style="color:var(--text3);">No bookings in this window.</span>';
@@ -6640,23 +6711,34 @@ async function loadOpsShareLinks() {
     wrap.innerHTML = '<span style="color:var(--text3);">No active share links yet. Create one above.</span>';
     return;
   }
+  // Bake the current dim/season/range into shared URLs so what the operator
+  // sees is what their team sees. They can still override on the public page.
+  const ctxQs = [];
+  if (_opsDim === 'booked')       ctxQs.push('dim=booked');
+  if (_opsSeason)                 ctxQs.push(`season=${encodeURIComponent(_opsSeason)}`);
+  if (_opsRange.mode === 'preset' && _opsRange.preset && _opsRange.preset !== 'last30')
+    ctxQs.push(`range=${encodeURIComponent(_opsRange.preset)}`);
+  const ctxAppend = ctxQs.length ? '?' + ctxQs.join('&') : '';
+
   wrap.innerHTML = links.map(l => {
-    const url   = `${window.location.origin}/public/operator-dashboard/${l.token}`;
-    const expS  = l.expires_at
+    const baseUrl = `${window.location.origin}/public/operator-dashboard/${l.token}`;
+    const url     = baseUrl + ctxAppend;
+    const tvUrl   = baseUrl + (ctxAppend ? ctxAppend + '&tv=1' : '?tv=1');
+    const expS    = l.expires_at
       ? `expires ${new Date(l.expires_at).toLocaleDateString()}`
       : 'never expires';
-    const label = l.label ? escapeHtml(l.label) : '<span style="color:var(--text3);">Unlabeled</span>';
+    const label   = l.label ? escapeHtml(l.label) : '<span style="color:var(--text3);">Unlabeled</span>';
     return `<div style="padding:10px 0;border-bottom:1px solid var(--border);">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <div style="font-weight:600;">${label}</div>
         <button class="btn btn-ghost btn-sm" onclick="opsRevokeShareLink('${l.id}')">Revoke</button>
       </div>
-      <div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Created ${new Date(l.created_at).toLocaleDateString()} · ${expS}</div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Created ${new Date(l.created_at).toLocaleDateString()} · ${expS}${ctxAppend ? ' · link inherits current dim/season/range' : ''}</div>
       <div style="display:flex;gap:6px;align-items:center;">
         <input type="text" readonly value="${url}" style="flex:1;font-family:monospace;font-size:11px;" onclick="this.select()">
         <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('${url}').then(() => this.textContent='✓ Copied').catch(()=>{})">Copy</button>
         <button class="btn btn-ghost btn-sm" onclick="window.open('${url}', '_blank')">Open</button>
-        <button class="btn btn-ghost btn-sm" onclick="window.open('${url}?tv=1', '_blank')">TV mode</button>
+        <button class="btn btn-ghost btn-sm" onclick="window.open('${tvUrl}', '_blank')">TV mode</button>
       </div>
     </div>`;
   }).join('');

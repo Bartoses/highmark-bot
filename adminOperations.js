@@ -172,6 +172,45 @@ export function deriveOperationalStatus(b) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Date dimension parser — selects which timestamp the date range filters on.
+//   dim=start  (default): filter on bookings.start_at  — "when does the trip happen"
+//   dim=booked          : filter on bookings.booked_at — "when did the customer reserve"
+// ─────────────────────────────────────────────────────────────────────────────
+export function parseDateDim(query = {}) {
+  const v = String(query.dim ?? "").toLowerCase().trim();
+  return v === "booked" || v === "created" ? "booked" : "start";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Season filter — narrows results by start_at month.
+//   summer   : Apr–Oct  (months 4..10)
+//   winter   : Nov–Mar  (months 11, 12, 1, 2, 3)
+//   shoulder : Apr–May  (months 4..5)  — when the bot serves both
+//   null     : no filter
+// ─────────────────────────────────────────────────────────────────────────────
+const SEASON_MONTHS = {
+  summer:   new Set([4, 5, 6, 7, 8, 9, 10]),
+  winter:   new Set([11, 12, 1, 2, 3]),
+  shoulder: new Set([4, 5]),
+};
+
+export function parseSeasonFilter(query = {}) {
+  const v = String(query.season ?? "").toLowerCase().trim();
+  return SEASON_MONTHS[v] ? v : null;
+}
+
+export function applySeasonFilter(rows, season) {
+  if (!season) return rows;
+  const months = SEASON_MONTHS[season];
+  if (!months) return rows;
+  return rows.filter(r => {
+    if (!r?.start_at) return false;
+    const m = new Date(r.start_at).getUTCMonth() + 1;
+    return months.has(m);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PHASE 4B — Filter param parsing
 // Accepts multi-select filters from the operations bookings list. All optional.
 // activity / location / guide / company:   comma-separated values
@@ -220,9 +259,55 @@ function applyFilters(rows, f) {
 // FETCH BOOKINGS — daily_manifest view + bookings join for ops columns
 // ─────────────────────────────────────────────────────────────────────────────
 export async function fetchBookingsInWindow(crmSupabase, companies, start, end, opts = {}) {
-  const { search = "", limit = 200, offset = 0 } = opts;
+  const { search = "", limit = 200, offset = 0, dim = "start", season = null } = opts;
 
-  // 1. Pull from manifest view (already joined customer + activity + payment)
+  // ── DIM = "booked" — filter the date range on bookings.booked_at instead of
+  // start_at. The manifest view doesn't expose booked_at, so we lead with the
+  // bookings table to satisfy the date filter, then enrich from the manifest.
+  if (dim === "booked") {
+    let bq = crmSupabase
+      .from("bookings")
+      .select("fareharbor_pk,guide_name,internal_notes,prep_completed,booked_at,created_at,company,status", { count: "exact" })
+      .in("company", companies)
+      // booked_at can be null on rows imported manually; treat created_at as the
+      // fallback "when the booking entered our system".
+      .or(`and(booked_at.gte.${start},booked_at.lt.${end}),and(booked_at.is.null,created_at.gte.${start},created_at.lt.${end})`)
+      .order("booked_at", { ascending: false })
+      .limit(Math.min(Number(limit) + Number(offset), 2000));
+    const { data: ops, error: opsErr, count } = await bq;
+    if (opsErr) throw opsErr;
+    const pks = (ops ?? []).map(o => o.fareharbor_pk).filter(Boolean);
+    if (!pks.length) return { rows: [], total: count ?? 0 };
+
+    let mq = crmSupabase.from("daily_manifest").select("*").in("fareharbor_pk", pks).limit(2000);
+    if (search?.trim()) {
+      mq = mq.or(`customer_name.ilike.%${search.trim()}%,phone.ilike.%${search.trim()}%,fareharbor_pk.ilike.%${search.trim()}%,activity.ilike.%${search.trim()}%`);
+    }
+    const { data: manifest, error: mErr } = await mq;
+    if (mErr) throw mErr;
+    const opsByPk      = new Map((ops ?? []).map(o => [o.fareharbor_pk, o]));
+    const manifestByPk = new Map((manifest ?? []).map(m => [m.fareharbor_pk, m]));
+    let rows = (ops ?? [])
+      .map(o => {
+        const m = manifestByPk.get(o.fareharbor_pk);
+        if (!m) return null; // search may have filtered it out
+        const enriched = {
+          ...m,
+          booked_at:      o.booked_at  ?? o.created_at ?? null,
+          guide_name:     o.guide_name ?? null,
+          internal_notes: o.internal_notes ?? null,
+          prep_completed: o.prep_completed ?? false,
+          status:         o.status ?? m.status ?? null,
+        };
+        enriched.operational_status = deriveOperationalStatus(enriched);
+        return enriched;
+      })
+      .filter(Boolean);
+    rows = applySeasonFilter(rows, season);
+    return { rows, total: rows.length };
+  }
+
+  // ── DIM = "start" (default) — original path: filter date range on start_at
   let q = crmSupabase
     .from("daily_manifest")
     .select("*", { count: "exact" })
@@ -241,30 +326,31 @@ export async function fetchBookingsInWindow(crmSupabase, companies, start, end, 
   if (error) throw error;
   if (!manifest?.length) return { rows: [], total: count ?? 0 };
 
-  // 2. Pull operational columns from bookings table by fareharbor_pk
+  // Pull operational columns from bookings table by fareharbor_pk
   const pks = manifest.map(b => b.fareharbor_pk).filter(Boolean);
   let opsRows = [];
   if (pks.length) {
     const { data: ops } = await crmSupabase
       .from("bookings")
-      .select("fareharbor_pk,guide_name,internal_notes,prep_completed")
+      .select("fareharbor_pk,guide_name,internal_notes,prep_completed,booked_at,created_at")
       .in("fareharbor_pk", pks);
     opsRows = ops ?? [];
   }
   const opsByPk = new Map(opsRows.map(r => [r.fareharbor_pk, r]));
 
-  const rows = manifest.map(b => {
+  let rows = manifest.map(b => {
     const ops = opsByPk.get(b.fareharbor_pk) ?? {};
     const enriched = {
       ...b,
-      guide_name:     ops.guide_name     ?? null,
+      booked_at:      ops.booked_at  ?? ops.created_at ?? null,
+      guide_name:     ops.guide_name ?? null,
       internal_notes: ops.internal_notes ?? null,
       prep_completed: ops.prep_completed ?? false,
     };
     enriched.operational_status = deriveOperationalStatus(enriched);
     return enriched;
   });
-
+  rows = applySeasonFilter(rows, season);
   return { rows, total: count ?? 0 };
 }
 
@@ -291,6 +377,8 @@ export async function handleOperationsSummary(req, res, _supabase, crmSupabase =
   // keeps working. arriving_next stays today-anchored regardless.
   const hasRangeQuery = !!(req.query?.range || (req.query?.start && req.query?.end));
   const range = hasRangeQuery ? parseDateRangeQuery(req.query) : null;
+  const dim    = parseDateDim(req.query);
+  const season = parseSeasonFilter(req.query);
 
   try {
     const today    = windowFor("today");
@@ -298,7 +386,7 @@ export async function handleOperationsSummary(req, res, _supabase, crmSupabase =
     const primary  = range ? { start: range.start, end: range.end } : today;
 
     const fetches = [
-      fetchBookingsInWindow(crmSupabase, companies, primary.start, primary.end, { limit: 1000 }),
+      fetchBookingsInWindow(crmSupabase, companies, primary.start, primary.end, { limit: 1000, dim, season }),
       fetchBookingsInWindow(crmSupabase, companies, tomorrow.start, tomorrow.end, { limit: 500 }),
     ];
     // Always pull "today" rows for the arriving-next list when a custom range is set
@@ -394,6 +482,8 @@ export async function handleOperationsBookings(req, res, _supabase, crmSupabase 
 
   const filters = parseBookingFilters(req.query);
   const format  = String(req.query.format ?? "json").toLowerCase();
+  const dim     = parseDateDim(req.query);
+  const season  = parseSeasonFilter(req.query);
 
   try {
     // For filtered views we need a wider initial pull because the manifest-side
@@ -401,7 +491,7 @@ export async function handleOperationsBookings(req, res, _supabase, crmSupabase 
     // in-memory on the returned page.
     const pullLimit = format === "csv" ? 2000 : Math.max(limit, 500);
     const { rows, total } = await fetchBookingsInWindow(
-      crmSupabase, companies, start, end, { search, limit: pullLimit, offset: 0 }
+      crmSupabase, companies, start, end, { search, limit: pullLimit, offset: 0, dim, season }
     );
     let filtered = applyFilters(rows, filters);
     if (reverse) filtered = filtered.slice().reverse();
@@ -665,9 +755,11 @@ export async function handleOperationsTomorrowPrep(req, res, _supabase, crmSupab
   const companies = resolveCompanyShortnames(clientId);
   if (!companies.length) return res.json(emptyPrep());
 
+  const season = parseSeasonFilter(req.query ?? {});
+
   try {
     const { start, end } = windowFor("tomorrow");
-    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500 });
+    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500, season });
 
     if (!rows.length) return res.json(emptyPrep());
 
@@ -749,8 +841,11 @@ export async function handleOperationsGuides(req, res, _supabase, crmSupabase = 
     const w = windowFor(tab); start = w.start; end = w.end;
   }
 
+  const dim    = parseDateDim(req.query ?? {});
+  const season = parseSeasonFilter(req.query ?? {});
+
   try {
-    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500 });
+    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500, dim, season });
 
     const byGuide = new Map();
     let unassignedBookings = 0, unassignedPax = 0;
@@ -854,17 +949,13 @@ export async function computeAndSendAnalytics(req, res, crmSupabase, clientId) {
   const days = Math.min(Math.max(Number(req.query?.days ?? 30), 1), 365);
   const end   = new Date();
   const start = new Date(end.getTime() - days * 86400_000);
+  const dim    = parseDateDim(req.query ?? {});
+  const season = parseSeasonFilter(req.query ?? {});
 
   try {
-    const { data, error } = await crmSupabase
-      .from("daily_manifest")
-      .select("start_at,activity,location,pax,receipt_total_cents,waiver_signed,checked_in")
-      .in("company", companies)
-      .gte("start_at", start.toISOString())
-      .lt("start_at",  end.toISOString())
-      .order("start_at", { ascending: true });
-    if (error) throw error;
-    const rows = data ?? [];
+    let rows = await fetchBookingsForRevenue(
+      crmSupabase, companies, start.toISOString(), end.toISOString(), { dim, season }
+    );
 
     if (!rows.length) return res.json(emptyAnalytics({ days }));
 
@@ -941,12 +1032,14 @@ export async function computeAndSendRevenue(req, res, crmSupabase, clientId) {
   const companies = resolveCompanyShortnames(clientId);
   if (!companies.length) return res.json(emptyRevenue());
 
-  const range = parseDateRangeQuery(req.query ?? {});
+  const range  = parseDateRangeQuery(req.query ?? {});
+  const dim    = parseDateDim(req.query ?? {});
+  const season = parseSeasonFilter(req.query ?? {});
   const wantCompare = String(req.query?.compare ?? "").toLowerCase() === "prev";
 
   try {
-    const fetches = [fetchBookingsForRevenue(crmSupabase, companies, range.start, range.end)];
-    if (wantCompare) fetches.push(fetchBookingsForRevenue(crmSupabase, companies, range.prev.start, range.prev.end));
+    const fetches = [fetchBookingsForRevenue(crmSupabase, companies, range.start, range.end, { dim, season })];
+    if (wantCompare) fetches.push(fetchBookingsForRevenue(crmSupabase, companies, range.prev.start, range.prev.end, { dim, season }));
     const [current, previous] = await Promise.all(fetches);
 
     const totals  = totalsFor(current);
@@ -974,31 +1067,64 @@ export async function computeAndSendRevenue(req, res, crmSupabase, clientId) {
   }
 }
 
-async function fetchBookingsForRevenue(crmSupabase, companies, start, end) {
-  // We pull from daily_manifest for revenue/pax/activity/location, then JOIN
-  // bookings for guide_name (manifest doesn't expose it).
+async function fetchBookingsForRevenue(crmSupabase, companies, start, end, opts = {}) {
+  const { dim = "start", season = null } = opts;
+
+  // ── DIM = "booked" — date filter on bookings.booked_at then enrich
+  if (dim === "booked") {
+    const { data: ops, error: opsErr } = await crmSupabase
+      .from("bookings")
+      .select("fareharbor_pk,guide_name,booked_at,created_at")
+      .in("company", companies)
+      .or(`and(booked_at.gte.${start},booked_at.lt.${end}),and(booked_at.is.null,created_at.gte.${start},created_at.lt.${end})`)
+      .limit(2000);
+    if (opsErr) throw opsErr;
+    const pks = (ops ?? []).map(o => o.fareharbor_pk).filter(Boolean);
+    if (!pks.length) return [];
+
+    const { data: manifest } = await crmSupabase
+      .from("daily_manifest")
+      .select("start_at,activity,location,pax,receipt_total_cents,balance_due_cents,fareharbor_pk,waiver_signed,checked_in,company")
+      .in("fareharbor_pk", pks)
+      .limit(2000);
+    const opsByPk = new Map((ops ?? []).map(o => [o.fareharbor_pk, o]));
+    let rows = (manifest ?? []).map(m => ({
+      ...m,
+      guide_name: opsByPk.get(m.fareharbor_pk)?.guide_name ?? null,
+      booked_at:  opsByPk.get(m.fareharbor_pk)?.booked_at ?? opsByPk.get(m.fareharbor_pk)?.created_at ?? null,
+    }));
+    rows = applySeasonFilter(rows, season);
+    return rows;
+  }
+
+  // ── DIM = "start" — original path
   const { data: manifest, error } = await crmSupabase
     .from("daily_manifest")
-    .select("start_at,activity,location,pax,receipt_total_cents,balance_due_cents,fareharbor_pk,waiver_signed,checked_in")
+    .select("start_at,activity,location,pax,receipt_total_cents,balance_due_cents,fareharbor_pk,waiver_signed,checked_in,company")
     .in("company", companies)
     .gte("start_at", start)
     .lt("start_at",  end)
     .order("start_at", { ascending: true })
     .limit(2000);
   if (error) throw error;
-  const rows = manifest ?? [];
-  if (!rows.length) return rows;
+  const rowsRaw = manifest ?? [];
+  if (!rowsRaw.length) return rowsRaw;
 
-  const pks = rows.map(r => r.fareharbor_pk).filter(Boolean);
+  const pks = rowsRaw.map(r => r.fareharbor_pk).filter(Boolean);
   let guideMap = new Map();
   if (pks.length) {
     const { data: ops } = await crmSupabase
       .from("bookings")
-      .select("fareharbor_pk,guide_name")
+      .select("fareharbor_pk,guide_name,booked_at,created_at")
       .in("fareharbor_pk", pks);
-    guideMap = new Map((ops ?? []).map(o => [o.fareharbor_pk, o.guide_name]));
+    guideMap = new Map((ops ?? []).map(o => [o.fareharbor_pk, o]));
   }
-  return rows.map(r => ({ ...r, guide_name: guideMap.get(r.fareharbor_pk) ?? null }));
+  let rows = rowsRaw.map(r => {
+    const o = guideMap.get(r.fareharbor_pk);
+    return { ...r, guide_name: o?.guide_name ?? null, booked_at: o?.booked_at ?? o?.created_at ?? null };
+  });
+  rows = applySeasonFilter(rows, season);
+  return rows;
 }
 
 function totalsFor(rows) {
@@ -1252,15 +1378,17 @@ export async function handleOperationsIntelligence(req, res, _supabase, crmSupab
   const companies = resolveCompanyShortnames(clientId);
   if (!companies.length) return res.json(emptyIntelligence());
 
+  const season = parseSeasonFilter(req.query ?? {});
+
   try {
     const todayWindow    = windowFor("today");
     const tomorrowWindow = windowFor("tomorrow");
     const next14End      = startOfDayMtIso(14);
 
     const [today, tomorrow, next14] = await Promise.all([
-      fetchBookingsInWindow(crmSupabase, companies, todayWindow.start, todayWindow.end, { limit: 500 }),
-      fetchBookingsInWindow(crmSupabase, companies, tomorrowWindow.start, tomorrowWindow.end, { limit: 500 }),
-      fetchBookingsInWindow(crmSupabase, companies, todayWindow.start, next14End, { limit: 1000 }),
+      fetchBookingsInWindow(crmSupabase, companies, todayWindow.start, todayWindow.end, { limit: 500, season }),
+      fetchBookingsInWindow(crmSupabase, companies, tomorrowWindow.start, tomorrowWindow.end, { limit: 500, season }),
+      fetchBookingsInWindow(crmSupabase, companies, todayWindow.start, next14End, { limit: 1000, season }),
     ]);
 
     // Waiver risk: bookings within next 2h missing waivers
