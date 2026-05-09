@@ -1548,6 +1548,17 @@ app.post("/web/chat", ipLimiter, async (req, res) => {
 // INTERNAL TEST UI — TEST_MODE only
 // Browser-based QA console. Run with: npm run ui
 // ─────────────────────────────────────────────────────────────────────────────
+// ── Public operator dashboard (no auth — share token validates) ──────────────
+// Registered BEFORE the requireUiAccess wall on /public so token-based access
+// works without UI_SECRET. The HTML page itself loads no sensitive data; the
+// API routes resolve the token in publicOperations.js before returning data.
+app.get("/public/api/operator-dashboard/:token/summary",        (req, res) => handlePublicSummary(req, res, supabase, crmSupabase));
+app.get("/public/api/operator-dashboard/:token/bookings",       (req, res) => handlePublicBookings(req, res, supabase, crmSupabase));
+app.get("/public/api/operator-dashboard/:token/tomorrow-prep",  (req, res) => handlePublicTomorrowPrep(req, res, supabase, crmSupabase));
+app.get("/public/api/operator-dashboard/:token/guides",         (req, res) => handlePublicGuides(req, res, supabase, crmSupabase));
+app.get("/public/api/operator-dashboard/:token/analytics",      (req, res) => handlePublicAnalytics(req, res, supabase, crmSupabase));
+app.get("/public/operator-dashboard/:token",                    (_req, res) => res.sendFile(path.join(__uiDir, "operator-dashboard.html")));
+
 app.use("/public", requireUiAccess, express.static(__uiDir));
 app.get("/ui", requireUiAccess, (_req, res) => res.sendFile(path.join(__uiDir, "ui.html")));
 
@@ -1791,14 +1802,8 @@ app.get(   "/portal/api/operations/analytics",                requirePortalAuth,
 app.get(   "/portal/api/operations/share-links",              requirePortalAuth, (req, res) => handleListShareLinks(req, res, supabase));
 app.post(  "/portal/api/operations/share-links",              requirePortalAuth, (req, res) => handleCreateShareLink(req, res, supabase));
 app.delete("/portal/api/operations/share-links/:id",          requirePortalAuth, (req, res) => handleRevokeShareLink(req, res, supabase));
-// Public no-auth dashboard endpoints (token in URL)
-app.get(   "/public/api/operator-dashboard/:token/summary",        (req, res) => handlePublicSummary(req, res, supabase, crmSupabase));
-app.get(   "/public/api/operator-dashboard/:token/bookings",       (req, res) => handlePublicBookings(req, res, supabase, crmSupabase));
-app.get(   "/public/api/operator-dashboard/:token/tomorrow-prep",  (req, res) => handlePublicTomorrowPrep(req, res, supabase, crmSupabase));
-app.get(   "/public/api/operator-dashboard/:token/guides",         (req, res) => handlePublicGuides(req, res, supabase, crmSupabase));
-app.get(   "/public/api/operator-dashboard/:token/analytics",      (req, res) => handlePublicAnalytics(req, res, supabase, crmSupabase));
-// Public dashboard HTML page (no auth — token validated by API on data fetch)
-app.get(   "/public/operator-dashboard/:token", (_req, res) => res.sendFile(path.join(__uiDir, "operator-dashboard.html")));
+// (Public operator dashboard is registered earlier — before requireUiAccess —
+//  so the no-auth share token flow isn't intercepted by the UI_SECRET wall.)
 // Crawler pages + manual trigger
 app.get( "/portal/api/crawl-pages",   requirePortalAuth, (req, res) => handlePortalCrawlPages(req, res, supabase));
 app.get( "/portal/api/integrations",  requirePortalAuth, (req, res) => handlePortalIntegrations(req, res, supabase));
