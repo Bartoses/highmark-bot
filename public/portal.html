@@ -452,10 +452,25 @@ tr:hover td { background: var(--panel2); }
 .data-table th { text-align:left; padding:10px 8px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text3); border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--panel); }
 .data-table td { padding:10px 8px; font-size:12.5px; color:var(--text2); border-bottom:1px solid var(--border); }
 .data-table tbody tr:hover { background:var(--panel2); }
+/* Mobile: tighter KPIs, hide low-value table cols, full-width drawer fields */
 @media (max-width: 720px) {
+  #sec-operations .ops-kpi-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 8px !important; }
+  .ops-kpi { padding:10px 12px; }
+  .ops-kpi-label { font-size:10px; margin-bottom:3px; }
+  .ops-kpi-value { font-size:18px; }
+  .ops-tab-btn { padding: 6px 10px !important; font-size: 11px !important; }
+  #opsSearch { width: 100% !important; }
+  /* Drop Location, Waiver, Check-in cols on tight screens; status pill survives */
   .ops-table th:nth-child(5), .ops-table td:nth-child(5) { display:none; }
   .ops-table th:nth-child(6), .ops-table td:nth-child(6) { display:none; }
+  .ops-table th:nth-child(8), .ops-table td:nth-child(8) { display:none; }
   .ops-detail-grid { grid-template-columns: 100px 1fr !important; }
+  /* Action buttons stack into 2 cols at narrow widths */
+  #opsBookingModalActions > div[style*="flex-wrap"] { flex-direction: column; }
+  #opsBookingModalActions > div[style*="flex-wrap"] > .btn { width: 100%; }
+  /* Share-link rows: stack URL + buttons */
+  #opsShareLinksList > div > div[style*="display:flex;gap:6px"] { flex-wrap: wrap; }
+  #opsShareLinksList input[readonly] { width: 100%; min-width: 0; }
 }
 /* ── Page placeholder (Conversations etc.) ───────────────────────────────── */
 .page-placeholder { text-align: center; padding: 60px 20px; color: var(--text2); }
@@ -1353,6 +1368,14 @@ tr:hover td { background: var(--panel2); }
         <div class="card" style="margin-bottom:12px;">
           <div class="card-title" style="margin-bottom:14px;">Settings &amp; Access</div>
           <div class="more-link-list">
+            <div class="more-link-item client-admin-only" onclick="switchSection('operations')">
+              <span>🛠</span> Operations
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item" onclick="switchSection('analytics')">
+              <span>📊</span> Analytics
+              <span class="more-link-arrow">›</span>
+            </div>
             <div class="more-link-item" onclick="switchSection('campaigns')">
               <span>📣</span> Campaigns
               <span class="more-link-arrow">›</span>
@@ -1766,7 +1789,9 @@ tr:hover td { background: var(--panel2); }
   <div class="mob-nav-item active" data-section="dashboard"><span class="mob-icon">⊞</span>Dashboard</div>
   <div class="mob-nav-item" data-section="conversations"><span class="mob-icon">💬</span>Convos</div>
   <div class="mob-nav-item" data-section="leads"><span class="mob-icon">👤</span>Leads</div>
-  <div class="mob-nav-item" data-section="analytics"><span class="mob-icon">📊</span>Analytics</div>
+  <!-- Operators see Ops in their primary mobile nav; everyone else sees Analytics -->
+  <div class="mob-nav-item client-admin-only" data-section="operations"><span class="mob-icon">🛠</span>Ops</div>
+  <div class="mob-nav-item" id="mobNavAnalytics" data-section="analytics"><span class="mob-icon">📊</span>Analytics</div>
   <div class="mob-nav-item" data-section="more"><span class="mob-icon">☰</span>More</div>
 </nav>
 
@@ -2159,6 +2184,9 @@ async function init() {
   if (me.isClientAdmin) {
     document.querySelectorAll('.client-admin-only').forEach(el => el.classList.remove('client-admin-only'));
     setupInviteModal();
+    // Operators get Ops in the mobile bottom nav — Analytics moves to More.
+    const mobAnalytics = document.getElementById('mobNavAnalytics');
+    if (mobAnalytics) mobAnalytics.style.display = 'none';
   }
 
   // Load initial section based on URL

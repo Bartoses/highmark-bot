@@ -63,6 +63,27 @@ body.tv table { font-size: 18px; }
 body.tv th { font-size: 13px; }
 body.tv .head h1 { font-size: 32px; }
 body.tv .pill { font-size: 14px; padding: 4px 12px; }
+
+/* Mobile (in trucks, at trailheads): condensed cards, large tap targets,
+   drop low-value table cols. NOT applied in TV mode. */
+@media (max-width: 640px) {
+  body:not(.tv) .wrap { padding: 14px 12px 80px; }
+  body:not(.tv) .head h1 { font-size: 18px; }
+  body:not(.tv) .head .meta { font-size: 10.5px; width: 100%; }
+  body:not(.tv) .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  body:not(.tv) .card { padding: 12px 12px; }
+  body:not(.tv) .kpi-value { font-size: 18px; }
+  body:not(.tv) .kpi-label { font-size: 9.5px; margin-bottom: 3px; }
+  body:not(.tv) .card-title { font-size: 13px; }
+  body:not(.tv) .row { padding: 10px 0; font-size: 13px; }
+  /* Hide Activity + Pax + Pay cols on phones; keep Time/Customer/Waiver/Status */
+  body:not(.tv) table th:nth-child(3), body:not(.tv) table td:nth-child(3) { display: none; }
+  body:not(.tv) table th:nth-child(4), body:not(.tv) table td:nth-child(4) { display: none; }
+  body:not(.tv) table th:nth-child(6), body:not(.tv) table td:nth-child(6) { display: none; }
+  body:not(.tv) table { font-size: 12px; }
+  body:not(.tv) th, body:not(.tv) td { padding: 8px 6px; }
+  body:not(.tv) .cols-2 { gap: 10px; }
+}
 </style>
 </head>
 <body>
