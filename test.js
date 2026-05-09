@@ -14804,18 +14804,126 @@ async function testOperationsDashboard() {
         res.statusCode === 400);
   }
 
-  // ── HTTP guards: every route 401s without auth ────────────────────────────
+  // ── HTTP guards: every route 401s without auth (Phase 1 + 2) ──────────────
   const opsRoutes = [
-    ["GET", "/portal/api/operations/summary"],
-    ["GET", "/portal/api/operations/bookings?tab=today"],
-    ["GET", "/portal/api/operations/bookings/CO-W69-W98"],
+    ["GET",  "/portal/api/operations/summary"],
+    ["GET",  "/portal/api/operations/bookings?tab=today"],
+    ["GET",  "/portal/api/operations/bookings/CO-W69-W98"],
+    ["GET",  "/portal/api/operations/tomorrow-prep"],
+    ["GET",  "/portal/api/operations/guides?tab=today"],
+    ["POST", "/portal/api/operations/bookings/CO-W69-W98/check-in"],
+    ["POST", "/portal/api/operations/bookings/CO-W69-W98/waiver"],
+    ["POST", "/portal/api/operations/bookings/CO-W69-W98/note"],
+    ["POST", "/portal/api/operations/bookings/CO-W69-W98/guide"],
+    ["POST", "/portal/api/operations/bookings/CO-W69-W98/prep"],
   ];
   let allOps401 = true;
   for (const [method, route] of opsRoutes) {
-    const r = await fetch(`${BASE_URL}${route}`, { method });
+    const r = await fetch(`${BASE_URL}${route}`, {
+      method,
+      headers: method === "POST" ? { "Content-Type": "application/json" } : {},
+      body:    method === "POST" ? "{}" : undefined,
+    });
     if (r.status !== 401) { allOps401 = false; console.log(`  Expected 401 on ${method} ${route}, got ${r.status}`); }
   }
   chk("ops: all /portal/api/operations routes return 401 without token", allOps401);
+
+  // ── Phase 2 unit tests: actions ───────────────────────────────────────────
+  const {
+    handleOperationsCheckIn,
+    handleOperationsWaiver,
+    handleOperationsNote,
+    handleOperationsGuide,
+    handleOperationsPrep,
+    handleOperationsTomorrowPrep,
+    handleOperationsGuides,
+  } = await import("./adminOperations.js");
+
+  const readonlyUser = { role: "client_user", isAdmin: false, isClientAdmin: false, clientId: "csr_rea" };
+
+  // 503 on missing crmSupabase (mutating endpoints)
+  {
+    const res = mockRes();
+    await handleOperationsCheckIn({ portalUser: adminUser, params: { pk: "X" }, body: { checked_in: true } }, res, null, null);
+    chk("ops: check-in returns 503 when crmSupabase missing", res.statusCode === 503);
+  }
+
+  // 403 for non-admin role
+  {
+    const fakeCrm = { from: () => ({ select: () => ({ eq: () => ({ in: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }), update: () => ({ eq: () => ({ data: null, error: null }) }) }) };
+    const res = mockRes();
+    await handleOperationsCheckIn({ portalUser: readonlyUser, params: { pk: "X" }, body: { checked_in: true } }, res, null, fakeCrm);
+    chk("ops: check-in rejects non-admin → 403", res.statusCode === 403);
+  }
+  {
+    const fakeCrm = { from: () => ({}) };
+    const res = mockRes();
+    await handleOperationsNote({ portalUser: readonlyUser, params: { pk: "X" }, body: { internal_notes: "hi" } }, res, null, fakeCrm);
+    chk("ops: note rejects non-admin → 403", res.statusCode === 403);
+  }
+
+  // 400 on missing/invalid body
+  {
+    const fakeCrm = { from: () => ({}) };
+    const res = mockRes();
+    await handleOperationsCheckIn({ portalUser: adminUser, params: { pk: "X" }, body: {} }, res, null, fakeCrm);
+    chk("ops: check-in missing checked_in → 400", res.statusCode === 400);
+  }
+  {
+    const fakeCrm = { from: () => ({}) };
+    const res = mockRes();
+    await handleOperationsWaiver({ portalUser: adminUser, params: { pk: "X" }, body: { waiver_signed: "true" } }, res, null, fakeCrm);
+    chk("ops: waiver rejects non-boolean → 400", res.statusCode === 400);
+  }
+  {
+    const fakeCrm = { from: () => ({}) };
+    const res = mockRes();
+    await handleOperationsNote({ portalUser: adminUser, params: { pk: "X" }, body: { internal_notes: 42 } }, res, null, fakeCrm);
+    chk("ops: note rejects non-string → 400", res.statusCode === 400);
+  }
+  {
+    const fakeCrm = { from: () => ({}) };
+    const res = mockRes();
+    await handleOperationsNote({ portalUser: adminUser, params: { pk: "X" }, body: { internal_notes: "a".repeat(5000) } }, res, null, fakeCrm);
+    chk("ops: note rejects oversized → 400", res.statusCode === 400);
+  }
+  {
+    const fakeCrm = { from: () => ({}) };
+    const res = mockRes();
+    await handleOperationsGuide({ portalUser: adminUser, params: { pk: "X" }, body: { guide_name: "x".repeat(200) } }, res, null, fakeCrm);
+    chk("ops: guide rejects oversized name → 400", res.statusCode === 400);
+  }
+  {
+    const fakeCrm = { from: () => ({}) };
+    const res = mockRes();
+    await handleOperationsPrep({ portalUser: adminUser, params: { pk: "X" }, body: {} }, res, null, fakeCrm);
+    chk("ops: prep rejects missing flag → 400", res.statusCode === 400);
+  }
+
+  // 404 when PK isn't owned by caller's client
+  {
+    const fakeCrm = {
+      from: () => ({
+        select: () => ({ eq: () => ({ in: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+      }),
+    };
+    const res = mockRes();
+    await handleOperationsCheckIn({ portalUser: adminUser, params: { pk: "FAKE-PK" }, body: { checked_in: true } }, res, null, fakeCrm);
+    chk("ops: check-in returns 404 when PK not in caller's company", res.statusCode === 404);
+  }
+
+  // tomorrow-prep + guides 503 on missing crmSupabase, 400 on bad tab
+  {
+    const res = mockRes();
+    await handleOperationsTomorrowPrep({ portalUser: adminUser, query: {} }, res, null, null);
+    chk("ops: tomorrow-prep returns 503 when crmSupabase missing", res.statusCode === 503);
+  }
+  {
+    const fakeCrm = { from: () => ({ select: () => ({ in: () => ({ gte: () => ({ lt: () => ({ order: () => ({ range: () => ({ data: [], error: null, count: 0 }) }) }) }) }) }) }) };
+    const res = mockRes();
+    await handleOperationsGuides({ portalUser: adminUser, query: { tab: "yesterday" } }, res, null, fakeCrm);
+    chk("ops: guides rejects unknown tab → 400", res.statusCode === 400);
+  }
 }
 
 main().catch((e) => {

@@ -1224,10 +1224,38 @@ tr:hover td { background: var(--panel2); }
           </div>
         </div>
 
-        <!-- ARRIVING NEXT -->
-        <div class="card" style="margin-bottom:16px;" id="opsArrivingNextCard">
-          <div class="card-title" style="margin-bottom:10px;">Arriving next</div>
-          <div id="opsArrivingNext" style="font-size:13px;color:var(--text2);">Loading…</div>
+        <!-- ALERTS PANEL (computed client-side from summary data) -->
+        <div class="card" style="margin-bottom:16px;display:none;" id="opsAlertsCard">
+          <div class="card-title" style="margin-bottom:10px;">⚠ Operational alerts</div>
+          <div id="opsAlerts" style="font-size:13px;color:var(--text2);"></div>
+        </div>
+
+        <!-- TWO-COLUMN: Arriving next + Tomorrow Prep -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px;">
+          <div class="card" id="opsArrivingNextCard">
+            <div class="card-title" style="margin-bottom:10px;">Arriving next <span id="opsArrivingNextRefreshed" style="font-size:10px;color:var(--text3);font-weight:400;float:right;"></span></div>
+            <div id="opsArrivingNext" style="font-size:13px;color:var(--text2);">Loading…</div>
+          </div>
+          <div class="card" id="opsTomorrowPrepCard">
+            <div class="card-title" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+              <span>Tomorrow prep</span>
+              <button class="btn btn-ghost btn-sm" onclick="loadOpsTomorrowPrep()">↻</button>
+            </div>
+            <div id="opsTomorrowPrep" style="font-size:13px;color:var(--text2);">Loading…</div>
+          </div>
+        </div>
+
+        <!-- GUIDES PANEL (collapsible, hidden until expanded) -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+            <span>Guides — <span id="opsGuidesTabLabel">Today</span></span>
+            <div style="display:flex;gap:4px;">
+              <button class="btn btn-ghost btn-sm ops-guide-tab-btn active" data-gtab="today">Today</button>
+              <button class="btn btn-ghost btn-sm ops-guide-tab-btn" data-gtab="tomorrow">Tomorrow</button>
+              <button class="btn btn-ghost btn-sm ops-guide-tab-btn" data-gtab="week">Week</button>
+            </div>
+          </div>
+          <div id="opsGuides" style="font-size:13px;color:var(--text2);">Loading…</div>
         </div>
 
         <!-- TAB BAR + TABLE -->
@@ -1809,11 +1837,31 @@ tr:hover td { background: var(--panel2); }
 <!-- ── Booking option modal ───────────────────────────────────────────────────── -->
 <!-- ── Operations: booking detail modal ─────────────────────────────────────── -->
 <div class="modal-backdrop" id="opsBookingModal">
-  <div class="modal" style="max-width:560px;">
+  <div class="modal" style="max-width:600px;">
     <div class="modal-title" id="opsBookingModalTitle">Booking</div>
     <div class="modal-body">
       <div id="opsBookingModalError" class="error-msg" style="display:none"></div>
       <div id="opsBookingModalBody" style="font-size:13px;color:var(--text2);">Loading…</div>
+      <div id="opsBookingModalActions" style="display:none;margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Actions</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+          <button class="btn btn-sm" id="opsActionCheckin"   onclick="opsToggleField('check-in', 'checked_in')"  >Toggle check-in</button>
+          <button class="btn btn-sm" id="opsActionWaiver"    onclick="opsToggleField('waiver', 'waiver_signed')" >Toggle waiver</button>
+          <button class="btn btn-sm" id="opsActionPrep"      onclick="opsToggleField('prep', 'prep_completed')"  >Toggle prep done</button>
+        </div>
+        <div class="form-group" style="margin-bottom:10px;">
+          <label style="font-size:11px;color:var(--text3);">Guide</label>
+          <div style="display:flex;gap:6px;">
+            <input type="text" id="opsGuideInput" placeholder="Guide name" style="flex:1;">
+            <button class="btn btn-primary btn-sm" onclick="opsSaveGuide()">Save</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label style="font-size:11px;color:var(--text3);">Internal notes</label>
+          <textarea id="opsNoteInput" placeholder="Staff-only notes…" style="min-height:64px;"></textarea>
+          <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="opsSaveNote()">Save note</button>
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="document.getElementById('opsBookingModal').classList.remove('open')">Close</button>
@@ -5358,12 +5406,21 @@ function showToast(msg) {
   toast._t = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
 }
 
-// ── Operations section (Phase 1: read-only ops dashboard) ──────────────────
+// ── Operations section (Phase 1 + 2) ───────────────────────────────────────
 let _opsTab = 'today';
 let _opsSearchTimer = null;
+let _opsGuideTab = 'today';
+let _opsArrivingNextRaw = [];
+let _opsCountdownInterval = null;
+let _opsCurrentBooking = null;
 
 async function loadOperations() {
-  await Promise.all([loadOperationsSummary(), loadOperationsTable(_opsTab)]);
+  await Promise.all([
+    loadOperationsSummary(),
+    loadOperationsTable(_opsTab),
+    loadOpsTomorrowPrep(),
+    loadOpsGuides(_opsGuideTab),
+  ]);
   setupOperationsHandlers();
 }
 
@@ -5378,6 +5435,17 @@ function setupOperationsHandlers() {
       loadOperationsTable(tab);
     };
   });
+  document.querySelectorAll('#sec-operations .ops-guide-tab-btn').forEach(btn => {
+    btn.onclick = () => {
+      const tab = btn.dataset.gtab;
+      if (!tab || tab === _opsGuideTab) return;
+      _opsGuideTab = tab;
+      document.querySelectorAll('#sec-operations .ops-guide-tab-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.gtab === tab));
+      document.getElementById('opsGuidesTabLabel').textContent = ({today:'Today',tomorrow:'Tomorrow',week:'Week'})[tab] ?? tab;
+      loadOpsGuides(tab);
+    };
+  });
   const searchEl = document.getElementById('opsSearch');
   if (searchEl && !searchEl._opsBound) {
     searchEl._opsBound = true;
@@ -5386,6 +5454,9 @@ function setupOperationsHandlers() {
       _opsSearchTimer = setTimeout(() => loadOperationsTable(_opsTab), 300);
     });
   }
+  // Live countdown ticker for arriving-next list (1-min cadence)
+  if (_opsCountdownInterval) clearInterval(_opsCountdownInterval);
+  _opsCountdownInterval = setInterval(renderOpsArrivingNext, 60_000);
 }
 
 function fmtCents(cents) {
@@ -5442,24 +5513,135 @@ async function loadOperationsSummary() {
   document.getElementById('opsKpiUnpaid').textContent   = fmtCents(t.unpaid_balance_cents ?? 0);
   document.getElementById('opsKpiTomorrow').textContent = tm.bookings ?? 0;
 
-  const next = data.arriving_next ?? [];
-  document.getElementById('opsKpiArrivingNext').textContent = next.length;
+  _opsArrivingNextRaw = data.arriving_next ?? [];
+  document.getElementById('opsKpiArrivingNext').textContent = _opsArrivingNextRaw.length;
+  renderOpsArrivingNext();
+  renderOpsAlerts(t);
+}
 
+function fmtCountdown(startMs) {
+  const diff = Math.round((startMs - Date.now()) / 60_000);
+  if (diff <= -120) return `${Math.abs(diff/60).toFixed(1)}h late`;
+  if (diff <  0)    return `${Math.abs(diff)}m late`;
+  if (diff === 0)   return `now`;
+  if (diff < 60)    return `${diff}m`;
+  return `${(diff/60).toFixed(1)}h`;
+}
+
+function renderOpsArrivingNext() {
   const wrap = document.getElementById('opsArrivingNext');
-  if (!next.length) {
+  const refreshedEl = document.getElementById('opsArrivingNextRefreshed');
+  if (!wrap) return;
+  refreshedEl.textContent = 'updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (!_opsArrivingNextRaw.length) {
     wrap.innerHTML = '<span style="color:var(--text3);">No upcoming arrivals today.</span>';
-  } else {
-    wrap.innerHTML = next.map(b => `
+    return;
+  }
+  wrap.innerHTML = _opsArrivingNextRaw.map(b => {
+    const startMs = b.start_at ? new Date(b.start_at).getTime() : null;
+    const cd = startMs ? fmtCountdown(startMs) : '';
+    const isLate = startMs && startMs < Date.now() && !b.checked_in;
+    return `
       <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;"
            onclick="openOpsBooking('${(b.fareharbor_pk ?? '').replace(/'/g, '\\\'')}')">
-        <div style="font-weight:700;min-width:64px;">${fmtTime(b.start_at)}</div>
+        <div style="min-width:74px;">
+          <div style="font-weight:700;font-size:13px;">${fmtTime(b.start_at)}</div>
+          <div style="font-size:10.5px;color:${isLate ? '#f57e7e' : 'var(--text3)'};font-weight:600;">${cd}</div>
+        </div>
         <div style="flex:1;">
           <div style="font-weight:600;color:var(--text);">${escapeHtml(b.customer_name ?? '—')}</div>
           <div style="font-size:11.5px;color:var(--text3);">${escapeHtml(b.activity ?? '')} · ${b.pax ?? 1} pax</div>
         </div>
         <div>${statusPill(b.operational_status)}</div>
-      </div>`).join('');
+      </div>`;
+  }).join('');
+}
+
+function renderOpsAlerts(today) {
+  const card  = document.getElementById('opsAlertsCard');
+  const wrap  = document.getElementById('opsAlerts');
+  const items = [];
+  if ((today.missing_waivers ?? 0) > 0)
+    items.push({ severity: 'warn', label: `${today.missing_waivers} booking${today.missing_waivers === 1 ? '' : 's'} missing waivers today` });
+  if ((today.unpaid_balance_cents ?? 0) > 0)
+    items.push({ severity: 'warn', label: `${fmtCents(today.unpaid_balance_cents)} in outstanding balances today` });
+  const lateCount = _opsArrivingNextRaw.filter(b => b.start_at && new Date(b.start_at).getTime() < Date.now() - 5 * 60_000 && !b.checked_in).length;
+  if (lateCount > 0)
+    items.push({ severity: 'critical', label: `${lateCount} arrival${lateCount === 1 ? '' : 's'} past start time without check-in` });
+
+  if (!items.length) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  wrap.innerHTML = items.map(it => {
+    const c = it.severity === 'critical' ? '#3a1f1f' : '#3a2f1f';
+    const t = it.severity === 'critical' ? '#f57e7e' : '#f5c14a';
+    return `<div style="padding:8px 12px;border-radius:6px;background:${c};color:${t};margin-bottom:6px;font-weight:600;">${escapeHtml(it.label)}</div>`;
+  }).join('');
+}
+
+async function loadOpsTomorrowPrep() {
+  const wrap = document.getElementById('opsTomorrowPrep');
+  if (!wrap) return;
+  wrap.innerHTML = 'Loading…';
+  const data = await apiFetch('/operations/tomorrow-prep');
+  if (!data) return;
+  if (!data.total_bookings) {
+    wrap.innerHTML = '<span style="color:var(--text3);">No bookings tomorrow yet.</span>';
+    return;
   }
+  const issues = data.open_issues ?? {};
+  const issueRow = (count, label, color) =>
+    count > 0 ? `<div style="margin-bottom:4px;color:${color};font-weight:600;">⚠ ${count} ${label}</div>` : '';
+  wrap.innerHTML = `
+    <div style="display:flex;justify-content:space-between;margin-bottom:10px;">
+      <div><b>${data.total_bookings}</b> booking${data.total_bookings === 1 ? '' : 's'}</div>
+      <div><b>${data.total_pax}</b> guest${data.total_pax === 1 ? '' : 's'}</div>
+      <div style="color:var(--text3);">${data.prep_completed}/${data.total_bookings} prepped</div>
+    </div>
+    ${issueRow(issues.missing_waivers,   'waiver' + (issues.missing_waivers === 1 ? '' : 's')   + ' missing',   '#f5c14a')}
+    ${issueRow(issues.unpaid_bookings,   'unpaid balance' + (issues.unpaid_bookings === 1 ? '' : 's'),         '#f5c14a')}
+    ${issueRow(issues.unassigned_guides, 'unassigned guide' + (issues.unassigned_guides === 1 ? '' : 's'),     '#7ec0f5')}
+    ${data.by_activity.length ? `
+      <div style="margin-top:10px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;font-weight:700;">By activity</div>
+      ${data.by_activity.slice(0, 5).map(a => `
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
+          <span>${escapeHtml(a.name)}</span>
+          <span style="color:var(--text3);">${a.bookings} bk · ${a.pax} pax</span>
+        </div>`).join('')}
+    ` : ''}
+    ${data.by_location.length > 1 ? `
+      <div style="margin-top:10px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;font-weight:700;">By location</div>
+      ${data.by_location.map(l => `
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
+          <span>${escapeHtml(l.name)}</span>
+          <span style="color:var(--text3);">${l.bookings} bk · ${l.pax} pax</span>
+        </div>`).join('')}
+    ` : ''}
+  `;
+}
+
+async function loadOpsGuides(tab) {
+  const wrap = document.getElementById('opsGuides');
+  if (!wrap) return;
+  wrap.innerHTML = 'Loading…';
+  const data = await apiFetch(`/operations/guides?tab=${encodeURIComponent(tab)}`);
+  if (!data) return;
+  const guides = data.guides ?? [];
+  const un = data.unassigned ?? { bookings: 0, pax: 0 };
+  if (!guides.length && un.bookings === 0) {
+    wrap.innerHTML = '<span style="color:var(--text3);">No bookings in this window.</span>';
+    return;
+  }
+  const rows = guides.map(g => `
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <span style="font-weight:600;">${escapeHtml(g.name)}</span>
+      <span style="color:var(--text3);">${g.bookings} bk · ${g.pax} pax</span>
+    </div>`).join('');
+  const unRow = un.bookings > 0 ? `
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;color:#f5c14a;font-weight:600;">
+      <span>⚠ Unassigned</span>
+      <span>${un.bookings} bk · ${un.pax} pax</span>
+    </div>` : '';
+  wrap.innerHTML = unRow + rows;
 }
 
 function escapeHtml(s) {
@@ -5507,11 +5689,13 @@ async function loadOperationsTable(tab) {
 
 async function openOpsBooking(pk) {
   if (!pk) return;
-  const modal = document.getElementById('opsBookingModal');
-  const title = document.getElementById('opsBookingModalTitle');
-  const body  = document.getElementById('opsBookingModalBody');
-  const err   = document.getElementById('opsBookingModalError');
+  const modal   = document.getElementById('opsBookingModal');
+  const title   = document.getElementById('opsBookingModalTitle');
+  const body    = document.getElementById('opsBookingModalBody');
+  const err     = document.getElementById('opsBookingModalError');
+  const actions = document.getElementById('opsBookingModalActions');
   err.style.display = 'none';
+  actions.style.display = 'none';
   title.textContent = `Booking ${pk}`;
   body.innerHTML = 'Loading…';
   modal.classList.add('open');
@@ -5524,6 +5708,7 @@ async function openOpsBooking(pk) {
     return;
   }
   const b = data.booking;
+  _opsCurrentBooking = b;
   const phoneLink = b.phone ? `<a href="tel:${escapeHtml(b.phone)}" style="color:var(--accent);">${escapeHtml(b.phone)}</a> · <a href="sms:${escapeHtml(b.phone)}" style="color:var(--accent);">Text</a>` : '—';
   body.innerHTML = `
     <div style="margin-bottom:14px;">${statusPill(b.operational_status)}</div>
@@ -5544,8 +5729,71 @@ async function openOpsBooking(pk) {
       <div style="color:var(--text3);">Guide</div><div>${escapeHtml(b.guide_name ?? '—')}</div>
       <div style="color:var(--text3);">FH PK</div><div style="font-family:monospace;font-size:12px;">${escapeHtml(b.fareharbor_pk ?? '—')}</div>
       ${b.booking_notes ? `<div style="color:var(--text3);">Notes</div><div>${escapeHtml(b.booking_notes)}</div>` : ''}
-      ${b.internal_notes ? `<div style="color:var(--text3);">Internal</div><div style="color:var(--text2);font-style:italic;">${escapeHtml(b.internal_notes)}</div>` : ''}
     </div>`;
+
+  // Show + populate action controls (admins only — server enforces, UI guards too)
+  if (me?.isClientAdmin) {
+    actions.style.display = 'block';
+    document.getElementById('opsActionCheckin').textContent = b.checked_in    ? 'Mark NOT checked in' : 'Mark checked in';
+    document.getElementById('opsActionWaiver').textContent  = b.waiver_signed ? 'Mark waiver UNSIGNED' : 'Mark waiver signed';
+    document.getElementById('opsActionPrep').textContent    = b.prep_completed ? 'Mark prep INCOMPLETE'  : 'Mark prep complete';
+    document.getElementById('opsGuideInput').value          = b.guide_name     ?? '';
+    document.getElementById('opsNoteInput').value           = b.internal_notes ?? '';
+  }
+}
+
+async function opsToggleField(action, fieldName) {
+  if (!_opsCurrentBooking) return;
+  const pk = _opsCurrentBooking.fareharbor_pk;
+  const newVal = !_opsCurrentBooking[fieldName];
+  const payload = {};
+  payload[fieldName] = newVal;
+  const r = await apiFetch(`/operations/bookings/${encodeURIComponent(pk)}/${action}`, {
+    method: 'POST', body: JSON.stringify(payload),
+  });
+  if (!r?.ok) { showOpsError(r?.error ?? 'Update failed'); return; }
+  // Optimistic refresh
+  await openOpsBooking(pk);
+  await loadOperationsSummary();
+  await loadOperationsTable(_opsTab);
+}
+
+async function opsSaveGuide() {
+  if (!_opsCurrentBooking) return;
+  const pk    = _opsCurrentBooking.fareharbor_pk;
+  const value = document.getElementById('opsGuideInput').value.trim();
+  const r = await apiFetch(`/operations/bookings/${encodeURIComponent(pk)}/guide`, {
+    method: 'POST', body: JSON.stringify({ guide_name: value || null }),
+  });
+  if (!r?.ok) { showOpsError(r?.error ?? 'Update failed'); return; }
+  await openOpsBooking(pk);
+  await loadOpsGuides(_opsGuideTab);
+  await loadOpsTomorrowPrep();
+}
+
+async function opsSaveNote() {
+  if (!_opsCurrentBooking) return;
+  const pk    = _opsCurrentBooking.fareharbor_pk;
+  const value = document.getElementById('opsNoteInput').value;
+  const r = await apiFetch(`/operations/bookings/${encodeURIComponent(pk)}/note`, {
+    method: 'POST', body: JSON.stringify({ internal_notes: value || null }),
+  });
+  if (!r?.ok) { showOpsError(r?.error ?? 'Update failed'); return; }
+  // Quietly confirm — no full reload, the note is already in the textarea
+  const err = document.getElementById('opsBookingModalError');
+  err.style.display = 'block';
+  err.style.background = '#1f3a2c';
+  err.style.color = '#7ee2a8';
+  err.textContent = 'Note saved.';
+  setTimeout(() => { err.style.display = 'none'; err.style.background = ''; err.style.color = ''; }, 1500);
+}
+
+function showOpsError(msg) {
+  const err = document.getElementById('opsBookingModalError');
+  err.style.display = 'block';
+  err.style.background = '';
+  err.style.color = '';
+  err.textContent = msg;
 }
 
 // ── Operator View section ──────────────────────────────────────────────────

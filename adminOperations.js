@@ -18,6 +18,18 @@ import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients } from "./clients.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SHARED ROLE GUARD
+// Mirrors adminPortal.requireClientAdmin so we don't need a circular import.
+// ─────────────────────────────────────────────────────────────────────────────
+function requireClientAdmin(req, res) {
+  if (!req.portalUser?.isClientAdmin) {
+    res.status(403).json({ error: "Admin access required" });
+    return false;
+  }
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CLIENT → COMPANY SHORTNAMES
 // Resolves which `bookings.company` values belong to the requesting client.
 // CSR/REA owns coloradosledrentals + rabbitearsadventures, etc.
@@ -282,6 +294,191 @@ export async function handleOperationsBookingDetail(req, res, _supabase, crmSupa
     };
     booking.operational_status = deriveOperationalStatus(booking);
     return res.json({ booking });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 2 — Mutating actions + aggregations
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Verify the requested PK belongs to the caller's client; returns the booking
+// row (with company) on success, or null after sending the error response.
+async function loadBookingForCaller(req, res, crmSupabase) {
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) { res.status(400).json({ error: "client_id required" }); return null; }
+  const pk = String(req.params.pk ?? "").trim();
+  if (!pk) { res.status(400).json({ error: "booking pk required" }); return null; }
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) { res.status(404).json({ error: "not found" }); return null; }
+  const { data, error } = await crmSupabase
+    .from("bookings")
+    .select("fareharbor_pk,company")
+    .eq("fareharbor_pk", pk)
+    .in("company", companies)
+    .maybeSingle();
+  if (error)  { res.status(500).json({ error: error.message }); return null; }
+  if (!data)  { res.status(404).json({ error: "not found" });   return null; }
+  return data;
+}
+
+async function patchBookingFields(req, res, crmSupabase, fields) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const booking = await loadBookingForCaller(req, res, crmSupabase);
+  if (!booking) return; // response already sent
+
+  const { error } = await crmSupabase
+    .from("bookings")
+    .update({ ...fields, updated_at: new Date().toISOString() })
+    .eq("fareharbor_pk", booking.fareharbor_pk);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true, fareharbor_pk: booking.fareharbor_pk, updated: fields });
+}
+
+// ── POST /portal/api/operations/bookings/:pk/check-in ─────────────────────────
+export async function handleOperationsCheckIn(req, res, _supabase, crmSupabase = null) {
+  const checkedIn = req.body?.checked_in;
+  if (typeof checkedIn !== "boolean") return res.status(400).json({ error: "checked_in (boolean) required" });
+  return patchBookingFields(req, res, crmSupabase, { checked_in: checkedIn });
+}
+
+// ── POST /portal/api/operations/bookings/:pk/waiver ──────────────────────────
+export async function handleOperationsWaiver(req, res, _supabase, crmSupabase = null) {
+  const signed = req.body?.waiver_signed;
+  if (typeof signed !== "boolean") return res.status(400).json({ error: "waiver_signed (boolean) required" });
+  return patchBookingFields(req, res, crmSupabase, { waiver_signed: signed });
+}
+
+// ── POST /portal/api/operations/bookings/:pk/note ────────────────────────────
+export async function handleOperationsNote(req, res, _supabase, crmSupabase = null) {
+  const note = req.body?.internal_notes;
+  if (note != null && typeof note !== "string") return res.status(400).json({ error: "internal_notes must be string or null" });
+  if (typeof note === "string" && note.length > 4000) return res.status(400).json({ error: "internal_notes too long (max 4000 chars)" });
+  return patchBookingFields(req, res, crmSupabase, { internal_notes: note ?? null });
+}
+
+// ── POST /portal/api/operations/bookings/:pk/guide ───────────────────────────
+export async function handleOperationsGuide(req, res, _supabase, crmSupabase = null) {
+  const name = req.body?.guide_name;
+  if (name != null && typeof name !== "string") return res.status(400).json({ error: "guide_name must be string or null" });
+  if (typeof name === "string" && name.length > 120) return res.status(400).json({ error: "guide_name too long (max 120 chars)" });
+  const trimmed = typeof name === "string" ? name.trim() || null : null;
+  return patchBookingFields(req, res, crmSupabase, { guide_name: trimmed });
+}
+
+// ── POST /portal/api/operations/bookings/:pk/prep ────────────────────────────
+export async function handleOperationsPrep(req, res, _supabase, crmSupabase = null) {
+  const prep = req.body?.prep_completed;
+  if (typeof prep !== "boolean") return res.status(400).json({ error: "prep_completed (boolean) required" });
+  return patchBookingFields(req, res, crmSupabase, { prep_completed: prep });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /portal/api/operations/tomorrow-prep
+// Aggregates tomorrow's bookings into prep-friendly counts (by activity, by
+// location), plus open-issue counts (waivers, payments, unassigned guides).
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleOperationsTomorrowPrep(req, res, _supabase, crmSupabase = null) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id required" });
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) return res.json(emptyPrep());
+
+  try {
+    const { start, end } = windowFor("tomorrow");
+    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500 });
+
+    if (!rows.length) return res.json(emptyPrep());
+
+    // Aggregate by activity, by location, and operational issues
+    const byActivity = new Map();
+    const byLocation = new Map();
+    let totalPax = 0, missingWaivers = 0, unpaid = 0, unassignedGuides = 0, prepDone = 0;
+
+    for (const b of rows) {
+      const act = b.activity ?? "Unknown";
+      const loc = b.location ?? "—";
+      byActivity.set(act, (byActivity.get(act) ?? { bookings: 0, pax: 0 }));
+      byActivity.get(act).bookings += 1;
+      byActivity.get(act).pax      += Number(b.pax ?? 1);
+      byLocation.set(loc, (byLocation.get(loc) ?? { bookings: 0, pax: 0 }));
+      byLocation.get(loc).bookings += 1;
+      byLocation.get(loc).pax      += Number(b.pax ?? 1);
+
+      totalPax += Number(b.pax ?? 1);
+      if (b.waiver_signed === false)            missingWaivers += 1;
+      if (Number(b.balance_due_cents ?? 0) > 0) unpaid         += 1;
+      if (!b.guide_name)                        unassignedGuides += 1;
+      if (b.prep_completed === true)            prepDone        += 1;
+    }
+
+    return res.json({
+      window:    { start, end },
+      total_bookings: rows.length,
+      total_pax: totalPax,
+      open_issues: {
+        missing_waivers:   missingWaivers,
+        unpaid_bookings:   unpaid,
+        unassigned_guides: unassignedGuides,
+      },
+      prep_completed:    prepDone,
+      prep_remaining:    rows.length - prepDone,
+      by_activity: [...byActivity.entries()]
+        .map(([name, v]) => ({ name, bookings: v.bookings, pax: v.pax }))
+        .sort((a, b) => b.pax - a.pax),
+      by_location: [...byLocation.entries()]
+        .map(([name, v]) => ({ name, bookings: v.bookings, pax: v.pax }))
+        .sort((a, b) => b.pax - a.pax),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+function emptyPrep() {
+  return {
+    total_bookings: 0, total_pax: 0,
+    open_issues: { missing_waivers: 0, unpaid_bookings: 0, unassigned_guides: 0 },
+    prep_completed: 0, prep_remaining: 0,
+    by_activity: [], by_location: [],
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /portal/api/operations/guides?tab=today|tomorrow|week
+// Per-guide load + an "Unassigned" bucket for bookings missing guide_name.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleOperationsGuides(req, res, _supabase, crmSupabase = null) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id required" });
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) return res.json({ guides: [], unassigned: { bookings: 0, pax: 0 } });
+
+  const tab = String(req.query.tab ?? "today").toLowerCase();
+  if (!["today", "tomorrow", "week"].includes(tab)) {
+    return res.status(400).json({ error: "invalid tab" });
+  }
+
+  try {
+    const { start, end } = windowFor(tab);
+    const { rows } = await fetchBookingsInWindow(crmSupabase, companies, start, end, { limit: 500 });
+
+    const byGuide = new Map();
+    let unassignedBookings = 0, unassignedPax = 0;
+    for (const b of rows) {
+      const g = (b.guide_name ?? "").trim();
+      const pax = Number(b.pax ?? 1);
+      if (!g) { unassignedBookings += 1; unassignedPax += pax; continue; }
+      if (!byGuide.has(g)) byGuide.set(g, { name: g, bookings: 0, pax: 0 });
+      byGuide.get(g).bookings += 1;
+      byGuide.get(g).pax      += pax;
+    }
+    const guides = [...byGuide.values()].sort((a, b) => b.pax - a.pax);
+    return res.json({ tab, guides, unassigned: { bookings: unassignedBookings, pax: unassignedPax } });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
