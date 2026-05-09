@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Operations Dashboard</title>
+<meta name="robots" content="noindex">
+<style>
+:root {
+  --bg:        #0a0a0a;
+  --panel:     #141414;
+  --panel2:    #1c1c1c;
+  --border:    #262626;
+  --text:      #f5f5f5;
+  --text2:     #a3a3a3;
+  --text3:     #6b6b6b;
+  --accent:    #10b981;
+  --warn:      #f5c14a;
+  --danger:    #f57e7e;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  min-height: 100vh;
+}
+.wrap   { max-width: 1400px; margin: 0 auto; padding: 20px 16px 60px; }
+.head   { display:flex; align-items:center; justify-content:space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+.head h1 { font-size: 22px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+.head .meta { font-size: 11.5px; color: var(--text3); }
+.head .badge { display:inline-block; background:#1f3a2c; color:#7ee2a8; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; margin-left: 6px; }
+.kpi-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px;
+}
+.card-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center; }
+.kpi-label { font-size: 10.5px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.kpi-value { font-size: 22px; font-weight: 700; color: var(--text); }
+.row { display:flex; align-items:center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.row:last-child { border-bottom: none; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.pill-ready { background: #1f3a2c; color: #7ee2a8; }
+.pill-warn  { background: #3a2f1f; color: var(--warn); }
+.pill-late  { background: #3a1f1f; color: var(--danger); }
+.pill-info  { background: #1f2a3a; color: #7ec0f5; }
+.bar { background: var(--panel2); border-radius: 4px; height: 6px; overflow: hidden; }
+.bar > span { display:block; height: 100%; background: var(--accent); }
+.cols-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.error { background:#3a1f1f; color: var(--danger); padding: 14px 18px; border-radius: 10px; font-weight: 600; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text3); font-weight: 700; }
+.refreshing { opacity: .65; transition: opacity .15s; }
+
+/* TV mode: oversize text, full-bleed, kiosk styling */
+body.tv .wrap { max-width: none; padding: 28px 32px; }
+body.tv .kpi-value { font-size: 42px; }
+body.tv .kpi-label { font-size: 13px; }
+body.tv .card-title { font-size: 18px; }
+body.tv .row { padding: 14px 0; font-size: 18px; }
+body.tv table { font-size: 18px; }
+body.tv th { font-size: 13px; }
+body.tv .head h1 { font-size: 32px; }
+body.tv .pill { font-size: 14px; padding: 4px 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <h1>
+      <span id="bizName">Operations</span>
+      <span class="badge" id="liveBadge">live</span>
+    </h1>
+    <div class="meta">
+      <span id="windowLabel">Today</span> · refreshed <span id="refreshedAt">—</span>
+    </div>
+  </div>
+
+  <div id="errorBanner" class="error" style="display:none;"></div>
+
+  <!-- KPI grid -->
+  <div class="kpi-grid" id="kpiGrid">
+    <div class="card"><div class="kpi-label">Today bookings</div><div class="kpi-value" id="kBookings">—</div></div>
+    <div class="card"><div class="kpi-label">Today guests</div><div class="kpi-value" id="kPax">—</div></div>
+    <div class="card"><div class="kpi-label">Today revenue</div><div class="kpi-value" id="kRevenue">—</div></div>
+    <div class="card"><div class="kpi-label">Missing waivers</div><div class="kpi-value" id="kWaivers">—</div></div>
+    <div class="card"><div class="kpi-label">Pending check-ins</div><div class="kpi-value" id="kCheckins">—</div></div>
+    <div class="card"><div class="kpi-label">Unpaid balance</div><div class="kpi-value" id="kUnpaid">—</div></div>
+    <div class="card"><div class="kpi-label">Tomorrow bookings</div><div class="kpi-value" id="kTomorrow">—</div></div>
+    <div class="card"><div class="kpi-label">Arriving next</div><div class="kpi-value" id="kArrivingNext">—</div></div>
+  </div>
+
+  <div class="cols-2" style="margin-bottom:16px;">
+    <div class="card">
+      <div class="card-title">Arriving next</div>
+      <div id="arrivingList" style="font-size:13px;color:var(--text2);">Loading…</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Tomorrow prep</div>
+      <div id="prepList" style="font-size:13px;color:var(--text2);">Loading…</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-title">Today's bookings</div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th><th>Customer</th><th>Activity</th><th style="text-align:right;">Pax</th><th>Waiver</th><th>Pay</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="bookingsTbody"><tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text3);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="cols-2">
+    <div class="card">
+      <div class="card-title">Last 30 days · Revenue</div>
+      <div id="revChart" style="font-size:12px;color:var(--text2);">Loading…</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Last 30 days · Top activities</div>
+      <div id="actChart" style="font-size:12px;color:var(--text2);">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const path  = window.location.pathname;
+  const m     = path.match(/^\/public\/operator-dashboard\/([^\/?#]+)/);
+  const token = m ? m[1] : null;
+  const tv    = new URLSearchParams(window.location.search).get('tv') === '1';
+  if (tv) document.body.classList.add('tv');
+
+  if (!token) {
+    document.getElementById('errorBanner').style.display = 'block';
+    document.getElementById('errorBanner').textContent = 'Missing share token in URL.';
+    return;
+  }
+
+  const API = `/public/api/operator-dashboard/${encodeURIComponent(token)}`;
+  const refreshMs = tv ? 30_000 : 60_000;
+
+  function fmtCents(c) { if (c == null) return '—'; return (c/100).toLocaleString('en-US', { style:'currency', currency:'USD', maximumFractionDigits: 0 }); }
+  function fmtTime(iso) { if (!iso) return '—'; try { return new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Denver'}); } catch { return '—'; } }
+  function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function statusPill(s) {
+    const m = { ready:['pill-ready','Ready'], needs_waiver:['pill-warn','Needs waiver'], needs_payment:['pill-warn','Payment due'], arriving_soon:['pill-info','Arriving soon'], late:['pill-late','Late'], checked_in:['pill-ready','Checked in'] };
+    const v = m[s] ?? ['', s ?? '—'];
+    return `<span class="pill ${v[0]}">${v[1]}</span>`;
+  }
+
+  async function fetchJson(path) {
+    const r = await fetch(path, { cache: 'no-store' });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`${r.status} ${t.slice(0, 180)}`);
+    }
+    return r.json();
+  }
+
+  async function refresh() {
+    document.body.classList.add('refreshing');
+    try {
+      const [summary, bookings, prep, analytics] = await Promise.all([
+        fetchJson(`${API}/summary`),
+        fetchJson(`${API}/bookings?tab=today&limit=200`),
+        fetchJson(`${API}/tomorrow-prep`),
+        fetchJson(`${API}/analytics?days=30`),
+      ]);
+
+      const t  = summary.today    ?? {};
+      const tm = summary.tomorrow ?? {};
+      document.getElementById('kBookings').textContent     = t.bookings ?? 0;
+      document.getElementById('kPax').textContent          = t.pax ?? 0;
+      document.getElementById('kRevenue').textContent      = fmtCents(t.revenue_cents ?? 0);
+      document.getElementById('kWaivers').textContent      = t.missing_waivers ?? 0;
+      document.getElementById('kCheckins').textContent     = t.pending_checkins ?? 0;
+      document.getElementById('kUnpaid').textContent       = fmtCents(t.unpaid_balance_cents ?? 0);
+      document.getElementById('kTomorrow').textContent     = tm.bookings ?? 0;
+      document.getElementById('kArrivingNext').textContent = (summary.arriving_next ?? []).length;
+
+      // Arriving next
+      const arr = summary.arriving_next ?? [];
+      document.getElementById('arrivingList').innerHTML = arr.length
+        ? arr.map(b => `<div class="row">
+            <div style="min-width:74px;font-weight:700;">${fmtTime(b.start_at)}</div>
+            <div style="flex:1;">
+              <div style="font-weight:600;color:var(--text);">${escapeHtml(b.customer_name ?? '—')}</div>
+              <div style="font-size:11.5px;color:var(--text3);">${escapeHtml(b.activity ?? '')} · ${b.pax ?? 1} pax</div>
+            </div>
+            <div>${statusPill(b.operational_status)}</div>
+          </div>`).join('')
+        : '<span style="color:var(--text3);">No upcoming arrivals.</span>';
+
+      // Tomorrow prep
+      const issues = prep.open_issues ?? {};
+      document.getElementById('prepList').innerHTML = prep.total_bookings
+        ? `<div class="row" style="font-weight:600;"><div><b>${prep.total_bookings}</b> booking${prep.total_bookings === 1 ? '' : 's'}</div><div><b>${prep.total_pax}</b> guest${prep.total_pax === 1 ? '' : 's'}</div><div style="color:var(--text3);">${prep.prep_completed}/${prep.total_bookings} prepped</div></div>
+           ${issues.missing_waivers   ? `<div class="row" style="color:var(--warn);">⚠ ${issues.missing_waivers} waiver${issues.missing_waivers === 1 ? '' : 's'} missing</div>` : ''}
+           ${issues.unpaid_bookings   ? `<div class="row" style="color:var(--warn);">⚠ ${issues.unpaid_bookings} unpaid balance${issues.unpaid_bookings === 1 ? '' : 's'}</div>` : ''}
+           ${issues.unassigned_guides ? `<div class="row" style="color:#7ec0f5;">⚠ ${issues.unassigned_guides} unassigned guide${issues.unassigned_guides === 1 ? '' : 's'}</div>` : ''}
+           ${(prep.by_activity ?? []).slice(0, 5).map(a => `<div class="row"><span>${escapeHtml(a.name)}</span><span style="color:var(--text3);margin-left:auto;">${a.bookings} bk · ${a.pax} pax</span></div>`).join('')}`
+        : '<span style="color:var(--text3);">No bookings tomorrow.</span>';
+
+      // Bookings table
+      const rows = bookings.bookings ?? [];
+      document.getElementById('bookingsTbody').innerHTML = rows.length
+        ? rows.map(b => `<tr>
+            <td style="white-space:nowrap;">${fmtTime(b.start_at)}</td>
+            <td style="font-weight:600;">${escapeHtml(b.customer_name ?? '—')}</td>
+            <td>${escapeHtml(b.activity ?? '—')}</td>
+            <td style="text-align:right;">${b.pax ?? 1}</td>
+            <td>${b.waiver_signed ? '<span style="color:#7ee2a8;">✓ Signed</span>' : '<span style="color:var(--warn);">○ Missing</span>'}</td>
+            <td>${Number(b.balance_due_cents ?? 0) > 0 ? `<span style="color:var(--warn);">${fmtCents(b.balance_due_cents)} due</span>` : '<span style="color:#7ee2a8;">Paid</span>'}</td>
+            <td>${statusPill(b.operational_status)}</td>
+          </tr>`).join('')
+        : '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text3);">No bookings today.</td></tr>';
+
+      // Revenue chart (CSS bars)
+      const rev = analytics.revenue_by_day ?? [];
+      const maxRev = Math.max(1, ...rev.map(r => r.revenue_cents ?? 0));
+      document.getElementById('revChart').innerHTML = rev.length
+        ? rev.slice(-30).map(d => {
+            const pct = ((d.revenue_cents ?? 0) / maxRev) * 100;
+            return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0;">
+              <span style="min-width:80px;font-size:11px;color:var(--text3);">${d.date.slice(5)}</span>
+              <div class="bar" style="flex:1;"><span style="width:${pct.toFixed(1)}%;"></span></div>
+              <span style="min-width:70px;text-align:right;color:var(--text2);">${fmtCents(d.revenue_cents)}</span>
+            </div>`;
+          }).join('')
+        : '<span style="color:var(--text3);">No data.</span>';
+
+      // Top activities
+      const acts = analytics.by_activity ?? [];
+      const maxAct = Math.max(1, ...acts.map(a => a.revenue_cents ?? 0));
+      document.getElementById('actChart').innerHTML = acts.length
+        ? acts.slice(0, 6).map(a => {
+            const pct = ((a.revenue_cents ?? 0) / maxAct) * 100;
+            return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;">
+              <span style="flex:1;font-weight:600;color:var(--text);">${escapeHtml(a.name)}</span>
+              <span style="min-width:70px;text-align:right;color:var(--text2);">${fmtCents(a.revenue_cents)}</span>
+              <span style="min-width:60px;text-align:right;color:var(--text3);font-size:11px;">${a.pax} pax</span>
+              <div class="bar" style="width:80px;"><span style="width:${pct.toFixed(1)}%;"></span></div>
+            </div>`;
+          }).join('')
+        : '<span style="color:var(--text3);">No data.</span>';
+
+      document.getElementById('refreshedAt').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      document.getElementById('errorBanner').style.display = 'none';
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      document.getElementById('errorBanner').style.display = 'block';
+      document.getElementById('errorBanner').textContent =
+        msg.startsWith('410') ? 'This share link has been revoked or expired.' :
+        msg.startsWith('404') ? 'Share link not found.' : `Couldn't load dashboard: ${msg}`;
+    } finally {
+      document.body.classList.remove('refreshing');
+    }
+  }
+
+  refresh();
+  setInterval(refresh, refreshMs);
+})();
+</script>
+</body>
+</html>

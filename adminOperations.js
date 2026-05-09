@@ -14,6 +14,7 @@
 // db2_bookings_operations.sql.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import crypto from "node:crypto";
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients } from "./clients.js";
 
@@ -34,7 +35,7 @@ function requireClientAdmin(req, res) {
 // Resolves which `bookings.company` values belong to the requesting client.
 // CSR/REA owns coloradosledrentals + rabbitearsadventures, etc.
 // ─────────────────────────────────────────────────────────────────────────────
-function resolveCompanyShortnames(clientId) {
+export function resolveCompanyShortnames(clientId) {
   const clients = getAllClients();
   const client  = clients[clientId];
   const fhs     = Array.isArray(client?.fareharborCompanies) ? client.fareharborCompanies : [];
@@ -62,7 +63,7 @@ function startOfDayMtIso(daysFromToday = 0) {
   return new Date(mt.getTime() + offsetHours * 3600_000).toISOString();
 }
 
-function windowFor(tab) {
+export function windowFor(tab) {
   switch (tab) {
     case "today":     return { start: startOfDayMtIso(0),  end: startOfDayMtIso(1)  };
     case "tomorrow":  return { start: startOfDayMtIso(1),  end: startOfDayMtIso(2)  };
@@ -76,7 +77,7 @@ function windowFor(tab) {
 // DERIVED OPERATIONAL STATUS
 // Computed on-the-fly from existing fields. No DB column required.
 // ─────────────────────────────────────────────────────────────────────────────
-function deriveOperationalStatus(b) {
+export function deriveOperationalStatus(b) {
   const now    = Date.now();
   const startMs = b.start_at ? new Date(b.start_at).getTime() : null;
   const dueCents = Number(b.balance_due_cents ?? 0);
@@ -92,7 +93,7 @@ function deriveOperationalStatus(b) {
 // ─────────────────────────────────────────────────────────────────────────────
 // FETCH BOOKINGS — daily_manifest view + bookings join for ops columns
 // ─────────────────────────────────────────────────────────────────────────────
-async function fetchBookingsInWindow(crmSupabase, companies, start, end, opts = {}) {
+export async function fetchBookingsInWindow(crmSupabase, companies, start, end, opts = {}) {
   const { search = "", limit = 200, offset = 0 } = opts;
 
   // 1. Pull from manifest view (already joined customer + activity + payment)
@@ -201,7 +202,7 @@ function emptyKpis() {
   return { bookings: 0, pax: 0, revenue_cents: 0, missing_waivers: 0, pending_checkins: 0, unpaid_balance_cents: 0 };
 }
 
-function summarize(rows) {
+export function summarize(rows) {
   let pax = 0, revenue = 0, waiverMissing = 0, checkInPending = 0, unpaid = 0;
   for (const b of rows) {
     pax     += Number(b.pax ?? 0);
@@ -482,4 +483,159 @@ export async function handleOperationsGuides(req, res, _supabase, crmSupabase = 
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 3 — Share links (no-auth read-only dashboards) + analytics
+// ─────────────────────────────────────────────────────────────────────────────
+
+function newShareToken() {
+  // 32-char URL-safe random token
+  return crypto.randomBytes(24).toString("base64url");
+}
+
+// ── POST /portal/api/operations/share-links ──────────────────────────────────
+export async function handleCreateShareLink(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  const label    = typeof req.body?.label === "string" ? req.body.label.slice(0, 120) : null;
+  const days     = Number(req.body?.expires_in_days);
+  const expires  = Number.isFinite(days) && days > 0
+    ? new Date(Date.now() + days * 86400_000).toISOString()
+    : null;
+  const createdBy = req.portalUser?.id ?? req.portalUser?.userId ?? null;
+
+  const { data, error } = await supabase
+    .from("operations_share_links")
+    .insert({ client_id: clientId, token: newShareToken(), label, expires_at: expires, created_by: createdBy })
+    .select("id,token,label,created_at,expires_at,revoked_at")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ link: data });
+}
+
+// ── GET /portal/api/operations/share-links ───────────────────────────────────
+export async function handleListShareLinks(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+
+  const { data, error } = await supabase
+    .from("operations_share_links")
+    .select("id,token,label,created_at,expires_at,revoked_at")
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ links: data ?? [] });
+}
+
+// ── DELETE /portal/api/operations/share-links/:id ────────────────────────────
+export async function handleRevokeShareLink(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+  const id = String(req.params.id ?? "").trim();
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  const { error, count } = await supabase
+    .from("operations_share_links")
+    .update({ revoked_at: new Date().toISOString() }, { count: "exact" })
+    .eq("id", id)
+    .eq("client_id", clientId);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!count) return res.status(404).json({ error: "not found" });
+  return res.json({ ok: true });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /portal/api/operations/analytics?days=30
+// Past-bookings analytics: revenue/day, by activity, by location,
+// waiver-completion rate, avg party size.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleOperationsAnalytics(req, res, _supabase, crmSupabase = null) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id required" });
+  return computeAndSendAnalytics(req, res, crmSupabase, clientId);
+}
+
+export async function computeAndSendAnalytics(req, res, crmSupabase, clientId) {
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) return res.json(emptyAnalytics());
+
+  const days = Math.min(Math.max(Number(req.query?.days ?? 30), 1), 365);
+  const end   = new Date();
+  const start = new Date(end.getTime() - days * 86400_000);
+
+  try {
+    const { data, error } = await crmSupabase
+      .from("daily_manifest")
+      .select("start_at,activity,location,pax,receipt_total_cents,waiver_signed,checked_in")
+      .in("company", companies)
+      .gte("start_at", start.toISOString())
+      .lt("start_at",  end.toISOString())
+      .order("start_at", { ascending: true });
+    if (error) throw error;
+    const rows = data ?? [];
+
+    if (!rows.length) return res.json(emptyAnalytics({ days }));
+
+    const revenueByDay = new Map();
+    const byActivity   = new Map();
+    const byLocation   = new Map();
+    let totalPax = 0, totalRevenue = 0, waiversSigned = 0, checkedIn = 0;
+
+    for (const r of rows) {
+      const day = (r.start_at ?? "").slice(0, 10);
+      revenueByDay.set(day, (revenueByDay.get(day) ?? 0) + Number(r.receipt_total_cents ?? 0));
+      const a = r.activity ?? "Unknown";
+      byActivity.set(a, (byActivity.get(a) ?? { bookings: 0, pax: 0, revenue_cents: 0 }));
+      byActivity.get(a).bookings      += 1;
+      byActivity.get(a).pax           += Number(r.pax ?? 1);
+      byActivity.get(a).revenue_cents += Number(r.receipt_total_cents ?? 0);
+      const l = r.location ?? "—";
+      byLocation.set(l, (byLocation.get(l) ?? { bookings: 0, pax: 0 }));
+      byLocation.get(l).bookings += 1;
+      byLocation.get(l).pax      += Number(r.pax ?? 1);
+      totalPax     += Number(r.pax ?? 1);
+      totalRevenue += Number(r.receipt_total_cents ?? 0);
+      if (r.waiver_signed) waiversSigned += 1;
+      if (r.checked_in)    checkedIn     += 1;
+    }
+
+    return res.json({
+      window: { start: start.toISOString(), end: end.toISOString(), days },
+      total_bookings:       rows.length,
+      total_pax:            totalPax,
+      total_revenue_cents:  totalRevenue,
+      avg_party_size:       Number((totalPax / rows.length).toFixed(2)),
+      waiver_completion:    Number((waiversSigned / rows.length).toFixed(3)),
+      checkin_completion:   Number((checkedIn   / rows.length).toFixed(3)),
+      revenue_by_day:       [...revenueByDay.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, cents]) => ({ date, revenue_cents: cents })),
+      by_activity:          [...byActivity.entries()]
+        .map(([name, v]) => ({ name, ...v }))
+        .sort((a, b) => b.revenue_cents - a.revenue_cents)
+        .slice(0, 10),
+      by_location:          [...byLocation.entries()]
+        .map(([name, v]) => ({ name, ...v }))
+        .sort((a, b) => b.pax - a.pax),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+function emptyAnalytics(extra = {}) {
+  return {
+    total_bookings: 0, total_pax: 0, total_revenue_cents: 0, avg_party_size: 0,
+    waiver_completion: 0, checkin_completion: 0,
+    revenue_by_day: [], by_activity: [], by_location: [],
+    ...extra,
+  };
 }

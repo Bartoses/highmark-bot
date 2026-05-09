@@ -55,7 +55,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
-import { handleOperationsSummary, handleOperationsBookings, handleOperationsBookingDetail, handleOperationsCheckIn, handleOperationsWaiver, handleOperationsNote, handleOperationsGuide, handleOperationsPrep, handleOperationsTomorrowPrep, handleOperationsGuides } from "./adminOperations.js";
+import { handleOperationsSummary, handleOperationsBookings, handleOperationsBookingDetail, handleOperationsCheckIn, handleOperationsWaiver, handleOperationsNote, handleOperationsGuide, handleOperationsPrep, handleOperationsTomorrowPrep, handleOperationsGuides, handleCreateShareLink, handleListShareLinks, handleRevokeShareLink, handleOperationsAnalytics } from "./adminOperations.js";
+import { handlePublicSummary, handlePublicBookings, handlePublicTomorrowPrep, handlePublicGuides, handlePublicAnalytics } from "./publicOperations.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { renderVerticalPage, VERTICAL_SLUGS } from "./verticals.js";
@@ -1785,6 +1786,19 @@ app.post(  "/portal/api/operations/bookings/:pk/waiver",      requirePortalAuth,
 app.post(  "/portal/api/operations/bookings/:pk/note",        requirePortalAuth, (req, res) => handleOperationsNote(req, res, supabase, crmSupabase));
 app.post(  "/portal/api/operations/bookings/:pk/guide",       requirePortalAuth, (req, res) => handleOperationsGuide(req, res, supabase, crmSupabase));
 app.post(  "/portal/api/operations/bookings/:pk/prep",        requirePortalAuth, (req, res) => handleOperationsPrep(req, res, supabase, crmSupabase));
+// Operations dashboard (Phase 3 — share links + analytics)
+app.get(   "/portal/api/operations/analytics",                requirePortalAuth, (req, res) => handleOperationsAnalytics(req, res, supabase, crmSupabase));
+app.get(   "/portal/api/operations/share-links",              requirePortalAuth, (req, res) => handleListShareLinks(req, res, supabase));
+app.post(  "/portal/api/operations/share-links",              requirePortalAuth, (req, res) => handleCreateShareLink(req, res, supabase));
+app.delete("/portal/api/operations/share-links/:id",          requirePortalAuth, (req, res) => handleRevokeShareLink(req, res, supabase));
+// Public no-auth dashboard endpoints (token in URL)
+app.get(   "/public/api/operator-dashboard/:token/summary",        (req, res) => handlePublicSummary(req, res, supabase, crmSupabase));
+app.get(   "/public/api/operator-dashboard/:token/bookings",       (req, res) => handlePublicBookings(req, res, supabase, crmSupabase));
+app.get(   "/public/api/operator-dashboard/:token/tomorrow-prep",  (req, res) => handlePublicTomorrowPrep(req, res, supabase, crmSupabase));
+app.get(   "/public/api/operator-dashboard/:token/guides",         (req, res) => handlePublicGuides(req, res, supabase, crmSupabase));
+app.get(   "/public/api/operator-dashboard/:token/analytics",      (req, res) => handlePublicAnalytics(req, res, supabase, crmSupabase));
+// Public dashboard HTML page (no auth — token validated by API on data fetch)
+app.get(   "/public/operator-dashboard/:token", (_req, res) => res.sendFile(path.join(__uiDir, "operator-dashboard.html")));
 // Crawler pages + manual trigger
 app.get( "/portal/api/crawl-pages",   requirePortalAuth, (req, res) => handlePortalCrawlPages(req, res, supabase));
 app.get( "/portal/api/integrations",  requirePortalAuth, (req, res) => handlePortalIntegrations(req, res, supabase));

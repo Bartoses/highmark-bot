@@ -1185,7 +1185,10 @@ tr:hover td { background: var(--panel2); }
       <div class="section client-admin-only" id="sec-operations">
         <div class="section-header">
           <span class="section-title">Operations</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadOperations()" id="opsRefreshBtn">↻ Refresh</button>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('opsShareLinksModal').classList.add('open');loadOpsShareLinks();">🔗 Share dashboards</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadOperations()" id="opsRefreshBtn">↻ Refresh</button>
+          </div>
         </div>
 
         <!-- KPI BAR -->
@@ -1291,6 +1294,19 @@ tr:hover td { background: var(--panel2); }
             </table>
           </div>
           <div id="opsTableMeta" style="margin-top:10px;font-size:11px;color:var(--text3);"></div>
+        </div>
+
+        <!-- ANALYTICS PANEL — past N days revenue + activities + completion rates -->
+        <div class="card" style="margin-top:16px;">
+          <div class="card-title" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+            <span>Analytics — last <span id="opsAnalyticsDaysLabel">30</span> days</span>
+            <div style="display:flex;gap:4px;">
+              <button class="btn btn-ghost btn-sm ops-an-btn active" data-andays="7">7d</button>
+              <button class="btn btn-ghost btn-sm ops-an-btn" data-andays="30">30d</button>
+              <button class="btn btn-ghost btn-sm ops-an-btn" data-andays="90">90d</button>
+            </div>
+          </div>
+          <div id="opsAnalytics" style="font-size:13px;color:var(--text2);">Loading…</div>
         </div>
       </div><!-- /sec-operations -->
 
@@ -1835,6 +1851,35 @@ tr:hover td { background: var(--panel2); }
 </div>
 
 <!-- ── Booking option modal ───────────────────────────────────────────────────── -->
+<!-- ── Operations: share links modal ────────────────────────────────────────── -->
+<div class="modal-backdrop" id="opsShareLinksModal">
+  <div class="modal" style="max-width:620px;">
+    <div class="modal-title">Share dashboards</div>
+    <div class="modal-body">
+      <p style="font-size:12.5px;color:var(--text2);margin-bottom:14px;">
+        Each link grants no-login access to a read-only ops dashboard for this client.
+        Use them on shop TVs, dispatch boards, or guide-crew phones. TV mode adds
+        <code>?tv=1</code> for 30s auto-refresh and oversized text.
+      </p>
+      <div style="display:flex;gap:6px;margin-bottom:14px;">
+        <input type="text" id="opsShareLinkLabel" placeholder="Label (e.g. Front desk TV)" style="flex:1;">
+        <select id="opsShareLinkDays" style="width:130px;">
+          <option value="0">Never expires</option>
+          <option value="30">30 days</option>
+          <option value="90">90 days</option>
+          <option value="365">1 year</option>
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="opsCreateShareLink()">Create link</button>
+      </div>
+      <div id="opsShareLinksError" class="error-msg" style="display:none;"></div>
+      <div id="opsShareLinksList" style="font-size:12.5px;">Loading…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('opsShareLinksModal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Operations: booking detail modal ─────────────────────────────────────── -->
 <div class="modal-backdrop" id="opsBookingModal">
   <div class="modal" style="max-width:600px;">
@@ -5414,12 +5459,15 @@ let _opsArrivingNextRaw = [];
 let _opsCountdownInterval = null;
 let _opsCurrentBooking = null;
 
+let _opsAnalyticsDays = 30;
+
 async function loadOperations() {
   await Promise.all([
     loadOperationsSummary(),
     loadOperationsTable(_opsTab),
     loadOpsTomorrowPrep(),
     loadOpsGuides(_opsGuideTab),
+    loadOpsAnalytics(_opsAnalyticsDays),
   ]);
   setupOperationsHandlers();
 }
@@ -5457,6 +5505,19 @@ function setupOperationsHandlers() {
   // Live countdown ticker for arriving-next list (1-min cadence)
   if (_opsCountdownInterval) clearInterval(_opsCountdownInterval);
   _opsCountdownInterval = setInterval(renderOpsArrivingNext, 60_000);
+
+  // Analytics window switcher
+  document.querySelectorAll('#sec-operations .ops-an-btn').forEach(btn => {
+    btn.onclick = () => {
+      const days = Number(btn.dataset.andays);
+      if (!days || days === _opsAnalyticsDays) return;
+      _opsAnalyticsDays = days;
+      document.querySelectorAll('#sec-operations .ops-an-btn').forEach(b =>
+        b.classList.toggle('active', Number(b.dataset.andays) === days));
+      document.getElementById('opsAnalyticsDaysLabel').textContent = days;
+      loadOpsAnalytics(days);
+    };
+  });
 }
 
 function fmtCents(cents) {
@@ -5794,6 +5855,126 @@ function showOpsError(msg) {
   err.style.background = '';
   err.style.color = '';
   err.textContent = msg;
+}
+
+// ── Operations: analytics (revenue/day + top activities + completion %) ───
+async function loadOpsAnalytics(days) {
+  const wrap = document.getElementById('opsAnalytics');
+  if (!wrap) return;
+  wrap.innerHTML = 'Loading…';
+  const data = await apiFetch(`/operations/analytics?days=${days}`);
+  if (!data) return;
+  if (!data.total_bookings) {
+    wrap.innerHTML = '<span style="color:var(--text3);">No bookings in this window.</span>';
+    return;
+  }
+  const rev = data.revenue_by_day ?? [];
+  const maxRev = Math.max(1, ...rev.map(r => r.revenue_cents ?? 0));
+  const acts = data.by_activity ?? [];
+  const maxAct = Math.max(1, ...acts.map(a => a.revenue_cents ?? 0));
+  const pct = (v) => `${(v * 100).toFixed(0)}%`;
+
+  wrap.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px;">
+      <div><div class="ops-kpi-label">Bookings</div><div class="ops-kpi-value">${data.total_bookings}</div></div>
+      <div><div class="ops-kpi-label">Guests</div><div class="ops-kpi-value">${data.total_pax}</div></div>
+      <div><div class="ops-kpi-label">Revenue</div><div class="ops-kpi-value">${fmtCents(data.total_revenue_cents)}</div></div>
+      <div><div class="ops-kpi-label">Avg party</div><div class="ops-kpi-value">${data.avg_party_size}</div></div>
+      <div><div class="ops-kpi-label">Waivers</div><div class="ops-kpi-value">${pct(data.waiver_completion)}</div></div>
+      <div><div class="ops-kpi-label">Check-ins</div><div class="ops-kpi-value">${pct(data.checkin_completion)}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px;">
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;margin-bottom:8px;">Revenue by day</div>
+        ${rev.length ? rev.slice(-30).map(d => {
+          const w = ((d.revenue_cents ?? 0) / maxRev) * 100;
+          return `<div style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:12px;">
+            <span style="min-width:60px;color:var(--text3);">${escapeHtml(d.date.slice(5))}</span>
+            <div style="flex:1;height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;"><div style="width:${w.toFixed(1)}%;height:100%;background:var(--accent);"></div></div>
+            <span style="min-width:64px;text-align:right;color:var(--text2);">${fmtCents(d.revenue_cents)}</span>
+          </div>`;
+        }).join('') : '<span style="color:var(--text3);">No data.</span>'}
+      </div>
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;margin-bottom:8px;">Top activities</div>
+        ${acts.length ? acts.slice(0, 8).map(a => {
+          const w = ((a.revenue_cents ?? 0) / maxAct) * 100;
+          return `<div style="padding:5px 0;border-bottom:1px solid var(--border);">
+            <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px;">
+              <span style="font-weight:600;color:var(--text);">${escapeHtml(a.name)}</span>
+              <span style="color:var(--text3);">${a.bookings} bk · ${a.pax} pax · ${fmtCents(a.revenue_cents)}</span>
+            </div>
+            <div style="height:4px;background:var(--panel2);border-radius:2px;overflow:hidden;"><div style="width:${w.toFixed(1)}%;height:100%;background:var(--accent);"></div></div>
+          </div>`;
+        }).join('') : '<span style="color:var(--text3);">No data.</span>'}
+      </div>
+    </div>`;
+}
+
+// ── Operations: share links ───────────────────────────────────────────────
+async function loadOpsShareLinks() {
+  const wrap = document.getElementById('opsShareLinksList');
+  const err  = document.getElementById('opsShareLinksError');
+  err.style.display = 'none';
+  wrap.innerHTML = 'Loading…';
+  const data = await apiFetch('/operations/share-links');
+  if (!data) return;
+  const links = (data.links ?? []).filter(l => !l.revoked_at);
+  if (!links.length) {
+    wrap.innerHTML = '<span style="color:var(--text3);">No active share links yet. Create one above.</span>';
+    return;
+  }
+  wrap.innerHTML = links.map(l => {
+    const url   = `${window.location.origin}/public/operator-dashboard/${l.token}`;
+    const expS  = l.expires_at
+      ? `expires ${new Date(l.expires_at).toLocaleDateString()}`
+      : 'never expires';
+    const label = l.label ? escapeHtml(l.label) : '<span style="color:var(--text3);">Unlabeled</span>';
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <div style="font-weight:600;">${label}</div>
+        <button class="btn btn-ghost btn-sm" onclick="opsRevokeShareLink('${l.id}')">Revoke</button>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Created ${new Date(l.created_at).toLocaleDateString()} · ${expS}</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="text" readonly value="${url}" style="flex:1;font-family:monospace;font-size:11px;" onclick="this.select()">
+        <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('${url}').then(() => this.textContent='✓ Copied').catch(()=>{})">Copy</button>
+        <button class="btn btn-ghost btn-sm" onclick="window.open('${url}', '_blank')">Open</button>
+        <button class="btn btn-ghost btn-sm" onclick="window.open('${url}?tv=1', '_blank')">TV mode</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function opsCreateShareLink() {
+  const labelEl = document.getElementById('opsShareLinkLabel');
+  const daysEl  = document.getElementById('opsShareLinkDays');
+  const errEl   = document.getElementById('opsShareLinksError');
+  errEl.style.display = 'none';
+  const days = Number(daysEl.value);
+  const r = await apiFetch('/operations/share-links', {
+    method: 'POST',
+    body:   JSON.stringify({ label: labelEl.value || null, expires_in_days: days || 0 }),
+  });
+  if (!r?.link) {
+    errEl.style.display = 'block';
+    errEl.textContent = r?.error ?? 'Could not create link.';
+    return;
+  }
+  labelEl.value = '';
+  await loadOpsShareLinks();
+}
+
+async function opsRevokeShareLink(id) {
+  if (!confirm('Revoke this link? Anyone using it will lose access.')) return;
+  const r = await apiFetch(`/operations/share-links/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!r?.ok) {
+    const errEl = document.getElementById('opsShareLinksError');
+    errEl.style.display = 'block';
+    errEl.textContent = r?.error ?? 'Could not revoke link.';
+    return;
+  }
+  await loadOpsShareLinks();
 }
 
 // ── Operator View section ──────────────────────────────────────────────────

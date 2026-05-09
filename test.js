@@ -14924,6 +14924,100 @@ async function testOperationsDashboard() {
     await handleOperationsGuides({ portalUser: adminUser, query: { tab: "yesterday" } }, res, null, fakeCrm);
     chk("ops: guides rejects unknown tab → 400", res.statusCode === 400);
   }
+
+  // ── Phase 3: share links + analytics + public routes ────────────────────
+  const {
+    handleCreateShareLink,
+    handleListShareLinks,
+    handleRevokeShareLink,
+    handleOperationsAnalytics,
+  } = await import("./adminOperations.js");
+  const {
+    handlePublicSummary,
+    handlePublicBookings,
+  } = await import("./publicOperations.js");
+
+  // 503 / 403 for share-link create
+  {
+    const res = mockRes();
+    await handleCreateShareLink({ portalUser: adminUser }, res, null);
+    chk("ops: create-share-link 503 when DB missing", res.statusCode === 503);
+  }
+  {
+    const fakeDb = { from: () => ({}) };
+    const res = mockRes();
+    await handleCreateShareLink({ portalUser: readonlyUser, body: {} }, res, fakeDb);
+    chk("ops: create-share-link 403 for non-admin", res.statusCode === 403);
+  }
+  // 503 for analytics
+  {
+    const res = mockRes();
+    await handleOperationsAnalytics({ portalUser: adminUser, query: {} }, res, null, null);
+    chk("ops: analytics 503 when crmSupabase missing", res.statusCode === 503);
+  }
+
+  // Public dashboard token resolution
+  {
+    // No token → 400
+    const res = mockRes();
+    await handlePublicSummary({ params: { token: "" } }, res, { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) }, {});
+    chk("public ops: empty token → 400", res.statusCode === 400);
+  }
+  {
+    // Unknown token → 404
+    const fakeDb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) };
+    const res = mockRes();
+    await handlePublicSummary({ params: { token: "abc" } }, res, fakeDb, {});
+    chk("public ops: unknown token → 404", res.statusCode === 404);
+  }
+  {
+    // Revoked token → 410
+    const fakeDb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { client_id: "csr_rea", revoked_at: new Date().toISOString(), expires_at: null }, error: null }) }) }) }) };
+    const res = mockRes();
+    await handlePublicSummary({ params: { token: "abc" } }, res, fakeDb, {});
+    chk("public ops: revoked token → 410", res.statusCode === 410);
+  }
+  {
+    // Expired token → 410
+    const fakeDb = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { client_id: "csr_rea", revoked_at: null, expires_at: new Date(Date.now() - 86_400_000).toISOString() }, error: null }) }) }) }) };
+    const res = mockRes();
+    await handlePublicBookings({ params: { token: "abc" }, query: { tab: "today" } }, res, fakeDb, {});
+    chk("public ops: expired token → 410", res.statusCode === 410);
+  }
+  {
+    // No DB → 503
+    const res = mockRes();
+    await handlePublicSummary({ params: { token: "abc" } }, res, null, {});
+    chk("public ops: missing DB → 503", res.statusCode === 503);
+  }
+
+  // HTTP guard: portal share-link routes 401 without auth
+  let allShare401 = true;
+  for (const [method, route] of [
+    ["GET",    "/portal/api/operations/share-links"],
+    ["POST",   "/portal/api/operations/share-links"],
+    ["DELETE", "/portal/api/operations/share-links/abc"],
+    ["GET",    "/portal/api/operations/analytics"],
+  ]) {
+    const r = await fetch(`${BASE_URL}${route}`, {
+      method,
+      headers: method === "POST" ? { "Content-Type": "application/json" } : {},
+      body:    method === "POST" ? "{}" : undefined,
+    });
+    if (r.status !== 401) { allShare401 = false; console.log(`  Expected 401 on ${method} ${route}, got ${r.status}`); }
+  }
+  chk("ops: share-link + analytics routes return 401 without token", allShare401);
+
+  // HTTP: public dashboard HTML page is reachable without auth
+  {
+    const r = await fetch(`${BASE_URL}/public/operator-dashboard/anytoken`);
+    chk("public ops: HTML page served without auth", r.status === 200, `got ${r.status}`);
+  }
+  // HTTP: public API routes for unknown token → 404 (not 401)
+  {
+    const r = await fetch(`${BASE_URL}/public/api/operator-dashboard/notarealtoken/summary`);
+    chk("public ops: unknown token API → 404", r.status === 404, `got ${r.status}`);
+  }
 }
 
 main().catch((e) => {
