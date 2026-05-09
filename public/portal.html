@@ -443,6 +443,20 @@ tr:hover td { background: var(--panel2); }
 .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
+/* ── Operations dashboard ───────────────────────────────────────────────── */
+.ops-kpi { padding:14px 16px; }
+.ops-kpi-label { font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px; }
+.ops-kpi-value { font-size:22px; font-weight:700; color:var(--text); }
+.ops-tab-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.data-table { border-collapse:collapse; }
+.data-table th { text-align:left; padding:10px 8px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text3); border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--panel); }
+.data-table td { padding:10px 8px; font-size:12.5px; color:var(--text2); border-bottom:1px solid var(--border); }
+.data-table tbody tr:hover { background:var(--panel2); }
+@media (max-width: 720px) {
+  .ops-table th:nth-child(5), .ops-table td:nth-child(5) { display:none; }
+  .ops-table th:nth-child(6), .ops-table td:nth-child(6) { display:none; }
+  .ops-detail-grid { grid-template-columns: 100px 1fr !important; }
+}
 /* ── Page placeholder (Conversations etc.) ───────────────────────────────── */
 .page-placeholder { text-align: center; padding: 60px 20px; color: var(--text2); }
 .page-placeholder h2 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
@@ -547,6 +561,9 @@ tr:hover td { background: var(--panel2); }
         <span class="nav-icon">🤝</span> Partners
       </div>
       <div class="nav-section-label client-admin-only" style="padding:10px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Admin</div>
+      <div class="nav-item client-admin-only" data-section="operations">
+        <span class="nav-icon">🛠</span> Operations
+      </div>
       <div class="nav-item client-admin-only" data-section="operator">
         <span class="nav-icon">📋</span> Operator View
       </div>
@@ -1164,6 +1181,91 @@ tr:hover td { background: var(--panel2); }
       </div><!-- /sec-onboarding -->
 
       <!-- OPERATOR VIEW — client_admin only -->
+      <!-- ── OPERATIONS DASHBOARD (Phase 1: read-only) ─────────────────────── -->
+      <div class="section client-admin-only" id="sec-operations">
+        <div class="section-header">
+          <span class="section-title">Operations</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadOperations()" id="opsRefreshBtn">↻ Refresh</button>
+        </div>
+
+        <!-- KPI BAR -->
+        <div id="opsKpiBar" class="ops-kpi-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px;">
+          <div class="card ops-kpi" data-kpi="bookings">
+            <div class="ops-kpi-label">Today bookings</div>
+            <div class="ops-kpi-value" id="opsKpiBookings">—</div>
+          </div>
+          <div class="card ops-kpi" data-kpi="pax">
+            <div class="ops-kpi-label">Today guests</div>
+            <div class="ops-kpi-value" id="opsKpiPax">—</div>
+          </div>
+          <div class="card ops-kpi" data-kpi="revenue">
+            <div class="ops-kpi-label">Today revenue</div>
+            <div class="ops-kpi-value" id="opsKpiRevenue">—</div>
+          </div>
+          <div class="card ops-kpi" data-kpi="waivers">
+            <div class="ops-kpi-label">Missing waivers</div>
+            <div class="ops-kpi-value" id="opsKpiWaivers">—</div>
+          </div>
+          <div class="card ops-kpi" data-kpi="checkin">
+            <div class="ops-kpi-label">Check-ins pending</div>
+            <div class="ops-kpi-value" id="opsKpiCheckins">—</div>
+          </div>
+          <div class="card ops-kpi" data-kpi="unpaid">
+            <div class="ops-kpi-label">Unpaid balance</div>
+            <div class="ops-kpi-value" id="opsKpiUnpaid">—</div>
+          </div>
+          <div class="card ops-kpi" data-kpi="tomorrow">
+            <div class="ops-kpi-label">Tomorrow bookings</div>
+            <div class="ops-kpi-value" id="opsKpiTomorrow">—</div>
+          </div>
+          <div class="card ops-kpi" data-kpi="arrivingNext">
+            <div class="ops-kpi-label">Arriving next</div>
+            <div class="ops-kpi-value" id="opsKpiArrivingNext">—</div>
+          </div>
+        </div>
+
+        <!-- ARRIVING NEXT -->
+        <div class="card" style="margin-bottom:16px;" id="opsArrivingNextCard">
+          <div class="card-title" style="margin-bottom:10px;">Arriving next</div>
+          <div id="opsArrivingNext" style="font-size:13px;color:var(--text2);">Loading…</div>
+        </div>
+
+        <!-- TAB BAR + TABLE -->
+        <div class="card">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+            <div class="ops-tabs" style="display:flex;gap:4px;">
+              <button class="btn btn-ghost btn-sm ops-tab-btn active" data-otab="today">Today</button>
+              <button class="btn btn-ghost btn-sm ops-tab-btn" data-otab="tomorrow">Tomorrow</button>
+              <button class="btn btn-ghost btn-sm ops-tab-btn" data-otab="week">This week</button>
+              <button class="btn btn-ghost btn-sm ops-tab-btn" data-otab="past">Past 30d</button>
+            </div>
+            <div style="flex:1;"></div>
+            <input type="search" id="opsSearch" placeholder="Search name, phone, PK…" style="width:220px;max-width:100%;">
+          </div>
+          <div id="opsTableWrap" style="overflow-x:auto;">
+            <table class="data-table ops-table" style="width:100%;font-size:12.5px;">
+              <thead>
+                <tr>
+                  <th style="text-align:left;">Time</th>
+                  <th style="text-align:left;">Customer</th>
+                  <th style="text-align:left;">Activity</th>
+                  <th style="text-align:right;">Pax</th>
+                  <th style="text-align:left;">Location</th>
+                  <th style="text-align:left;">Waiver</th>
+                  <th style="text-align:left;">Payment</th>
+                  <th style="text-align:left;">Check-in</th>
+                  <th style="text-align:left;">Status</th>
+                </tr>
+              </thead>
+              <tbody id="opsTableBody">
+                <tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text3);">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="opsTableMeta" style="margin-top:10px;font-size:11px;color:var(--text3);"></div>
+        </div>
+      </div><!-- /sec-operations -->
+
       <div class="section client-admin-only" id="sec-operator">
         <div class="section-header">
           <span class="section-title">Operator View</span>
@@ -1705,6 +1807,20 @@ tr:hover td { background: var(--panel2); }
 </div>
 
 <!-- ── Booking option modal ───────────────────────────────────────────────────── -->
+<!-- ── Operations: booking detail modal ─────────────────────────────────────── -->
+<div class="modal-backdrop" id="opsBookingModal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-title" id="opsBookingModalTitle">Booking</div>
+    <div class="modal-body">
+      <div id="opsBookingModalError" class="error-msg" style="display:none"></div>
+      <div id="opsBookingModalBody" style="font-size:13px;color:var(--text2);">Loading…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('opsBookingModal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="bkModal">
   <div class="modal">
     <div class="modal-title">Add Booking Option</div>
@@ -1994,7 +2110,7 @@ const sectionTitles = {
   analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
   integrations: 'Integrations', messaging: 'Messaging', partners: 'Partners',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
-  operator: 'Operator View',
+  operator: 'Operator View', operations: 'Operations',
 };
 function switchSection(name, tabParam) {
   // Close any open modals before navigating
@@ -2010,6 +2126,7 @@ function switchSection(name, tabParam) {
   if (name === 'clients'     && !me?.isAdmin)       name = 'dashboard';
   if (name === 'onboarding'  && !me?.isAdmin)       name = 'dashboard';
   if (name === 'operator'    && !me?.isClientAdmin) name = 'dashboard';
+  if (name === 'operations'  && !me?.isClientAdmin) name = 'dashboard';
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.mob-nav-item').forEach(n => n.classList.remove('active'));
@@ -2034,6 +2151,7 @@ function switchSection(name, tabParam) {
   if (name === 'partners')      loadPartners();
   if (name === 'onboarding')    resetOnboarding();
   if (name === 'operator')      loadOperator();
+  if (name === 'operations')    loadOperations();
 }
 
 function switchSettingsTab(tab) {
@@ -5238,6 +5356,196 @@ function showToast(msg) {
   toast.style.opacity = '1';
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+}
+
+// ── Operations section (Phase 1: read-only ops dashboard) ──────────────────
+let _opsTab = 'today';
+let _opsSearchTimer = null;
+
+async function loadOperations() {
+  await Promise.all([loadOperationsSummary(), loadOperationsTable(_opsTab)]);
+  setupOperationsHandlers();
+}
+
+function setupOperationsHandlers() {
+  document.querySelectorAll('#sec-operations .ops-tab-btn').forEach(btn => {
+    btn.onclick = () => {
+      const tab = btn.dataset.otab;
+      if (!tab || tab === _opsTab) return;
+      _opsTab = tab;
+      document.querySelectorAll('#sec-operations .ops-tab-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.otab === tab));
+      loadOperationsTable(tab);
+    };
+  });
+  const searchEl = document.getElementById('opsSearch');
+  if (searchEl && !searchEl._opsBound) {
+    searchEl._opsBound = true;
+    searchEl.addEventListener('input', () => {
+      clearTimeout(_opsSearchTimer);
+      _opsSearchTimer = setTimeout(() => loadOperationsTable(_opsTab), 300);
+    });
+  }
+}
+
+function fmtCents(cents) {
+  if (cents == null) return '—';
+  const n = Number(cents) / 100;
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleTimeString('en-US',
+      { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' });
+  } catch { return '—'; }
+}
+
+function fmtDateTime(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('en-US',
+      { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' });
+  } catch { return '—'; }
+}
+
+function statusPill(status) {
+  const map = {
+    ready:          { c: '#1f3a2c', t: '#7ee2a8', label: 'Ready' },
+    needs_waiver:   { c: '#3a2f1f', t: '#f5c14a', label: 'Needs waiver' },
+    needs_payment:  { c: '#3a2f1f', t: '#f5c14a', label: 'Payment due' },
+    arriving_soon:  { c: '#1f2a3a', t: '#7ec0f5', label: 'Arriving soon' },
+    late:           { c: '#3a1f1f', t: '#f57e7e', label: 'Late' },
+    checked_in:     { c: '#1f3a2c', t: '#7ee2a8', label: 'Checked in' },
+  };
+  const v = map[status] ?? { c: '#2a2a2a', t: 'var(--text2)', label: status ?? '—' };
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${v.c};color:${v.t};font-size:11px;font-weight:600;">${v.label}</span>`;
+}
+
+function boolPill(b, okLabel, missLabel) {
+  if (b === true)  return `<span style="color:#7ee2a8;font-weight:600;">✓ ${okLabel}</span>`;
+  if (b === false) return `<span style="color:#f5c14a;">○ ${missLabel}</span>`;
+  return `<span style="color:var(--text3);">—</span>`;
+}
+
+async function loadOperationsSummary() {
+  const data = await apiFetch('/operations/summary');
+  if (!data) return;
+  const t = data.today ?? {};
+  const tm = data.tomorrow ?? {};
+  document.getElementById('opsKpiBookings').textContent = t.bookings ?? 0;
+  document.getElementById('opsKpiPax').textContent      = t.pax ?? 0;
+  document.getElementById('opsKpiRevenue').textContent  = fmtCents(t.revenue_cents ?? 0);
+  document.getElementById('opsKpiWaivers').textContent  = t.missing_waivers ?? 0;
+  document.getElementById('opsKpiCheckins').textContent = t.pending_checkins ?? 0;
+  document.getElementById('opsKpiUnpaid').textContent   = fmtCents(t.unpaid_balance_cents ?? 0);
+  document.getElementById('opsKpiTomorrow').textContent = tm.bookings ?? 0;
+
+  const next = data.arriving_next ?? [];
+  document.getElementById('opsKpiArrivingNext').textContent = next.length;
+
+  const wrap = document.getElementById('opsArrivingNext');
+  if (!next.length) {
+    wrap.innerHTML = '<span style="color:var(--text3);">No upcoming arrivals today.</span>';
+  } else {
+    wrap.innerHTML = next.map(b => `
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;"
+           onclick="openOpsBooking('${(b.fareharbor_pk ?? '').replace(/'/g, '\\\'')}')">
+        <div style="font-weight:700;min-width:64px;">${fmtTime(b.start_at)}</div>
+        <div style="flex:1;">
+          <div style="font-weight:600;color:var(--text);">${escapeHtml(b.customer_name ?? '—')}</div>
+          <div style="font-size:11.5px;color:var(--text3);">${escapeHtml(b.activity ?? '')} · ${b.pax ?? 1} pax</div>
+        </div>
+        <div>${statusPill(b.operational_status)}</div>
+      </div>`).join('');
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+async function loadOperationsTable(tab) {
+  const tbody = document.getElementById('opsTableBody');
+  const meta  = document.getElementById('opsTableMeta');
+  tbody.innerHTML = '<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text3);">Loading…</td></tr>';
+  const search = document.getElementById('opsSearch')?.value ?? '';
+  const params = new URLSearchParams({ tab, limit: '200' });
+  if (search.trim()) params.set('search', search.trim());
+
+  const data = await apiFetch(`/operations/bookings?${params}`);
+  if (!data) return;
+
+  const rows = data.bookings ?? [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3);">No bookings in this window.</td></tr>';
+    meta.textContent = '';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(b => `
+    <tr style="cursor:pointer;" onclick="openOpsBooking('${(b.fareharbor_pk ?? '').replace(/'/g, '\\\'')}')">
+      <td style="white-space:nowrap;">${fmtDateTime(b.start_at)}</td>
+      <td>
+        <div style="font-weight:600;">${escapeHtml(b.customer_name ?? '—')}</div>
+        <div style="font-size:11px;color:var(--text3);">${escapeHtml(b.phone ?? '')}</div>
+      </td>
+      <td>${escapeHtml(b.activity ?? '—')}</td>
+      <td style="text-align:right;">${b.pax ?? 1}</td>
+      <td>${escapeHtml(b.location ?? '—')}</td>
+      <td>${boolPill(b.waiver_signed, 'Signed', 'Missing')}</td>
+      <td>${(Number(b.balance_due_cents ?? 0) > 0)
+            ? `<span style="color:#f5c14a;">${fmtCents(b.balance_due_cents)} due</span>`
+            : `<span style="color:#7ee2a8;">Paid</span>`}</td>
+      <td>${boolPill(b.checked_in, 'In', 'Pending')}</td>
+      <td>${statusPill(b.operational_status)}</td>
+    </tr>`).join('');
+
+  meta.textContent = `${rows.length} of ${data.total ?? rows.length} booking${rows.length === 1 ? '' : 's'}`;
+}
+
+async function openOpsBooking(pk) {
+  if (!pk) return;
+  const modal = document.getElementById('opsBookingModal');
+  const title = document.getElementById('opsBookingModalTitle');
+  const body  = document.getElementById('opsBookingModalBody');
+  const err   = document.getElementById('opsBookingModalError');
+  err.style.display = 'none';
+  title.textContent = `Booking ${pk}`;
+  body.innerHTML = 'Loading…';
+  modal.classList.add('open');
+
+  const data = await apiFetch(`/operations/bookings/${encodeURIComponent(pk)}`);
+  if (!data?.booking) {
+    err.style.display = 'block';
+    err.textContent = data?.error ?? 'Booking not found.';
+    body.innerHTML = '';
+    return;
+  }
+  const b = data.booking;
+  const phoneLink = b.phone ? `<a href="tel:${escapeHtml(b.phone)}" style="color:var(--accent);">${escapeHtml(b.phone)}</a> · <a href="sms:${escapeHtml(b.phone)}" style="color:var(--accent);">Text</a>` : '—';
+  body.innerHTML = `
+    <div style="margin-bottom:14px;">${statusPill(b.operational_status)}</div>
+    <div class="ops-detail-grid" style="display:grid;grid-template-columns:130px 1fr;gap:8px 12px;font-size:13px;">
+      <div style="color:var(--text3);">Customer</div><div style="color:var(--text);font-weight:600;">${escapeHtml(b.customer_name ?? '—')}</div>
+      <div style="color:var(--text3);">Phone</div><div>${phoneLink}</div>
+      <div style="color:var(--text3);">Activity</div><div>${escapeHtml(b.activity ?? '—')}</div>
+      <div style="color:var(--text3);">Pax</div><div>${b.pax ?? 1}</div>
+      <div style="color:var(--text3);">Location</div><div>${escapeHtml(b.location ?? '—')}</div>
+      <div style="color:var(--text3);">Start</div><div>${fmtDateTime(b.start_at)}</div>
+      <div style="color:var(--text3);">End</div><div>${fmtDateTime(b.end_at)}</div>
+      <div style="color:var(--text3);">Arrival</div><div>${escapeHtml(b.arrival_display ?? '—')}</div>
+      <div style="color:var(--text3);">Total</div><div>${fmtCents(b.receipt_total_cents)}</div>
+      <div style="color:var(--text3);">Paid</div><div>${fmtCents(b.amount_paid_cents)}</div>
+      <div style="color:var(--text3);">Due</div><div>${Number(b.balance_due_cents ?? 0) > 0 ? `<span style="color:#f5c14a;font-weight:600;">${fmtCents(b.balance_due_cents)}</span>` : '<span style="color:#7ee2a8;">Paid in full</span>'}</div>
+      <div style="color:var(--text3);">Waiver</div><div>${boolPill(b.waiver_signed, 'Signed', 'Missing')}</div>
+      <div style="color:var(--text3);">Check-in</div><div>${boolPill(b.checked_in, 'Checked in', 'Pending')}</div>
+      <div style="color:var(--text3);">Guide</div><div>${escapeHtml(b.guide_name ?? '—')}</div>
+      <div style="color:var(--text3);">FH PK</div><div style="font-family:monospace;font-size:12px;">${escapeHtml(b.fareharbor_pk ?? '—')}</div>
+      ${b.booking_notes ? `<div style="color:var(--text3);">Notes</div><div>${escapeHtml(b.booking_notes)}</div>` : ''}
+      ${b.internal_notes ? `<div style="color:var(--text3);">Internal</div><div style="color:var(--text2);font-style:italic;">${escapeHtml(b.internal_notes)}</div>` : ''}
+    </div>`;
 }
 
 // ── Operator View section ──────────────────────────────────────────────────

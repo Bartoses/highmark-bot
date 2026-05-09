@@ -55,6 +55,7 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
+import { handleOperationsSummary, handleOperationsBookings, handleOperationsBookingDetail } from "./adminOperations.js";
 import { handleListSiteContent, handleGetSiteSection, handleUpdateSiteSection } from "./adminSiteContent.js";
 import { loadSiteContent } from "./siteContent.js";
 import { renderVerticalPage, VERTICAL_SLUGS } from "./verticals.js";
@@ -1772,6 +1773,10 @@ app.get(   "/portal/api/partners",               requirePortalAuth, (req, res) =
 app.post(  "/portal/api/partners",               requirePortalAuth, (req, res) => handlePortalCreatePartner(req, res, supabase));
 app.patch( "/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalUpdatePartner(req, res, supabase));
 app.delete("/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalDeletePartner(req, res, supabase));
+// Operations dashboard (Phase 1 — read-only)
+app.get(   "/portal/api/operations/summary",      requirePortalAuth, (req, res) => handleOperationsSummary(req, res, supabase, crmSupabase));
+app.get(   "/portal/api/operations/bookings",     requirePortalAuth, (req, res) => handleOperationsBookings(req, res, supabase, crmSupabase));
+app.get(   "/portal/api/operations/bookings/:pk", requirePortalAuth, (req, res) => handleOperationsBookingDetail(req, res, supabase, crmSupabase));
 // Crawler pages + manual trigger
 app.get( "/portal/api/crawl-pages",   requirePortalAuth, (req, res) => handlePortalCrawlPages(req, res, supabase));
 app.get( "/portal/api/integrations",  requirePortalAuth, (req, res) => handlePortalIntegrations(req, res, supabase));

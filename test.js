@@ -3235,6 +3235,7 @@ async function main() {
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
     await testDateExtract();      // Deterministic date parser (replaces per-message Claude call)
     await testSelfSignup();       // Sprint 7: self-serve signup + onboarding polling page
+    await testOperationsDashboard(); // Phase 1 ops dashboard: read-only routes + auth guards
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -14744,6 +14745,77 @@ async function testSelfSignup() {
   // ── Integration: home + portal-login still link to /signup somewhere reachable ──
   const homeR = await fetch(`http://localhost:${TEST_PORT}/`);
   chk("home: GET / still 200 with signup route added", homeR.status === 200);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1: Operator Operations Dashboard — read-only routes + handler unit tests
+// ─────────────────────────────────────────────────────────────────────────────
+async function testOperationsDashboard() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const {
+    handleOperationsSummary,
+    handleOperationsBookings,
+    handleOperationsBookingDetail,
+  } = await import("./adminOperations.js");
+
+  function mockRes() {
+    const r = { statusCode: 200, body: null };
+    r.status = (c) => { r.statusCode = c; return r; };
+    r.json   = (b) => { r.body = b;        return r; };
+    return r;
+  }
+  const adminUser = { role: "client_admin", isAdmin: false, isClientAdmin: true, clientId: "csr_rea" };
+
+  // ── 503 when crmSupabase missing ──────────────────────────────────────────
+  {
+    const res = mockRes();
+    await handleOperationsSummary({ portalUser: adminUser, query: {} }, res, null, null);
+    chk("ops: summary returns 503 when crmSupabase missing",
+        res.statusCode === 503 && /crm/i.test(res.body?.error ?? ""), JSON.stringify(res.body));
+  }
+  {
+    const res = mockRes();
+    await handleOperationsBookings({ portalUser: adminUser, query: { tab: "today" } }, res, null, null);
+    chk("ops: bookings returns 503 when crmSupabase missing",
+        res.statusCode === 503, String(res.statusCode));
+  }
+  {
+    const res = mockRes();
+    await handleOperationsBookingDetail({ portalUser: adminUser, params: { pk: "X" }, query: {} }, res, null, null);
+    chk("ops: booking detail returns 503 when crmSupabase missing",
+        res.statusCode === 503, String(res.statusCode));
+  }
+
+  // ── 400 on invalid tab ────────────────────────────────────────────────────
+  {
+    const fakeCrm = { from: () => ({ select: () => ({ in: () => ({ gte: () => ({ lt: () => ({ order: () => ({ range: () => ({ data: [], error: null, count: 0 }) }) }) }) }) }) }) };
+    const res = mockRes();
+    await handleOperationsBookings({ portalUser: adminUser, query: { tab: "yesteryear" } }, res, null, fakeCrm);
+    chk("ops: bookings rejects unknown tab → 400", res.statusCode === 400);
+  }
+
+  // ── 400 when caller missing client_id ─────────────────────────────────────
+  {
+    const res = mockRes();
+    await handleOperationsSummary({ portalUser: { role: "client_admin", isClientAdmin: true }, query: {} }, res, null, { from: () => ({}) });
+    chk("ops: summary rejects request without resolvable client_id → 400",
+        res.statusCode === 400);
+  }
+
+  // ── HTTP guards: every route 401s without auth ────────────────────────────
+  const opsRoutes = [
+    ["GET", "/portal/api/operations/summary"],
+    ["GET", "/portal/api/operations/bookings?tab=today"],
+    ["GET", "/portal/api/operations/bookings/CO-W69-W98"],
+  ];
+  let allOps401 = true;
+  for (const [method, route] of opsRoutes) {
+    const r = await fetch(`${BASE_URL}${route}`, { method });
+    if (r.status !== 401) { allOps401 = false; console.log(`  Expected 401 on ${method} ${route}, got ${r.status}`); }
+  }
+  chk("ops: all /portal/api/operations routes return 401 without token", allOps401);
 }
 
 main().catch((e) => {
