@@ -470,11 +470,14 @@ tr:hover td { background: var(--panel2); }
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
-.ops-item-chip { font-size: 11px !important; padding: 2px 9px !important; border-radius: 12px !important; height: auto !important; line-height: 1.7 !important; white-space: nowrap; }
+.ops-item-chip { font-size: 11px !important; padding: 2px 9px !important; border-radius: 12px !important; height: auto !important; line-height: 1.7 !important; white-space: nowrap; flex-shrink: 0; }
 .ops-item-chip.active { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
-.ops-item-season-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text3); white-space: nowrap; padding: 0 4px 0 6px; }
-.ops-item-season-label:first-child { padding-left: 0; }
+.ops-item-season-strip { display: flex; align-items: center; gap: 5px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 5px; }
+.ops-item-season-strip::-webkit-scrollbar { display: none; }
+.ops-item-season-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text3); white-space: nowrap; flex-shrink: 0; padding-right: 2px; }
 .ops-card-loading { opacity: 0.55; pointer-events: none; transition: opacity 0.15s; }
+/* Hide scrollbar on range/dim rows */
+#opsFilterBody > div[style*="overflow-x"]::-webkit-scrollbar { display: none; }
 .ops-pulse-late {
   animation: ops-pulse 1.6s ease-in-out infinite;
 }
@@ -494,6 +497,9 @@ tr:hover td { background: var(--panel2); }
   .ops-kpi-value { font-size:18px; }
   .ops-tab-btn { padding: 6px 10px !important; font-size: 11px !important; }
   #opsSearch { width: 100% !important; }
+  /* Filter bar: tighter padding on mobile */
+  #opsFilterCard > div:first-child { padding: 9px 12px; }
+  #opsFilterBody { padding: 8px 12px; gap: 8px; }
   /* Drop Location, Waiver, Check-in cols on tight screens; status pill survives */
   .ops-table th:nth-child(5), .ops-table td:nth-child(5) { display:none; }
   .ops-table th:nth-child(6), .ops-table td:nth-child(6) { display:none; }
@@ -1240,48 +1246,64 @@ tr:hover td { background: var(--panel2); }
           </div>
         </div>
 
-        <!-- GLOBAL DATE RANGE FILTER + DIMENSION + SEASON -->
-        <div class="card ops-range-bar" style="margin-bottom:14px;padding:10px 14px;display:flex;flex-direction:column;gap:8px;position:sticky;top:0;z-index:5;">
-          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);margin-right:4px;">Range</div>
-            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="today">Today</button>
-            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="this_week">This week</button>
-            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="this_month">This month</button>
-            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="next7">Next 7</button>
-            <button class="btn btn-ghost btn-sm ops-range-btn active" data-range="last30">Last 30d</button>
-            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="last90">Last 90d</button>
-            <button class="btn btn-ghost btn-sm ops-range-btn" data-range="ytd">YTD</button>
-            <button class="btn btn-ghost btn-sm" onclick="opsToggleCustomRange()">Custom…</button>
-            <div id="opsCustomRange" style="display:none;gap:6px;align-items:center;">
+        <!-- GLOBAL FILTER BAR — sticky, collapsible on mobile -->
+        <div class="card ops-range-bar" id="opsFilterCard" style="margin-bottom:14px;padding:0;position:sticky;top:0;z-index:5;">
+
+          <!-- Always-visible summary row (tap to collapse/expand) -->
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;user-select:none;" onclick="toggleOpsFilterBar()">
+            <span id="opsFilterToggleBtn" style="font-size:12px;color:var(--text3);flex-shrink:0;width:14px;text-align:center;">▼</span>
+            <div id="opsFilterSummary" style="flex:1;font-size:12.5px;font-weight:600;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Last 30 days</div>
+            <div style="font-size:11px;color:var(--text3);flex-shrink:0;" id="opsRangeLabel">—</div>
+          </div>
+
+          <!-- Collapsible body -->
+          <div id="opsFilterBody" style="border-top:1px solid var(--border);padding:10px 14px;display:flex;flex-direction:column;gap:10px;">
+
+            <!-- Range: single horizontal scroll strip -->
+            <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;">
+              <div style="display:flex;align-items:center;gap:6px;padding-bottom:2px;min-width:max-content;">
+                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;padding-right:2px;">Range</span>
+                <button class="btn btn-ghost btn-sm ops-range-btn" data-range="today" style="flex-shrink:0;">Today</button>
+                <button class="btn btn-ghost btn-sm ops-range-btn" data-range="this_week" style="flex-shrink:0;">This week</button>
+                <button class="btn btn-ghost btn-sm ops-range-btn" data-range="this_month" style="flex-shrink:0;">This month</button>
+                <button class="btn btn-ghost btn-sm ops-range-btn" data-range="next7" style="flex-shrink:0;">Next 7</button>
+                <button class="btn btn-ghost btn-sm ops-range-btn active" data-range="last30" style="flex-shrink:0;">Last 30d</button>
+                <button class="btn btn-ghost btn-sm ops-range-btn" data-range="last90" style="flex-shrink:0;">Last 90d</button>
+                <button class="btn btn-ghost btn-sm ops-range-btn" data-range="ytd" style="flex-shrink:0;">YTD</button>
+                <button class="btn btn-ghost btn-sm" onclick="opsToggleCustomRange()" style="flex-shrink:0;">Custom…</button>
+              </div>
+            </div>
+            <div id="opsCustomRange" style="display:none;gap:6px;align-items:center;flex-wrap:wrap;padding-top:2px;">
               <input type="date" id="opsCustomStart" style="font-size:12px;">
               <span style="color:var(--text3);">→</span>
               <input type="date" id="opsCustomEnd" style="font-size:12px;">
               <button class="btn btn-primary btn-sm" onclick="opsApplyCustomRange()">Apply</button>
             </div>
-            <div style="flex:1;"></div>
-            <div style="font-size:11px;color:var(--text3);" id="opsRangeLabel">—</div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;border-top:1px solid var(--border);padding-top:8px;">
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);">Dim</span>
-              <button class="btn btn-ghost btn-sm ops-dim-btn active" data-dim="start"  title="Filter on the trip date">Start date</button>
-              <button class="btn btn-ghost btn-sm ops-dim-btn"        data-dim="booked" title="Filter on when the booking was created">Booked date</button>
+
+            <!-- Dim + Season: scrollable on mobile -->
+            <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-top:1px solid var(--border);padding-top:10px;">
+              <div style="display:flex;align-items:center;gap:10px;min-width:max-content;">
+                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;">Dim</span>
+                <button class="btn btn-ghost btn-sm ops-dim-btn active" data-dim="start"  style="flex-shrink:0;" title="Filter on the trip date">Start date</button>
+                <button class="btn btn-ghost btn-sm ops-dim-btn"        data-dim="booked" style="flex-shrink:0;" title="Filter on when the booking was created">Booked date</button>
+                <span style="width:1px;height:18px;background:var(--border);flex-shrink:0;"></span>
+                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;">Season</span>
+                <button class="btn btn-ghost btn-sm ops-season-btn active" data-season=""         style="flex-shrink:0;">All</button>
+                <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="summer"   style="flex-shrink:0;" title="Apr–Oct trips">Summer</button>
+                <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="winter"   style="flex-shrink:0;" title="Nov–Mar trips">Winter</button>
+                <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="shoulder" style="flex-shrink:0;" title="Apr–May trips">Shoulder</button>
+              </div>
             </div>
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);">Season</span>
-              <button class="btn btn-ghost btn-sm ops-season-btn active" data-season="">All</button>
-              <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="summer" title="Apr–Oct trips">Summer</button>
-              <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="winter" title="Nov–Mar trips">Winter</button>
-              <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="shoulder" title="Apr–May trips">Shoulder</button>
+
+            <!-- Items: each season group = independent horizontal scroll strip -->
+            <div id="opsItemFilterRow" style="border-top:1px solid var(--border);padding-top:10px;">
+              <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:6px;">Items</div>
+              <div id="opsItemChips">
+                <div style="font-size:11.5px;color:var(--text3);">Loading…</div>
+              </div>
             </div>
-          </div>
-          <!-- Item filter chips — populated from filter-options, grouped summer/winter -->
-          <div id="opsItemFilterRow" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;border-top:1px solid var(--border);padding-top:8px;">
-            <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);white-space:nowrap;margin-right:2px;">Items</span>
-            <div id="opsItemChips" style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
-              <span style="font-size:11.5px;color:var(--text3);">Loading…</span>
-            </div>
-          </div>
+
+          </div><!-- /opsFilterBody -->
         </div>
 
         <!-- EXECUTIVE SUMMARY (collapsible — primary headline metrics) -->
@@ -5768,6 +5790,41 @@ function opsApplyCustomRange() {
   loadOperations();
 }
 
+// ── Filter bar collapse/expand ────────────────────────────────────────────
+let _opsFilterOpen = window.innerWidth > 720;   // desktop opens expanded
+
+function toggleOpsFilterBar() {
+  _opsFilterOpen = !_opsFilterOpen;
+  _applyOpsFilterBarState();
+}
+
+function _applyOpsFilterBarState() {
+  const body = document.getElementById('opsFilterBody');
+  const btn  = document.getElementById('opsFilterToggleBtn');
+  if (body) body.style.display = _opsFilterOpen ? '' : 'none';
+  if (btn)  btn.textContent = _opsFilterOpen ? '▲' : '▼';
+  _refreshOpsFilterSummary();
+}
+
+function _refreshOpsFilterSummary() {
+  const el = document.getElementById('opsFilterSummary');
+  if (!el) return;
+  const RANGE_LABELS = {
+    today: 'Today', this_week: 'This week', this_month: 'This month',
+    next7: 'Next 7d', last30: 'Last 30d', last90: 'Last 90d', ytd: 'YTD',
+  };
+  const rangeStr = _opsRange.mode === 'custom'
+    ? `${_opsRange.start} → ${_opsRange.end}`
+    : (RANGE_LABELS[_opsRange.preset] ?? _opsRange.preset);
+  const parts = [rangeStr];
+  if (_opsSeason) parts.push(_opsSeason.charAt(0).toUpperCase() + _opsSeason.slice(1));
+  const itemCount = (_opsFilters.activity ?? []).length;
+  if (itemCount > 0) parts.push(`${itemCount} item${itemCount === 1 ? '' : 's'}`);
+  const otherFilters = opsFilterCount() - itemCount;
+  if (otherFilters > 0) parts.push(`+${otherFilters} filter${otherFilters === 1 ? '' : 's'}`);
+  el.textContent = parts.join(' · ');
+}
+
 // ── Skeleton helper — shimmer placeholder rows ────────────────────────────
 function opsSkel(lines = 3) {
   const ws = [72, 90, 65, 83, 78, 55, 88];
@@ -5789,22 +5846,26 @@ function renderOpsItemChips(bySeason, allActivities) {
   const wrap = document.getElementById('opsItemChips');
   if (!wrap) return;
   const { summer = [], winter = [], year_round = [] } = bySeason;
-  // Fall back: if categorisation is empty, show all in year_round
   const effectiveYr = (!summer.length && !winter.length) ? allActivities : year_round;
   if (!summer.length && !winter.length && !effectiveYr.length) {
     wrap.innerHTML = '<span style="font-size:11.5px;color:var(--text3);">No items found.</span>';
     return;
   }
   const selected = new Set(_opsFilters.activity ?? []);
-  const chip = (act) => {
-    const active = selected.has(act) ? ' active' : '';
-    return `<button class="btn btn-ghost btn-sm ops-item-chip${active}" data-activity="${escapeHtml(act)}" title="${escapeHtml(act)}">${escapeHtml(act)}</button>`;
-  };
-  const group = (label, items) => {
+  const chip = (act) =>
+    `<button class="btn btn-ghost btn-sm ops-item-chip${selected.has(act) ? ' active' : ''}" data-activity="${escapeHtml(act)}" title="${escapeHtml(act)}">${escapeHtml(act)}</button>`;
+  // Each season = its own horizontal scroll strip
+  const strip = (emoji, label, items) => {
     if (!items.length) return '';
-    return `<span class="ops-item-season-label">${label}</span>${items.map(chip).join('')}`;
+    return `<div class="ops-item-season-strip">
+      <span class="ops-item-season-label">${emoji} ${label}</span>
+      ${items.map(chip).join('')}
+    </div>`;
   };
-  wrap.innerHTML = group('Summer', summer) + group('Winter', winter) + group('All-season', effectiveYr);
+  wrap.innerHTML =
+    strip('☀', 'Summer', summer) +
+    strip('❄', 'Winter', winter) +
+    strip('·', 'All-season', effectiveYr);
   // Wire click handlers
   wrap.querySelectorAll('.ops-item-chip').forEach(btn => {
     btn.onclick = () => {
@@ -5815,6 +5876,7 @@ function renderOpsItemChips(bySeason, allActivities) {
       btn.classList.toggle('active', _opsFilters.activity.includes(act));
       updateOpsFilterBadge();
       opsPersistFiltersUrl();
+      _refreshOpsFilterSummary();
       loadOperationsTable(_opsTab);
     };
   });
@@ -5829,6 +5891,7 @@ function syncOpsItemChips() {
 
 async function loadOperations() {
   document.getElementById("opsRangeLabel").textContent = opsRangeLabel();
+  _applyOpsFilterBarState();
   // Reset cards to skeleton state before firing all fetches
   opsResetCardSkeletons();
   await Promise.all([
@@ -6258,6 +6321,7 @@ function opsApplyFilters() {
   updateOpsFilterBadge();
   opsPersistFiltersUrl();
   syncOpsItemChips();
+  _refreshOpsFilterSummary();
   loadOperationsTable(_opsTab);
 }
 
@@ -6266,6 +6330,7 @@ function opsResetFilters() {
   updateOpsFilterBadge();
   opsPersistFiltersUrl();
   syncOpsItemChips();
+  _refreshOpsFilterSummary();
   document.getElementById('opsFiltersModal').classList.remove('open');
   loadOperationsTable(_opsTab);
 }
