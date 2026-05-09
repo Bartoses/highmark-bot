@@ -1619,23 +1619,40 @@ async function handleImportBooking(data, context, client, integrations) {
         .single();
 
       if (custRow?.id) {
-        await crmDb.from("bookings").upsert({
-          fareharbor_pk:       pk,
-          customer_id:         custRow.id,
-          activity_id:         activityId,
-          start_at:            startAt,
-          end_at:              endAt ?? startAt,
-          status:              "booked",
-          customer_count:      1,
-          receipt_total_cents: 0,
-          amount_paid_cents:   0,
-          total_cents:         0,
-          total_paid_cents:    0,
-          arrival_time:        startAt,
-          arrival_display:     buildArrivalDisplay(parsed.beginDatetime, parsed.endDatetime),
-          company,
-        }, { onConflict: "fareharbor_pk" });
-        manifestSaved = true;
+        // Cross-prefix dedup: if a real-PK (e.g. CO-XXX-XXX) booking already exists
+        // for this (customer_id, start_at), skip the BOT- synthetic write entirely.
+        // The real booking carries the authoritative payment/status data; a BOT-
+        // placeholder would only create a $0 duplicate alongside it.
+        const { data: twin } = await crmDb
+          .from("bookings")
+          .select("fareharbor_pk")
+          .eq("customer_id", custRow.id)
+          .eq("start_at", startAt)
+          .neq("fareharbor_pk", pk)
+          .maybeSingle();
+
+        if (twin?.fareharbor_pk) {
+          console.log(`[booking-import] skipping BOT- write — twin ${twin.fareharbor_pk} exists for cust=${custRow.id} start=${startAt}`);
+          isNewBooking = false;
+        } else {
+          await crmDb.from("bookings").upsert({
+            fareharbor_pk:       pk,
+            customer_id:         custRow.id,
+            activity_id:         activityId,
+            start_at:            startAt,
+            end_at:              endAt ?? startAt,
+            status:              "booked",
+            customer_count:      1,
+            receipt_total_cents: 0,
+            amount_paid_cents:   0,
+            total_cents:         0,
+            total_paid_cents:    0,
+            arrival_time:        startAt,
+            arrival_display:     buildArrivalDisplay(parsed.beginDatetime, parsed.endDatetime),
+            company,
+          }, { onConflict: "fareharbor_pk" });
+          manifestSaved = true;
+        }
       }
     }
 
