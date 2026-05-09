@@ -15121,6 +15121,56 @@ async function testOperationsDashboard() {
     }
     chk("ops4b: filter-options + CSV export require auth", allOk);
   }
+
+  // ── Phase 4C: AI insights + operations intelligence ───────────────────
+  const {
+    handleOperationsIntelligence,
+    handleOperationsAiInsights,
+  } = await import("./adminOperations.js");
+
+  // intelligence: 503 on no crmSupabase
+  {
+    const res = mockRes();
+    await handleOperationsIntelligence({ portalUser: adminUser, query: {} }, res, null, null);
+    chk("ops4c: intelligence 503 when crmSupabase missing", res.statusCode === 503);
+  }
+
+  // ai-insights: 503 on no DB
+  {
+    const res = mockRes();
+    await handleOperationsAiInsights({ portalUser: adminUser, method: "GET" }, res, null, null, null);
+    chk("ops4c: ai-insights 503 when DB missing", res.statusCode === 503);
+  }
+
+  // ai-insights POST refresh: 403 for non-admin
+  {
+    const fakeDb  = { from: () => ({ select: () => ({ eq: () => ({ order: () => ({ limit: () => ({ data: [] }) }) }) }) }) };
+    const fakeCrm = { from: () => ({}) };
+    const res = mockRes();
+    await handleOperationsAiInsights(
+      { portalUser: readonlyUser, method: "POST" },
+      res, fakeDb, fakeCrm, null
+    );
+    chk("ops4c: ai-insights POST refresh rejects non-admin → 403", res.statusCode === 403);
+  }
+
+  // HTTP guards: routes 401
+  {
+    let allOk = true;
+    for (const [m, r] of [
+      ["GET",  "/portal/api/operations/intelligence"],
+      ["GET",  "/portal/api/operations/ai-insights"],
+      ["POST", "/portal/api/operations/ai-insights/refresh"],
+    ]) {
+      const resp = await fetch(`${BASE_URL}${r}`, {
+        method: m,
+        headers: m === "POST" ? { "Content-Type": "application/json" } : {},
+        body:    m === "POST" ? "{}" : undefined,
+      });
+      if (resp.status !== 401) { allOk = false; console.log(`Expected 401 on ${m} ${r}, got ${resp.status}`); }
+    }
+    chk("ops4c: intelligence + ai-insights require auth", allOk);
+  }
 }
 
 main().catch((e) => {

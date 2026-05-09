@@ -458,6 +458,23 @@ tr:hover td { background: var(--panel2); }
 .ops-sort.sorted-asc  .ops-sort-ind::after { content: ' ↑'; color: var(--accent); }
 .ops-sort.sorted-desc .ops-sort-ind::after { content: ' ↓'; color: var(--accent); }
 #opsFiltersModal select[multiple] { background: var(--panel2); }
+.ops-skel {
+  background: linear-gradient(90deg, var(--panel2) 0%, var(--border) 50%, var(--panel2) 100%);
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: ops-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes ops-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.ops-pulse-late {
+  animation: ops-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ops-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,126,126,0.45); }
+  50%      { box-shadow: 0 0 0 6px rgba(245,126,126,0); }
+}
 .data-table { border-collapse:collapse; }
 .data-table th { text-align:left; padding:10px 8px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text3); border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--panel); }
 .data-table td { padding:10px 8px; font-size:12.5px; color:var(--text2); border-bottom:1px solid var(--border); }
@@ -1243,7 +1260,29 @@ tr:hover td { background: var(--panel2); }
             <span>Executive summary</span>
             <span id="opsExecRange" style="font-size:11px;color:var(--text3);font-weight:400;">—</span>
           </div>
-          <div id="opsExecSummary" style="font-size:13px;color:var(--text2);margin-top:10px;">Loading…</div>
+          <div id="opsExecSummary" style="font-size:13px;color:var(--text2);margin-top:10px;">
+            <div class="ops-skel" style="height:24px;width:60%;margin-bottom:10px;"></div>
+            <div class="ops-skel" style="height:18px;width:90%;margin-bottom:8px;"></div>
+            <div class="ops-skel" style="height:18px;width:80%;"></div>
+          </div>
+        </div>
+
+        <!-- AI INSIGHTS — Claude-generated narrative observations (24h cached) -->
+        <div class="card client-admin-only" style="margin-bottom:16px;background:linear-gradient(135deg, rgba(16,185,129,0.06) 0%, var(--panel) 100%);border-color:rgba(16,185,129,0.18);">
+          <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+            <span><span style="color:var(--accent);">✦</span> AI insights</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span id="opsAiAge" style="font-size:11px;color:var(--text3);font-weight:400;"></span>
+              <button class="btn btn-ghost btn-sm" id="opsAiRefreshBtn" onclick="loadOpsAiInsights(true)">↻ Refresh</button>
+            </div>
+          </div>
+          <div id="opsAiInsights" style="font-size:13px;color:var(--text2);margin-top:10px;">Loading…</div>
+        </div>
+
+        <!-- OPERATIONS INTELLIGENCE — actionable risk signals -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:10px;">⚡ Operations intelligence</div>
+          <div id="opsIntel" style="font-size:13px;color:var(--text2);">Loading…</div>
         </div>
 
         <!-- KPI BAR (labels swap to range when custom range is active) -->
@@ -5689,6 +5728,8 @@ async function loadOperations() {
     loadOpsTomorrowPrep(),
     loadOpsGuides(_opsGuideTab),
     loadOpsAnalytics(_opsAnalyticsDays),
+    loadOpsIntelligence(),
+    loadOpsAiInsights(false),
   ]);
   setupOperationsHandlers();
 }
@@ -6455,6 +6496,81 @@ async function loadOpsForecast() {
       </div>
     </div>
   `;
+}
+
+// ── Operations: AI insights (Claude-generated, 24h cached) ────────────────
+async function loadOpsAiInsights(force) {
+  const wrap = document.getElementById('opsAiInsights');
+  const btn  = document.getElementById('opsAiRefreshBtn');
+  if (!wrap) return;
+  if (force) {
+    btn.disabled = true;
+    wrap.innerHTML = '<div class="ops-skel" style="height:18px;width:70%;margin-bottom:8px;"></div><div class="ops-skel" style="height:14px;width:90%;margin-bottom:6px;"></div><div class="ops-skel" style="height:14px;width:85%;margin-bottom:6px;"></div><div class="ops-skel" style="height:14px;width:78%;"></div>';
+  }
+  const data = await apiFetch('/operations/ai-insights' + (force ? '/refresh' : ''), force ? { method: 'POST', body: '{}' } : {});
+  if (btn) btn.disabled = false;
+  if (!data) return;
+  if (data.error) {
+    wrap.innerHTML = `<span style="color:var(--text3);">${escapeHtml(data.error)}</span>`;
+    return;
+  }
+  const bullets = data.bullets ?? [];
+  const headline = data.headline;
+  const ageEl = document.getElementById('opsAiAge');
+  if (ageEl) {
+    if (data.generated_at) {
+      const mins = Math.round((Date.now() - new Date(data.generated_at).getTime()) / 60_000);
+      ageEl.textContent = mins < 60 ? `${mins}m ago${data.cached ? ' · cached' : ''}` : `${Math.round(mins/60)}h ago${data.cached ? ' · cached' : ''}`;
+    } else {
+      ageEl.textContent = '';
+    }
+  }
+  if (!bullets.length && !headline) {
+    wrap.innerHTML = '<span style="color:var(--text3);">Not enough booking data yet for AI observations.</span>';
+    return;
+  }
+  wrap.innerHTML = `
+    ${headline ? `<div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:10px;">${escapeHtml(headline)}</div>` : ''}
+    <ul style="margin:0;padding-left:18px;">
+      ${bullets.map(b => `<li style="margin-bottom:5px;line-height:1.45;">${escapeHtml(b)}</li>`).join('')}
+    </ul>
+  `;
+}
+
+// ── Operations: operational intelligence (staffing/waiver/inventory) ──────
+async function loadOpsIntelligence() {
+  const wrap = document.getElementById('opsIntel');
+  if (!wrap) return;
+  const data = await apiFetch('/operations/intelligence');
+  if (!data) return;
+
+  const wr  = data.waiver_risk?.count ?? 0;
+  const stf = data.staffing ?? {};
+  const inv = data.inventory_load ?? [];
+
+  const flagBlock = (sev, text) => {
+    const colors = sev === 'critical' ? ['#3a1f1f', '#f57e7e'] : ['#3a2f1f', '#f5c14a'];
+    return `<div style="padding:8px 12px;border-radius:6px;background:${colors[0]};color:${colors[1]};margin-bottom:6px;font-weight:600;font-size:12.5px;">⚠ ${escapeHtml(text)}</div>`;
+  };
+  const flags = [];
+  if (wr > 0) flags.push(flagBlock(wr >= 3 ? 'critical' : 'warn', `${wr} arrival${wr===1?'':'s'} within 2 hours missing waivers`));
+  for (const f of (stf.flags ?? [])) flags.push(flagBlock(f.severity ?? 'warn', f.label));
+  if (!flags.length) flags.push('<div style="padding:8px 12px;border-radius:6px;background:#1f3a2c;color:#7ee2a8;font-weight:600;font-size:12.5px;">✓ No operational risks detected.</div>');
+
+  const maxPax = Math.max(1, ...inv.map(i => i.pax ?? 0));
+  const invHtml = inv.length ? `
+    <div style="margin-top:14px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;margin-bottom:6px;">Inventory load (next 14 days)</div>
+    ${inv.map(i => {
+      const w = (i.pax / maxPax) * 100;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.5px;">
+        <span style="flex:1;font-weight:600;color:var(--text);">${escapeHtml(i.activity)}</span>
+        <span style="min-width:60px;text-align:right;color:var(--text3);font-size:11px;">${i.bookings} bk</span>
+        <span style="min-width:60px;text-align:right;color:var(--text2);">${i.pax} pax</span>
+        <div style="width:80px;height:5px;background:var(--panel2);border-radius:2px;overflow:hidden;"><div style="width:${w.toFixed(1)}%;height:100%;background:var(--accent);"></div></div>
+      </div>`;
+    }).join('')}` : '';
+
+  wrap.innerHTML = flags.join('') + invHtml;
 }
 
 // ── Operations: analytics (revenue/day + top activities + completion %) ───

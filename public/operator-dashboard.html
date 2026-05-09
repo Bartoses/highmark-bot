@@ -64,6 +64,21 @@ body.tv th { font-size: 13px; }
 body.tv .head h1 { font-size: 32px; }
 body.tv .pill { font-size: 14px; padding: 4px 12px; }
 
+/* TV mode panel rotation: dim everything except .tv-focus, which gets a glow */
+body.tv .tv-rotatable { transition: opacity .6s ease, transform .4s ease; }
+body.tv .tv-rotatable:not(.tv-focus) { opacity: .55; }
+body.tv .tv-focus {
+  opacity: 1; transform: scale(1.005);
+  box-shadow: 0 0 0 2px rgba(16,185,129,0.55), 0 0 36px rgba(16,185,129,0.15);
+}
+body.tv .tv-late {
+  animation: tv-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tv-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,126,126,0.6); }
+  50%      { box-shadow: 0 0 0 10px rgba(245,126,126,0); }
+}
+
 /* Mobile (in trucks, at trailheads): condensed cards, large tap targets,
    drop low-value table cols. NOT applied in TV mode. */
 @media (max-width: 640px) {
@@ -113,17 +128,17 @@ body.tv .pill { font-size: 14px; padding: 4px 12px; }
   </div>
 
   <div class="cols-2" style="margin-bottom:16px;">
-    <div class="card">
+    <div class="card tv-rotatable" id="panel-arriving">
       <div class="card-title">Arriving next</div>
       <div id="arrivingList" style="font-size:13px;color:var(--text2);">Loading…</div>
     </div>
-    <div class="card">
+    <div class="card tv-rotatable" id="panel-prep">
       <div class="card-title">Tomorrow prep</div>
       <div id="prepList" style="font-size:13px;color:var(--text2);">Loading…</div>
     </div>
   </div>
 
-  <div class="card" style="margin-bottom:16px;">
+  <div class="card tv-rotatable" id="panel-bookings" style="margin-bottom:16px;">
     <div class="card-title">Today's bookings</div>
     <div style="overflow-x:auto;">
       <table>
@@ -138,11 +153,11 @@ body.tv .pill { font-size: 14px; padding: 4px 12px; }
   </div>
 
   <div class="cols-2">
-    <div class="card">
+    <div class="card tv-rotatable" id="panel-rev">
       <div class="card-title">Last 30 days · Revenue</div>
       <div id="revChart" style="font-size:12px;color:var(--text2);">Loading…</div>
     </div>
-    <div class="card">
+    <div class="card tv-rotatable" id="panel-acts">
       <div class="card-title">Last 30 days · Top activities</div>
       <div id="actChart" style="font-size:12px;color:var(--text2);">Loading…</div>
     </div>
@@ -286,6 +301,29 @@ body.tv .pill { font-size: 14px; padding: 4px 12px; }
 
   refresh();
   setInterval(refresh, refreshMs);
+
+  // ── TV mode panel rotation: cycle focus across the panels every 8s ──
+  if (tv) {
+    const panelOrder = ['panel-arriving', 'panel-prep', 'panel-bookings', 'panel-rev', 'panel-acts'];
+    let idx = 0;
+    function tickRotation() {
+      document.querySelectorAll('.tv-rotatable').forEach(el => el.classList.remove('tv-focus'));
+      const target = document.getElementById(panelOrder[idx]);
+      if (target) target.classList.add('tv-focus');
+      idx = (idx + 1) % panelOrder.length;
+    }
+    tickRotation();
+    setInterval(tickRotation, 8_000);
+
+    // Pulse-highlight late arrivals when present (called after refresh runs)
+    const observer = new MutationObserver(() => {
+      const arriving = document.getElementById('panel-arriving');
+      if (!arriving) return;
+      const hasLate = !!arriving.querySelector('.pill-late');
+      arriving.classList.toggle('tv-late', hasLate);
+    });
+    observer.observe(document.getElementById('arrivingList'), { childList: true, subtree: true });
+  }
 })();
 </script>
 </body>

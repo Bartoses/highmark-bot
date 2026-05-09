@@ -1240,6 +1240,219 @@ function emptyFilterOptions() {
   return { activities: [], locations: [], companies: [], affiliates: [], guides: [], statuses: [] };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4C — Operations Intelligence
+// Aggregates today + tomorrow + 14-day-forward bookings into actionable risk
+// signals: staffing risk, waiver risk, inventory load. No new schema required.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handleOperationsIntelligence(req, res, _supabase, crmSupabase = null) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM database unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id required" });
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) return res.json(emptyIntelligence());
+
+  try {
+    const todayWindow    = windowFor("today");
+    const tomorrowWindow = windowFor("tomorrow");
+    const next14End      = startOfDayMtIso(14);
+
+    const [today, tomorrow, next14] = await Promise.all([
+      fetchBookingsInWindow(crmSupabase, companies, todayWindow.start, todayWindow.end, { limit: 500 }),
+      fetchBookingsInWindow(crmSupabase, companies, tomorrowWindow.start, tomorrowWindow.end, { limit: 500 }),
+      fetchBookingsInWindow(crmSupabase, companies, todayWindow.start, next14End, { limit: 1000 }),
+    ]);
+
+    // Waiver risk: bookings within next 2h missing waivers
+    const now = Date.now();
+    const waiverRisk = today.rows.filter(b => {
+      const startMs = new Date(b.start_at).getTime();
+      return startMs >= now - 30 * 60_000 && startMs <= now + 2 * 3600_000 && b.waiver_signed === false;
+    }).map(b => ({
+      fareharbor_pk: b.fareharbor_pk, customer_name: b.customer_name, phone: b.phone,
+      activity: b.activity, start_at: b.start_at, pax: b.pax,
+    }));
+
+    // Staffing risk: count tomorrow + next 7 weekend days, surface unassigned guide load
+    const tomorrowUnassigned = tomorrow.rows.filter(b => !b.guide_name);
+    const weekendForward = next14.rows.filter(b => {
+      const t = new Date(b.start_at);
+      const dow = t.getUTCDay();
+      return (dow === 0 || dow === 6) && t.getTime() > now;
+    });
+    const weekendUnassigned = weekendForward.filter(b => !b.guide_name);
+    const staffingFlags = [];
+    if (tomorrowUnassigned.length >= 3) {
+      staffingFlags.push({
+        severity: "warn",
+        label: `${tomorrowUnassigned.length} bookings tomorrow without an assigned guide`,
+      });
+    }
+    if (weekendUnassigned.length >= 5) {
+      staffingFlags.push({
+        severity: "warn",
+        label: `${weekendUnassigned.length} weekend bookings (next 14 days) without an assigned guide`,
+      });
+    }
+
+    // Inventory load by activity: pax_total / activity_count_in_window
+    // Treat "vehicles" as customer_count proxy (we don't have a true inventory cap yet)
+    const inventory = new Map();
+    for (const b of next14.rows) {
+      const a = b.activity ?? "Unknown";
+      const cur = inventory.get(a) ?? { activity: a, bookings: 0, pax: 0 };
+      cur.bookings += 1;
+      cur.pax      += Number(b.pax ?? 1);
+      inventory.set(a, cur);
+    }
+    const inventoryRows = [...inventory.values()].sort((a, b) => b.pax - a.pax).slice(0, 10);
+
+    return res.json({
+      generated_at: new Date().toISOString(),
+      waiver_risk: { count: waiverRisk.length, bookings: waiverRisk },
+      staffing: {
+        tomorrow_unassigned:  tomorrowUnassigned.length,
+        weekend_total:        weekendForward.length,
+        weekend_unassigned:   weekendUnassigned.length,
+        flags:                staffingFlags,
+      },
+      inventory_load: inventoryRows,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+function emptyIntelligence() {
+  return {
+    generated_at: new Date().toISOString(),
+    waiver_risk: { count: 0, bookings: [] },
+    staffing: { tomorrow_unassigned: 0, weekend_total: 0, weekend_unassigned: 0, flags: [] },
+    inventory_load: [],
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4C — AI Insights (Claude-generated, 24h cached per client)
+// GET  /portal/api/operations/ai-insights         — read-through cache
+// POST /portal/api/operations/ai-insights/refresh — force regeneration
+// ─────────────────────────────────────────────────────────────────────────────
+const AI_CACHE_TTL_MS = 24 * 3600_000;
+const AI_INSIGHTS_MODEL = "claude-haiku-4-5-20251001";
+
+export async function handleOperationsAiInsights(req, res, supabase, crmSupabase, anthropic) {
+  if (!supabase || !crmSupabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id required" });
+  const force = req.method === "POST";
+  if (force && !req.portalUser?.isClientAdmin) return res.status(403).json({ error: "Admin access required" });
+
+  try {
+    // 1. Cache lookup
+    if (!force) {
+      const { data: cached } = await supabase
+        .from("ops_ai_insights")
+        .select("insights,generated_at")
+        .eq("client_id", clientId)
+        .order("generated_at", { ascending: false })
+        .limit(1);
+      const top = cached?.[0];
+      if (top && Date.now() - new Date(top.generated_at).getTime() < AI_CACHE_TTL_MS) {
+        return res.json({ ...top.insights, generated_at: top.generated_at, cached: true });
+      }
+    }
+
+    if (!anthropic) return res.status(503).json({ error: "Claude API unavailable" });
+
+    // 2. Build context: a compact JSON summary of last 30 days + tomorrow + forecast
+    const ctx = await buildInsightsContext(crmSupabase, clientId);
+    if (!ctx) return res.json({ headline: null, bullets: [], generated_at: new Date().toISOString(), cached: false });
+
+    // 3. Prompt Claude Haiku for 4-6 operator-facing observations
+    const systemPrompt = `You are an analyst writing concise operator-facing observations for an outdoor adventure company's operations dashboard. Read the JSON data and return EXACTLY 4-6 short bullets (each <= 140 chars) that surface non-obvious patterns about pacing, staffing risk, revenue mix, or operational risk. Avoid generic statements ("revenue is good"). Each bullet must be specific to the data. Output JSON only: { "headline": "<one sentence summary>", "bullets": ["...", "..."] }`;
+
+    let parsed = { headline: null, bullets: [] };
+    try {
+      const response = await anthropic.messages.create({
+        model:      AI_INSIGHTS_MODEL,
+        max_tokens: 500,
+        system:     systemPrompt,
+        messages: [{ role: "user", content: `OPERATIONS DATA (JSON):\n${JSON.stringify(ctx)}` }],
+      });
+      const raw = response?.content?.[0]?.text ?? "{}";
+      // Strip code fences if Claude wrapped them
+      const cleaned = raw.replace(/^```json\s*|\s*```$/g, "").trim();
+      const obj = JSON.parse(cleaned);
+      if (obj && typeof obj === "object") {
+        parsed.headline = typeof obj.headline === "string" ? obj.headline.slice(0, 280) : null;
+        parsed.bullets  = Array.isArray(obj.bullets)
+          ? obj.bullets.filter(b => typeof b === "string").slice(0, 6).map(b => b.slice(0, 200))
+          : [];
+      }
+    } catch (e) {
+      console.error("[ai-insights] Claude error:", e.message);
+      return res.status(500).json({ error: "ai generation failed" });
+    }
+
+    // 4. Persist
+    const insights = { ...parsed, model: AI_INSIGHTS_MODEL, prompt_window: ctx.window };
+    await supabase.from("ops_ai_insights").insert({
+      client_id: clientId,
+      insights,
+    });
+
+    return res.json({ ...insights, generated_at: new Date().toISOString(), cached: false });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+async function buildInsightsContext(crmSupabase, clientId) {
+  const companies = resolveCompanyShortnames(clientId);
+  if (!companies.length) return null;
+
+  const last30Start = startOfDayMtIso(-30);
+  const todayStart  = startOfDayMtIso(0);
+  const next14End   = startOfDayMtIso(14);
+
+  const [past30, upcoming14] = await Promise.all([
+    fetchBookingsForRevenue(crmSupabase, companies, last30Start, todayStart),
+    fetchBookingsForRevenue(crmSupabase, companies, todayStart,  next14End),
+  ]);
+
+  const totals30 = totalsFor(past30);
+  const byActivity30 = groupBy(past30, "activity").slice(0, 5).map(({ name, bookings, pax, revenue_cents }) => ({ name, bookings, pax, revenue_cents }));
+  const byLocation30 = groupBy(past30, "location").slice(0, 5).map(({ name, bookings, pax, revenue_cents }) => ({ name, bookings, pax, revenue_cents }));
+  const byGuide30    = groupByGuide(past30).slice(0, 5).map(({ name, bookings, pax, revenue_cents }) => ({ name, bookings, pax, revenue_cents }));
+  const dow          = bestDayOfWeek(past30);
+
+  // Upcoming snapshot: counts, weekend share, unassigned guides
+  const totalsUp = totalsFor(upcoming14);
+  const weekendUp = upcoming14.filter(r => {
+    const dow = new Date(r.start_at).getUTCDay();
+    return dow === 0 || dow === 6;
+  });
+  const unassignedUp = upcoming14.filter(r => !r.guide_name).length;
+
+  return {
+    window: { past_days: 30, upcoming_days: 14, generated_at: new Date().toISOString() },
+    last_30_days: {
+      ...totals30,
+      best_day_of_week: dow,
+      top_activities: byActivity30,
+      top_locations:  byLocation30,
+      top_guides:     byGuide30,
+    },
+    next_14_days: {
+      bookings:           upcoming14.length,
+      pax:                totalsUp.pax,
+      revenue_cents:      totalsUp.revenue_cents,
+      weekend_bookings:   weekendUp.length,
+      unassigned_guides:  unassignedUp,
+    },
+  };
+}
+
 function emptyForecast() {
   return {
     month: null, mtd: null, booked_in_month: null, last_month: null,
