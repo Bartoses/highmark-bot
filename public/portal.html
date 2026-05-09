@@ -470,6 +470,11 @@ tr:hover td { background: var(--panel2); }
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+.ops-item-chip { font-size: 11px !important; padding: 2px 9px !important; border-radius: 12px !important; height: auto !important; line-height: 1.7 !important; white-space: nowrap; }
+.ops-item-chip.active { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
+.ops-item-season-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text3); white-space: nowrap; padding: 0 4px 0 6px; }
+.ops-item-season-label:first-child { padding-left: 0; }
+.ops-card-loading { opacity: 0.55; pointer-events: none; transition: opacity 0.15s; }
 .ops-pulse-late {
   animation: ops-pulse 1.6s ease-in-out infinite;
 }
@@ -1268,6 +1273,13 @@ tr:hover td { background: var(--panel2); }
               <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="summer" title="Apr–Oct trips">Summer</button>
               <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="winter" title="Nov–Mar trips">Winter</button>
               <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="shoulder" title="Apr–May trips">Shoulder</button>
+            </div>
+          </div>
+          <!-- Item filter chips — populated from filter-options, grouped summer/winter -->
+          <div id="opsItemFilterRow" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;border-top:1px solid var(--border);padding-top:8px;">
+            <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);white-space:nowrap;margin-right:2px;">Items</span>
+            <div id="opsItemChips" style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
+              <span style="font-size:11.5px;color:var(--text3);">Loading…</span>
             </div>
           </div>
         </div>
@@ -5674,6 +5686,7 @@ let _opsAnalyticsDays = 30;
 let _opsRange  = { mode: "preset", preset: "last30", start: null, end: null };
 let _opsDim    = "start";       // 'start' or 'booked'
 let _opsSeason = null;          // 'summer' | 'winter' | 'shoulder' | null
+let _opsItemsLoaded = false;    // item chip filter initialized
 
 function opsRangeQS() {
   const base = _opsRange.mode === "custom" && _opsRange.start && _opsRange.end
@@ -5755,8 +5768,69 @@ function opsApplyCustomRange() {
   loadOperations();
 }
 
+// ── Skeleton helper — shimmer placeholder rows ────────────────────────────
+function opsSkel(lines = 3) {
+  const ws = [72, 90, 65, 83, 78, 55, 88];
+  return Array.from({length: lines}, (_, i) =>
+    `<div class="ops-skel" style="height:13px;width:${ws[i % ws.length]}%;margin-bottom:9px;display:block;"></div>`
+  ).join('');
+}
+
+// ── Item filter chips — lazy-loaded from filter-options, grouped by season ─
+async function initOpsItemFilter() {
+  if (_opsItemsLoaded) { syncOpsItemChips(); return; }
+  const opts = await apiFetch('/operations/filter-options');
+  if (!opts) return;
+  _opsItemsLoaded = true;
+  renderOpsItemChips(opts.items_by_season ?? {}, opts.activities ?? []);
+}
+
+function renderOpsItemChips(bySeason, allActivities) {
+  const wrap = document.getElementById('opsItemChips');
+  if (!wrap) return;
+  const { summer = [], winter = [], year_round = [] } = bySeason;
+  // Fall back: if categorisation is empty, show all in year_round
+  const effectiveYr = (!summer.length && !winter.length) ? allActivities : year_round;
+  if (!summer.length && !winter.length && !effectiveYr.length) {
+    wrap.innerHTML = '<span style="font-size:11.5px;color:var(--text3);">No items found.</span>';
+    return;
+  }
+  const selected = new Set(_opsFilters.activity ?? []);
+  const chip = (act) => {
+    const active = selected.has(act) ? ' active' : '';
+    return `<button class="btn btn-ghost btn-sm ops-item-chip${active}" data-activity="${escapeHtml(act)}" title="${escapeHtml(act)}">${escapeHtml(act)}</button>`;
+  };
+  const group = (label, items) => {
+    if (!items.length) return '';
+    return `<span class="ops-item-season-label">${label}</span>${items.map(chip).join('')}`;
+  };
+  wrap.innerHTML = group('Summer', summer) + group('Winter', winter) + group('All-season', effectiveYr);
+  // Wire click handlers
+  wrap.querySelectorAll('.ops-item-chip').forEach(btn => {
+    btn.onclick = () => {
+      const act = btn.dataset.activity;
+      const idx = _opsFilters.activity.indexOf(act);
+      if (idx === -1) _opsFilters.activity.push(act);
+      else _opsFilters.activity.splice(idx, 1);
+      btn.classList.toggle('active', _opsFilters.activity.includes(act));
+      updateOpsFilterBadge();
+      opsPersistFiltersUrl();
+      loadOperationsTable(_opsTab);
+    };
+  });
+}
+
+function syncOpsItemChips() {
+  const selected = new Set(_opsFilters.activity ?? []);
+  document.querySelectorAll('#opsItemChips .ops-item-chip').forEach(btn => {
+    btn.classList.toggle('active', selected.has(btn.dataset.activity));
+  });
+}
+
 async function loadOperations() {
   document.getElementById("opsRangeLabel").textContent = opsRangeLabel();
+  // Reset cards to skeleton state before firing all fetches
+  opsResetCardSkeletons();
   await Promise.all([
     loadOperationsSummary(),
     loadOpsRevenueAndExec(),
@@ -5767,8 +5841,41 @@ async function loadOperations() {
     loadOpsAnalytics(_opsAnalyticsDays),
     loadOpsIntelligence(),
     loadOpsAiInsights(false),
+    initOpsItemFilter(),
   ]);
   setupOperationsHandlers();
+}
+
+function opsResetCardSkeletons() {
+  // KPI values
+  ['opsKpiBookings','opsKpiPax','opsKpiRevenue','opsKpiAvg','opsKpiWaivers','opsKpiCheckins','opsKpiUnpaid','opsKpiArrivingNext'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = `<span class="ops-skel" style="height:20px;width:55%;display:inline-block;"></span>`;
+  });
+  // Exec summary
+  const exec = document.getElementById('opsExecSummary');
+  if (exec) exec.innerHTML = `${opsSkel(1).replace('13px','22px').replace('72%','52%')}${opsSkel(2)}`;
+  // Revenue card
+  const rev = document.getElementById('opsRevenue');
+  if (rev) rev.innerHTML = opsSkel(5);
+  // Forecast card
+  const fc = document.getElementById('opsForecast');
+  if (fc) fc.innerHTML = opsSkel(3);
+  // Intel card
+  const intel = document.getElementById('opsIntel');
+  if (intel) intel.innerHTML = opsSkel(3);
+  // Guides card
+  const guides = document.getElementById('opsGuides');
+  if (guides) guides.innerHTML = opsSkel(4);
+  // Tomorrow prep
+  const prep = document.getElementById('opsTomorrowPrep');
+  if (prep) prep.innerHTML = opsSkel(3);
+  // Arriving next
+  const arr = document.getElementById('opsArrivingNext');
+  if (arr) arr.innerHTML = opsSkel(3);
+  // Analytics
+  const an = document.getElementById('opsAnalytics');
+  if (an) an.innerHTML = opsSkel(4);
 }
 
 function setupOperationsHandlers() {
@@ -5901,7 +6008,11 @@ function boolPill(b, okLabel, missLabel) {
 }
 
 async function loadOperationsSummary() {
-  // Pass the global range so KPIs reflect the selected window.
+  // Show KPI skeletons while fetching
+  ['opsKpiBookings','opsKpiPax','opsKpiRevenue','opsKpiWaivers','opsKpiCheckins','opsKpiUnpaid','opsKpiArrivingNext'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = `<span class="ops-skel" style="height:18px;width:50%;display:inline-block;"></span>`;
+  });
   const data = await apiFetch(`/operations/summary?${opsRangeQS()}`);
   if (!data) return;
   const t = data.today ?? {};
@@ -5986,7 +6097,7 @@ function renderOpsAlerts(today) {
 async function loadOpsTomorrowPrep() {
   const wrap = document.getElementById('opsTomorrowPrep');
   if (!wrap) return;
-  wrap.innerHTML = 'Loading…';
+  wrap.innerHTML = opsSkel(3);
   const extra = _opsSeason ? `?season=${encodeURIComponent(_opsSeason)}` : '';
   const data = await apiFetch('/operations/tomorrow-prep' + extra);
   if (!data) return;
@@ -6028,7 +6139,7 @@ async function loadOpsTomorrowPrep() {
 async function loadOpsGuides(tab) {
   const wrap = document.getElementById('opsGuides');
   if (!wrap) return;
-  wrap.innerHTML = 'Loading…';
+  wrap.innerHTML = opsSkel(4);
   const extra = (_opsDim === 'booked' ? '&dim=booked' : '') + (_opsSeason ? `&season=${encodeURIComponent(_opsSeason)}` : '');
   const data = await apiFetch(`/operations/guides?tab=${encodeURIComponent(tab)}${extra}`);
   if (!data) return;
@@ -6146,6 +6257,7 @@ function opsApplyFilters() {
   document.getElementById('opsFiltersModal').classList.remove('open');
   updateOpsFilterBadge();
   opsPersistFiltersUrl();
+  syncOpsItemChips();
   loadOperationsTable(_opsTab);
 }
 
@@ -6153,6 +6265,7 @@ function opsResetFilters() {
   _opsFilters = { activity:[], location:[], guide:[], company:[], status:[], affiliate:[], waiver:null, payment:null, min_pax:null, max_pax:null };
   updateOpsFilterBadge();
   opsPersistFiltersUrl();
+  syncOpsItemChips();
   document.getElementById('opsFiltersModal').classList.remove('open');
   loadOperationsTable(_opsTab);
 }
@@ -6246,7 +6359,11 @@ function renderOpsTableRows() {
 
 async function loadOperationsTable(tab) {
   const tbody = document.getElementById('opsTableBody');
-  tbody.innerHTML = '<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text3);">Loading…</td></tr>';
+  tbody.innerHTML = Array.from({length:5}, () =>
+    `<tr>${Array.from({length:9}, () =>
+      `<td style="padding:10px 8px;"><span class="ops-skel" style="height:12px;width:${50+Math.floor(Math.random()*40)}%;display:inline-block;"></span></td>`
+    ).join('')}</tr>`
+  ).join('');
   const search = document.getElementById('opsSearch')?.value ?? '';
   // Bookings table uses its own tab UI (today/tomorrow/week/past). The global
   // date range bar above governs the analytics + KPI block. Apply filters on
@@ -6446,6 +6563,8 @@ function fmtDelta(d, isPct = false) {
 }
 
 async function loadOpsRevenueAndExec() {
+  const revWrap = document.getElementById('opsRevenue');
+  if (revWrap && !revWrap.classList.contains('ops-skel')) revWrap.innerHTML = opsSkel(5);
   const data = await apiFetch(`/operations/revenue?${opsRangeQS()}&compare=prev`);
   if (!data) return;
 
@@ -6531,6 +6650,7 @@ async function loadOpsRevenueAndExec() {
 
 async function loadOpsForecast() {
   const wrap = document.getElementById('opsForecast');
+  if (wrap) wrap.innerHTML = opsSkel(3);
   const data = await apiFetch('/operations/forecast');
   if (!data) return;
   if (!data.month) {
@@ -6610,6 +6730,7 @@ async function loadOpsAiInsights(force) {
 async function loadOpsIntelligence() {
   const wrap = document.getElementById('opsIntel');
   if (!wrap) return;
+  wrap.innerHTML = opsSkel(3);
   const extra = _opsSeason ? `?season=${encodeURIComponent(_opsSeason)}` : '';
   const data = await apiFetch('/operations/intelligence' + extra);
   if (!data) return;
@@ -6647,7 +6768,7 @@ async function loadOpsIntelligence() {
 async function loadOpsAnalytics(days) {
   const wrap = document.getElementById('opsAnalytics');
   if (!wrap) return;
-  wrap.innerHTML = 'Loading…';
+  wrap.innerHTML = opsSkel(4);
   const extra = (_opsDim === 'booked' ? '&dim=booked' : '') + (_opsSeason ? `&season=${encodeURIComponent(_opsSeason)}` : '');
   const data = await apiFetch(`/operations/analytics?days=${days}${extra}`);
   if (!data) return;

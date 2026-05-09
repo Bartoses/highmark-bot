@@ -1337,7 +1337,7 @@ export async function handleOperationsFilterOptions(req, res, _supabase, crmSupa
 
     const [{ data: manifest, error: mErr }, { data: opsRows, error: oErr }] = await Promise.all([
       crmSupabase.from("daily_manifest")
-        .select("activity,location,company,fareharbor_pk,affiliate")
+        .select("activity,location,company,fareharbor_pk,affiliate,category")
         .in("company", companies)
         .gte("start_at", start)
         .lt("start_at",  end)
@@ -1358,7 +1358,25 @@ export async function handleOperationsFilterOptions(req, res, _supabase, crmSupa
     const affiliates = uniqSorted((manifest ?? []).map(r => r.affiliate));
     const guides     = uniqSorted((opsRows  ?? []).map(r => (r.guide_name ?? "").trim()).filter(Boolean));
     const statuses   = uniqSorted((opsRows  ?? []).map(r => r.status));
-    return res.json({ activities, locations, companies: compsOut, affiliates, guides, statuses });
+
+    // Group activities by season based on their category field
+    const SUMMER_CATS = new Set(['rzr_rental','rzr_tour','atv_rental','atv_tour','raft','kayak','paddleboard','canoe','zipline']);
+    const WINTER_CATS = new Set(['guided_tour','snowmobile_tour','snow_tour','ski_lesson','snowshoe','sled','ice_fishing']);
+    const actCatMap = new Map();
+    for (const r of manifest ?? []) {
+      if (r.activity && r.category && !actCatMap.has(r.activity)) {
+        actCatMap.set(r.activity, (r.category ?? "").toLowerCase().trim());
+      }
+    }
+    const items_by_season = { summer: [], winter: [], year_round: [] };
+    for (const act of activities) {
+      const cat = actCatMap.get(act) ?? "";
+      if (SUMMER_CATS.has(cat))      items_by_season.summer.push(act);
+      else if (WINTER_CATS.has(cat)) items_by_season.winter.push(act);
+      else                            items_by_season.year_round.push(act);
+    }
+
+    return res.json({ activities, locations, companies: compsOut, affiliates, guides, statuses, items_by_season });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
