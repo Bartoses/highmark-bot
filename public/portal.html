@@ -497,20 +497,80 @@ tr:hover td { background: var(--panel2); }
   .ops-kpi-value { font-size:18px; }
   .ops-tab-btn { padding: 6px 10px !important; font-size: 11px !important; }
   #opsSearch { width: 100% !important; }
-  /* Filter bar: tighter padding on mobile */
   #opsFilterCard > div:first-child { padding: 9px 12px; }
   #opsFilterBody { padding: 8px 12px; gap: 8px; }
-  /* Drop Location, Waiver, Check-in cols on tight screens; status pill survives */
+  /* New 8-col table: hide Location(5) and Status(7) on mobile */
   .ops-table th:nth-child(5), .ops-table td:nth-child(5) { display:none; }
-  .ops-table th:nth-child(6), .ops-table td:nth-child(6) { display:none; }
-  .ops-table th:nth-child(8), .ops-table td:nth-child(8) { display:none; }
+  .ops-table th:nth-child(7), .ops-table td:nth-child(7) { display:none; }
   .ops-detail-grid { grid-template-columns: 100px 1fr !important; }
-  /* Action buttons stack into 2 cols at narrow widths */
   #opsBookingModalActions > div[style*="flex-wrap"] { flex-direction: column; }
   #opsBookingModalActions > div[style*="flex-wrap"] > .btn { width: 100%; }
-  /* Share-link rows: stack URL + buttons */
   #opsShareLinksList > div > div[style*="display:flex;gap:6px"] { flex-wrap: wrap; }
   #opsShareLinksList input[readonly] { width: 100%; min-width: 0; }
+  #opsHealthRow { grid-template-columns: 1fr !important; }
+  .ops-dispatch-item { grid-template-columns: 60px 1fr !important; }
+  .ops-dispatch-actions { display: none !important; }
+}
+/* ── KPI micro-context ─────────────────────────────────────────────────────── */
+.ops-kpi-ctx { font-size:11px; color:var(--text3); margin-top:4px; line-height:1.3; }
+/* ── Operational Health Score ring ────────────────────────────────────────── */
+.ops-health-score { display:flex; align-items:center; gap:16px; }
+/* ── Today's Priorities ──────────────────────────────────────────────────── */
+.ops-priority-item {
+  display:flex; align-items:flex-start; gap:10px; padding:9px 12px;
+  border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid var(--border);
+  margin-bottom:6px; cursor:pointer; transition:background .12s, border-color .12s;
+}
+.ops-priority-item:hover { background:rgba(255,255,255,0.05); border-color:var(--border2); }
+.ops-priority-item.p-crit { border-left:3px solid #f57e7e; }
+.ops-priority-item.p-warn { border-left:3px solid #f5c14a; }
+.ops-priority-item.p-info { border-left:3px solid #7ec0f5; }
+.ops-priority-num { font-size:10px; font-weight:700; color:var(--text3); width:18px; flex-shrink:0; padding-top:1px; }
+.ops-priority-main { flex:1; }
+.ops-priority-text { font-size:13px; color:var(--text); font-weight:600; line-height:1.3; }
+.ops-priority-sub { font-size:11px; color:var(--text3); margin-top:2px; }
+.ops-priority-actions { display:flex; gap:5px; flex-shrink:0; align-items:flex-start; flex-wrap:wrap; }
+/* ── Dispatch board (arriving next) ──────────────────────────────────────── */
+.ops-dispatch-item {
+  display:grid; grid-template-columns:72px 1fr auto; gap:12px; align-items:start;
+  padding:12px 0; border-bottom:1px solid var(--border);
+}
+.ops-dispatch-item:last-child { border-bottom:none; }
+.ops-dispatch-item.is-late { background:rgba(245,126,126,0.04); border-left:3px solid #f57e7e; padding-left:10px; margin-left:-1px; border-radius:3px 0 0 3px; }
+.ops-dispatch-item.arriving-soon { border-left:3px solid #7ec0f5; padding-left:10px; margin-left:-1px; border-radius:3px 0 0 3px; }
+.ops-dispatch-time { font-size:14px; font-weight:700; color:var(--text); }
+.ops-dispatch-cd { font-size:11px; font-weight:700; margin-top:2px; }
+.ops-dispatch-cd.cd-late { color:#f57e7e; }
+.ops-dispatch-cd.cd-soon { color:#7ec0f5; }
+.ops-dispatch-cd.cd-ok { color:var(--text3); }
+.ops-dispatch-avatar { width:30px; height:30px; border-radius:50%; background:var(--panel2); display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:var(--text2); margin-right:8px; flex-shrink:0; vertical-align:middle; }
+.ops-dispatch-actions { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+.ops-dispatch-tags { display:flex; gap:4px; flex-wrap:wrap; margin-top:5px; }
+/* ── Risk badges ─────────────────────────────────────────────────────────── */
+.ops-risk { display:inline-flex; align-items:center; gap:3px; padding:1px 6px; border-radius:8px; font-size:10.5px; font-weight:700; white-space:nowrap; }
+.ops-risk.r-crit { background:rgba(245,126,126,0.15); color:#f57e7e; }
+.ops-risk.r-warn { background:rgba(245,193,74,0.15); color:#f5c14a; }
+.ops-risk.r-info { background:rgba(126,192,245,0.15); color:#7ec0f5; }
+.ops-risk.r-vip  { background:rgba(167,139,250,0.15); color:#c4b5fd; }
+.ops-risk.r-ok   { background:rgba(126,226,168,0.15); color:#7ee2a8; }
+/* ── Row risk tints ──────────────────────────────────────────────────────── */
+.ops-row-highval > td:first-child { border-left:2px solid var(--accent); }
+.ops-row-highval { background:rgba(16,185,129,0.04) !important; }
+.ops-row-crit > td { background:rgba(245,126,126,0.04); }
+.ops-row-warn > td { background:rgba(245,193,74,0.025); }
+/* ── AI insights scannable ───────────────────────────────────────────────── */
+.ops-insight-row { display:flex; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); align-items:flex-start; }
+.ops-insight-row:last-child { border-bottom:none; }
+.ops-insight-emoji { font-size:17px; flex-shrink:0; width:26px; text-align:center; padding-top:1px; }
+.ops-insight-body { flex:1; }
+.ops-insight-title { font-size:13px; font-weight:700; color:var(--text); line-height:1.35; }
+.ops-insight-detail { font-size:11.5px; color:var(--text2); margin-top:2px; line-height:1.4; }
+/* ── Morning briefing + Prep sheet print ─────────────────────────────────── */
+@media print {
+  body > *:not(#opsPrepModal) { display:none !important; }
+  #opsPrepModal { position:static !important; background:#fff !important; color:#000 !important; display:block !important; }
+  #opsPrepModal .modal { max-width:100% !important; max-height:none !important; box-shadow:none !important; }
+  .modal-footer, #opsPrepPrintBtn { display:none !important; }
 }
 /* ── Page placeholder (Conversations etc.) ───────────────────────────────── */
 .page-placeholder { text-align: center; padding: 60px 20px; color: var(--text2); }
@@ -1240,26 +1300,22 @@ tr:hover td { background: var(--panel2); }
       <div class="section client-admin-only" id="sec-operations">
         <div class="section-header">
           <span class="section-title">Operations</span>
-          <div style="display:flex;gap:6px;">
-            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('opsShareLinksModal').classList.add('open');loadOpsShareLinks();">🔗 Share dashboards</button>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn btn-ghost btn-sm" onclick="opsMorningBriefing()">☀ Briefing</button>
+            <button class="btn btn-ghost btn-sm" onclick="opsPrepSheet()">📋 Prep sheet</button>
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('opsShareLinksModal').classList.add('open');loadOpsShareLinks();">🔗 Share</button>
             <button class="btn btn-ghost btn-sm" onclick="loadOperations()" id="opsRefreshBtn">↻ Refresh</button>
           </div>
         </div>
 
         <!-- GLOBAL FILTER BAR — sticky, collapsible on mobile -->
         <div class="card ops-range-bar" id="opsFilterCard" style="margin-bottom:14px;padding:0;position:sticky;top:0;z-index:5;">
-
-          <!-- Always-visible summary row (tap to collapse/expand) -->
           <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;user-select:none;" onclick="toggleOpsFilterBar()">
             <span id="opsFilterToggleBtn" style="font-size:12px;color:var(--text3);flex-shrink:0;width:14px;text-align:center;">▼</span>
             <div id="opsFilterSummary" style="flex:1;font-size:12.5px;font-weight:600;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Last 30 days</div>
             <div style="font-size:11px;color:var(--text3);flex-shrink:0;" id="opsRangeLabel">—</div>
           </div>
-
-          <!-- Collapsible body -->
           <div id="opsFilterBody" style="border-top:1px solid var(--border);padding:10px 14px;display:flex;flex-direction:column;gap:10px;">
-
-            <!-- Range: single horizontal scroll strip -->
             <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;">
               <div style="display:flex;align-items:center;gap:6px;padding-bottom:2px;min-width:max-content;">
                 <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;padding-right:2px;">Range</span>
@@ -1279,8 +1335,6 @@ tr:hover td { background: var(--panel2); }
               <input type="date" id="opsCustomEnd" style="font-size:12px;">
               <button class="btn btn-primary btn-sm" onclick="opsApplyCustomRange()">Apply</button>
             </div>
-
-            <!-- Dim + Season: scrollable on mobile -->
             <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-top:1px solid var(--border);padding-top:10px;">
               <div style="display:flex;align-items:center;gap:10px;min-width:max-content;">
                 <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;">Dim</span>
@@ -1294,19 +1348,120 @@ tr:hover td { background: var(--panel2); }
                 <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="shoulder" style="flex-shrink:0;" title="Apr–May trips">Shoulder</button>
               </div>
             </div>
-
-            <!-- Items: each season group = independent horizontal scroll strip -->
             <div id="opsItemFilterRow" style="border-top:1px solid var(--border);padding-top:10px;">
               <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:6px;">Items</div>
-              <div id="opsItemChips">
-                <div style="font-size:11.5px;color:var(--text3);">Loading…</div>
-              </div>
+              <div id="opsItemChips"><div style="font-size:11.5px;color:var(--text3);">Loading…</div></div>
             </div>
-
-          </div><!-- /opsFilterBody -->
+          </div>
         </div>
 
-        <!-- EXECUTIVE SUMMARY (collapsible — primary headline metrics) -->
+        <!-- MISSION CONTROL: Health Score + Today's Priorities -->
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:16px;margin-bottom:16px;align-items:stretch;" id="opsHealthRow">
+          <!-- Health Score ring -->
+          <div class="card" id="opsHealthCard" style="background:linear-gradient(135deg, var(--panel) 0%, rgba(16,185,129,0.05) 100%);min-width:200px;">
+            <div class="ops-health-score">
+              <div style="position:relative;width:68px;height:68px;flex-shrink:0;">
+                <svg width="68" height="68" viewBox="0 0 68 68" style="overflow:visible;">
+                  <circle cx="34" cy="34" r="27" fill="none" stroke="var(--panel2)" stroke-width="7"/>
+                  <circle id="opsHealthArc" cx="34" cy="34" r="27" fill="none" stroke="#10b981" stroke-width="7"
+                    stroke-linecap="round" stroke-dasharray="169.65" stroke-dashoffset="33.93"
+                    style="transform:rotate(-90deg);transform-origin:34px 34px;transition:stroke-dashoffset .6s ease,stroke .4s;"/>
+                </svg>
+                <div id="opsHealthNum" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;color:var(--text);">—</div>
+              </div>
+              <div>
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:4px;">Operational Health</div>
+                <div id="opsHealthLabel" style="font-size:13px;font-weight:700;color:var(--text);line-height:1.3;">Computing…</div>
+                <div id="opsHealthSub" style="font-size:11px;color:var(--text3);margin-top:3px;line-height:1.4;"></div>
+              </div>
+            </div>
+          </div>
+          <!-- Today's Priorities -->
+          <div class="card" id="opsPrioritiesCard" style="background:linear-gradient(135deg,rgba(245,193,74,0.04) 0%,var(--panel) 100%);border-color:rgba(245,193,74,0.15);display:none;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+              <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#f5c14a;">Today's priorities</div>
+              <span id="opsPrioritiesCount" style="font-size:11px;color:var(--text3);"></span>
+            </div>
+            <div id="opsPriorities"></div>
+          </div>
+        </div>
+
+        <!-- ARRIVING NEXT — dispatch board (full width) -->
+        <div class="card" id="opsArrivingNextCard" style="margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div class="card-title" style="margin:0;">Dispatch — Arriving next</div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <span id="opsArrivingNextCount" style="font-size:11px;color:var(--text3);"></span>
+              <span id="opsArrivingNextRefreshed" style="font-size:10px;color:var(--text3);font-weight:400;"></span>
+            </div>
+          </div>
+          <div id="opsArrivingNext" style="font-size:13px;color:var(--text2);">Loading…</div>
+        </div>
+
+        <!-- ALERTS — actionable cards -->
+        <div class="card" style="margin-bottom:16px;display:none;" id="opsAlertsCard">
+          <div class="card-title" style="margin-bottom:10px;">⚠ Action required</div>
+          <div id="opsAlerts" style="font-size:13px;color:var(--text2);"></div>
+        </div>
+
+        <!-- KPI BAR with micro-context -->
+        <div id="opsKpiBar" class="ops-kpi-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin-bottom:16px;">
+          <div class="card ops-kpi" data-kpi="bookings">
+            <div class="ops-kpi-label" id="opsKpiBookingsLabel">Bookings</div>
+            <div class="ops-kpi-value" id="opsKpiBookings">—</div>
+            <div class="ops-kpi-delta" id="opsKpiBookingsDelta"></div>
+            <div class="ops-kpi-ctx" id="opsKpiBookingsCtx"></div>
+          </div>
+          <div class="card ops-kpi" data-kpi="pax">
+            <div class="ops-kpi-label" id="opsKpiPaxLabel">Guests</div>
+            <div class="ops-kpi-value" id="opsKpiPax">—</div>
+            <div class="ops-kpi-delta" id="opsKpiPaxDelta"></div>
+            <div class="ops-kpi-ctx" id="opsKpiPaxCtx"></div>
+          </div>
+          <div class="card ops-kpi" data-kpi="revenue">
+            <div class="ops-kpi-label" id="opsKpiRevenueLabel">Revenue</div>
+            <div class="ops-kpi-value" id="opsKpiRevenue">—</div>
+            <div class="ops-kpi-delta" id="opsKpiRevenueDelta"></div>
+            <div class="ops-kpi-ctx" id="opsKpiRevenueCtx"></div>
+          </div>
+          <div class="card ops-kpi" data-kpi="avg">
+            <div class="ops-kpi-label">Avg booking</div>
+            <div class="ops-kpi-value" id="opsKpiAvg">—</div>
+            <div class="ops-kpi-delta" id="opsKpiAvgDelta"></div>
+          </div>
+          <div class="card ops-kpi" data-kpi="waivers" id="opsKpiWaiversCard" style="cursor:pointer;" onclick="_opsQuickFilter('waiver','missing')" title="Click to view missing waivers">
+            <div class="ops-kpi-label">Missing waivers</div>
+            <div class="ops-kpi-value" id="opsKpiWaivers">—</div>
+            <div class="ops-kpi-ctx" id="opsKpiWaiversCtx"></div>
+          </div>
+          <div class="card ops-kpi" data-kpi="checkin">
+            <div class="ops-kpi-label">Check-ins pending</div>
+            <div class="ops-kpi-value" id="opsKpiCheckins">—</div>
+          </div>
+          <div class="card ops-kpi" data-kpi="unpaid" id="opsKpiUnpaidCard" style="cursor:pointer;" onclick="_opsQuickFilter('payment','due')" title="Click to view unpaid bookings">
+            <div class="ops-kpi-label">Unpaid balance</div>
+            <div class="ops-kpi-value" id="opsKpiUnpaid">—</div>
+            <div class="ops-kpi-ctx" id="opsKpiUnpaidCtx"></div>
+          </div>
+          <div class="card ops-kpi" data-kpi="arrivingNext">
+            <div class="ops-kpi-label">Arriving today</div>
+            <div class="ops-kpi-value" id="opsKpiArrivingNext">—</div>
+          </div>
+        </div>
+
+        <!-- AI INSIGHTS — scannable format -->
+        <div class="card client-admin-only" style="margin-bottom:16px;background:linear-gradient(135deg, rgba(16,185,129,0.06) 0%, var(--panel) 100%);border-color:rgba(16,185,129,0.18);">
+          <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+            <span><span style="color:var(--accent);">✦</span> AI Insights</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span id="opsAiAge" style="font-size:11px;color:var(--text3);font-weight:400;"></span>
+              <button class="btn btn-ghost btn-sm" id="opsAiRefreshBtn" onclick="loadOpsAiInsights(true)">↻ Refresh</button>
+            </div>
+          </div>
+          <div id="opsAiInsights" style="font-size:13px;color:var(--text2);margin-top:10px;">Loading…</div>
+        </div>
+
+        <!-- EXECUTIVE SUMMARY -->
         <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg, var(--panel) 0%, var(--panel2) 100%);">
           <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
             <span>Executive summary</span>
@@ -1319,89 +1474,28 @@ tr:hover td { background: var(--panel2); }
           </div>
         </div>
 
-        <!-- AI INSIGHTS — Claude-generated narrative observations (24h cached) -->
-        <div class="card client-admin-only" style="margin-bottom:16px;background:linear-gradient(135deg, rgba(16,185,129,0.06) 0%, var(--panel) 100%);border-color:rgba(16,185,129,0.18);">
-          <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
-            <span><span style="color:var(--accent);">✦</span> AI insights</span>
-            <div style="display:flex;gap:6px;align-items:center;">
-              <span id="opsAiAge" style="font-size:11px;color:var(--text3);font-weight:400;"></span>
-              <button class="btn btn-ghost btn-sm" id="opsAiRefreshBtn" onclick="loadOpsAiInsights(true)">↻ Refresh</button>
-            </div>
-          </div>
-          <div id="opsAiInsights" style="font-size:13px;color:var(--text2);margin-top:10px;">Loading…</div>
-        </div>
-
-        <!-- OPERATIONS INTELLIGENCE — actionable risk signals -->
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-title" style="margin-bottom:10px;">⚡ Operations intelligence</div>
-          <div id="opsIntel" style="font-size:13px;color:var(--text2);">Loading…</div>
-        </div>
-
-        <!-- KPI BAR (labels swap to range when custom range is active) -->
-        <div id="opsKpiBar" class="ops-kpi-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px;">
-          <div class="card ops-kpi" data-kpi="bookings">
-            <div class="ops-kpi-label" id="opsKpiBookingsLabel">Today bookings</div>
-            <div class="ops-kpi-value" id="opsKpiBookings">—</div>
-            <div class="ops-kpi-delta" id="opsKpiBookingsDelta"></div>
-          </div>
-          <div class="card ops-kpi" data-kpi="pax">
-            <div class="ops-kpi-label" id="opsKpiPaxLabel">Today guests</div>
-            <div class="ops-kpi-value" id="opsKpiPax">—</div>
-            <div class="ops-kpi-delta" id="opsKpiPaxDelta"></div>
-          </div>
-          <div class="card ops-kpi" data-kpi="revenue">
-            <div class="ops-kpi-label" id="opsKpiRevenueLabel">Today revenue</div>
-            <div class="ops-kpi-value" id="opsKpiRevenue">—</div>
-            <div class="ops-kpi-delta" id="opsKpiRevenueDelta"></div>
-          </div>
-          <div class="card ops-kpi" data-kpi="avg">
-            <div class="ops-kpi-label">Avg booking value</div>
-            <div class="ops-kpi-value" id="opsKpiAvg">—</div>
-            <div class="ops-kpi-delta" id="opsKpiAvgDelta"></div>
-          </div>
-          <div class="card ops-kpi" data-kpi="waivers">
-            <div class="ops-kpi-label">Missing waivers</div>
-            <div class="ops-kpi-value" id="opsKpiWaivers">—</div>
-          </div>
-          <div class="card ops-kpi" data-kpi="checkin">
-            <div class="ops-kpi-label">Check-ins pending</div>
-            <div class="ops-kpi-value" id="opsKpiCheckins">—</div>
-          </div>
-          <div class="card ops-kpi" data-kpi="unpaid">
-            <div class="ops-kpi-label">Unpaid balance</div>
-            <div class="ops-kpi-value" id="opsKpiUnpaid">—</div>
-          </div>
-          <div class="card ops-kpi" data-kpi="arrivingNext">
-            <div class="ops-kpi-label">Arriving next</div>
-            <div class="ops-kpi-value" id="opsKpiArrivingNext">—</div>
-          </div>
-        </div>
-
-        <!-- ALERTS PANEL (computed client-side from summary data) -->
-        <div class="card" style="margin-bottom:16px;display:none;" id="opsAlertsCard">
-          <div class="card-title" style="margin-bottom:10px;">⚠ Operational alerts</div>
-          <div id="opsAlerts" style="font-size:13px;color:var(--text2);"></div>
-        </div>
-
-        <!-- TWO-COLUMN: Arriving next + Tomorrow Prep -->
+        <!-- TWO-COL: Tomorrow prep + Ops intelligence -->
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px;">
-          <div class="card" id="opsArrivingNextCard">
-            <div class="card-title" style="margin-bottom:10px;">Arriving next <span id="opsArrivingNextRefreshed" style="font-size:10px;color:var(--text3);font-weight:400;float:right;"></span></div>
-            <div id="opsArrivingNext" style="font-size:13px;color:var(--text2);">Loading…</div>
-          </div>
           <div class="card" id="opsTomorrowPrepCard">
             <div class="card-title" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
               <span>Tomorrow prep</span>
-              <button class="btn btn-ghost btn-sm" onclick="loadOpsTomorrowPrep()">↻</button>
+              <div style="display:flex;gap:5px;">
+                <button class="btn btn-ghost btn-sm" onclick="opsPrepSheet()" title="Print prep sheet">📋</button>
+                <button class="btn btn-ghost btn-sm" onclick="loadOpsTomorrowPrep()">↻</button>
+              </div>
             </div>
             <div id="opsTomorrowPrep" style="font-size:13px;color:var(--text2);">Loading…</div>
+          </div>
+          <div class="card">
+            <div class="card-title" style="margin-bottom:10px;">⚡ Operational health</div>
+            <div id="opsIntel" style="font-size:13px;color:var(--text2);">Loading…</div>
           </div>
         </div>
 
         <!-- REVENUE INTELLIGENCE -->
         <div class="card" style="margin-bottom:16px;">
           <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <span>Revenue intelligence</span>
+            <span>What's making money</span>
             <span style="font-size:11px;color:var(--text3);font-weight:400;" id="opsRevWindowLabel">—</span>
           </div>
           <div id="opsRevenue" style="font-size:13px;color:var(--text2);">Loading…</div>
@@ -1413,7 +1507,7 @@ tr:hover td { background: var(--panel2); }
           <div id="opsForecast" style="font-size:13px;color:var(--text2);">Loading…</div>
         </div>
 
-        <!-- GUIDES PANEL (collapsible, hidden until expanded) -->
+        <!-- GUIDES PANEL -->
         <div class="card" style="margin-bottom:16px;">
           <div class="card-title" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
             <span>Guides — <span id="opsGuidesTabLabel">Today</span></span>
@@ -1426,7 +1520,7 @@ tr:hover td { background: var(--panel2); }
           <div id="opsGuides" style="font-size:13px;color:var(--text2);">Loading…</div>
         </div>
 
-        <!-- TAB BAR + TABLE -->
+        <!-- BOOKINGS TABLE — ops queue with risk badges + inline actions -->
         <div class="card">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
             <div class="ops-tabs" style="display:flex;gap:4px;">
@@ -1449,21 +1543,20 @@ tr:hover td { background: var(--panel2); }
                   <th class="ops-sort" data-sort="activity" style="text-align:left;cursor:pointer;">Activity <span class="ops-sort-ind"></span></th>
                   <th class="ops-sort" data-sort="pax" style="text-align:right;cursor:pointer;">Pax <span class="ops-sort-ind"></span></th>
                   <th class="ops-sort" data-sort="location" style="text-align:left;cursor:pointer;">Location <span class="ops-sort-ind"></span></th>
-                  <th style="text-align:left;">Waiver</th>
-                  <th class="ops-sort" data-sort="balance_due_cents" style="text-align:left;cursor:pointer;">Payment <span class="ops-sort-ind"></span></th>
-                  <th style="text-align:left;">Check-in</th>
+                  <th style="text-align:left;">Risks</th>
                   <th style="text-align:left;">Status</th>
+                  <th style="text-align:left;">Actions</th>
                 </tr>
               </thead>
               <tbody id="opsTableBody">
-                <tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text3);">Loading…</td></tr>
+                <tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text3);">Loading…</td></tr>
               </tbody>
             </table>
           </div>
           <div id="opsTableMeta" style="margin-top:10px;font-size:11px;color:var(--text3);"></div>
         </div>
 
-        <!-- ANALYTICS PANEL — past N days revenue + activities + completion rates -->
+        <!-- ANALYTICS PANEL -->
         <div class="card" style="margin-top:16px;">
           <div class="card-title" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
             <span>Analytics — last <span id="opsAnalyticsDaysLabel">30</span> days</span>
@@ -2118,6 +2211,30 @@ tr:hover td { background: var(--panel2); }
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="document.getElementById('opsShareLinksModal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Operations: morning briefing modal ────────────────────────────────────── -->
+<div class="modal-backdrop" id="opsBriefingModal">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-title">☀ Morning Briefing</div>
+    <div class="modal-body" style="max-height:75vh;overflow-y:auto;" id="opsBriefingBody">Loading…</div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="window.print()">🖨 Print</button>
+      <button class="btn btn-ghost" onclick="document.getElementById('opsBriefingModal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Operations: prep sheet modal ─────────────────────────────────────────── -->
+<div class="modal-backdrop" id="opsPrepModal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-title">📋 Tomorrow Prep Sheet</div>
+    <div class="modal-body" style="max-height:75vh;overflow-y:auto;" id="opsPrepContent">Loading…</div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="opsPrepPrintBtn" onclick="window.print()">🖨 Print</button>
+      <button class="btn btn-ghost" onclick="document.getElementById('opsPrepModal').classList.remove('open')">Close</button>
     </div>
   </div>
 </div>
@@ -5703,6 +5820,9 @@ let _opsGuideTab = 'today';
 let _opsArrivingNextRaw = [];
 let _opsCountdownInterval = null;
 let _opsCurrentBooking = null;
+let _opsIntelData = null;
+let _opsTomorrowPrepData = null;
+let _opsSummaryToday = null;
 
 let _opsAnalyticsDays = 30;
 let _opsRange  = { mode: "preset", preset: "last30", start: null, end: null };
@@ -5910,33 +6030,35 @@ async function loadOperations() {
 }
 
 function opsResetCardSkeletons() {
-  // KPI values
   ['opsKpiBookings','opsKpiPax','opsKpiRevenue','opsKpiAvg','opsKpiWaivers','opsKpiCheckins','opsKpiUnpaid','opsKpiArrivingNext'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.innerHTML = `<span class="ops-skel" style="height:20px;width:55%;display:inline-block;"></span>`;
   });
-  // Exec summary
+  ['opsKpiBookingsCtx','opsKpiPaxCtx','opsKpiRevenueCtx','opsKpiWaiversCtx','opsKpiUnpaidCtx'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = '';
+  });
+  const healthNum = document.getElementById('opsHealthNum');
+  if (healthNum) healthNum.textContent = '—';
+  const healthLabel = document.getElementById('opsHealthLabel');
+  if (healthLabel) healthLabel.textContent = 'Computing…';
+  const healthSub = document.getElementById('opsHealthSub');
+  if (healthSub) healthSub.textContent = '';
+  const pCard = document.getElementById('opsPrioritiesCard');
+  if (pCard) pCard.style.display = 'none';
   const exec = document.getElementById('opsExecSummary');
   if (exec) exec.innerHTML = `${opsSkel(1).replace('13px','22px').replace('72%','52%')}${opsSkel(2)}`;
-  // Revenue card
   const rev = document.getElementById('opsRevenue');
   if (rev) rev.innerHTML = opsSkel(5);
-  // Forecast card
   const fc = document.getElementById('opsForecast');
   if (fc) fc.innerHTML = opsSkel(3);
-  // Intel card
   const intel = document.getElementById('opsIntel');
   if (intel) intel.innerHTML = opsSkel(3);
-  // Guides card
   const guides = document.getElementById('opsGuides');
   if (guides) guides.innerHTML = opsSkel(4);
-  // Tomorrow prep
   const prep = document.getElementById('opsTomorrowPrep');
   if (prep) prep.innerHTML = opsSkel(3);
-  // Arriving next
   const arr = document.getElementById('opsArrivingNext');
   if (arr) arr.innerHTML = opsSkel(3);
-  // Analytics
   const an = document.getElementById('opsAnalytics');
   if (an) an.innerHTML = opsSkel(4);
 }
@@ -6035,6 +6157,216 @@ function fmtCents(cents) {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 }
 
+// ── Operational Health Score ──────────────────────────────────────────────
+function renderOpsHealthScore() {
+  const numEl   = document.getElementById('opsHealthNum');
+  const arcEl   = document.getElementById('opsHealthArc');
+  const labelEl = document.getElementById('opsHealthLabel');
+  const subEl   = document.getElementById('opsHealthSub');
+  if (!numEl) return;
+
+  const t   = _opsSummaryToday ?? {};
+  const stf = _opsIntelData?.staffing ?? {};
+  let score = 100;
+  const issues = [];
+
+  const waivers = t.missing_waivers ?? 0;
+  if (waivers > 0) { score -= Math.min(30, waivers * 8); issues.push(`${waivers} missing waiver${waivers === 1 ? '' : 's'}`); }
+
+  const unpaid = t.unpaid_balance_cents ?? 0;
+  if (unpaid > 0) { score -= 10; issues.push('unpaid balances'); }
+
+  const lateArrivals = _opsArrivingNextRaw.filter(b => b.start_at && new Date(b.start_at).getTime() < Date.now() - 5 * 60_000 && !b.checked_in).length;
+  if (lateArrivals > 0) { score -= lateArrivals * 15; issues.push(`${lateArrivals} late arrival${lateArrivals === 1 ? '' : 's'}`); }
+
+  for (const f of (stf.flags ?? [])) {
+    if (f.severity === 'critical') { score -= 20; issues.push(f.label?.toLowerCase() ?? 'staffing issue'); }
+    else { score -= 10; }
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const circ = 169.65;
+  const offset = circ * (1 - score / 100);
+  const color = score >= 80 ? '#10b981' : score >= 55 ? '#f5c14a' : '#f57e7e';
+  const label = score >= 80 ? 'All systems go' : score >= 55 ? 'Needs attention' : 'Action required';
+
+  numEl.textContent = score;
+  numEl.style.color = color;
+  if (arcEl) { arcEl.style.stroke = color; arcEl.style.strokeDashoffset = offset.toFixed(2); }
+  if (labelEl) { labelEl.textContent = label; labelEl.style.color = color; }
+  if (subEl) subEl.textContent = issues.length ? issues.slice(0, 2).join(' · ') : 'No active risks';
+}
+
+// ── Today's Priorities ────────────────────────────────────────────────────
+function renderOpsTodayPriorities() {
+  const card = document.getElementById('opsPrioritiesCard');
+  const wrap = document.getElementById('opsPriorities');
+  const cnt  = document.getElementById('opsPrioritiesCount');
+  if (!card || !wrap) return;
+
+  const t   = _opsSummaryToday ?? {};
+  const stf = _opsIntelData?.staffing ?? {};
+  const items = [];
+
+  const lateArrivals = _opsArrivingNextRaw.filter(b => b.start_at && new Date(b.start_at).getTime() < Date.now() - 5 * 60_000 && !b.checked_in).length;
+  if (lateArrivals > 0)
+    items.push({ sev: 'p-crit', icon: '🚨', text: `${lateArrivals} arrival${lateArrivals === 1 ? '' : 's'} past start time`, sub: 'Check in or contact customer now', action: null });
+
+  const waivers = t.missing_waivers ?? 0;
+  if (waivers > 0)
+    items.push({ sev: 'p-warn', icon: '📋', text: `Send ${waivers} waiver reminder${waivers === 1 ? '' : 's'}`, sub: `${waivers} booking${waivers === 1 ? '' : 's'} require signed waivers`, action: `_opsQuickFilter('waiver','missing')` });
+
+  const unpaid = t.unpaid_balance_cents ?? 0;
+  if (unpaid > 0)
+    items.push({ sev: 'p-warn', icon: '💰', text: `Collect ${fmtCents(unpaid)} in outstanding balances`, sub: 'Text or call customers with due amounts', action: `_opsQuickFilter('payment','due')` });
+
+  for (const f of (stf.flags ?? []).slice(0, 2))
+    items.push({ sev: f.severity === 'critical' ? 'p-crit' : 'p-info', icon: '👤', text: f.label ?? 'Staffing issue', sub: 'Assign guides in booking detail', action: null });
+
+  const prepData = _opsTomorrowPrepData ?? {};
+  const unassigned = prepData.open_issues?.unassigned_guides ?? 0;
+  if (unassigned > 0)
+    items.push({ sev: 'p-info', icon: '🗓', text: `Assign guides to ${unassigned} tomorrow booking${unassigned === 1 ? '' : 's'}`, sub: 'Open each booking to assign a guide', action: `document.getElementById('opsTableWrap')?.scrollIntoView({behavior:'smooth'})` });
+
+  if (!items.length) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  if (cnt) cnt.textContent = `${items.length} item${items.length === 1 ? '' : 's'}`;
+  wrap.innerHTML = items.map((it, i) => {
+    const actionAttr = it.action ? `onclick="${it.action}"` : '';
+    return `<div class="ops-priority-item ${it.sev}" ${actionAttr}>
+      <div class="ops-priority-num">${i + 1}</div>
+      <div class="ops-priority-main">
+        <div class="ops-priority-text">${it.icon} ${escapeHtml(it.text)}</div>
+        <div class="ops-priority-sub">${escapeHtml(it.sub)}</div>
+      </div>
+      <div style="font-size:16px;color:var(--text3);">→</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Morning Briefing modal ────────────────────────────────────────────────
+function opsMorningBriefing() {
+  const modal = document.getElementById('opsBriefingModal');
+  const body  = document.getElementById('opsBriefingBody');
+  if (!modal) return;
+  modal.classList.add('open');
+
+  const t     = _opsSummaryToday ?? {};
+  const arr   = _opsArrivingNextRaw;
+  const prep  = _opsTomorrowPrepData ?? {};
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const first = arr.length ? arr.reduce((a, b) => (new Date(a.start_at) < new Date(b.start_at) ? a : b), arr[0]) : null;
+
+  const waivers  = t.missing_waivers ?? 0;
+  const unpaid   = t.unpaid_balance_cents ?? 0;
+  const stfFlags = _opsIntelData?.staffing?.flags ?? [];
+
+  const issueRows = [];
+  if (waivers > 0)   issueRows.push(`<div style="color:#f5c14a;font-weight:600;padding:3px 0;">⚠ ${waivers} missing waiver${waivers === 1 ? '' : 's'}</div>`);
+  if (unpaid  > 0)   issueRows.push(`<div style="color:#f5c14a;font-weight:600;padding:3px 0;">⚠ ${fmtCents(unpaid)} unpaid balance</div>`);
+  for (const f of stfFlags.slice(0, 2)) issueRows.push(`<div style="color:#7ec0f5;font-weight:600;padding:3px 0;">⚠ ${escapeHtml(f.label ?? '')}</div>`);
+  if (!issueRows.length) issueRows.push('<div style="color:#7ee2a8;font-weight:600;padding:3px 0;">✓ No issues — you\'re in great shape</div>');
+
+  const arrivalRows = arr.slice(0, 5).map(b =>
+    `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
+      <span style="font-weight:600;">${fmtTime(b.start_at)}</span>
+      <span>${escapeHtml(b.customer_name ?? '—')}</span>
+      <span style="color:var(--text3);">${escapeHtml(b.activity ?? '')} · ${b.pax ?? 1} pax</span>
+    </div>`
+  ).join('');
+
+  body.innerHTML = `
+    <div style="text-align:center;padding:16px 0 20px;border-bottom:1px solid var(--border);margin-bottom:20px;">
+      <div style="font-size:12px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">${today}</div>
+      <div style="font-size:32px;font-weight:800;color:var(--text);">${t.bookings ?? 0} <span style="font-size:14px;color:var(--text3);font-weight:400;">bookings</span></div>
+      <div style="display:flex;justify-content:center;gap:24px;margin-top:10px;">
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--text);">${t.pax ?? 0}</div><div style="font-size:11px;color:var(--text3);">guests</div></div>
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--text);">${fmtCents(t.revenue_cents ?? 0)}</div><div style="font-size:11px;color:var(--text3);">expected</div></div>
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--text);">${arr.length}</div><div style="font-size:11px;color:var(--text3);">arriving today</div></div>
+      </div>
+    </div>
+    <div style="margin-bottom:18px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Action items</div>
+      ${issueRows.join('')}
+    </div>
+    ${first ? `<div style="margin-bottom:18px;padding:12px;background:var(--panel2);border-radius:8px;border:1px solid var(--border);">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px;">First arrival</div>
+      <div style="font-size:16px;font-weight:700;color:var(--text);">${fmtTime(first.start_at)}</div>
+      <div style="font-size:12.5px;color:var(--text2);margin-top:2px;">${escapeHtml(first.customer_name ?? '—')} · ${escapeHtml(first.activity ?? '')} · ${first.pax ?? 1} pax</div>
+    </div>` : ''}
+    ${arrivalRows ? `<div style="margin-bottom:18px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Today's arrivals</div>
+      ${arrivalRows}
+    </div>` : ''}
+    ${prep.total_bookings ? `<div style="padding-top:16px;border-top:1px solid var(--border);">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Tomorrow preview</div>
+      <div style="font-size:13px;color:var(--text2);">${prep.total_bookings} booking${prep.total_bookings === 1 ? '' : 's'} · ${prep.total_pax} guest${prep.total_pax === 1 ? '' : 's'}</div>
+    </div>` : ''}
+  `;
+}
+
+// ── Prep Sheet modal ──────────────────────────────────────────────────────
+function opsPrepSheet() {
+  const modal = document.getElementById('opsPrepModal');
+  const body  = document.getElementById('opsPrepContent');
+  if (!modal) return;
+  modal.classList.add('open');
+
+  const prep = _opsTomorrowPrepData;
+  if (!prep) { body.innerHTML = '<span style="color:var(--text3);">Load the Operations page first to generate the prep sheet.</span>'; return; }
+  if (!prep.total_bookings) {
+    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text3);">No bookings tomorrow — nothing to prep!</div>';
+    return;
+  }
+
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const dateStr = tomorrow.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const issues = prep.open_issues ?? {};
+
+  const issueRows = [];
+  if (issues.missing_waivers > 0)   issueRows.push(`<div style="color:#f5c14a;font-weight:600;">⚠ ${issues.missing_waivers} waiver${issues.missing_waivers === 1 ? '' : 's'} missing</div>`);
+  if (issues.unpaid_bookings > 0)   issueRows.push(`<div style="color:#f5c14a;font-weight:600;">⚠ ${issues.unpaid_bookings} unpaid balance${issues.unpaid_bookings === 1 ? '' : 's'}</div>`);
+  if (issues.unassigned_guides > 0) issueRows.push(`<div style="color:#7ec0f5;font-weight:600;">📌 ${issues.unassigned_guides} unassigned guide${issues.unassigned_guides === 1 ? '' : 's'}</div>`);
+
+  const actRows = (prep.by_activity ?? []).map(a =>
+    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <span style="font-weight:600;">${escapeHtml(a.name)}</span>
+      <span style="color:var(--text3);">${a.bookings} booking${a.bookings === 1 ? '' : 's'} · ${a.pax} guest${a.pax === 1 ? '' : 's'}</span>
+    </div>`
+  ).join('');
+
+  const locRows = (prep.by_location ?? []).length > 1 ? (prep.by_location ?? []).map(l =>
+    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <span style="font-weight:600;">${escapeHtml(l.name)}</span>
+      <span style="color:var(--text3);">${l.bookings} booking${l.bookings === 1 ? '' : 's'} · ${l.pax} pax</span>
+    </div>`
+  ).join('') : '';
+
+  body.innerHTML = `
+    <div style="text-align:center;padding:8px 0 16px;border-bottom:1px solid var(--border);margin-bottom:16px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);">Prep Sheet</div>
+      <div style="font-size:18px;font-weight:800;color:var(--text);margin-top:4px;">${dateStr}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);">
+      <div><div style="font-size:28px;font-weight:800;color:var(--text);">${prep.total_bookings}</div><div style="font-size:11px;color:var(--text3);">bookings</div></div>
+      <div><div style="font-size:28px;font-weight:800;color:var(--text);">${prep.total_pax}</div><div style="font-size:11px;color:var(--text3);">guests</div></div>
+      <div><div style="font-size:28px;font-weight:800;color:var(--text);">${prep.prep_completed}/${prep.total_bookings}</div><div style="font-size:11px;color:var(--text3);">prepped</div></div>
+    </div>
+    ${issueRows.length ? `<div style="margin-bottom:16px;padding:12px;background:rgba(245,193,74,0.06);border:1px solid rgba(245,193,74,0.2);border-radius:8px;">${issueRows.join('')}</div>` : ''}
+    ${actRows ? `<div style="margin-bottom:16px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">By activity</div>
+      ${actRows}
+    </div>` : ''}
+    ${locRows ? `<div style="margin-bottom:16px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">By location</div>
+      ${locRows}
+    </div>` : ''}
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);text-align:center;">
+      Printed ${new Date().toLocaleString()} · Highmark Operations
+    </div>
+  `;
+}
+
 function fmtTime(iso) {
   if (!iso) return '—';
   try {
@@ -6071,7 +6403,6 @@ function boolPill(b, okLabel, missLabel) {
 }
 
 async function loadOperationsSummary() {
-  // Show KPI skeletons while fetching
   ['opsKpiBookings','opsKpiPax','opsKpiRevenue','opsKpiWaivers','opsKpiCheckins','opsKpiUnpaid','opsKpiArrivingNext'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.innerHTML = `<span class="ops-skel" style="height:18px;width:50%;display:inline-block;"></span>`;
@@ -6079,7 +6410,8 @@ async function loadOperationsSummary() {
   const data = await apiFetch(`/operations/summary?${opsRangeQS()}`);
   if (!data) return;
   const t = data.today ?? {};
-  // Update labels to reflect the active range (e.g. "Last 30d bookings")
+  _opsSummaryToday = t;
+
   const lbl = opsRangeLabel();
   document.getElementById('opsKpiBookingsLabel').textContent = `${lbl} bookings`;
   document.getElementById('opsKpiPaxLabel').textContent      = `${lbl} guests`;
@@ -6092,10 +6424,35 @@ async function loadOperationsSummary() {
   document.getElementById('opsKpiCheckins').textContent = t.pending_checkins ?? 0;
   document.getElementById('opsKpiUnpaid').textContent   = fmtCents(t.unpaid_balance_cents ?? 0);
 
+  // KPI micro-context
+  const bkCtx = document.getElementById('opsKpiBookingsCtx');
+  if (bkCtx) {
+    const n = t.bookings ?? 0;
+    bkCtx.textContent = n === 0 ? 'No bookings in range' : n > 50 ? 'Strong volume' : n > 20 ? 'Solid pacing' : 'Building momentum';
+  }
+  const wCtx = document.getElementById('opsKpiWaiversCtx');
+  if (wCtx && (t.missing_waivers ?? 0) > 0) {
+    wCtx.style.color = '#f5c14a';
+    wCtx.textContent = 'Click to view — action needed';
+  }
+  const uCtx = document.getElementById('opsKpiUnpaidCtx');
+  if (uCtx && (t.unpaid_balance_cents ?? 0) > 0) {
+    uCtx.style.color = '#f5c14a';
+    uCtx.textContent = 'Click to view outstanding';
+  }
+
   _opsArrivingNextRaw = data.arriving_next ?? [];
   document.getElementById('opsKpiArrivingNext').textContent = _opsArrivingNextRaw.length;
+
+  const cntEl = document.getElementById('opsArrivingNextCount');
+  if (cntEl) cntEl.textContent = _opsArrivingNextRaw.length
+    ? `${_opsArrivingNextRaw.length} arrival${_opsArrivingNextRaw.length === 1 ? '' : 's'} today`
+    : '';
+
   renderOpsArrivingNext();
   renderOpsAlerts(t);
+  renderOpsHealthScore();
+  renderOpsTodayPriorities();
 }
 
 function fmtCountdown(startMs) {
@@ -6111,27 +6468,54 @@ function renderOpsArrivingNext() {
   const wrap = document.getElementById('opsArrivingNext');
   const refreshedEl = document.getElementById('opsArrivingNextRefreshed');
   if (!wrap) return;
-  refreshedEl.textContent = 'updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (refreshedEl) refreshedEl.textContent = 'live · ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   if (!_opsArrivingNextRaw.length) {
-    wrap.innerHTML = '<span style="color:var(--text3);">No upcoming arrivals today.</span>';
+    wrap.innerHTML = `<div style="padding:20px 0;text-align:center;color:var(--text3);">
+      <div style="font-size:18px;margin-bottom:6px;">🎉</div>
+      <div style="font-size:13px;font-weight:600;">No arrivals today</div>
+      <div style="font-size:11.5px;margin-top:4px;">Good time for prep, training, or maintenance</div>
+    </div>`;
     return;
   }
   wrap.innerHTML = _opsArrivingNextRaw.map(b => {
     const startMs = b.start_at ? new Date(b.start_at).getTime() : null;
+    const diffMin = startMs ? Math.round((startMs - Date.now()) / 60_000) : null;
     const cd = startMs ? fmtCountdown(startMs) : '';
-    const isLate = startMs && startMs < Date.now() && !b.checked_in;
+    const isLate = diffMin != null && diffMin < -5 && !b.checked_in;
+    const isSoon = diffMin != null && diffMin >= 0 && diffMin <= 45;
+    const cdClass = isLate ? 'cd-late' : isSoon ? 'cd-soon' : 'cd-ok';
+    const rowClass = isLate ? 'is-late' : isSoon ? 'arriving-soon' : '';
+    const initials = (b.customer_name ?? '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+    const highVal = (b.receipt_total_cents ?? 0) >= 100000;
+    const tags = [];
+    if (!b.waiver_signed)                tags.push(`<span class="ops-risk r-crit">⚠ Waiver</span>`);
+    if ((b.balance_due_cents ?? 0) > 0)  tags.push(`<span class="ops-risk r-warn">$ Unpaid</span>`);
+    if (!b.guide_name)                   tags.push(`<span class="ops-risk r-info">Guide</span>`);
+    if (b.checked_in)                    tags.push(`<span class="ops-risk r-ok">✓ In</span>`);
+    if (highVal)                         tags.push(`<span class="ops-risk r-vip">VIP</span>`);
+    const phone = b.phone ?? '';
+    const pkSafe = (b.fareharbor_pk ?? '').replace(/'/g, '\\\'');
     return `
-      <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;"
-           onclick="openOpsBooking('${(b.fareharbor_pk ?? '').replace(/'/g, '\\\'')}')">
-        <div style="min-width:74px;">
-          <div style="font-weight:700;font-size:13px;">${fmtTime(b.start_at)}</div>
-          <div style="font-size:10.5px;color:${isLate ? '#f57e7e' : 'var(--text3)'};font-weight:600;">${cd}</div>
+      <div class="ops-dispatch-item ${rowClass}">
+        <div>
+          <div class="ops-dispatch-time">${fmtTime(b.start_at)}</div>
+          <div class="ops-dispatch-cd ${cdClass}">${cd}</div>
         </div>
-        <div style="flex:1;">
-          <div style="font-weight:600;color:var(--text);">${escapeHtml(b.customer_name ?? '—')}</div>
-          <div style="font-size:11.5px;color:var(--text3);">${escapeHtml(b.activity ?? '')} · ${b.pax ?? 1} pax</div>
+        <div>
+          <div style="display:flex;align-items:center;">
+            <span class="ops-dispatch-avatar">${escapeHtml(initials)}</span>
+            <div>
+              <div style="font-weight:700;color:var(--text);font-size:13px;${highVal ? 'color:#c4b5fd;' : ''}">${escapeHtml(b.customer_name ?? '—')}${highVal ? ' ★' : ''}</div>
+              <div style="font-size:11.5px;color:var(--text3);">${escapeHtml(b.activity ?? '')} · ${b.pax ?? 1} pax${b.location ? ' · ' + escapeHtml(b.location) : ''}</div>
+            </div>
+          </div>
+          ${tags.length ? `<div class="ops-dispatch-tags">${tags.join('')}</div>` : ''}
         </div>
-        <div>${statusPill(b.operational_status)}</div>
+        <div class="ops-dispatch-actions">
+          ${phone ? `<a href="sms:${escapeHtml(phone)}" class="btn btn-ghost btn-sm" title="Text customer" style="text-decoration:none;">💬</a>` : ''}
+          ${phone ? `<a href="tel:${escapeHtml(phone)}" class="btn btn-ghost btn-sm" title="Call customer" style="text-decoration:none;">📞</a>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="openOpsBooking('${pkSafe}')" title="View booking">→</button>
+        </div>
       </div>`;
   }).join('');
 }
@@ -6140,21 +6524,43 @@ function renderOpsAlerts(today) {
   const card  = document.getElementById('opsAlertsCard');
   const wrap  = document.getElementById('opsAlerts');
   const items = [];
-  if ((today.missing_waivers ?? 0) > 0)
-    items.push({ severity: 'warn', label: `${today.missing_waivers} booking${today.missing_waivers === 1 ? '' : 's'} missing waivers today` });
-  if ((today.unpaid_balance_cents ?? 0) > 0)
-    items.push({ severity: 'warn', label: `${fmtCents(today.unpaid_balance_cents)} in outstanding balances today` });
+
   const lateCount = _opsArrivingNextRaw.filter(b => b.start_at && new Date(b.start_at).getTime() < Date.now() - 5 * 60_000 && !b.checked_in).length;
   if (lateCount > 0)
-    items.push({ severity: 'critical', label: `${lateCount} arrival${lateCount === 1 ? '' : 's'} past start time without check-in` });
+    items.push({ severity: 'critical', icon: '🚨', label: `${lateCount} arrival${lateCount === 1 ? '' : 's'} past start time`, sub: 'Not yet checked in', filterKey: null });
+  if ((today.missing_waivers ?? 0) > 0)
+    items.push({ severity: 'warn', icon: '📋', label: `${today.missing_waivers} missing waiver${today.missing_waivers === 1 ? '' : 's'}`, sub: 'Required before departure', filterKey: 'waiver', filterVal: 'missing' });
+  if ((today.unpaid_balance_cents ?? 0) > 0)
+    items.push({ severity: 'warn', icon: '💰', label: `${fmtCents(today.unpaid_balance_cents)} unpaid balance`, sub: 'Outstanding before trip', filterKey: 'payment', filterVal: 'due' });
 
   if (!items.length) { card.style.display = 'none'; return; }
   card.style.display = 'block';
-  wrap.innerHTML = items.map(it => {
-    const c = it.severity === 'critical' ? '#3a1f1f' : '#3a2f1f';
-    const t = it.severity === 'critical' ? '#f57e7e' : '#f5c14a';
-    return `<div style="padding:8px 12px;border-radius:6px;background:${c};color:${t};margin-bottom:6px;font-weight:600;">${escapeHtml(it.label)}</div>`;
+  wrap.innerHTML = items.map((it, idx) => {
+    const bg = it.severity === 'critical' ? '#3a1f1f' : '#2a2518';
+    const col = it.severity === 'critical' ? '#f57e7e' : '#f5c14a';
+    const viewBtn = it.filterKey
+      ? `<button class="btn btn-sm" style="background:${col};color:#000;font-weight:700;border:none;cursor:pointer;" onclick="_opsQuickFilter('${it.filterKey}','${it.filterVal}')">View →</button>`
+      : '';
+    return `
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;background:${bg};margin-bottom:8px;border:1px solid ${col}33;">
+        <span style="font-size:18px;flex-shrink:0;">${it.icon}</span>
+        <div style="flex:1;">
+          <div style="font-weight:700;color:${col};font-size:13px;">${escapeHtml(it.label)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:1px;">${escapeHtml(it.sub)}</div>
+        </div>
+        ${viewBtn}
+      </div>`;
   }).join('');
+}
+
+function _opsQuickFilter(key, val) {
+  _opsFilters[key] = val;
+  updateOpsFilterBadge();
+  opsPersistFiltersUrl();
+  _refreshOpsFilterSummary();
+  loadOperationsTable(_opsTab);
+  const table = document.getElementById('opsTableWrap');
+  if (table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function loadOpsTomorrowPrep() {
@@ -6164,8 +6570,13 @@ async function loadOpsTomorrowPrep() {
   const extra = _opsSeason ? `?season=${encodeURIComponent(_opsSeason)}` : '';
   const data = await apiFetch('/operations/tomorrow-prep' + extra);
   if (!data) return;
+  _opsTomorrowPrepData = data;
   if (!data.total_bookings) {
-    wrap.innerHTML = '<span style="color:var(--text3);">No bookings tomorrow yet.</span>';
+    wrap.innerHTML = `<div style="text-align:center;padding:16px 0;color:var(--text3);">
+      <div style="font-size:18px;margin-bottom:6px;">🎉</div>
+      <div style="font-size:13px;font-weight:600;">No bookings tomorrow</div>
+      <div style="font-size:11.5px;margin-top:4px;">Great time for vehicle maintenance, guide training, or inventory prep</div>
+    </div>`;
     return;
   }
   const issues = data.open_issues ?? {};
@@ -6398,34 +6809,52 @@ function renderOpsTableRows() {
   });
   const sorted = applyOpsClientSort(_opsLastRows);
   if (!sorted.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text3);">No bookings match the current filters.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3);">No bookings match the current filters.</td></tr>';
     meta.textContent = '';
     return;
   }
-  tbody.innerHTML = sorted.map(b => `
-    <tr style="cursor:pointer;" onclick="openOpsBooking('${(b.fareharbor_pk ?? '').replace(/'/g, '\\\'')}')">
-      <td style="white-space:nowrap;">${fmtDateTime(b.start_at)}</td>
-      <td>
+  tbody.innerHTML = sorted.map(b => {
+    const highVal = (b.receipt_total_cents ?? 0) >= 100000;
+    const hasCrit = !b.waiver_signed || (b.balance_due_cents ?? 0) > 0;
+    const isLate  = b.operational_status === 'late';
+    const rowCls  = highVal ? 'ops-row-highval' : isLate ? 'ops-row-crit' : hasCrit ? 'ops-row-warn' : '';
+    const pkSafe  = (b.fareharbor_pk ?? '').replace(/'/g, '\\\'');
+    const phone   = b.phone ?? '';
+
+    const risks = [];
+    if (!b.waiver_signed)               risks.push(`<span class="ops-risk r-crit">Waiver</span>`);
+    if ((b.balance_due_cents ?? 0) > 0) risks.push(`<span class="ops-risk r-warn">${fmtCents(b.balance_due_cents)}</span>`);
+    if (!b.guide_name)                  risks.push(`<span class="ops-risk r-info">No guide</span>`);
+    if (highVal)                        risks.push(`<span class="ops-risk r-vip">VIP</span>`);
+    if (b.is_repeat_guest)              risks.push(`<span class="ops-risk r-ok">Repeat</span>`);
+
+    return `<tr class="${rowCls}">
+      <td style="white-space:nowrap;cursor:pointer;" onclick="openOpsBooking('${pkSafe}')">${fmtDateTime(b.start_at)}</td>
+      <td style="cursor:pointer;" onclick="openOpsBooking('${pkSafe}')">
         <div style="font-weight:600;">${escapeHtml(b.customer_name ?? '—')}</div>
         <div style="font-size:11px;color:var(--text3);">${escapeHtml(b.phone ?? '')}</div>
       </td>
-      <td>${escapeHtml(b.activity ?? '—')}</td>
-      <td style="text-align:right;">${b.pax ?? 1}</td>
-      <td>${escapeHtml(b.location ?? '—')}</td>
-      <td>${boolPill(b.waiver_signed, 'Signed', 'Missing')}</td>
-      <td>${(Number(b.balance_due_cents ?? 0) > 0)
-            ? `<span style="color:#f5c14a;">${fmtCents(b.balance_due_cents)} due</span>`
-            : `<span style="color:#7ee2a8;">Paid</span>`}</td>
-      <td>${boolPill(b.checked_in, 'In', 'Pending')}</td>
+      <td style="cursor:pointer;" onclick="openOpsBooking('${pkSafe}')">${escapeHtml(b.activity ?? '—')}</td>
+      <td style="text-align:right;cursor:pointer;" onclick="openOpsBooking('${pkSafe}')">${b.pax ?? 1}</td>
+      <td style="cursor:pointer;" onclick="openOpsBooking('${pkSafe}')">${escapeHtml(b.location ?? '—')}</td>
+      <td><div style="display:flex;gap:3px;flex-wrap:wrap;">${risks.join('') || '<span style="color:var(--text3);font-size:11px;">—</span>'}</div></td>
       <td>${statusPill(b.operational_status)}</td>
-    </tr>`).join('');
+      <td>
+        <div style="display:flex;gap:4px;">
+          ${phone ? `<a href="sms:${escapeHtml(phone)}" class="btn btn-ghost btn-sm" title="Text" style="padding:2px 7px;font-size:11px;text-decoration:none;">💬</a>` : ''}
+          ${phone ? `<a href="tel:${escapeHtml(phone)}" class="btn btn-ghost btn-sm" title="Call" style="padding:2px 7px;font-size:11px;text-decoration:none;">📞</a>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="openOpsBooking('${pkSafe}')" style="padding:2px 7px;font-size:11px;">→</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
   meta.textContent = `${sorted.length} booking${sorted.length === 1 ? '' : 's'}${opsFilterCount() > 0 ? ' · filtered' : ''}`;
 }
 
 async function loadOperationsTable(tab) {
   const tbody = document.getElementById('opsTableBody');
   tbody.innerHTML = Array.from({length:5}, () =>
-    `<tr>${Array.from({length:9}, () =>
+    `<tr>${Array.from({length:8}, () =>
       `<td style="padding:10px 8px;"><span class="ops-skel" style="height:12px;width:${50+Math.floor(Math.random()*40)}%;display:inline-block;"></span></td>`
     ).join('')}</tr>`
   ).join('');
@@ -6783,12 +7212,35 @@ async function loadOpsAiInsights(force) {
     wrap.innerHTML = '<span style="color:var(--text3);">Not enough booking data yet for AI observations.</span>';
     return;
   }
-  wrap.innerHTML = `
-    ${headline ? `<div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:10px;">${escapeHtml(headline)}</div>` : ''}
-    <ul style="margin:0;padding-left:18px;">
-      ${bullets.map(b => `<li style="margin-bottom:5px;line-height:1.45;">${escapeHtml(b)}</li>`).join('')}
-    </ul>
-  `;
+  // Pick emoji per bullet based on keywords
+  const pickEmoji = (text) => {
+    const t = text.toLowerCase();
+    if (t.includes('staff') || t.includes('guide') || t.includes('unassign')) return '👤';
+    if (t.includes('revenue') || t.includes('earning') || t.includes('making money')) return '📈';
+    if (t.includes('waiver') || t.includes('check-in') || t.includes('missing')) return '⚠️';
+    if (t.includes('unpaid') || t.includes('balance') || t.includes('payment')) return '💰';
+    if (t.includes('weekend') || t.includes('saturday') || t.includes('sunday')) return '📅';
+    if (t.includes('rzr') || t.includes('snowmobile') || t.includes('tour') || t.includes('rental')) return '🏔';
+    if (t.includes('repeat') || t.includes('return') || t.includes('vip')) return '⭐';
+    if (t.includes('risk') || t.includes('gap') || t.includes('critical')) return '🚨';
+    if (t.includes('growth') || t.includes('increase') || t.includes('up')) return '↑';
+    return '✦';
+  };
+  // Split long bullets into title + detail
+  const renderBullet = (b) => {
+    const emoji = pickEmoji(b);
+    const parts = b.split('—');
+    const title = parts[0].trim();
+    const detail = parts.slice(1).join('—').trim();
+    return `<div class="ops-insight-row">
+      <div class="ops-insight-emoji">${emoji}</div>
+      <div class="ops-insight-body">
+        <div class="ops-insight-title">${escapeHtml(title)}</div>
+        ${detail ? `<div class="ops-insight-detail">${escapeHtml(detail)}</div>` : ''}
+      </div>
+    </div>`;
+  };
+  wrap.innerHTML = bullets.slice(0, 5).map(renderBullet).join('');
 }
 
 // ── Operations: operational intelligence (staffing/waiver/inventory) ──────
@@ -6799,34 +7251,41 @@ async function loadOpsIntelligence() {
   const extra = _opsSeason ? `?season=${encodeURIComponent(_opsSeason)}` : '';
   const data = await apiFetch('/operations/intelligence' + extra);
   if (!data) return;
+  _opsIntelData = data;
 
   const wr  = data.waiver_risk?.count ?? 0;
   const stf = data.staffing ?? {};
   const inv = data.inventory_load ?? [];
 
   const flagBlock = (sev, text) => {
-    const colors = sev === 'critical' ? ['#3a1f1f', '#f57e7e'] : ['#3a2f1f', '#f5c14a'];
+    const colors = sev === 'critical' ? ['#3a1f1f', '#f57e7e'] : ['#2a2518', '#f5c14a'];
     return `<div style="padding:8px 12px;border-radius:6px;background:${colors[0]};color:${colors[1]};margin-bottom:6px;font-weight:600;font-size:12.5px;">⚠ ${escapeHtml(text)}</div>`;
   };
   const flags = [];
   if (wr > 0) flags.push(flagBlock(wr >= 3 ? 'critical' : 'warn', `${wr} arrival${wr===1?'':'s'} within 2 hours missing waivers`));
   for (const f of (stf.flags ?? [])) flags.push(flagBlock(f.severity ?? 'warn', f.label));
-  if (!flags.length) flags.push('<div style="padding:8px 12px;border-radius:6px;background:#1f3a2c;color:#7ee2a8;font-weight:600;font-size:12.5px;">✓ No operational risks detected.</div>');
+  if (!flags.length) flags.push('<div style="padding:8px 12px;border-radius:6px;background:#1f3a2c;color:#7ee2a8;font-weight:600;font-size:12.5px;">✓ All clear — no operational risks.</div>');
 
   const maxPax = Math.max(1, ...inv.map(i => i.pax ?? 0));
   const invHtml = inv.length ? `
-    <div style="margin-top:14px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;margin-bottom:6px;">Inventory load (next 14 days)</div>
+    <div style="margin-top:14px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);font-weight:700;margin-bottom:8px;">Today's load (next 14 days)</div>
     ${inv.map(i => {
       const w = (i.pax / maxPax) * 100;
-      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.5px;">
-        <span style="flex:1;font-weight:600;color:var(--text);">${escapeHtml(i.activity)}</span>
-        <span style="min-width:60px;text-align:right;color:var(--text3);font-size:11px;">${i.bookings} bk</span>
-        <span style="min-width:60px;text-align:right;color:var(--text2);">${i.pax} pax</span>
-        <div style="width:80px;height:5px;background:var(--panel2);border-radius:2px;overflow:hidden;"><div style="width:${w.toFixed(1)}%;height:100%;background:var(--accent);"></div></div>
+      const color = w > 80 ? '#f57e7e' : w > 55 ? '#f5c14a' : 'var(--accent)';
+      return `<div style="margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px;">
+          <span style="font-weight:600;color:var(--text);">${escapeHtml(i.activity)}</span>
+          <span style="color:var(--text3);font-size:11px;">${i.bookings} bk · ${i.pax} pax</span>
+        </div>
+        <div style="height:7px;background:var(--panel2);border-radius:4px;overflow:hidden;">
+          <div style="width:${w.toFixed(1)}%;height:100%;background:${color};border-radius:4px;transition:width .4s;"></div>
+        </div>
       </div>`;
     }).join('')}` : '';
 
   wrap.innerHTML = flags.join('') + invHtml;
+  renderOpsHealthScore();
+  renderOpsTodayPriorities();
 }
 
 // ── Operations: analytics (revenue/day + top activities + completion %) ───
