@@ -7968,7 +7968,7 @@ function renderMessagingSection(cfg, editable) {
   return `<div class="card">
     <div class="card-title" style="margin-bottom:4px;">SMS Automation</div>
     <div style="font-size:12px;color:var(--text2);margin-bottom:16px;">Control which automated messages are sent to guests.</div>
-    ${toggle('msg_confirmations', 'Booking Confirmations', cfg.enable_confirmation_texts, 'Send a confirmation text immediately after a booking is made')}
+    ${toggle('msg_confirmations', 'Booking Confirmations', cfg.enable_confirmation_texts, 'Send a confirmation text immediately after a booking is made — covers both FareHarbor and Polaris (RZR) bookings')}
     ${toggle('msg_cancellations', 'Cancellation Texts', cfg.enable_cancellations, 'Notify guests when their booking is cancelled')}
     ${toggle('msg_rebooking', 'Rebooking Suggestions', cfg.enable_rebooking, 'Include a rebooking link in cancellation texts')}
     ${toggle('msg_reminders', 'Reminders', cfg.enable_reminders, 'Send automated reminders before the booking date')}

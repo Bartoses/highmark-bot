@@ -3234,6 +3234,7 @@ async function main() {
     await testSprintBOperatorUX();     // Sprint B: numeric menu, ops load, unanswered, largest bookings, underbooked, busiest hours, follow-ups, first-timers
     await testSprintCOperatorPortal(); // Sprint C: operator_phones CRUD, auth guards, validation
     await testBriefingPolish();        // Briefing polish: real manifest + season revenue + new bookings + UX copy
+    await testPolarisConfirmations();  // Polaris (MPWR) confirmation text builder
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -13750,6 +13751,64 @@ async function testSprintBOperatorUX() {
     chk("sprintB: unanswered header includes count (2)", out.includes("UNANSWERED CONVOS (2)"));
     chk("sprintB: unanswered shows handoff flag", out.includes("[handoff]"));
     chk("sprintB: unanswered shows paused flag", out.includes("[paused]"));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Polaris (MPWR) confirmation text builder
+// ─────────────────────────────────────────────────────────────────────────────
+async function testPolarisConfirmations() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const { buildPolarisConfirmationText } = await import("./mpwrSync.js");
+
+  // Happy path — has all fields
+  {
+    const text = buildPolarisConfirmationText({
+      guestName:     "Sean Bartosewcz",
+      locationLabel: "Kremmling",
+      beginDate:     "2026-07-04",
+      startTime:     "09:00",
+      endTime:       "13:00",
+      bookingPk:     "CO-ABC-123",
+    });
+    chk("polaris: confirmation text uses first name", text.includes("Hey Sean"), text);
+    chk("polaris: confirmation includes location", text.includes("Kremmling"), text);
+    chk("polaris: confirmation includes company", text.includes("Colorado Sled Rentals"), text);
+    chk("polaris: confirmation includes formatted date",
+        text.includes("July 4") || text.includes("Saturday"), text);
+    chk("polaris: confirmation includes time range", text.includes("9am–1pm") || text.includes("9:00am") || text.includes("am"), text);
+    chk("polaris: confirmation includes booking PK", text.includes("CO-ABC-123"));
+    chk("polaris: confirmation ≤ 320 chars", text.length <= 320, `got ${text.length}`);
+  }
+
+  // Missing guestName → falls back to "there"
+  {
+    const text = buildPolarisConfirmationText({
+      guestName:     null,
+      locationLabel: "Steamboat",
+      beginDate:     "2026-08-15",
+      startTime:     "10:00",
+      endTime:       "14:00",
+      bookingPk:     "CO-XYZ-789",
+    });
+    chk("polaris: falls back to 'there' when no name", text.includes("Hey there"), text);
+    chk("polaris: uses Steamboat as locationLabel", text.includes("Steamboat"), text);
+  }
+
+  // Missing time → omits time range (no NaN/undefined)
+  {
+    const text = buildPolarisConfirmationText({
+      guestName:     "Bob",
+      locationLabel: "Kremmling",
+      beginDate:     "2026-09-01",
+      startTime:     null,
+      endTime:       null,
+      bookingPk:     "CO-NO-TIME",
+    });
+    chk("polaris: handles missing time gracefully",
+        !text.includes("undefined") && !text.includes("NaN"), text);
   }
 }
 

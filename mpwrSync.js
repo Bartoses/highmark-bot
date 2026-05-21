@@ -162,7 +162,7 @@ async function fetchOrders(outfitterId, token) {
 
 // ── Upsert one order into DB2 ─────────────────────────────────────────────────
 
-async function upsertOrder(order, activityId, db2) {
+async function upsertOrder(order, activityId, db2, { db1, twilioClient, locationLabel } = {}) {
   const rawPhone = order.customerPhoneNumber;
   const phone    = rawPhone ? normalizePhone(rawPhone) : null;
   const name     = (
@@ -227,12 +227,143 @@ async function upsertOrder(order, activityId, db2) {
   }, { onConflict: 'fareharbor_pk' });
 
   if (error) throw new Error(error.message);
+
+  // Fire confirmation text (idempotent, gated by per-client toggle).
+  // Status "booked" only — cancellations / completed don't trigger.
+  if (db1 && twilioClient && phone && (STATUS_MAP[order.reservationStatus] ?? 'booked') === 'booked') {
+    try {
+      await sendPolarisConfirmationIfNeeded({
+        bookingPk:     order.shortId,
+        guestPhone:    phone,
+        guestName:     name,
+        locationLabel: locationLabel ?? null,
+        beginDate,
+        startTime,
+        endTime,
+        db1,
+        twilioClient,
+      });
+    } catch (err) {
+      console.warn(`[mpwrSync] confirmation send failed for ${order.shortId}: ${err.message}`);
+    }
+  }
+
   return 'upserted';
+}
+
+// ── Polaris confirmation text ────────────────────────────────────────────────
+// Mirrors the FH confirmation flow:
+//   1. Check messaging_config.enable_confirmation_texts for csr_rea (Polaris
+//      bookings always belong to coloradosledrentals/csr_rea).
+//   2. Skip if confirmations_sent already has a row for this booking_pk.
+//   3. Build a Polaris-flavored text and send via Twilio.
+//   4. Insert into confirmations_sent with source='mpwr'.
+//
+// Test mode: CONFIRMATIONS_ENABLED=false or TEST_MODE=true redirects to
+// CONFIRMATIONS_TEST_PHONE if set; otherwise the send is skipped entirely.
+// ─────────────────────────────────────────────────────────────────────────────
+async function sendPolarisConfirmationIfNeeded({
+  bookingPk, guestPhone, guestName, locationLabel,
+  beginDate, startTime, endTime, db1, twilioClient,
+}) {
+  const clientId = 'csr_rea';
+
+  // Per-client gate via messaging_config (default OFF for safety until owner enables).
+  let confirmEnabled = false;
+  try {
+    const { data: cfg } = await db1
+      .from('messaging_config')
+      .select('enable_confirmation_texts')
+      .eq('client_id', clientId)
+      .maybeSingle();
+    confirmEnabled = cfg ? !!cfg.enable_confirmation_texts : false;
+  } catch { /* table missing → leave default OFF */ }
+
+  if (!confirmEnabled) return;
+
+  // Idempotency check — skip if confirmation already sent
+  const { data: existing } = await db1
+    .from('confirmations_sent')
+    .select('id')
+    .eq('booking_pk', bookingPk)
+    .maybeSingle();
+  if (existing) return;
+
+  // Test mode — redirect or skip
+  const testMode = process.env.CONFIRMATIONS_ENABLED === 'false' || process.env.TEST_MODE === 'true';
+  const testTo   = process.env.CONFIRMATIONS_TEST_PHONE || null;
+  if (testMode && !testTo) {
+    console.log(`[mpwrSync] [TEST MODE] Would send Polaris confirmation for ${bookingPk} to ${guestPhone}`);
+    return;
+  }
+  const sendTo = testMode ? testTo : guestPhone;
+
+  // From-number resolution — prefer CSR_REA_TWILIO_NUMBER; fall back to global Twilio number.
+  const fromNumber = process.env.CSR_REA_TWILIO_NUMBER || process.env.TWILIO_PHONE_NUMBER || null;
+  if (!fromNumber) {
+    console.warn(`[mpwrSync] No outbound Twilio number — skipping confirmation for ${bookingPk}`);
+    return;
+  }
+
+  const text = buildPolarisConfirmationText({
+    guestName, locationLabel, beginDate, startTime, endTime, bookingPk,
+  });
+
+  try {
+    await twilioClient.messages.create({ body: text, from: fromNumber, to: sendTo });
+    console.log(`[mpwrSync] Polaris confirmation sent to ${sendTo} for ${bookingPk}${testMode ? ' [TEST MODE]' : ''}`);
+  } catch (err) {
+    throw new Error(`Twilio send failed: ${err.message}`);
+  }
+
+  // Record send so we don't double-text
+  await db1.from('confirmations_sent').upsert(
+    {
+      booking_pk:           bookingPk,
+      guest_phone:          guestPhone,
+      guest_name:           guestName,
+      company:              'coloradosledrentals',
+      item_name:            locationLabel ? `RZR ${locationLabel}` : 'RZR adventure',
+      start_at:             toUtcIso(beginDate, startTime),
+      confirmation_sent_at: new Date().toISOString(),
+      source:               'mpwr',
+      cancellation_sent:    false,
+    },
+    { onConflict: 'booking_pk' }
+  );
+}
+
+export function buildPolarisConfirmationText({ guestName, locationLabel, beginDate, startTime, endTime, bookingPk }) {
+  const firstName = (guestName ?? 'there').split(' ')[0];
+  const loc       = locationLabel ?? 'Steamboat';
+  // Build a friendly date string from beginDate (YYYY-MM-DD)
+  let dateStr = beginDate;
+  try {
+    const [y, m, d] = String(beginDate).split('-').map(Number);
+    if (y && m && d) {
+      dateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    }
+  } catch { /* leave as-is */ }
+  const timeRange = startTime && endTime ? ` from ${formatTime12(startTime)}–${formatTime12(endTime)}` : '';
+
+  const body = `Hey ${firstName}! Your ${loc} RZR ride with Colorado Sled Rentals is confirmed for ${dateStr}${timeRange} 🏔`;
+  const suffix = ` Confirmation: ${bookingPk}. Reply here with any questions!`;
+  const text = body + suffix;
+  return text.length <= 320 ? text : text.slice(0, 317) + '...';
+}
+
+function formatTime12(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = String(hhmm).split(':').map(Number);
+  if (!Number.isFinite(h)) return hhmm;
+  const ampm = h >= 12 ? 'pm' : 'am';
+  const h12  = h % 12 === 0 ? 12 : h % 12;
+  return m ? `${h12}:${String(m).padStart(2, '0')}${ampm}` : `${h12}${ampm}`;
 }
 
 // ── Sync one outfitter location ───────────────────────────────────────────────
 
-async function syncLocation(outfitterId, db2) {
+async function syncLocation(outfitterId, db2, opts = {}) {
   const token      = getToken();
   const orders     = await fetchOrders(outfitterId, token);
   const activityId = ACTIVITY_BY_OUTFITTER[outfitterId];
@@ -244,7 +375,7 @@ async function syncLocation(outfitterId, db2) {
   for (const order of orders) {
     if (!order?.shortId) { skipped++; continue; }
     try {
-      const r = await upsertOrder(order, activityId, db2);
+      const r = await upsertOrder(order, activityId, db2, opts);
       r === 'upserted' ? upserted++ : skipped++;
     } catch (err) {
       console.error(`[mpwrSync] ${order.shortId}: ${err.message}`);
@@ -257,7 +388,7 @@ async function syncLocation(outfitterId, db2) {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-export async function runMpwrSync(db2) {
+export async function runMpwrSync(db2, { db1 = null, twilioClient = null } = {}) {
   if (!process.env.MPWR_TOKEN) {
     console.log('[mpwrSync] Skipping — MPWR_TOKEN not set');
     return null;
@@ -276,7 +407,7 @@ export async function runMpwrSync(db2) {
   const results = [];
   for (const loc of locations) {
     try {
-      const r = await syncLocation(loc.id, db2);
+      const r = await syncLocation(loc.id, db2, { db1, twilioClient, locationLabel: loc.label });
       console.log(`[mpwrSync] ${loc.label}: fetched=${r.total} upserted=${r.upserted} skipped=${r.skipped} errors=${r.errors}`);
       results.push({ ...r, label: loc.label });
     } catch (err) {

@@ -1876,7 +1876,7 @@ app.get("/portal/api/operator", requirePortalAuth, async (req, res) => {
   const clientId = resolvePortalClientId(req);
   if (!clientId) return res.status(400).json({ error: "client_id required" });
   try {
-    const data = await buildOperatorApiData(clientId, supabase);
+    const data = await buildOperatorApiData(clientId, supabase, crmSupabase);
     res.json(data);
   } catch (err) {
     res.status(503).json({ error: "DB unavailable: " + err.message });

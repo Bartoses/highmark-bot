@@ -66,8 +66,10 @@ try {
   await evaluateEventCampaigns(supabase, crmSupabase);
 
   // MPWR booking sync — runs at :00 and :30 of each hour
+  // Passes db1 + twilioClient so per-booking confirmation texts can fire
+  // (gated by messaging_config.enable_confirmation_texts for csr_rea).
   if (crmSupabase && isMpwrSyncWindow()) {
-    await runMpwrSync(crmSupabase);
+    await runMpwrSync(crmSupabase, { db1: supabase, twilioClient });
   }
 
   // Operator digests — every cron tick, per-phone digest_times decides who's due

@@ -349,6 +349,37 @@ Done when:
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### DB2 Source of Truth + Polaris Confirmations (2026-05-21)
+Owner asks: booking data should always come from DB2 (real CRM manifest, not
+FH availability cache), and Polaris/MPWR bookings need confirmation texts
+gated by the existing portal toggle.
+
+- operatorBriefing.js buildOperatorApiData (used by GET /portal/api/operator
+  → portal Operator View): now fetches DB2 daily_manifest first, falls back
+  to FH availability KB only when no crmSupabase is configured. Returns
+  normalized `bookings: [{ time, name, capacity, pk, revenue_cents, source }]`
+  + a top-level `bookings_source` ∈ {manifest, manifest_empty, fh_kb} so the
+  UI can label data provenance.
+- index.js: GET /portal/api/operator now threads crmSupabase into
+  buildOperatorApiData.
+- mpwrSync.js: new sendPolarisConfirmationIfNeeded + buildPolarisConfirmationText.
+  After every successful booking upsert, the sync optionally fires a Twilio
+  confirmation text gated by messaging_config.enable_confirmation_texts for
+  csr_rea (default OFF). Idempotent — DB1 confirmations_sent stamps source='mpwr'.
+  Test-mode honors CONFIRMATIONS_ENABLED + CONFIRMATIONS_TEST_PHONE.
+  Confirmation text format:
+    "Hey {first}! Your {Kremmling|Steamboat} RZR ride with Colorado Sled
+    Rentals is confirmed for {Monday, July 4} from 9am–1pm 🏔
+    Confirmation: CO-ABC-123. Reply here with any questions!"
+- cron-worker.js: runMpwrSync now passes db1 (DB1 supabase) + twilioClient so
+  the confirmation path can resolve config + send SMS.
+- public/portal.html: "Booking Confirmations" toggle help text updated to
+  clarify it covers both FareHarbor and Polaris (RZR) bookings.
+- Tests: +10 assertions in testPolarisConfirmations — first-name fallback,
+  location label, company name, formatted date, time range, booking PK
+  inclusion, length cap, name-missing graceful path, missing-time
+  graceful path. 2326/2326 passing.
+
 ### Briefing Polish — Real Manifest + Season Revenue + New Bookings (2026-05-21)
 Owner feedback after the first live preview of the briefing: "Today's bookings"
 was reading from the FH availability cache (which shows OPEN SLOTS, not actual
