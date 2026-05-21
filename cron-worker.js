@@ -17,6 +17,7 @@ import { processScheduledMessages } from "./scheduler.js";
 import { generateDailyBriefing } from "./operatorBriefing.js";
 import { evaluateEventCampaigns } from "./campaignTriggers.js";
 import { getAllClients } from "./clients.js";
+import { runMpwrSync } from "./mpwrSync.js";
 
 const required = [
   "TWILIO_ACCOUNT_SID",
@@ -40,6 +41,12 @@ const crmSupabase  = process.env.CRM_SUPABASE_URL
   : null;
 
 console.log(`[CRON-WORKER] Starting at ${new Date().toISOString()}`);
+
+// ─── MPWR sync window — run at :00 and :30 of each hour ─────────────────────
+function isMpwrSyncWindow() {
+  const min = new Date().getUTCMinutes();
+  return min < 5 || (min >= 30 && min < 35);
+}
 
 // ─── Morning briefing check (7:00 AM MT = 13:00 UTC in MDT / 14:00 UTC in MST) ──
 // Railway cron runs every 5 min — check if we're in the 7am MT briefing window.
@@ -88,6 +95,11 @@ try {
 
   // Smart event campaigns — evaluate on every cron tick
   await evaluateEventCampaigns(supabase, crmSupabase);
+
+  // MPWR booking sync — runs at :00 and :30 of each hour
+  if (crmSupabase && isMpwrSyncWindow()) {
+    await runMpwrSync(crmSupabase);
+  }
 
   // Morning briefing — only runs in the 7am MT window
   if (isBriefingWindow()) {
