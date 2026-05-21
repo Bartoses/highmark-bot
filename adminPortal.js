@@ -1037,14 +1037,11 @@ async function syncOperatorPhonesTable(clientId, supabase, { ownerPhone, operato
     await supabase.from("operator_phones").insert(toInsert);
   }
 
-  // DELETE phones that are no longer in the desired set
-  const toDelete = [];
-  for (const row of existing ?? []) {
-    if (!desired.has(row.phone)) toDelete.push(row.id);
-  }
-  if (toDelete.length) {
-    await supabase.from("operator_phones").delete().in("id", toDelete);
-  }
+  // Note: we intentionally do NOT delete operator_phones rows that aren't in
+  // the legacy set. Phones added via the Sprint C "Operator Intelligence" UI
+  // may not appear in clients.operator_phones JSONB; deleting them on every
+  // Settings save would silently undo the user's work. Removal happens
+  // explicitly via DELETE /portal/api/operator-phones/:id.
 
   // Re-tag role for the owner phone (in case ownerPhone changed but the row exists)
   if (canonicalOwner && existingByPhone.has(canonicalOwner)) {
@@ -2485,6 +2482,270 @@ export async function handlePortalPartnerAnalytics(req, res, supabase) {
     }, { totalSent: 0, totalClicked: 0 });
 
     return res.json({ days, rows, summary, clientId });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OPERATOR PHONES CRUD (Sprint C) — /portal/api/operator-phones
+// Read: any portal user (client-scoped). Mutating: client_admin+.
+// Each row drives:
+//   • internal-mode SMS access for that phone (detectOwner consults the table)
+//   • per-phone daily digest preferences (times + types + timezone)
+//   • last_digest_sent_at stamp (read-only; updated by the dispatcher)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VALID_OPERATOR_ROLES        = ["owner", "manager", "sales", "staff"];
+const VALID_DIGEST_TYPES          = ["all", "bookings", "revenue", "leads", "staffing", "issues", "weather"];
+const DIGEST_TIME_RE              = /^([01]\d|2[0-3]):([0-5]\d)$/; // HH:MM 24-hour
+
+function validateOperatorPhoneInput(body, { partial = false } = {}) {
+  const errors = [];
+  const out = {};
+
+  if (body.phone !== undefined) {
+    const normalized = normalizePhone(String(body.phone ?? "").trim());
+    if (!normalized) errors.push("phone must be a valid US phone number");
+    else out.phone = normalized;
+  } else if (!partial) {
+    errors.push("phone is required");
+  }
+
+  if (body.label !== undefined) {
+    out.label = body.label ? String(body.label).trim().slice(0, 60) : null;
+  }
+
+  if (body.role !== undefined) {
+    const v = String(body.role).toLowerCase().trim();
+    if (!VALID_OPERATOR_ROLES.includes(v)) {
+      errors.push(`role must be one of: ${VALID_OPERATOR_ROLES.join(", ")}`);
+    } else out.role = v;
+  }
+
+  if (body.internal_mode_enabled !== undefined) {
+    if (typeof body.internal_mode_enabled !== "boolean") {
+      errors.push("internal_mode_enabled must be a boolean");
+    } else out.internal_mode_enabled = body.internal_mode_enabled;
+  }
+
+  if (body.daily_digest_enabled !== undefined) {
+    if (typeof body.daily_digest_enabled !== "boolean") {
+      errors.push("daily_digest_enabled must be a boolean");
+    } else out.daily_digest_enabled = body.daily_digest_enabled;
+  }
+
+  if (body.digest_times !== undefined) {
+    const arr = Array.isArray(body.digest_times) ? body.digest_times : [];
+    const cleaned = [];
+    for (const t of arr) {
+      const v = String(t ?? "").trim();
+      if (!DIGEST_TIME_RE.test(v)) {
+        errors.push(`digest_times: "${t}" is not HH:MM (24-hour)`);
+        break;
+      }
+      cleaned.push(v);
+    }
+    if (!cleaned.length && !partial) errors.push("digest_times must have at least one HH:MM entry");
+    if (cleaned.length) out.digest_times = cleaned;
+  }
+
+  if (body.digest_types !== undefined) {
+    const arr = Array.isArray(body.digest_types) ? body.digest_types : [];
+    const cleaned = [];
+    for (const t of arr) {
+      const v = String(t ?? "").toLowerCase().trim();
+      if (!VALID_DIGEST_TYPES.includes(v)) {
+        errors.push(`digest_types: "${t}" must be one of ${VALID_DIGEST_TYPES.join(", ")}`);
+        break;
+      }
+      cleaned.push(v);
+    }
+    if (cleaned.length) out.digest_types = cleaned;
+  }
+
+  if (body.timezone !== undefined) {
+    const tz = String(body.timezone ?? "").trim();
+    if (!tz) errors.push("timezone cannot be empty");
+    else {
+      // Validate via Intl.DateTimeFormat — throws on unknown zones
+      try { new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date()); out.timezone = tz; }
+      catch { errors.push(`timezone "${tz}" is not a valid IANA zone`); }
+    }
+  }
+
+  return { errors, values: out };
+}
+
+// GET /portal/api/operator-phones
+export async function handlePortalOperatorPhones(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { data, error } = await supabase
+    .from("operator_phones")
+    .select("id, client_id, phone, label, role, internal_mode_enabled, daily_digest_enabled, digest_times, digest_types, timezone, last_digest_sent_at, created_at, updated_at")
+    .eq("client_id", clientId)
+    .order("role", { ascending: true })
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    if (error.message?.includes("does not exist")) return res.json({ phones: [] });
+    return res.status(500).json({ error: error.message });
+  }
+  return res.json({ phones: data ?? [] });
+}
+
+// POST /portal/api/operator-phones
+export async function handlePortalCreateOperatorPhone(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { errors, values } = validateOperatorPhoneInput(req.body ?? {}, { partial: false });
+  if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+
+  const row = {
+    client_id:              clientId,
+    role:                   "staff",
+    internal_mode_enabled:  true,
+    daily_digest_enabled:   true,
+    digest_times:           ["06:30"],
+    digest_types:           ["all"],
+    timezone:               "America/Denver",
+    ...values,
+  };
+
+  const { data, error } = await supabase
+    .from("operator_phones")
+    .insert(row)
+    .select()
+    .single();
+  if (error) {
+    if (error.code === "23505") return res.status(409).json({ error: "That phone is already configured for this client." });
+    if (error.message?.includes("does not exist")) {
+      return res.status(503).json({ error: "Run db1_operator_phones.sql migration first" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  return res.status(201).json({ phone: data });
+}
+
+// PATCH /portal/api/operator-phones/:id
+export async function handlePortalUpdateOperatorPhone(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: existing, error: fetchErr } = await supabase
+    .from("operator_phones").select("id, client_id").eq("id", id).single();
+  if (fetchErr || !existing)             return res.status(404).json({ error: "Operator phone not found" });
+  if (existing.client_id !== clientId)   return res.status(403).json({ error: "Access denied" });
+
+  const { errors, values } = validateOperatorPhoneInput(req.body ?? {}, { partial: true });
+  if (errors.length)                     return res.status(400).json({ error: errors.join("; ") });
+  if (Object.keys(values).length === 0)  return res.status(400).json({ error: "No updatable fields provided" });
+
+  const { data, error } = await supabase
+    .from("operator_phones").update(values).eq("id", id).select().single();
+  if (error) {
+    if (error.code === "23505") return res.status(409).json({ error: "That phone is already configured for this client." });
+    return res.status(500).json({ error: error.message });
+  }
+  return res.json({ phone: data });
+}
+
+// DELETE /portal/api/operator-phones/:id
+export async function handlePortalDeleteOperatorPhone(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: existing, error: fetchErr } = await supabase
+    .from("operator_phones").select("id, client_id").eq("id", id).single();
+  if (fetchErr || !existing)             return res.status(404).json({ error: "Operator phone not found" });
+  if (existing.client_id !== clientId)   return res.status(403).json({ error: "Access denied" });
+
+  const { error } = await supabase.from("operator_phones").delete().eq("id", id);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true });
+}
+
+// POST /portal/api/operator-phones/:id/test — send a one-off briefing right now
+export async function handlePortalTestOperatorPhone(req, res, supabase, twilioClient, crmSupabase = null) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: row, error: fetchErr } = await supabase
+    .from("operator_phones")
+    .select("id, client_id, phone, digest_types")
+    .eq("id", id)
+    .single();
+  if (fetchErr || !row)             return res.status(404).json({ error: "Operator phone not found" });
+  if (row.client_id !== clientId)   return res.status(403).json({ error: "Access denied" });
+
+  const clients = getAllClients();
+  const client  = clients[clientId];
+  if (!client)  return res.status(404).json({ error: `Client '${clientId}' not found` });
+
+  try {
+    const { generateDailyBriefing } = await import("./operatorBriefing.js");
+    const result = await generateDailyBriefing(client, supabase, twilioClient, crmSupabase, {
+      toPhone:     row.phone,
+      dedupKey:    `${clientId}:${row.id}:test:${Date.now()}`,
+      opRowId:     row.id,
+      digestTypes: row.digest_types ?? ["all"],
+    });
+    return res.json({
+      ok:      !!result.success,
+      sent:    result.sent ?? false,
+      preview: result.preview ?? null,
+      reason:  result.reason ?? null,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /portal/api/operator/preview-briefing — generate but do not send
+export async function handlePortalPreviewBriefing(req, res, supabase, crmSupabase = null) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const clients = getAllClients();
+  const client  = clients[clientId];
+  if (!client)  return res.status(404).json({ error: `Client '${clientId}' not found` });
+
+  try {
+    const {
+      buildBriefingText,
+      getTodaysAvailability,
+      getHotLeads,
+      getWeatherSnapshot,
+      getWeeklyRevenueEstimate,
+      detectOperationalIssues,
+    } = await import("./operatorBriefing.js");
+
+    const [todaySlots, hotLeads, weatherSnap, revenue, issues] = await Promise.all([
+      getTodaysAvailability(clientId, supabase),
+      getHotLeads(clientId, supabase, 3),
+      getWeatherSnapshot(supabase, clientId),
+      getWeeklyRevenueEstimate(clientId, supabase, crmSupabase),
+      detectOperationalIssues(client, supabase, crmSupabase),
+    ]);
+
+    const preview = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, { revenue, issues });
+    return res.json({ preview, chars: preview.length, issues, hotLeadsCount: hotLeads.length });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

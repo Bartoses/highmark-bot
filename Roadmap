@@ -349,6 +349,44 @@ Done when:
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Sprint C — Operator Intelligence: Portal UI for Per-Phone Tuning (2026-05-21)
+Third sprint of the Daily Operator Briefing upgrade: ships the portal UI that
+lets client_admins manage per-phone digest preferences, send test briefings,
+and preview today's briefing — completing the multi-tenant operator config
+loop that Sprints A and B set up.
+
+- adminPortal.js: 6 new handlers — handlePortalOperatorPhones (list),
+  handlePortalCreateOperatorPhone (POST), handlePortalUpdateOperatorPhone
+  (PATCH), handlePortalDeleteOperatorPhone (DELETE),
+  handlePortalTestOperatorPhone (POST :id/test → generateDailyBriefing with
+  dedup bypass), handlePortalPreviewBriefing (GET, builds briefing text
+  without sending).
+- validateOperatorPhoneInput: shared validator for POST/PATCH — normalizes
+  E.164 phone, enforces role ∈ {owner,manager,sales,staff}, digest_times
+  HH:MM 24-hour, digest_types ⊆ {all,bookings,revenue,leads,staffing,issues,
+  weather}, timezone via Intl.DateTimeFormat. 409 on unique-violation, 403
+  on cross-tenant, 404 on missing row.
+- index.js: 6 new routes wired under requirePortalAuth — GET/POST/PATCH/
+  DELETE /portal/api/operator-phones[/:id], POST /:id/test, GET
+  /portal/api/operator/preview-briefing.
+- syncOperatorPhonesTable in the Settings save handler no longer deletes
+  rows missing from the legacy clients.operator_phones list. The Sprint C
+  UI can add phones that aren't mirrored to the JSONB column, and removal
+  is now an explicit DELETE through the new endpoint.
+- public/portal.html: new "🤖 Operator Intelligence" card below the existing
+  Internal section. Per-phone cards expose label, role, internal-mode +
+  daily-digest toggles, digest_times comma-input, sections checkbox grid,
+  timezone, last_digest_sent_at, "Send test now" button, Save button,
+  Remove button. Top-of-card "Preview today's briefing" renders the briefing
+  text in a scrollable monospace box. loadOperatorIntelligence() is called
+  from loadSettings() so the section populates whenever the user opens
+  Settings.
+- Tests: +18 assertions in testSprintCOperatorPortal — 401 guards on all
+  routes, POST validation (bad phone, role, digest_times, digest_types,
+  timezone), POST happy path (E.164 normalization + array persistence),
+  PATCH partial update + cross-tenant 403 + not-found 404 + empty-body
+  400, DELETE happy path, client_user 403 on POST. 2292/2292 passing.
+
 ### Sprint B — Operator Intelligence: Conversational UX + Expanded Handlers (2026-05-21)
 Second sprint of the Daily Operator Briefing upgrade: turns the briefing into a
 genuine two-way thread. Numeric quick-reply menu, separate operator

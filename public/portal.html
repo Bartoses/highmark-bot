@@ -4266,6 +4266,21 @@ async function loadSettings() {
       </div>
     </div>
 
+    <!-- Operator Intelligence — Sprint C: per-phone digest preferences + preview/test -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🤖 Operator Intelligence</span>
+        <button class="btn btn-ghost btn-sm" onclick="previewBriefingNow()">Preview today's briefing</button>
+      </div>
+      <div class="form-hint" style="margin-bottom:14px;">
+        Tune what each operator phone receives. Numbers added in the Internal section above appear here automatically — set their digest times, sections, and internal-mode access.
+      </div>
+      <div id="operatorIntelligenceList">
+        <div style="font-size:12px;color:var(--text2);padding:12px 0;">Loading operator phones…</div>
+      </div>
+      <pre id="briefingPreviewBox" hidden style="margin-top:14px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:480px;overflow:auto;"></pre>
+    </div>
+
     <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);">
       <div style="display:flex;align-items:center;justify-content:space-between;">
         <div>
@@ -4571,6 +4586,7 @@ async function loadSettings() {
 
   onBookingModeChange(); // init conditional visibility
   loadPlanUsage();       // async — loads into #planUsageContent
+  loadOperatorIntelligence(); // Sprint C: per-phone digest preferences
 }
 
 function onBookingModeChange() {
@@ -5703,6 +5719,159 @@ function addOperatorPhoneRow(value = '') {
   row.style.cssText = 'display:flex;gap:8px;margin-bottom:6px;';
   row.innerHTML = `<input type="text" class="form-input op-phone-input" value="${escHtml(value)}" placeholder="+12223334444" style="max-width:220px;"><button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.op-phone-row').remove()" title="Remove">✕</button>`;
   list.appendChild(row);
+}
+
+// ─── Operator Intelligence (Sprint C) ────────────────────────────────────────
+const OPERATOR_DIGEST_TYPES = ['all','bookings','revenue','leads','staffing','issues','weather'];
+const OPERATOR_ROLES        = ['owner','manager','sales','staff'];
+
+async function loadOperatorIntelligence() {
+  const list = document.getElementById('operatorIntelligenceList');
+  if (!list) return;
+  const r = await apiFetch('/operator-phones');
+  if (!r || r.error) {
+    list.innerHTML = `<div class="form-hint" style="color:var(--danger);">Couldn't load operator phones: ${r?.error ?? _lastApiError ?? 'unknown'}</div>`;
+    return;
+  }
+  const phones = r.phones ?? [];
+  if (!phones.length) {
+    list.innerHTML = `<div class="form-hint">No operator phones yet. Add one in the Internal section above and save — it will appear here for tuning.</div>`;
+    return;
+  }
+  list.innerHTML = phones.map(opPhoneCardHtml).join('');
+}
+
+function opPhoneCardHtml(p) {
+  const times    = (p.digest_times ?? ['06:30']).join(', ');
+  const types    = p.digest_types ?? ['all'];
+  const lastSent = p.last_digest_sent_at ? new Date(p.last_digest_sent_at).toLocaleString() : '—';
+  return `
+    <div class="op-int-card" data-op-id="${p.id}" style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;background:var(--surface2);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="font-weight:600;font-size:13px;">${escHtml(formatPhone(p.phone))}</div>
+        <button class="btn btn-ghost btn-sm" onclick="deleteOperatorPhone('${p.id}')" title="Remove">✕ Remove</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="font-size:11px;color:var(--text2);">Label</label>
+          <input type="text" class="form-input op-int-label" value="${escHtml(p.label ?? '')}" placeholder="e.g. Owner, Kremmling Mgr">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text2);">Role</label>
+          <select class="form-input op-int-role">
+            ${OPERATOR_ROLES.map(r => `<option value="${r}" ${p.role === r ? 'selected' : ''}>${r}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:18px;margin-bottom:10px;">
+        <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" class="op-int-internal" ${p.internal_mode_enabled !== false ? 'checked' : ''}>
+          Internal-mode access
+        </label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" class="op-int-digest" ${p.daily_digest_enabled !== false ? 'checked' : ''}>
+          Daily digest
+        </label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="font-size:11px;color:var(--text2);">Digest times (HH:MM, comma-separated)</label>
+          <input type="text" class="form-input op-int-times" value="${escHtml(times)}" placeholder="06:30, 13:00, 19:00">
+          <div style="font-size:10px;color:var(--text3);">In the phone's timezone. Multiple times = morning + afternoon + evening.</div>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text2);">Timezone</label>
+          <input type="text" class="form-input op-int-tz" value="${escHtml(p.timezone ?? 'America/Denver')}" placeholder="America/Denver">
+        </div>
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">Sections to include</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          ${OPERATOR_DIGEST_TYPES.map(t => `
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="op-int-type" value="${t}" ${types.includes(t) ? 'checked' : ''}>
+              ${t}
+            </label>
+          `).join('')}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:10px;">
+        <div style="font-size:11px;color:var(--text3);">Last sent: ${escHtml(lastSent)}</div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-ghost btn-sm" onclick="testOperatorPhone('${p.id}', this)">Send test now</button>
+          <button class="btn btn-primary btn-sm" onclick="saveOperatorPhone('${p.id}', this)">Save</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function formatPhone(e164) {
+  if (!e164) return '';
+  const m = String(e164).match(/^\+1(\d{3})(\d{3})(\d{4})$/);
+  return m ? `+1 (${m[1]}) ${m[2]}-${m[3]}` : e164;
+}
+
+async function saveOperatorPhone(id, btn) {
+  const card = btn.closest('.op-int-card');
+  if (!card) return;
+  const body = {
+    label:                  card.querySelector('.op-int-label').value.trim() || null,
+    role:                   card.querySelector('.op-int-role').value,
+    internal_mode_enabled:  card.querySelector('.op-int-internal').checked,
+    daily_digest_enabled:   card.querySelector('.op-int-digest').checked,
+    digest_times:           card.querySelector('.op-int-times').value.split(',').map(s => s.trim()).filter(Boolean),
+    digest_types:           [...card.querySelectorAll('.op-int-type:checked')].map(c => c.value),
+    timezone:               card.querySelector('.op-int-tz').value.trim() || 'America/Denver',
+  };
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const r = await apiFetch(`/operator-phones/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  btn.disabled = false; btn.textContent = 'Save';
+  if (!r || r.error) {
+    showToast(`Save failed: ${r?.error ?? _lastApiError ?? 'unknown'}`);
+    return;
+  }
+  showToast('Saved');
+  loadOperatorIntelligence();
+}
+
+async function testOperatorPhone(id, btn) {
+  btn.disabled = true; btn.textContent = 'Sending…';
+  const r = await apiFetch(`/operator-phones/${id}/test`, { method: 'POST', body: '{}' });
+  btn.disabled = false; btn.textContent = 'Send test now';
+  if (!r || r.error) {
+    showToast(`Test send failed: ${r?.error ?? _lastApiError ?? 'unknown'}`);
+    return;
+  }
+  if (r.sent === false && r.preview) {
+    showToast('Test built (TEST_MODE) — preview shown');
+    showBriefingPreview(r.preview);
+  } else if (r.ok) {
+    showToast('Test briefing sent ✓');
+  } else {
+    showToast(`Skipped: ${r.reason ?? 'unknown'}`);
+  }
+}
+
+async function deleteOperatorPhone(id) {
+  if (!confirm('Remove this operator phone? They will no longer receive briefings or have internal-mode access.')) return;
+  const r = await apiFetch(`/operator-phones/${id}`, { method: 'DELETE' });
+  if (!r || r.error) { showToast(`Delete failed: ${r?.error ?? _lastApiError ?? 'unknown'}`); return; }
+  showToast('Removed');
+  loadOperatorIntelligence();
+}
+
+async function previewBriefingNow() {
+  const r = await apiFetch('/operator/preview-briefing');
+  if (!r || r.error) { showToast(`Preview failed: ${r?.error ?? _lastApiError ?? 'unknown'}`); return; }
+  showBriefingPreview(r.preview, r.chars);
+}
+
+function showBriefingPreview(text, chars) {
+  const box = document.getElementById('briefingPreviewBox');
+  if (!box) return;
+  box.textContent = (chars != null ? `[${chars} chars]\n\n` : '') + text;
+  box.hidden = false;
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 async function saveWeatherLocations() {

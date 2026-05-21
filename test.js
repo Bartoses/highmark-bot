@@ -3232,6 +3232,7 @@ async function main() {
     await testOperatorMode();     // Sprint 4A: operator briefing, commands, portal
     await testSprintAOperatorPhones(); // Sprint A: operator_phones table, isDigestTimeNow, dispatchOperatorDigests
     await testSprintBOperatorUX();     // Sprint B: numeric menu, ops load, unanswered, largest bookings, underbooked, busiest hours, follow-ups, first-timers
+    await testSprintCOperatorPortal(); // Sprint C: operator_phones CRUD, auth guards, validation
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -13748,6 +13749,188 @@ async function testSprintBOperatorUX() {
     chk("sprintB: unanswered header includes count (2)", out.includes("UNANSWERED CONVOS (2)"));
     chk("sprintB: unanswered shows handoff flag", out.includes("[handoff]"));
     chk("sprintB: unanswered shows paused flag", out.includes("[paused]"));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint C — Portal UI for operator phones (CRUD + test-send + preview)
+// Tests the pure validators, HTTP auth guards on the new routes, and the
+// preview-briefing endpoint surface.
+// ─────────────────────────────────────────────────────────────────────────────
+async function testSprintCOperatorPortal() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const { default: fetch } = await import("node-fetch");
+
+  // ── HTTP auth guards — all routes require requirePortalAuth ─────────────
+  const opRoutes = [
+    ["GET",    "/portal/api/operator-phones"],
+    ["POST",   "/portal/api/operator-phones"],
+    ["PATCH",  "/portal/api/operator-phones/abc"],
+    ["DELETE", "/portal/api/operator-phones/abc"],
+    ["POST",   "/portal/api/operator-phones/abc/test"],
+    ["GET",    "/portal/api/operator/preview-briefing"],
+  ];
+  let all401 = true;
+  for (const [method, route] of opRoutes) {
+    const res = await fetch(`${BASE_URL}${route}`, {
+      method,
+      headers: method === "POST" || method === "PATCH" ? { "Content-Type": "application/json" } : {},
+      body:    method === "POST" || method === "PATCH" ? "{}" : undefined,
+    });
+    if (res.status !== 401) { all401 = false; console.log(`  Expected 401 on ${method} ${route}, got ${res.status}`); }
+  }
+  chk("sprintC: all /portal/api/operator-phones routes return 401 without token", all401);
+
+  // ── POST body validation paths via direct handler import (no auth needed) ──
+  // Import the validator indirectly via handler — we call the handler with a
+  // stubbed res + req so we don't depend on the live server's auth flow.
+  const adminPortal = await import("./adminPortal.js");
+
+  // Build a minimal stub req with a portalUser claiming client_admin + clientId
+  const makeReq = (body = {}, params = {}, query = {}, role = "client_admin") => ({
+    body, params, query,
+    portalUser: { isClientAdmin: true, isAdmin: false, clientId: "csr_rea", isClientUser: false },
+    headers: {},
+  });
+  const makeRes = () => {
+    const res = { statusCode: 200, jsonBody: null };
+    res.status = (c) => { res.statusCode = c; return res; };
+    res.json   = (b) => { res.jsonBody   = b; return res; };
+    return res;
+  };
+
+  // POST — bad phone → 400
+  {
+    const res = makeRes();
+    await adminPortal.handlePortalCreateOperatorPhone(makeReq({ phone: "not-a-phone" }), res, { from: () => ({ insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: null, error: null }) }) }) }) });
+    chk("sprintC: POST rejects invalid phone with 400", res.statusCode === 400, `got ${res.statusCode}: ${JSON.stringify(res.jsonBody)}`);
+  }
+
+  // POST — bad role → 400
+  {
+    const res = makeRes();
+    await adminPortal.handlePortalCreateOperatorPhone(makeReq({ phone: "+15551234567", role: "ceo" }), res, { from: () => ({ insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: null, error: null }) }) }) }) });
+    chk("sprintC: POST rejects invalid role", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+
+  // POST — bad digest_times entry → 400
+  {
+    const res = makeRes();
+    await adminPortal.handlePortalCreateOperatorPhone(makeReq({ phone: "+15551234567", digest_times: ["25:00"] }), res, { from: () => ({}) });
+    chk("sprintC: POST rejects malformed digest_times (25:00)", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+
+  // POST — bad digest_types value → 400
+  {
+    const res = makeRes();
+    await adminPortal.handlePortalCreateOperatorPhone(makeReq({ phone: "+15551234567", digest_types: ["foo"] }), res, { from: () => ({}) });
+    chk("sprintC: POST rejects unknown digest_types value", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+
+  // POST — invalid timezone → 400
+  {
+    const res = makeRes();
+    await adminPortal.handlePortalCreateOperatorPhone(makeReq({ phone: "+15551234567", timezone: "Not/A/Zone" }), res, { from: () => ({}) });
+    chk("sprintC: POST rejects invalid IANA timezone", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+
+  // POST — happy path inserts row
+  {
+    let insertedRow = null;
+    const supa = {
+      from: () => ({
+        insert: (row) => { insertedRow = row; return { select: () => ({ single: () => Promise.resolve({ data: { id: "uuid-x", ...row }, error: null }) }) }; },
+      }),
+    };
+    const res = makeRes();
+    await adminPortal.handlePortalCreateOperatorPhone(
+      makeReq({ phone: "5551234567", label: "Mgr Kremmling", role: "manager", digest_times: ["06:30","13:00"], digest_types: ["bookings","leads"], timezone: "America/Denver" }),
+      res, supa,
+    );
+    chk("sprintC: POST happy path returns 201", res.statusCode === 201, JSON.stringify(res.jsonBody));
+    chk("sprintC: POST normalizes phone to E.164", insertedRow?.phone === "+15551234567", JSON.stringify(insertedRow));
+    chk("sprintC: POST persists label", insertedRow?.label === "Mgr Kremmling");
+    chk("sprintC: POST persists digest_times array", JSON.stringify(insertedRow?.digest_times) === '["06:30","13:00"]');
+  }
+
+  // PATCH — partial update with valid digest_types
+  {
+    let updateBody = null;
+    const supa = {
+      from: () => ({
+        select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { id: "uuid-x", client_id: "csr_rea" }, error: null }) }) }),
+        update: (body) => { updateBody = body; return { eq: () => ({ select: () => ({ single: () => Promise.resolve({ data: { id: "uuid-x", ...body }, error: null }) }) }) }; },
+      }),
+    };
+    const res = makeRes();
+    await adminPortal.handlePortalUpdateOperatorPhone(
+      makeReq({ daily_digest_enabled: false, digest_types: ["all"] }, { id: "uuid-x" }),
+      res, supa,
+    );
+    chk("sprintC: PATCH partial update succeeds", res.statusCode === 200, JSON.stringify(res.jsonBody));
+    chk("sprintC: PATCH only touches provided fields", updateBody?.daily_digest_enabled === false && updateBody?.digest_types?.includes("all"));
+    chk("sprintC: PATCH does NOT touch unspecified fields (phone)", updateBody?.phone === undefined);
+  }
+
+  // PATCH — wrong client_id → 403
+  {
+    const supa = {
+      from: () => ({
+        select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { id: "uuid-x", client_id: "other_client" }, error: null }) }) }),
+      }),
+    };
+    const res = makeRes();
+    await adminPortal.handlePortalUpdateOperatorPhone(makeReq({ label: "Try" }, { id: "uuid-x" }), res, supa);
+    chk("sprintC: PATCH cross-tenant access denied", res.statusCode === 403, JSON.stringify(res.jsonBody));
+  }
+
+  // PATCH — not found → 404
+  {
+    const supa = {
+      from: () => ({
+        select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: null, error: { code: "PGRST116" } }) }) }),
+      }),
+    };
+    const res = makeRes();
+    await adminPortal.handlePortalUpdateOperatorPhone(makeReq({ label: "x" }, { id: "missing" }), res, supa);
+    chk("sprintC: PATCH not-found returns 404", res.statusCode === 404, JSON.stringify(res.jsonBody));
+  }
+
+  // PATCH — empty body → 400
+  {
+    const supa = {
+      from: () => ({
+        select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { id: "uuid-x", client_id: "csr_rea" }, error: null }) }) }),
+      }),
+    };
+    const res = makeRes();
+    await adminPortal.handlePortalUpdateOperatorPhone(makeReq({}, { id: "uuid-x" }), res, supa);
+    chk("sprintC: PATCH empty body returns 400", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+
+  // DELETE — happy path
+  {
+    let deleted = false;
+    const supa = {
+      from: () => ({
+        select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { id: "uuid-x", client_id: "csr_rea" }, error: null }) }) }),
+        delete: () => ({ eq: () => Promise.resolve({ error: null, then(res) { deleted = true; res({ error: null }); return Promise.resolve(); } }) }),
+      }),
+    };
+    const res = makeRes();
+    await adminPortal.handlePortalDeleteOperatorPhone(makeReq({}, { id: "uuid-x" }), res, supa);
+    chk("sprintC: DELETE happy path returns ok", res.statusCode === 200 && res.jsonBody?.ok === true, JSON.stringify(res.jsonBody));
+  }
+
+  // client_user (read-only) → 403 on POST
+  {
+    const req = makeReq({ phone: "+15551234567" });
+    req.portalUser = { isClientAdmin: false, isAdmin: false, clientId: "csr_rea", isClientUser: true };
+    const res = makeRes();
+    await adminPortal.handlePortalCreateOperatorPhone(req, res, { from: () => ({}) });
+    chk("sprintC: POST as client_user → 403", res.statusCode === 403, JSON.stringify(res.jsonBody));
   }
 }
 

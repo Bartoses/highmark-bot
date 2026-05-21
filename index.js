@@ -51,7 +51,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handleDismissChecklist,
   handlePortalPreviewOpener,
   handlePortalUsage,
-  handlePortalPartners, handlePortalCreatePartner, handlePortalUpdatePartner, handlePortalDeletePartner, handlePortalPartnerAnalytics } from "./adminPortal.js";
+  handlePortalPartners, handlePortalCreatePartner, handlePortalUpdatePartner, handlePortalDeletePartner, handlePortalPartnerAnalytics,
+  handlePortalOperatorPhones, handlePortalCreateOperatorPhone, handlePortalUpdateOperatorPhone, handlePortalDeleteOperatorPhone, handlePortalTestOperatorPhone, handlePortalPreviewBriefing } from "./adminPortal.js";
 import { getCustomApiContext } from "./apiIntegrations.js";
 import { getAcceptedRewriteInstruction } from "./rewriteEngine.js";
 import { handleCreateInvite, handleListInvites, handleResendInvite, handleRevokeInvite, handleUpdatePortalUser, handleInviteInfo, handleAcceptInvite, handlePortalUsers, handlePortalInvites, handlePortalCreateInvite, handlePortalResendInvite, handlePortalRevokeInvite, handlePortalUpdateUser } from "./adminInvites.js";
@@ -1795,6 +1796,14 @@ app.get(   "/portal/api/partners",               requirePortalAuth, (req, res) =
 app.post(  "/portal/api/partners",               requirePortalAuth, (req, res) => handlePortalCreatePartner(req, res, supabase));
 app.patch( "/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalUpdatePartner(req, res, supabase));
 app.delete("/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalDeletePartner(req, res, supabase));
+
+// ── Operator phones (Sprint C) ─────────────────────────────────────────────
+app.get(   "/portal/api/operator-phones",          requirePortalAuth, (req, res) => handlePortalOperatorPhones(req, res, supabase));
+app.post(  "/portal/api/operator-phones",          requirePortalAuth, (req, res) => handlePortalCreateOperatorPhone(req, res, supabase));
+app.patch( "/portal/api/operator-phones/:id",      requirePortalAuth, (req, res) => handlePortalUpdateOperatorPhone(req, res, supabase));
+app.delete("/portal/api/operator-phones/:id",      requirePortalAuth, (req, res) => handlePortalDeleteOperatorPhone(req, res, supabase));
+app.post(  "/portal/api/operator-phones/:id/test", requirePortalAuth, (req, res) => handlePortalTestOperatorPhone(req, res, supabase, twilioClient, crmSupabase));
+app.get(   "/portal/api/operator/preview-briefing", requirePortalAuth, (req, res) => handlePortalPreviewBriefing(req, res, supabase, crmSupabase));
 // Operations dashboard (Phase 1 — read-only)
 app.get(   "/portal/api/operations/summary",                  requirePortalAuth, (req, res) => handleOperationsSummary(req, res, supabase, crmSupabase));
 app.get(   "/portal/api/operations/bookings",                 requirePortalAuth, (req, res) => handleOperationsBookings(req, res, supabase, crmSupabase));
