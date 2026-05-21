@@ -364,109 +364,430 @@ export async function getWeeklyRevenueEstimate(clientId, supabase, crmSupabase =
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// OPERATIONAL SIGNAL DETECTORS — surface actionable items from DB2 manifest.
+// Each detector is independent and graceful — null/empty crmSupabase → []/null.
+// Detectors return small ranked lists; the briefing builder picks the top items
+// to keep the digest short and high-signal.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Unpaid bookings with future start dates, ranked by balance_due_cents desc.
+export async function detectUnpaidBookings(crmSupabase) {
+  if (!crmSupabase) return [];
+  try {
+    const nowISO = new Date().toISOString();
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, activity, location, start_at, arrival_display, balance_due_cents, customer_count")
+      .gt("balance_due_cents", 0)
+      .gte("start_at", nowISO)
+      .order("balance_due_cents", { ascending: false })
+      .limit(10);
+    return data ?? [];
+  } catch { return []; }
+}
+
+// Bookings arriving in the next 48h that don't have waiver_signed = true.
+export async function detectMissingWaivers(crmSupabase) {
+  if (!crmSupabase) return [];
+  try {
+    const nowISO  = new Date().toISOString();
+    const horizon = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, activity, location, start_at, customer_count, waiver_signed")
+      .neq("waiver_signed", true)
+      .gte("start_at", nowISO)
+      .lt("start_at", horizon)
+      .order("start_at", { ascending: true })
+      .limit(20);
+    return data ?? [];
+  } catch { return []; }
+}
+
+// 3+ arrivals within the same hour today → operational crunch.
+// Returns array of { hour_label, count, location_breakdown }.
+export async function detectOverlappingArrivals(crmSupabase) {
+  if (!crmSupabase) return [];
+  try {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end   = new Date(start); end.setDate(end.getDate() + 1);
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("start_at, location, customer_count")
+      .gte("start_at", start.toISOString())
+      .lt("start_at", end.toISOString());
+    const rows = data ?? [];
+    if (!rows.length) return [];
+    const byHour = new Map();
+    for (const r of rows) {
+      if (!r.start_at) continue;
+      const hourStr = new Date(r.start_at).toLocaleString("en-US", { timeZone: "America/Denver", hour: "numeric", hour12: true });
+      const cur = byHour.get(hourStr) ?? { count: 0, locations: {}, pax: 0 };
+      cur.count += 1;
+      cur.pax   += Number(r.customer_count) || 0;
+      cur.locations[r.location ?? "?"] = (cur.locations[r.location ?? "?"] ?? 0) + 1;
+      byHour.set(hourStr, cur);
+    }
+    return [...byHour.entries()]
+      .map(([hour_label, v]) => ({ hour_label, ...v }))
+      .filter((h) => h.count >= 3)
+      .sort((a, b) => b.count - a.count);
+  } catch { return []; }
+}
+
+// Upcoming bookings with total_cents > $1000 (100,000 cents).
+export async function detectHighValueBookings(crmSupabase, minCents = 100000) {
+  if (!crmSupabase) return [];
+  try {
+    const nowISO  = new Date().toISOString();
+    const horizon = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, activity, location, start_at, customer_count, total_cents, balance_due_cents")
+      .gte("total_cents", minCents)
+      .gte("start_at", nowISO)
+      .lt("start_at", horizon)
+      .order("total_cents", { ascending: false })
+      .limit(5);
+    return data ?? [];
+  } catch { return []; }
+}
+
+// Detects likely-duplicate bookings: BOT-prefixed PKs that share the customer
+// name + start_at with a non-BOT PK. These usually indicate the bot created a
+// placeholder before the real FH/Polaris booking arrived.
+export async function detectDuplicateBookings(crmSupabase) {
+  if (!crmSupabase) return [];
+  try {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const horizon = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, start_at, normalized_phone, activity")
+      .gte("start_at", since)
+      .lt("start_at", horizon);
+    const rows = data ?? [];
+    if (!rows.length) return [];
+
+    // Group by name + date
+    const byKey = new Map();
+    for (const r of rows) {
+      const date = (r.start_at ?? "").slice(0, 10);
+      const key  = `${(r.normalized_phone ?? r.customer_name ?? "?").toLowerCase()}|${date}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(r);
+    }
+    const dupes = [];
+    for (const [, group] of byKey) {
+      if (group.length < 2) continue;
+      const hasBot = group.some((r) => /^BOT-/i.test(r.fareharbor_pk ?? ""));
+      const hasReal = group.some((r) => !/^BOT-/i.test(r.fareharbor_pk ?? ""));
+      if (hasBot && hasReal) {
+        dupes.push({
+          customer_name: group[0].customer_name,
+          start_at:      group[0].start_at,
+          bot_pk:        group.find((r) =>  /^BOT-/i.test(r.fareharbor_pk ?? ""))?.fareharbor_pk,
+          real_pk:       group.find((r) => !/^BOT-/i.test(r.fareharbor_pk ?? ""))?.fareharbor_pk,
+        });
+      }
+    }
+    return dupes.slice(0, 10);
+  } catch { return []; }
+}
+
+// Bookings arriving today or tomorrow without a phone number.
+export async function detectMissingPhones(crmSupabase) {
+  if (!crmSupabase) return [];
+  try {
+    const now    = new Date();
+    const start  = new Date(now); start.setHours(0, 0, 0, 0);
+    const end    = new Date(start); end.setDate(end.getDate() + 2);
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, activity, location, start_at, customer_count, phone")
+      .is("phone", null)
+      .gte("start_at", start.toISOString())
+      .lt("start_at",  end.toISOString())
+      .limit(10);
+    return data ?? [];
+  } catch { return []; }
+}
+
+// Compares this week's new-booking volume vs last week to flag a slowdown.
+// Uses DB2 bookings.created_at; falls back to DB1 confirmations_sent.
+// Returns { this_week, last_week, delta_pct } or null on error.
+export async function detectPacingSignal(crmSupabase, supabase) {
+  const now      = Date.now();
+  const sinceTW  = new Date(now - 7  * 86400 * 1000).toISOString();
+  const sinceLW  = new Date(now - 14 * 86400 * 1000).toISOString();
+
+  let thisWeek = 0, lastWeek = 0;
+  if (crmSupabase) {
+    try {
+      const [tw, lw] = await Promise.all([
+        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", sinceTW),
+        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", sinceLW).lt("created_at", sinceTW),
+      ]);
+      if (!tw.error && !lw.error) {
+        thisWeek = tw.count ?? 0;
+        lastWeek = lw.count ?? 0;
+      }
+    } catch { /* fall through */ }
+  }
+  if (thisWeek === 0 && lastWeek === 0 && supabase) {
+    try {
+      const [tw, lw] = await Promise.all([
+        supabase.from("confirmations_sent").select("id", { count: "exact", head: true }).gte("confirmation_sent_at", sinceTW),
+        supabase.from("confirmations_sent").select("id", { count: "exact", head: true }).gte("confirmation_sent_at", sinceLW).lt("confirmation_sent_at", sinceTW),
+      ]);
+      if (!tw.error && !lw.error) {
+        thisWeek = tw.count ?? 0;
+        lastWeek = lw.count ?? 0;
+      }
+    } catch { /* ignore */ }
+  }
+  const delta_pct = lastWeek > 0 ? Math.round(((thisWeek - lastWeek) / lastWeek) * 100) : null;
+  return { this_week: thisWeek, last_week: lastWeek, delta_pct };
+}
+
+// Location concentration over the last 30 days. Returns array of
+// { location, count, pct } sorted desc by count.
+export async function detectLocationConcentration(crmSupabase) {
+  if (!crmSupabase) return [];
+  try {
+    const since = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("location")
+      .gte("start_at", since);
+    const rows = data ?? [];
+    if (!rows.length) return [];
+    const counts = new Map();
+    for (const r of rows) {
+      const loc = r.location ?? "Unknown";
+      counts.set(loc, (counts.get(loc) ?? 0) + 1);
+    }
+    const total = rows.length;
+    return [...counts.entries()]
+      .map(([location, count]) => ({ location, count, pct: Math.round((count / total) * 100) }))
+      .sort((a, b) => b.count - a.count);
+  } catch { return []; }
+}
+
+// Unresolved handoffs from DB1 conversations.
+export async function detectUnresolvedHandoffs(supabase, clientId) {
+  if (!supabase || !clientId) return [];
+  try {
+    const { data } = await supabase
+      .from("conversations")
+      .select("from_number, updated_at, messages")
+      .eq("client_id", clientId)
+      .eq("handoff", true)
+      .eq("handoff_resolved", false)
+      .order("updated_at", { ascending: false })
+      .limit(5);
+    return data ?? [];
+  } catch { return []; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // BRIEFING TEXT BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weatherSnap, extras = {}) {
-  const biz      = client.name ?? "Your business";
-  const dateStr  = new Date().toLocaleDateString("en-US", {
+  const biz     = client.name ?? "Your business";
+  const dateStr = new Date().toLocaleDateString("en-US", {
     timeZone: "America/Denver", weekday: "short", month: "short", day: "numeric",
   });
 
+  const manifest         = extras.manifest         ?? [];
+  const unpaid           = extras.unpaid           ?? [];
+  const missingWaivers   = extras.missingWaivers   ?? [];
+  const overlaps         = extras.overlaps         ?? [];
+  const highValue        = extras.highValue        ?? [];
+  const duplicates       = extras.duplicates       ?? [];
+  const missingPhones    = extras.missingPhones    ?? [];
+  const pacing           = extras.pacing           ?? null;
+  const locationMix      = extras.locationMix      ?? [];
+  const unresolved       = extras.unresolvedHandoffs ?? [];
+  const rev              = extras.revenue          ?? null;
+  const season           = extras.seasonRevenue    ?? null;
+  const newBookings      = extras.newBookings      ?? null;
+  const issues           = extras.issues           ?? [];
+
   const lines = [];
-  lines.push(`Good morning! Here's your day for ${biz}:`);
-  lines.push("");
+  lines.push(`🏔 OPERATOR BRIEFING — ${dateStr}`);
+  lines.push(`${biz}`);
 
-  // ── Today's manifest (real DB2 rows preferred via extras.manifest) ───────
-  const manifest = extras.manifest ?? null;
-  if (Array.isArray(manifest)) {
-    const todayPax      = manifest.reduce((s, r) => s + (Number(r.customer_count) || 0), 0);
-    const todayRevCents = manifest.reduce((s, r) => s + (Number(r.total_cents) || 0), 0);
-    lines.push(`TODAY (${dateStr}): ${manifest.length} booking${manifest.length !== 1 ? "s" : ""} · ${todayPax} guest${todayPax !== 1 ? "s" : ""} · $${Math.round(todayRevCents / 100).toLocaleString()}`);
-    if (manifest.length === 0) {
-      lines.push("Nothing on the manifest yet — quiet day so far.");
-    } else {
-      for (const r of manifest.slice(0, 5)) {
-        const time = r.start_at
-          ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
-          : "?";
-        const name = (r.customer_name ?? "?").split(" ")[0];
-        const act  = (r.activity ?? "?").replace(/^.*?[•\-]\s*/, "").slice(0, 28);
-        lines.push(`• ${time} — ${name} (${r.customer_count ?? "?"}p, ${act})`);
-      }
-      if (manifest.length > 5) lines.push(`  …+${manifest.length - 5} more`);
-    }
-  } else {
-    // Legacy path — FH availability slots
-    lines.push(`TODAY'S OPENINGS (${dateStr}):`);
-    const bookingLines = (todaySlotsOrIgnored ?? []).slice(0, 5);
-    if (bookingLines.length === 0) {
-      lines.push("Nothing on the manifest yet — quiet day so far.");
-    } else {
-      for (const s of bookingLines) lines.push(`• ${s.time} — ${s.name}`);
-    }
+  // ── ⚠ ACTIONS NEEDED — surface real problems, not metrics ───────────────
+  const actions = [];
+
+  // Unpaid balances (top by balance, with name + dollar)
+  if (unpaid.length) {
+    const total = unpaid.reduce((s, r) => s + (Number(r.balance_due_cents) || 0), 0);
+    const top   = unpaid[0];
+    const topName = (top.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+    const topAmt  = `$${Math.round((top.balance_due_cents ?? 0) / 100).toLocaleString()}`;
+    const topDate = top.start_at ? new Date(top.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+    actions.push(`$${Math.round(total / 100).toLocaleString()} unpaid across ${unpaid.length} booking${unpaid.length !== 1 ? "s" : ""} — biggest: ${topName} ${topAmt} (${topDate})`);
   }
 
-  // ── New bookings created (24h / 7d) ──────────────────────────────────────
-  const fresh = extras.newBookings ?? null;
-  if (fresh && (fresh.last_24h > 0 || fresh.last_7d > 0)) {
+  // Missing waivers (next 48h)
+  if (missingWaivers.length) {
+    const arrivingToday = missingWaivers.filter((r) => isToday(r.start_at)).length;
+    const todayClause   = arrivingToday > 0 ? ` — ${arrivingToday} arrive today` : "";
+    actions.push(`${missingWaivers.length} guest${missingWaivers.length !== 1 ? "s" : ""} missing waivers${todayClause}`);
+  }
+
+  // Overlapping arrivals
+  if (overlaps.length) {
+    const top = overlaps[0];
+    const locText = Object.entries(top.locations ?? {}).map(([loc, n]) => `${loc} ${n}`).join("/");
+    actions.push(`${top.count} arrivals overlap at ${top.hour_label}${locText ? ` (${locText})` : ""}`);
+  }
+
+  // Missing phone numbers on imminent arrivals
+  if (missingPhones.length) {
+    const first = missingPhones[0];
+    const name  = (first.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+    actions.push(`${missingPhones.length} booking${missingPhones.length !== 1 ? "s" : ""} missing phone — e.g. ${name}`);
+  }
+
+  if (actions.length) {
     lines.push("");
-    lines.push(`NEW BOOKINGS: ${fresh.last_24h} in last 24h · ${fresh.last_7d} this week`);
+    lines.push("⚠ ACTIONS");
+    for (const a of actions.slice(0, 5)) lines.push(`• ${a}`);
   }
 
-  // ── Hot leads ────────────────────────────────────────────────────────────
-  lines.push("");
-  lines.push(`HOT LEADS (${hotLeads.length}):`);
-  if (hotLeads.length === 0) {
-    lines.push("No open leads needing follow-up.");
-  } else {
-    for (const lead of hotLeads.slice(0, 3)) {
-      const firstName = (lead.name ?? "Unknown").split(" ")[0];
-      const svc       = lead.service ?? "N/A";
-      lines.push(`• ${firstName} — ${svc}, ${lead.status}`);
-    }
+  // ── 💰 REVENUE — pipeline + biggest unpaid risk ──────────────────────────
+  const revLines = [];
+  if (manifest.length) {
+    const todayPax  = manifest.reduce((s, r) => s + (Number(r.customer_count) || 0), 0);
+    const todayCents = manifest.reduce((s, r) => s + (Number(r.total_cents) || 0), 0);
+    revLines.push(`Today: ${manifest.length} booking${manifest.length !== 1 ? "s" : ""} · ${todayPax}p · $${Math.round(todayCents / 100).toLocaleString()}`);
   }
-
-  // ── Conditions ───────────────────────────────────────────────────────────
-  lines.push("");
-  lines.push(`CONDITIONS: ${buildConditionsLine(weatherSnap)}`);
-
-  // ── Revenue: 7-day + season-to-date ──────────────────────────────────────
-  const rev    = extras.revenue ?? null;
-  const season = extras.seasonRevenue ?? null;
-  if ((rev && (rev.estimated > 0 || rev.bookings > 0)) || (season && season.revenue_cents > 0)) {
+  if (rev && rev.estimated > 0) {
+    const tag = rev.source === "manifest" ? "" : " (est)";
+    revLines.push(`Next 7d${tag}: $${rev.estimated.toLocaleString()} · ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""}`);
+  }
+  if (season && season.revenue_cents > 0) {
+    const tag = season.source === "manifest" ? "" : " (est)";
+    revLines.push(`${season.period_label}${tag}: $${Math.round(season.revenue_cents / 100).toLocaleString()}`);
+  }
+  if (highValue.length) {
+    const top = highValue[0];
+    const name = (top.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+    const dol  = `$${Math.round((top.total_cents ?? 0) / 100).toLocaleString()}`;
+    const date = top.start_at ? new Date(top.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+    const unpaidNote = (top.balance_due_cents ?? 0) > 0 ? " — UNPAID" : "";
+    revLines.push(`Largest upcoming: ${name} ${dol} (${date}, ${top.activity ?? "?"})${unpaidNote}`);
+  }
+  if (revLines.length) {
     lines.push("");
-    if (rev && (rev.estimated > 0 || rev.bookings > 0)) {
-      const tag = rev.source === "manifest" ? "" : " (est)";
-      lines.push(`7-DAY${tag}: $${rev.estimated.toLocaleString()} · ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""}`);
-    }
-    if (season && season.revenue_cents > 0) {
-      const tag = season.source === "manifest" ? "" : " (est)";
-      lines.push(`${season.period_label.toUpperCase()}${tag}: $${Math.round(season.revenue_cents / 100).toLocaleString()} · ${season.bookings} booking${season.bookings !== 1 ? "s" : ""}`);
-    }
+    lines.push("💰 REVENUE");
+    for (const l of revLines) lines.push(`• ${l}`);
   }
 
-  // ── Alerts ───────────────────────────────────────────────────────────────
-  const issues = extras.issues ?? [];
+  // ── 📈 INSIGHTS — patterns worth noting ──────────────────────────────────
+  const insights = [];
+  if (locationMix.length >= 2) {
+    const top = locationMix[0];
+    const second = locationMix[1];
+    if (top.pct >= 60) {
+      insights.push(`${top.location} driving ${top.pct}% of bookings — ${second.location} only ${second.pct}%`);
+    }
+  }
+  if (pacing && pacing.last_week > 5 && pacing.delta_pct != null) {
+    if (pacing.delta_pct <= -25) {
+      insights.push(`Pacing down ${Math.abs(pacing.delta_pct)}% vs last week (${pacing.this_week} vs ${pacing.last_week} new bookings)`);
+    } else if (pacing.delta_pct >= 50) {
+      insights.push(`Pacing up ${pacing.delta_pct}% vs last week — strong momentum`);
+    }
+  }
+  if (duplicates.length) {
+    insights.push(`${duplicates.length} duplicate BOT-/CO- reservation${duplicates.length !== 1 ? "s" : ""} detected — review imports`);
+  }
+  if (newBookings && newBookings.last_24h > 0) {
+    insights.push(`${newBookings.last_24h} new in last 24h · ${newBookings.last_7d} this week`);
+  }
+  if (insights.length) {
+    lines.push("");
+    lines.push("📈 INSIGHTS");
+    for (const i of insights.slice(0, 3)) lines.push(`• ${i}`);
+  }
+
+  // ── 🔥 FOLLOW UP — specific calls/messages ───────────────────────────────
+  const followups = [];
+  // Biggest unpaid → specific call
+  if (unpaid.length) {
+    const top  = unpaid[0];
+    const name = (top.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+    const dol  = `$${Math.round((top.balance_due_cents ?? 0) / 100).toLocaleString()}`;
+    const date = top.start_at ? new Date(top.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+    followups.push(`Call ${name} — ${dol} unpaid balance before ${date}`);
+  }
+  // Hot leads
+  if (hotLeads.length) {
+    for (const lead of hotLeads.slice(0, 2)) {
+      const name = (lead.name ?? "Unknown").split(" ")[0];
+      followups.push(`Hot lead: ${name} — ${lead.service ?? "n/a"} (${lead.status})`);
+    }
+  }
+  // Unresolved handoffs
+  if (unresolved.length) {
+    for (const h of unresolved.slice(0, 1)) {
+      const last  = Array.isArray(h.messages) ? h.messages[h.messages.length - 1] : null;
+      const body  = (last?.content ?? "").slice(0, 40);
+      const phone = (h.from_number ?? "").replace(/^\+1/, "");
+      followups.push(`Unresolved handoff: ${phone} — "${body}…"`);
+    }
+  }
+  if (followups.length) {
+    lines.push("");
+    lines.push("🔥 FOLLOW UP");
+    for (const f of followups.slice(0, 4)) lines.push(`• ${f}`);
+  }
+
+  // ── 🌤 CONDITIONS — only if weather data exists ──────────────────────────
+  const condLine = buildConditionsLine(weatherSnap);
+  if (condLine !== "No weather data available." && condLine !== "Conditions unavailable.") {
+    lines.push("");
+    lines.push(`🌤 CONDITIONS — ${condLine}`);
+  }
+
+  // ── System alerts (still important but lower priority than ACTIONS) ──────
   if (issues.length) {
     lines.push("");
-    lines.push(`ALERTS (${issues.length}):`);
-    for (const issue of issues.slice(0, 3)) {
-      lines.push(`! ${issue}`);
-    }
+    lines.push("⚠️ SYSTEM");
+    for (const i of issues.slice(0, 2)) lines.push(`• ${i}`);
   }
 
-  // ── Quick-reply menu ─────────────────────────────────────────────────────
+  // ── If nothing surfaced, give a friendly idle line ──────────────────────
+  if (actions.length === 0 && followups.length === 0 && revLines.length === 0) {
+    lines.push("");
+    lines.push("Quiet morning — nothing flagged. Reply for details on what's on the books.");
+  }
+
+  // ── Quick-reply menu — operational focus ─────────────────────────────────
   lines.push("");
-  lines.push("Reply 1-7 or ask anything:");
-  lines.push("1 Today's manifest   5 Weather/conditions");
-  lines.push("2 Revenue            6 Tomorrow outlook");
-  lines.push("3 Open leads         7 Unanswered convos");
-  lines.push("4 Ops load");
+  lines.push("Reply 1-8 or ask anything:");
+  lines.push("1 Manifest    5 Hot leads");
+  lines.push("2 Revenue     6 Underbooked");
+  lines.push("3 Follow-ups  7 Unpaid");
+  lines.push("4 Risks       8 Missing waivers");
 
   let text = lines.join("\n");
-  if (text.length > 1280) text = smartTruncate(text, 1280);
+  if (text.length > 1480) text = smartTruncate(text, 1480);
   return text;
+}
+
+// Helper — true if ISO date string is today in MT.
+function isToday(iso) {
+  if (!iso) return false;
+  try {
+    const d = new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+    return d === todayMT();
+  } catch { return false; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -476,13 +797,16 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
 // number at any time of day.
 // ─────────────────────────────────────────────────────────────────────────────
 export const OPERATOR_MENU = {
-  "1": "bookings today",
-  "2": "revenue this week",
-  "3": "leads",
-  "4": "ops load",
-  "5": "weather",
-  "6": "bookings tomorrow",
-  "7": "unanswered",
+  "1":  "bookings today",
+  "2":  "revenue this week",
+  "3":  "follow-ups",
+  "4":  "risks",
+  "5":  "leads",
+  "6":  "underbooked",
+  "7":  "unpaid",
+  "8":  "missing waivers",
+  "9":  "ops load",
+  "10": "weather",
 };
 
 export function resolveMenuShortcut(message) {
@@ -695,8 +1019,11 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     }
   } catch { /* proceed if dedup check fails */ }
 
-  // Gather all data in parallel
-  const [todaySlots, manifest, hotLeads, weatherSnap, revenue, seasonRevenue, newBookings, issues] = await Promise.all([
+  // Gather all data in parallel — operational signals + summary metrics.
+  const [
+    todaySlots, manifest, hotLeads, weatherSnap, revenue, seasonRevenue, newBookings, issues,
+    unpaid, missingWaivers, overlaps, highValue, duplicates, missingPhones, pacing, locationMix, unresolvedHandoffs,
+  ] = await Promise.all([
     getTodaysAvailability(client.id, supabase),
     getTodaysManifest(client.id, crmSupabase),
     getHotLeads(client.id, supabase, 3),
@@ -705,6 +1032,15 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     getSeasonRevenue(client, crmSupabase, supabase),
     getNewBookingsStats(crmSupabase, supabase),
     detectOperationalIssues(client, supabase, crmSupabase),
+    detectUnpaidBookings(crmSupabase),
+    detectMissingWaivers(crmSupabase),
+    detectOverlappingArrivals(crmSupabase),
+    detectHighValueBookings(crmSupabase),
+    detectDuplicateBookings(crmSupabase),
+    detectMissingPhones(crmSupabase),
+    detectPacingSignal(crmSupabase, supabase),
+    detectLocationConcentration(crmSupabase),
+    detectUnresolvedHandoffs(supabase, client.id),
   ]);
 
   const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
@@ -713,6 +1049,15 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     seasonRevenue,
     newBookings,
     issues,
+    unpaid,
+    missingWaivers,
+    overlaps,
+    highValue,
+    duplicates,
+    missingPhones,
+    pacing,
+    locationMix,
+    unresolvedHandoffs,
     digestTypes: options.digestTypes ?? ["all"],
   });
 
@@ -904,7 +1249,41 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     return await formatFirstTimers(client, crmSupabase, range);
   }
 
-  // OPS LOAD (menu #4) — operational issues + workload at a glance
+  // UNPAID — menu #7 / "unpaid", "balances due", "show me unpaid"
+  if (msg === "unpaid" || msg.match(/\bunpaid\b|\bbalances?\s+due\b|\bowed\b|\bnot\s+paid\b/)) {
+    const rows = await detectUnpaidBookings(crmSupabase);
+    return formatUnpaidResponse(rows);
+  }
+
+  // MISSING WAIVERS — menu #8 / "waivers", "no waivers"
+  if (msg === "missing waivers" || msg.match(/\bwaivers?\b/)) {
+    const rows = await detectMissingWaivers(crmSupabase);
+    return formatMissingWaiversResponse(rows);
+  }
+
+  // RISKS — menu #4 / "risks", "what's at risk", "problems"
+  if (msg === "risks" || msg.match(/\bat\s+risk\b|\bproblems?\b|\boperational\s+risks?\b/)) {
+    const [unp, waivers, overlaps, dupes, phones] = await Promise.all([
+      detectUnpaidBookings(crmSupabase),
+      detectMissingWaivers(crmSupabase),
+      detectOverlappingArrivals(crmSupabase),
+      detectDuplicateBookings(crmSupabase),
+      detectMissingPhones(crmSupabase),
+    ]);
+    return formatRisksResponse({ unpaid: unp, waivers, overlaps, duplicates: dupes, missingPhones: phones });
+  }
+
+  // FOLLOW-UPS — menu #3 / "follow-ups", "who do I need to call"
+  if (msg === "follow-ups" || msg === "followups" || msg.match(/\bfollow[-\s]?ups?\s+(due|today|now|list)?\b|\bwho\s+do\s+i\s+(need\s+to\s+)?call\b/)) {
+    const [unp, hot, handoffs] = await Promise.all([
+      detectUnpaidBookings(crmSupabase),
+      getHotLeads(client.id, supabase, 5),
+      detectUnresolvedHandoffs(supabase, client.id),
+    ]);
+    return formatFollowupsResponse({ unpaid: unp, hotLeads: hot, handoffs });
+  }
+
+  // OPS LOAD (menu #9) — operational issues + workload at a glance
   if (msg === "ops load" || msg === "operations" || msg === "staffing" || msg.match(/\boperational\s+load\b/)) {
     const [issues, hotLeads, todaySlots] = await Promise.all([
       detectOperationalIssues(client, supabase, crmSupabase),
@@ -1218,6 +1597,122 @@ function formatRevenueResponse(rev) {
     return `Revenue (${rev.period}): $${rev.estimated.toLocaleString()} across ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""} (FareHarbor).`;
   }
   return `Est. revenue (${rev.period}): $${rev.estimated.toLocaleString()} (~${rev.bookings} converted leads × $175 avg).\nFor exact figures, check FareHarbor reports.`;
+}
+
+// Formatter — unpaid bookings list with per-booking dollar amount + date.
+export function formatUnpaidResponse(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return "UNPAID BOOKINGS\n\nNothing unpaid — every booking is square.";
+  }
+  const total = rows.reduce((s, r) => s + (Number(r.balance_due_cents) || 0), 0);
+  const lines = [`UNPAID BOOKINGS — ${rows.length} totaling $${Math.round(total / 100).toLocaleString()}`, ""];
+  for (const r of rows.slice(0, 8)) {
+    const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+    const dol  = `$${Math.round((r.balance_due_cents ?? 0) / 100).toLocaleString()}`;
+    const date = r.start_at ? new Date(r.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+    const act  = (r.activity ?? "?").replace(/^.*?[•\-]\s*/, "").slice(0, 22);
+    lines.push(`• ${name} — ${dol} (${date}, ${act})`);
+  }
+  return lines.join("\n");
+}
+
+// Formatter — missing waivers, prioritized by arrival proximity.
+export function formatMissingWaiversResponse(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return "MISSING WAIVERS\n\nAll upcoming guests have waivers on file.";
+  }
+  const arrivingToday = rows.filter((r) => isToday(r.start_at));
+  const lines = [`MISSING WAIVERS — ${rows.length} guest${rows.length !== 1 ? "s" : ""}${arrivingToday.length ? `, ${arrivingToday.length} arriving today` : ""}`, ""];
+  for (const r of rows.slice(0, 8)) {
+    const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+    const date = r.start_at ? new Date(r.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+    const time = r.start_at ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" }) : "?";
+    lines.push(`• ${name} — ${date} ${time} (${r.customer_count ?? "?"}p, ${r.location ?? "?"})`);
+  }
+  return lines.join("\n");
+}
+
+// Formatter — operational risks summary (combines multiple signals).
+export function formatRisksResponse({ unpaid, waivers, overlaps, duplicates, missingPhones }) {
+  const lines = ["OPERATIONAL RISKS"];
+  let hadAny = false;
+
+  if (unpaid?.length) {
+    hadAny = true;
+    const total = unpaid.reduce((s, r) => s + (Number(r.balance_due_cents) || 0), 0);
+    lines.push("");
+    lines.push(`💸 ${unpaid.length} unpaid booking${unpaid.length !== 1 ? "s" : ""} — $${Math.round(total / 100).toLocaleString()} due`);
+    const top = unpaid[0];
+    lines.push(`  Biggest: ${(top.customer_name ?? "?").split(" ").slice(0,2).join(" ")} $${Math.round((top.balance_due_cents ?? 0)/100).toLocaleString()}`);
+  }
+  if (waivers?.length) {
+    hadAny = true;
+    const arrivingToday = waivers.filter((r) => isToday(r.start_at)).length;
+    lines.push("");
+    lines.push(`📝 ${waivers.length} guest${waivers.length !== 1 ? "s" : ""} missing waivers${arrivingToday ? ` (${arrivingToday} today)` : ""}`);
+  }
+  if (overlaps?.length) {
+    hadAny = true;
+    const o = overlaps[0];
+    lines.push("");
+    lines.push(`⏰ ${o.count} arrivals overlap at ${o.hour_label}`);
+  }
+  if (missingPhones?.length) {
+    hadAny = true;
+    lines.push("");
+    lines.push(`📞 ${missingPhones.length} booking${missingPhones.length !== 1 ? "s" : ""} missing phone numbers`);
+  }
+  if (duplicates?.length) {
+    hadAny = true;
+    lines.push("");
+    lines.push(`🔁 ${duplicates.length} duplicate BOT-/CO- reservation${duplicates.length !== 1 ? "s" : ""}`);
+  }
+  if (!hadAny) {
+    return "OPERATIONAL RISKS\n\nNothing flagged — operations look clean.";
+  }
+  return lines.join("\n");
+}
+
+// Formatter — combined follow-up list (unpaid calls, hot leads, handoffs).
+export function formatFollowupsResponse({ unpaid, hotLeads, handoffs }) {
+  const lines = ["FOLLOW-UPS"];
+  let hadAny = false;
+
+  if (unpaid?.length) {
+    hadAny = true;
+    lines.push("");
+    lines.push("💸 Unpaid (call to collect)");
+    for (const r of unpaid.slice(0, 3)) {
+      const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+      const dol  = `$${Math.round((r.balance_due_cents ?? 0) / 100).toLocaleString()}`;
+      const date = r.start_at ? new Date(r.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+      lines.push(`• ${name} — ${dol} before ${date}`);
+    }
+  }
+  if (hotLeads?.length) {
+    hadAny = true;
+    lines.push("");
+    lines.push("🔥 Hot leads");
+    for (const lead of hotLeads.slice(0, 3)) {
+      const name = (lead.name ?? "Unknown").split(" ")[0];
+      lines.push(`• ${name} — ${lead.service ?? "n/a"} (${lead.status})`);
+    }
+  }
+  if (handoffs?.length) {
+    hadAny = true;
+    lines.push("");
+    lines.push("🤝 Unresolved handoffs");
+    for (const h of handoffs.slice(0, 2)) {
+      const last  = Array.isArray(h.messages) ? h.messages[h.messages.length - 1] : null;
+      const body  = (last?.content ?? "").slice(0, 50);
+      const phone = (h.from_number ?? "").replace(/^\+1/, "");
+      lines.push(`• ${phone}: "${body}…"`);
+    }
+  }
+  if (!hadAny) {
+    return "FOLLOW-UPS\n\nNothing waiting on you.";
+  }
+  return lines.join("\n");
 }
 
 // Compact "operations load" snapshot — combines staffing pressure signals.

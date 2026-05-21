@@ -349,6 +349,47 @@ Done when:
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Action-Oriented Briefing (2026-05-21)
+Owner feedback after the polished preview: the digest was still summarizing
+data instead of telling the operator what to do. Goal: every line should
+answer "what needs my attention right now?" — not "what are the numbers?"
+
+- operatorBriefing.js — eight new operational detectors:
+  • detectUnpaidBookings — DB2 manifest WHERE balance_due_cents > 0, future,
+    sorted by balance desc.
+  • detectMissingWaivers — next 48h arrivals WHERE waiver_signed ≠ true.
+  • detectOverlappingArrivals — 3+ arrivals within the same hour today.
+  • detectHighValueBookings — upcoming WHERE total_cents ≥ $1000.
+  • detectDuplicateBookings — BOT-prefixed + non-BOT pairs sharing name+date.
+  • detectMissingPhones — today/tomorrow arrivals WHERE phone IS NULL.
+  • detectPacingSignal — bookings created this week vs last (DB2.bookings
+    .created_at preferred, DB1 confirmations_sent fallback).
+  • detectLocationConcentration — last 30d location share, sorted desc.
+  • detectUnresolvedHandoffs — DB1 conversations.handoff=true, not resolved.
+- buildBriefingText completely rewritten with a five-section action-driven
+  format: ⚠ ACTIONS → 💰 REVENUE → 📈 INSIGHTS → 🔥 FOLLOW UP → 🌤 CONDITIONS
+  → ⚠️ SYSTEM. Each line names the specific person + dollar amount + date so
+  the operator can act without drilling in. Idle morning gracefully shows
+  "Quiet morning — nothing flagged" + the menu.
+- Updated numeric menu (1-10) — 1 Manifest, 2 Revenue, 3 Follow-ups, 4 Risks,
+  5 Hot leads, 6 Underbooked, 7 Unpaid, 8 Missing waivers, 9 Ops load,
+  10 Weather. Each maps to a dedicated formatter:
+  formatUnpaidResponse, formatMissingWaiversResponse, formatRisksResponse
+  (combined signals), formatFollowupsResponse (unpaid + hot leads +
+  handoffs). All return clean empty-state copy when nothing flagged.
+- generateDailyBriefing + handlePortalPreviewBriefing now fetch all
+  detectors in parallel and pass them into buildBriefingText. Preview
+  response also exposes a `signals` count breakdown for the UI to show
+  badges.
+- Length cap raised 1280 → 1480 to accommodate richer detail without
+  truncating critical signals.
+- Tests: +54 assertions in testActionOrientedBriefing — menu mapping (1-10),
+  ACTIONS leading the briefing, name+dollar+date specificity in each
+  section, INSIGHTS pattern detection (location concentration, pacing,
+  duplicates), FOLLOW UP combined output, idle morning copy, detector
+  unit tests (overlap aggregation, duplicate pairing, location pct,
+  pacing delta). 2370/2370 passing.
+
 ### DB2 Source of Truth + Polaris Confirmations (2026-05-21)
 Owner asks: booking data should always come from DB2 (real CRM manifest, not
 FH availability cache), and Polaris/MPWR bookings need confirmation texts

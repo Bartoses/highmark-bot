@@ -3235,6 +3235,7 @@ async function main() {
     await testSprintCOperatorPortal(); // Sprint C: operator_phones CRUD, auth guards, validation
     await testBriefingPolish();        // Briefing polish: real manifest + season revenue + new bookings + UX copy
     await testPolarisConfirmations();  // Polaris (MPWR) confirmation text builder
+    await testActionOrientedBriefing();// Action-oriented briefing: detectors + ACTIONS/REVENUE/INSIGHTS/FOLLOW UP format + 1-10 menu
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -13210,19 +13211,22 @@ async function testOperatorMode() {
     fetched_at: new Date().toISOString(),
   };
 
-  const briefing = buildBriefingText(mockClient, mockSlots, mockLeads, mockWeather);
+  // Provide a non-empty manifest + hot lead so REVENUE / FOLLOW UP sections render.
+  const briefing = buildBriefingText(mockClient, mockSlots, mockLeads, mockWeather, {
+    manifest: [{ customer_name: "Smith", activity: "Snowmobile", start_at: new Date().toISOString(), customer_count: 2, total_cents: 50000 }],
+  });
   chk("4a: buildBriefingText returns string", typeof briefing === "string");
-  chk("4a: buildBriefingText ≤ 960 chars", briefing.length <= 960, `got ${briefing.length}`);
+  chk("4a: buildBriefingText ≤ 1480 chars", briefing.length <= 1480, `got ${briefing.length}`);
   chk("4a: briefing includes business name", briefing.includes("Colorado Sled Rentals"));
-  chk("4a: briefing includes today's section header", briefing.includes("TODAY"));
-  chk("4a: briefing includes HOT LEADS", briefing.includes("HOT LEADS"));
+  chk("4a: briefing includes operator banner", briefing.includes("OPERATOR BRIEFING"));
+  chk("4a: briefing includes FOLLOW UP section", briefing.includes("FOLLOW UP"));
   chk("4a: briefing includes CONDITIONS", briefing.includes("CONDITIONS"));
-  chk("4a: briefing includes numeric reply menu", briefing.includes("Reply 1-7"));
+  chk("4a: briefing includes numeric reply menu", briefing.includes("Reply 1-8"));
 
   const emptyBriefing = buildBriefingText(mockClient, [], [], null);
-  chk("4a: empty briefing ≤ 960 chars", emptyBriefing.length <= 960, `got ${emptyBriefing.length}`);
-  chk("4a: empty briefing has no-bookings message", emptyBriefing.includes("Nothing on the manifest"));
-  chk("4a: empty briefing has no-leads message", emptyBriefing.includes("No open leads"));
+  chk("4a: empty briefing ≤ 1480 chars", emptyBriefing.length <= 1480, `got ${emptyBriefing.length}`);
+  chk("4a: idle briefing shows 'Quiet morning' copy", emptyBriefing.includes("Quiet morning"));
+  chk("4a: idle briefing still ends with menu", emptyBriefing.includes("1 Manifest"));
 
   // ── Admin trigger endpoint ─────────────────────────────────────────────────
   {
@@ -13269,23 +13273,21 @@ async function testOperatorMode() {
       revenue: { estimated: 3500, bookings: 20, period: "7 days", source: "manifest" },
       issues:  ["Confirmation texts are OFF", "2 new leads uncontacted >4h"],
     });
-    chk("4a: briefingText with extras ≤ 1280 chars",
-        briefingWithExtras.length <= 1280, `got ${briefingWithExtras.length}`);
-    chk("4a: briefingText includes 7-DAY revenue line",
-        briefingWithExtras.includes("7-DAY"), briefingWithExtras);
+    chk("4a: briefingText with extras ≤ 1480 chars",
+        briefingWithExtras.length <= 1480, `got ${briefingWithExtras.length}`);
+    chk("4a: briefingText includes next-7d revenue line",
+        briefingWithExtras.includes("Next 7d"), briefingWithExtras);
     chk("4a: briefingText includes $3,500",
         briefingWithExtras.includes("$3,500"), briefingWithExtras);
-    chk("4a: briefingText includes ALERTS section",
-        briefingWithExtras.includes("ALERTS"), briefingWithExtras);
-    chk("4a: briefingText includes alert text",
-        briefingWithExtras.includes("Confirmation texts"), briefingWithExtras);
+    chk("4a: briefingText surfaces system alert",
+        briefingWithExtras.includes("SYSTEM") && briefingWithExtras.includes("Confirmation texts"), briefingWithExtras);
 
-    // Estimate (not manifest) shows "(est)" suffix on the 7-DAY line
+    // Estimate (not manifest) shows "(est)" suffix on the revenue line
     const briefingEstimate = bbt(mc, [], [], null, {
       revenue: { estimated: 350, bookings: 2, period: "7 days", source: "estimate" },
     });
     chk("4a: briefingText estimate source shows (est)",
-        briefingEstimate.includes("7-DAY (est)"), briefingEstimate);
+        briefingEstimate.includes("(est)"), briefingEstimate);
   }
 
   // ── detectOperationalIssues — unit tests ──────────────────────────────────
@@ -13571,28 +13573,27 @@ async function testSprintBOperatorUX() {
     buildBriefingText,
   } = await import("./operatorBriefing.js");
 
-  // ── resolveMenuShortcut — numeric reply routing ──────────────────────────
+  // ── resolveMenuShortcut — numeric reply routing (1-10 action-oriented) ──
   chk("sprintB: shortcut '1' → bookings today",  resolveMenuShortcut("1") === "bookings today");
   chk("sprintB: shortcut '2' → revenue this week", resolveMenuShortcut("2") === "revenue this week");
-  chk("sprintB: shortcut '3' → leads", resolveMenuShortcut("3") === "leads");
-  chk("sprintB: shortcut '4' → ops load", resolveMenuShortcut("4") === "ops load");
-  chk("sprintB: shortcut '5' → weather", resolveMenuShortcut("5") === "weather");
-  chk("sprintB: shortcut '6' → bookings tomorrow", resolveMenuShortcut("6") === "bookings tomorrow");
-  chk("sprintB: shortcut '7' → unanswered", resolveMenuShortcut("7") === "unanswered");
-  chk("sprintB: shortcut whitespace trimmed", resolveMenuShortcut("  3  ") === "leads");
-  chk("sprintB: shortcut '8' → null", resolveMenuShortcut("8") === null);
+  chk("sprintB: shortcut '3' → follow-ups", resolveMenuShortcut("3") === "follow-ups");
+  chk("sprintB: shortcut '4' → risks", resolveMenuShortcut("4") === "risks");
+  chk("sprintB: shortcut '5' → leads", resolveMenuShortcut("5") === "leads");
+  chk("sprintB: shortcut '7' → unpaid", resolveMenuShortcut("7") === "unpaid");
+  chk("sprintB: shortcut whitespace trimmed", resolveMenuShortcut("  3  ") === "follow-ups");
+  chk("sprintB: shortcut '11' → null", resolveMenuShortcut("11") === null);
   chk("sprintB: shortcut 'hello' → null", resolveMenuShortcut("hello") === null);
   chk("sprintB: shortcut '' → null", resolveMenuShortcut("") === null);
   chk("sprintB: shortcut null → null", resolveMenuShortcut(null) === null);
-  chk("sprintB: OPERATOR_MENU exposes 7 slots", Object.keys(OPERATOR_MENU).length === 7);
+  chk("sprintB: OPERATOR_MENU exposes 10 slots", Object.keys(OPERATOR_MENU).length === 10);
 
   // ── buildBriefingText includes the numeric menu ──────────────────────────
   {
     const mc = { id: "csr_rea", name: "Test Co", inboundPhones: ["+18335786496"] };
     const text = buildBriefingText(mc, [], [], null);
-    chk("sprintB: briefing includes 'Reply 1-7'", text.includes("Reply 1-7"), text.slice(-200));
-    chk("sprintB: briefing menu line 1", text.includes("1 Today's manifest"), text);
-    chk("sprintB: briefing menu line 7", text.includes("7 Unanswered convos"), text);
+    chk("sprintB: briefing includes 'Reply 1-8'", text.includes("Reply 1-8"), text.slice(-200));
+    chk("sprintB: briefing menu line 1", text.includes("1 Manifest"), text);
+    chk("sprintB: briefing menu line 8", text.includes("8 Missing waivers"), text);
   }
 
   // ── formatOpsLoadResponse — pure formatter ───────────────────────────────
@@ -13755,6 +13756,259 @@ async function testSprintBOperatorUX() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Action-oriented briefing — detectors + formatters + new menu
+// ─────────────────────────────────────────────────────────────────────────────
+async function testActionOrientedBriefing() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const {
+    buildBriefingText,
+    formatUnpaidResponse,
+    formatMissingWaiversResponse,
+    formatRisksResponse,
+    formatFollowupsResponse,
+    detectOverlappingArrivals,
+    detectDuplicateBookings,
+    detectLocationConcentration,
+    detectPacingSignal,
+    OPERATOR_MENU,
+    resolveMenuShortcut,
+  } = await import("./operatorBriefing.js");
+
+  // ── Updated menu mapping (1-10) ──────────────────────────────────────────
+  chk("action: menu '1' → manifest", resolveMenuShortcut("1") === "bookings today");
+  chk("action: menu '3' → follow-ups", resolveMenuShortcut("3") === "follow-ups");
+  chk("action: menu '4' → risks", resolveMenuShortcut("4") === "risks");
+  chk("action: menu '7' → unpaid", resolveMenuShortcut("7") === "unpaid");
+  chk("action: menu '8' → missing waivers", resolveMenuShortcut("8") === "missing waivers");
+  chk("action: menu '10' → weather", resolveMenuShortcut("10") === "weather");
+  chk("action: OPERATOR_MENU has 10 entries", Object.keys(OPERATOR_MENU).length === 10);
+
+  // ── buildBriefingText leads with ACTIONS when signals present ────────────
+  {
+    const text = buildBriefingText(
+      { id: "csr_rea", name: "CSR + REA" },
+      [], [], null,
+      {
+        manifest: [
+          { customer_name: "Alice Smith", activity: "RZR Kremmling", start_at: "2026-07-04T15:00:00Z", customer_count: 4, total_cents: 200000 },
+        ],
+        unpaid: [
+          { customer_name: "Jared Torres",  balance_due_cents: 292000, start_at: "2026-07-03T15:00:00Z", activity: "RZR Kremmling" },
+          { customer_name: "Sara Williams", balance_due_cents: 40000,  start_at: "2026-08-15T15:00:00Z", activity: "RZR Steamboat" },
+        ],
+        missingWaivers: [
+          { customer_name: "Alice Smith", start_at: new Date().toISOString(), customer_count: 4, location: "Kremmling" },
+          { customer_name: "Bob Jones",   start_at: new Date(Date.now() + 12*3600000).toISOString(), customer_count: 2, location: "Steamboat" },
+        ],
+        overlaps: [{ hour_label: "1 PM", count: 3, locations: { Kremmling: 2, Steamboat: 1 }, pax: 8 }],
+        highValue: [{ customer_name: "Jared Torres", total_cents: 292000, balance_due_cents: 292000, start_at: "2026-07-03T15:00:00Z", activity: "RZR Kremmling" }],
+        duplicates: [{ customer_name: "Mike", start_at: "2026-06-01T15:00:00Z", bot_pk: "BOT-1", real_pk: "CO-AAA-111" }],
+        missingPhones: [{ customer_name: "Benjamin Reed" }],
+        pacing: { this_week: 6, last_week: 12, delta_pct: -50 },
+        locationMix: [{ location: "Kremmling", count: 68, pct: 68 }, { location: "Steamboat", count: 32, pct: 32 }],
+        unresolvedHandoffs: [{ from_number: "+19705551234", messages: [{ role: "user", content: "Group of 8 needs custom pricing" }] }],
+        revenue:       { estimated: 22892, bookings: 41, source: "manifest" },
+        seasonRevenue: { revenue_cents: 12000000, bookings: 240, period_label: "Summer 2026", source: "manifest" },
+        newBookings:   { last_24h: 3, last_7d: 18 },
+        issues:        ["Confirmation texts are OFF"],
+        hotLeads:      [],
+      },
+    );
+
+    chk("action: briefing leads with ACTIONS section", text.indexOf("⚠ ACTIONS") < text.indexOf("💰 REVENUE"), text);
+    chk("action: ACTIONS surfaces Jared Torres by name + dollar",
+        text.includes("Jared Torres") && text.includes("$2,920"), text);
+    chk("action: ACTIONS includes missing-waivers count",
+        text.includes("missing waivers"), text);
+    chk("action: ACTIONS surfaces overlap at 1 PM",
+        text.includes("3 arrivals overlap at 1 PM"), text);
+    chk("action: ACTIONS includes missing-phone hint",
+        text.includes("Benjamin Reed"), text);
+
+    chk("action: REVENUE section present", text.includes("💰 REVENUE"), text);
+    chk("action: REVENUE shows largest upcoming + UNPAID tag",
+        text.includes("Largest upcoming") && text.includes("UNPAID"), text);
+    chk("action: REVENUE shows Summer season label",
+        text.includes("Summer 2026"), text);
+
+    chk("action: INSIGHTS section present", text.includes("📈 INSIGHTS"), text);
+    chk("action: INSIGHTS calls out location concentration (Kremmling 68%)",
+        text.includes("Kremmling") && text.includes("68%"), text);
+    chk("action: INSIGHTS calls out pacing down 50%",
+        text.includes("Pacing down 50%"), text);
+    chk("action: INSIGHTS flags duplicate reservations",
+        text.includes("duplicate"), text);
+
+    chk("action: FOLLOW UP section present", text.includes("🔥 FOLLOW UP"), text);
+    chk("action: FOLLOW UP includes call-to-action for unpaid",
+        text.includes("Call Jared Torres") || text.includes("Call Jared"), text);
+    chk("action: FOLLOW UP shows unresolved handoff",
+        text.includes("Unresolved handoff"), text);
+
+    chk("action: SYSTEM section surfaces confirmation alert",
+        text.includes("⚠️ SYSTEM") && text.includes("Confirmation texts"), text);
+
+    chk("action: numeric menu shows 1-8",
+        text.includes("Reply 1-8") && text.includes("1 Manifest") && text.includes("8 Missing waivers"), text);
+  }
+
+  // ── Empty signals → idle copy ────────────────────────────────────────────
+  {
+    const text = buildBriefingText({ id: "csr_rea", name: "CSR + REA" }, [], [], null, {});
+    chk("action: idle morning shows 'Quiet morning' copy when nothing flagged",
+        text.includes("Quiet morning"), text);
+    chk("action: idle briefing still ends with menu",
+        text.includes("Reply 1-8") && text.includes("1 Manifest"), text);
+  }
+
+  // ── formatUnpaidResponse ─────────────────────────────────────────────────
+  {
+    const out = formatUnpaidResponse([
+      { customer_name: "Jared Torres", balance_due_cents: 292000, start_at: "2026-07-03T15:00:00Z", activity: "RZR Kremmling" },
+      { customer_name: "Sara Williams", balance_due_cents: 40000, start_at: "2026-08-15T15:00:00Z", activity: "RZR Steamboat" },
+    ]);
+    chk("action: unpaid header includes totals", out.includes("$3,320") && out.includes("2 totaling"), out);
+    chk("action: unpaid lists biggest first", out.indexOf("Jared") < out.indexOf("Sara"), out);
+
+    const clean = formatUnpaidResponse([]);
+    chk("action: unpaid empty state is reassuring", clean.includes("Nothing unpaid"), clean);
+  }
+
+  // ── formatMissingWaiversResponse ─────────────────────────────────────────
+  {
+    const todayIso  = new Date().toISOString();
+    const out = formatMissingWaiversResponse([
+      { customer_name: "Alice", start_at: todayIso, customer_count: 4, location: "Kremmling" },
+      { customer_name: "Bob",   start_at: new Date(Date.now() + 36 * 3600000).toISOString(), customer_count: 2, location: "Steamboat" },
+    ]);
+    chk("action: waivers header mentions arriving today",
+        out.includes("arriving today"), out);
+
+    const clean = formatMissingWaiversResponse([]);
+    chk("action: waivers empty state reassures", clean.includes("All upcoming guests"), clean);
+  }
+
+  // ── formatRisksResponse — combined signals ───────────────────────────────
+  {
+    const out = formatRisksResponse({
+      unpaid:        [{ customer_name: "Jared", balance_due_cents: 292000 }],
+      waivers:       [{ customer_name: "Alice", start_at: new Date().toISOString() }],
+      overlaps:      [{ hour_label: "1 PM", count: 3, locations: {}, pax: 5 }],
+      duplicates:    [{}, {}],
+      missingPhones: [],
+    });
+    chk("action: risks shows unpaid dollar", out.includes("$2,920"), out);
+    chk("action: risks shows waivers", out.includes("missing waivers"), out);
+    chk("action: risks shows overlap", out.includes("overlap at 1 PM"), out);
+    chk("action: risks shows duplicates", out.includes("duplicate"), out);
+
+    const clean = formatRisksResponse({ unpaid: [], waivers: [], overlaps: [], duplicates: [], missingPhones: [] });
+    chk("action: risks clean state", clean.includes("Nothing flagged"), clean);
+  }
+
+  // ── formatFollowupsResponse ──────────────────────────────────────────────
+  {
+    const out = formatFollowupsResponse({
+      unpaid:   [{ customer_name: "Jared", balance_due_cents: 292000, start_at: "2026-07-03T15:00:00Z" }],
+      hotLeads: [{ name: "Sara",  service: "RZR",       status: "engaged" }],
+      handoffs: [{ from_number: "+19705551234", messages: [{ role: "user", content: "Group of 8" }] }],
+    });
+    chk("action: follow-ups shows unpaid call",
+        out.includes("Jared") && out.includes("$2,920"), out);
+    chk("action: follow-ups lists hot lead",
+        out.includes("Sara") && out.includes("RZR"), out);
+    chk("action: follow-ups shows unresolved handoff phone",
+        out.includes("9705551234") || out.includes("970-555-1234") || out.includes("Group of 8"), out);
+  }
+
+  // ── detectOverlappingArrivals — pure aggregation ─────────────────────────
+  {
+    const today = new Date(); today.setHours(13, 0, 0, 0);
+    const t = (offsetMin, location) => ({
+      start_at: new Date(today.getTime() + offsetMin * 60000).toISOString(),
+      location, customer_count: 2,
+    });
+    const crmStub = {
+      from() {
+        return {
+          select() { return this; },
+          gte()    { return this; },
+          lt()     { return Promise.resolve({ data: [
+            t(0, "Kremmling"), t(10, "Kremmling"), t(45, "Steamboat"),
+            t(70, "Kremmling"),
+          ], error: null }); },
+        };
+      },
+    };
+    const result = await detectOverlappingArrivals(crmStub);
+    const peak = result[0];
+    chk("action: overlap detector picks 1pm hour", peak?.hour_label?.includes("PM"), JSON.stringify(peak));
+    chk("action: overlap detector counts 3 in same hour", peak?.count === 3, JSON.stringify(peak));
+  }
+
+  // ── detectDuplicateBookings ──────────────────────────────────────────────
+  {
+    const crmStub = {
+      from() {
+        return {
+          select() { return this; },
+          gte()    { return this; },
+          lt()     { return Promise.resolve({ data: [
+            { fareharbor_pk: "BOT-001", customer_name: "Mike", normalized_phone: "+15551112222", start_at: "2026-06-01T15:00:00Z" },
+            { fareharbor_pk: "CO-AAA-111", customer_name: "Mike", normalized_phone: "+15551112222", start_at: "2026-06-01T15:00:00Z" },
+            { fareharbor_pk: "CO-BBB-222", customer_name: "Sara", normalized_phone: "+15553334444", start_at: "2026-06-02T15:00:00Z" },
+          ], error: null }); },
+        };
+      },
+    };
+    const dupes = await detectDuplicateBookings(crmStub);
+    chk("action: duplicate detector finds BOT/CO pair", dupes.length === 1, JSON.stringify(dupes));
+    chk("action: duplicate detector ignores singleton CO bookings",
+        dupes[0]?.customer_name === "Mike", JSON.stringify(dupes));
+  }
+
+  // ── detectLocationConcentration ──────────────────────────────────────────
+  {
+    const crmStub = {
+      from() {
+        return {
+          select() { return this; },
+          gte()    { return Promise.resolve({ data: [
+            ...Array(68).fill({ location: "Kremmling" }),
+            ...Array(32).fill({ location: "Steamboat" }),
+          ], error: null }); },
+        };
+      },
+    };
+    const result = await detectLocationConcentration(crmStub);
+    chk("action: location concentration ranks Kremmling first", result[0]?.location === "Kremmling");
+    chk("action: location concentration computes pct", result[0]?.pct === 68);
+  }
+
+  // ── detectPacingSignal ───────────────────────────────────────────────────
+  {
+    // The production code awaits both `.gte(...)` (this week) and
+    // `.gte(...).lt(...)` (last week). Build a chainable thenable so both
+    // resolve to count=8 regardless of whether .lt() was called.
+    const makeChain = (count) => {
+      const chain = {
+        select() { return chain; },
+        gte()    { return chain; },
+        lt()     { return chain; },
+        then(resolve) { resolve({ data: null, error: null, count }); return Promise.resolve(); },
+      };
+      return chain;
+    };
+    const crmStub = { from: () => makeChain(8) };
+    const result = await detectPacingSignal(crmStub, null);
+    chk("action: pacing source DB2 returns counts", result.this_week === 8 && result.last_week === 8);
+    chk("action: pacing delta_pct is 0 when equal", result.delta_pct === 0);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Polaris (MPWR) confirmation text builder
 // ─────────────────────────────────────────────────────────────────────────────
 async function testPolarisConfirmations() {
@@ -13841,20 +14095,19 @@ async function testBriefingPolish() {
       newBookings:   { last_24h: 3, last_7d: 18, source: "db2" },
       issues:        [],
     });
-    chk("polish: shows real manifest count + pax + revenue",
-        text.includes("2 bookings") && text.includes("6 guests") && text.includes("$3,000"), text);
-    chk("polish: lists Alice and Bob with activity", text.includes("Alice") && text.includes("Bob"));
-    chk("polish: NEW BOOKINGS section present",
-        text.includes("NEW BOOKINGS: 3 in last 24h · 18 this week"), text);
-    chk("polish: SEASON revenue line includes label + dollars",
-        text.includes("SUMMER 2026") && text.includes("$120,000"), text);
-    chk("polish: 7-DAY line includes $22,892",
-        text.includes("7-DAY") && text.includes("$22,892"), text);
+    chk("polish: REVENUE section shows today count + pax + revenue",
+        text.includes("2 bookings") && text.includes("6p") && text.includes("$3,000"), text);
+    chk("polish: REVENUE shows next-7d revenue line",
+        text.includes("Next 7d") && text.includes("$22,892"), text);
+    chk("polish: REVENUE shows season label + dollars",
+        text.includes("Summer 2026") && text.includes("$120,000"), text);
+    chk("polish: INSIGHTS shows new-booking pulse",
+        text.includes("3 new in last 24h"), text);
     chk("polish: no 'check FareHarbor directly' jargon",
         !text.includes("check FareHarbor directly"), text);
   }
 
-  // ── Empty manifest → friendly copy ───────────────────────────────────────
+  // ── Empty signals → idle copy ────────────────────────────────────────────
   {
     const text = buildBriefingText({ id: "csr_rea", name: "Test" }, [], [], null, {
       manifest:      [],
@@ -13863,12 +14116,12 @@ async function testBriefingPolish() {
       newBookings:   { last_24h: 0, last_7d: 0, source: "db2" },
       issues:        [],
     });
-    chk("polish: empty manifest uses friendly copy",
-        text.includes("Nothing on the manifest yet"), text);
-    chk("polish: shows 0 bookings · 0 guests · $0 header",
-        text.includes("0 bookings") && text.includes("0 guests"), text);
-    chk("polish: NEW BOOKINGS suppressed when zero",
-        !text.includes("NEW BOOKINGS"), text);
+    chk("polish: idle morning shows 'Quiet morning' copy",
+        text.includes("Quiet morning"), text);
+    chk("polish: no zero-count REVENUE line when nothing is booked",
+        !text.includes("$0 ·"), text);
+    chk("polish: idle briefing ends with numeric menu",
+        text.includes("Reply 1-8") && text.includes("1 Manifest"), text);
   }
 
   // ── formatManifestResponse — direct unit test ────────────────────────────

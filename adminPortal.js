@@ -2737,9 +2737,21 @@ export async function handlePortalPreviewBriefing(req, res, supabase, crmSupabas
       getSeasonRevenue,
       getNewBookingsStats,
       detectOperationalIssues,
+      detectUnpaidBookings,
+      detectMissingWaivers,
+      detectOverlappingArrivals,
+      detectHighValueBookings,
+      detectDuplicateBookings,
+      detectMissingPhones,
+      detectPacingSignal,
+      detectLocationConcentration,
+      detectUnresolvedHandoffs,
     } = await import("./operatorBriefing.js");
 
-    const [todaySlots, manifest, hotLeads, weatherSnap, revenue, seasonRevenue, newBookings, issues] = await Promise.all([
+    const [
+      todaySlots, manifest, hotLeads, weatherSnap, revenue, seasonRevenue, newBookings, issues,
+      unpaid, missingWaivers, overlaps, highValue, duplicates, missingPhones, pacing, locationMix, unresolvedHandoffs,
+    ] = await Promise.all([
       getTodaysAvailability(clientId, supabase),
       getTodaysManifest(clientId, crmSupabase),
       getHotLeads(clientId, supabase, 3),
@@ -2748,12 +2760,37 @@ export async function handlePortalPreviewBriefing(req, res, supabase, crmSupabas
       getSeasonRevenue(client, crmSupabase, supabase),
       getNewBookingsStats(crmSupabase, supabase),
       detectOperationalIssues(client, supabase, crmSupabase),
+      detectUnpaidBookings(crmSupabase),
+      detectMissingWaivers(crmSupabase),
+      detectOverlappingArrivals(crmSupabase),
+      detectHighValueBookings(crmSupabase),
+      detectDuplicateBookings(crmSupabase),
+      detectMissingPhones(crmSupabase),
+      detectPacingSignal(crmSupabase, supabase),
+      detectLocationConcentration(crmSupabase),
+      detectUnresolvedHandoffs(supabase, clientId),
     ]);
 
     const preview = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
       manifest, revenue, seasonRevenue, newBookings, issues,
+      unpaid, missingWaivers, overlaps, highValue, duplicates, missingPhones, pacing, locationMix, unresolvedHandoffs,
     });
-    return res.json({ preview, chars: preview.length, issues, hotLeadsCount: hotLeads.length, manifestCount: manifest.length });
+    return res.json({
+      preview,
+      chars:         preview.length,
+      issues,
+      hotLeadsCount: hotLeads.length,
+      manifestCount: manifest.length,
+      signals: {
+        unpaid:           unpaid.length,
+        missingWaivers:   missingWaivers.length,
+        overlaps:         overlaps.length,
+        highValue:        highValue.length,
+        duplicates:       duplicates.length,
+        missingPhones:    missingPhones.length,
+        unresolvedHandoffs: unresolvedHandoffs.length,
+      },
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
