@@ -2730,22 +2730,30 @@ export async function handlePortalPreviewBriefing(req, res, supabase, crmSupabas
     const {
       buildBriefingText,
       getTodaysAvailability,
+      getTodaysManifest,
       getHotLeads,
       getWeatherSnapshot,
       getWeeklyRevenueEstimate,
+      getSeasonRevenue,
+      getNewBookingsStats,
       detectOperationalIssues,
     } = await import("./operatorBriefing.js");
 
-    const [todaySlots, hotLeads, weatherSnap, revenue, issues] = await Promise.all([
+    const [todaySlots, manifest, hotLeads, weatherSnap, revenue, seasonRevenue, newBookings, issues] = await Promise.all([
       getTodaysAvailability(clientId, supabase),
+      getTodaysManifest(clientId, crmSupabase),
       getHotLeads(clientId, supabase, 3),
       getWeatherSnapshot(supabase, clientId),
       getWeeklyRevenueEstimate(clientId, supabase, crmSupabase),
+      getSeasonRevenue(client, crmSupabase, supabase),
+      getNewBookingsStats(crmSupabase, supabase),
       detectOperationalIssues(client, supabase, crmSupabase),
     ]);
 
-    const preview = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, { revenue, issues });
-    return res.json({ preview, chars: preview.length, issues, hotLeadsCount: hotLeads.length });
+    const preview = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
+      manifest, revenue, seasonRevenue, newBookings, issues,
+    });
+    return res.json({ preview, chars: preview.length, issues, hotLeadsCount: hotLeads.length, manifestCount: manifest.length });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

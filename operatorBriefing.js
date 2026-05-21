@@ -119,6 +119,152 @@ export async function getTomorrowsAvailability(clientId, supabase) {
   return slotsForDate(rows, tomorrowMT());
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REAL TODAY MANIFEST (DB2 daily_manifest)
+// Used by the owner briefing instead of FH availability slots — operators want
+// "what's actually on the books today," not "what slots are still open."
+// Returns rows shaped like { start_at, activity, customer_name, customer_count,
+// total_cents } sorted by start_at.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function getTodaysManifest(clientId, crmSupabase) {
+  if (!crmSupabase) return [];
+  try {
+    const startMT = new Date();
+    startMT.setHours(0, 0, 0, 0);
+    const endMT = new Date(startMT);
+    endMT.setDate(endMT.getDate() + 1);
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, activity, start_at, customer_count, total_cents, location, status")
+      .gte("start_at", startMT.toISOString())
+      .lt("start_at", endMT.toISOString())
+      .order("start_at", { ascending: true });
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// Current-season revenue from DB2 daily_manifest (or estimate fallback).
+// Season window:
+//   summer:   May 1  → Oct 31
+//   winter:   Nov 1  → Apr 30 of next year (Nov-Mar = current winter; Apr = same window)
+// Returns { bookings, revenue_cents, period_label, season, source } where
+// `source` is "manifest" (DB2) or "estimate" (DB1 fallback).
+export async function getSeasonRevenue(client, crmSupabase, supabase, season = null) {
+  const now      = new Date();
+  const year     = now.getFullYear();
+  const month    = now.getMonth() + 1; // 1-12
+  const detected = season ?? (month >= 5 && month <= 10 ? "summer" : "winter");
+
+  let startISO, endISO, label;
+  if (detected === "summer") {
+    startISO = new Date(year, 4, 1).toISOString();      // May 1
+    endISO   = new Date(year, 10, 1).toISOString();     // Nov 1 (exclusive)
+    label    = `Summer ${year}`;
+  } else {
+    // Winter spans Nov of prior year through Apr of current
+    const startYear = month >= 11 ? year : year - 1;
+    startISO = new Date(startYear, 10, 1).toISOString();      // Nov 1
+    endISO   = new Date(startYear + 1, 4, 1).toISOString();   // May 1 (exclusive)
+    label    = `Winter ${startYear}/${(startYear + 1).toString().slice(-2)}`;
+  }
+
+  // Prefer DB2 daily_manifest
+  if (crmSupabase) {
+    try {
+      const { data } = await crmSupabase
+        .from("daily_manifest")
+        .select("fareharbor_pk, total_cents, total")
+        .gte("start_at", startISO)
+        .lt("start_at", endISO);
+      if (data?.length) {
+        const seenPks = new Set();
+        let totalCents = 0;
+        for (const r of data) {
+          if (r.fareharbor_pk != null) seenPks.add(r.fareharbor_pk);
+          // total_cents stored in cents; total stored as dollars (legacy)
+          if (r.total_cents != null) totalCents += Number(r.total_cents) || 0;
+          else if (r.total != null) totalCents += (Number(r.total) || 0) * 100;
+        }
+        return {
+          bookings:      seenPks.size || data.length,
+          revenue_cents: totalCents,
+          period_label:  label,
+          season:        detected,
+          source:        "manifest",
+        };
+      }
+    } catch { /* fall through */ }
+  }
+
+  // Fallback: estimate from DB1 leads
+  try {
+    const { data } = await supabase
+      .from("leads")
+      .select("id")
+      .eq("client_id", client.id)
+      .in("status", ["converted", "engaged"])
+      .gte("created_at", startISO)
+      .lt("created_at", endISO);
+    const count = data?.length ?? 0;
+    return {
+      bookings:      count,
+      revenue_cents: count * 17500, // $175 avg
+      period_label:  label,
+      season:        detected,
+      source:        "estimate",
+    };
+  } catch {
+    return { bookings: 0, revenue_cents: 0, period_label: label, season: detected, source: "estimate" };
+  }
+}
+
+// New bookings created in the last N hours. Tries DB2 bookings.created_at
+// (covers MPWR + FH writes). Falls back to DB1 confirmations_sent on error.
+// Returns { last_24h, last_7d, source } counts.
+export async function getNewBookingsStats(crmSupabase, supabase) {
+  const now    = Date.now();
+  const since24 = new Date(now -  24 * 60 * 60 * 1000).toISOString();
+  const since7d = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Try DB2 bookings table (covers MPWR + FH inserts)
+  if (crmSupabase) {
+    try {
+      const [r24, r7] = await Promise.all([
+        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", since24),
+        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", since7d),
+      ]);
+      if (!r24.error && !r7.error) {
+        return {
+          last_24h: r24.count ?? 0,
+          last_7d:  r7.count  ?? 0,
+          source:   "db2",
+        };
+      }
+    } catch { /* fall through */ }
+  }
+
+  // Fallback: DB1 confirmations_sent (FH webhook only — undercounts MPWR)
+  if (supabase) {
+    try {
+      const [c24, c7] = await Promise.all([
+        supabase.from("confirmations_sent").select("id", { count: "exact", head: true }).gte("confirmation_sent_at", since24),
+        supabase.from("confirmations_sent").select("id", { count: "exact", head: true }).gte("confirmation_sent_at", since7d),
+      ]);
+      if (!c24.error && !c7.error) {
+        return {
+          last_24h: c24.count ?? 0,
+          last_7d:  c7.count  ?? 0,
+          source:   "db1_confirmations",
+        };
+      }
+    } catch { /* ignore */ }
+  }
+
+  return { last_24h: 0, last_7d: 0, source: "unavailable" };
+}
+
 async function getCustomWeatherData(clientId, supabase) {
   try {
     const { data } = await supabase
@@ -221,7 +367,7 @@ export async function getWeeklyRevenueEstimate(clientId, supabase, crmSupabase =
 // BRIEFING TEXT BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap, extras = {}) {
+export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weatherSnap, extras = {}) {
   const biz      = client.name ?? "Your business";
   const dateStr  = new Date().toLocaleDateString("en-US", {
     timeZone: "America/Denver", weekday: "short", month: "short", day: "numeric",
@@ -230,17 +376,45 @@ export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap, ext
   const lines = [];
   lines.push(`Good morning! Here's your day for ${biz}:`);
   lines.push("");
-  lines.push(`TODAY'S BOOKINGS (${dateStr}):`);
 
-  const bookingLines = todaySlots.slice(0, 5);
-  if (bookingLines.length === 0) {
-    lines.push("No bookings found in cache — check FareHarbor directly.");
+  // ── Today's manifest (real DB2 rows preferred via extras.manifest) ───────
+  const manifest = extras.manifest ?? null;
+  if (Array.isArray(manifest)) {
+    const todayPax      = manifest.reduce((s, r) => s + (Number(r.customer_count) || 0), 0);
+    const todayRevCents = manifest.reduce((s, r) => s + (Number(r.total_cents) || 0), 0);
+    lines.push(`TODAY (${dateStr}): ${manifest.length} booking${manifest.length !== 1 ? "s" : ""} · ${todayPax} guest${todayPax !== 1 ? "s" : ""} · $${Math.round(todayRevCents / 100).toLocaleString()}`);
+    if (manifest.length === 0) {
+      lines.push("Nothing on the manifest yet — quiet day so far.");
+    } else {
+      for (const r of manifest.slice(0, 5)) {
+        const time = r.start_at
+          ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
+          : "?";
+        const name = (r.customer_name ?? "?").split(" ")[0];
+        const act  = (r.activity ?? "?").replace(/^.*?[•\-]\s*/, "").slice(0, 28);
+        lines.push(`• ${time} — ${name} (${r.customer_count ?? "?"}p, ${act})`);
+      }
+      if (manifest.length > 5) lines.push(`  …+${manifest.length - 5} more`);
+    }
   } else {
-    for (const s of bookingLines) {
-      lines.push(`• ${s.time} — ${s.name}`);
+    // Legacy path — FH availability slots
+    lines.push(`TODAY'S OPENINGS (${dateStr}):`);
+    const bookingLines = (todaySlotsOrIgnored ?? []).slice(0, 5);
+    if (bookingLines.length === 0) {
+      lines.push("Nothing on the manifest yet — quiet day so far.");
+    } else {
+      for (const s of bookingLines) lines.push(`• ${s.time} — ${s.name}`);
     }
   }
 
+  // ── New bookings created (24h / 7d) ──────────────────────────────────────
+  const fresh = extras.newBookings ?? null;
+  if (fresh && (fresh.last_24h > 0 || fresh.last_7d > 0)) {
+    lines.push("");
+    lines.push(`NEW BOOKINGS: ${fresh.last_24h} in last 24h · ${fresh.last_7d} this week`);
+  }
+
+  // ── Hot leads ────────────────────────────────────────────────────────────
   lines.push("");
   lines.push(`HOT LEADS (${hotLeads.length}):`);
   if (hotLeads.length === 0) {
@@ -253,22 +427,26 @@ export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap, ext
     }
   }
 
+  // ── Conditions ───────────────────────────────────────────────────────────
   lines.push("");
-  const condLine = buildConditionsLine(weatherSnap);
-  lines.push(`CONDITIONS: ${condLine}`);
+  lines.push(`CONDITIONS: ${buildConditionsLine(weatherSnap)}`);
 
-  // Revenue section (real from DB2, or estimated from leads)
-  const rev = extras.revenue ?? null;
-  if (rev && (rev.estimated > 0 || rev.bookings > 0)) {
+  // ── Revenue: 7-day + season-to-date ──────────────────────────────────────
+  const rev    = extras.revenue ?? null;
+  const season = extras.seasonRevenue ?? null;
+  if ((rev && (rev.estimated > 0 || rev.bookings > 0)) || (season && season.revenue_cents > 0)) {
     lines.push("");
-    if (rev.source === "manifest") {
-      lines.push(`REVENUE (7d): $${rev.estimated.toLocaleString()} — ${rev.bookings} bookings`);
-    } else {
-      lines.push(`EST. REVENUE (7d): $${rev.estimated.toLocaleString()}`);
+    if (rev && (rev.estimated > 0 || rev.bookings > 0)) {
+      const tag = rev.source === "manifest" ? "" : " (est)";
+      lines.push(`7-DAY${tag}: $${rev.estimated.toLocaleString()} · ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""}`);
+    }
+    if (season && season.revenue_cents > 0) {
+      const tag = season.source === "manifest" ? "" : " (est)";
+      lines.push(`${season.period_label.toUpperCase()}${tag}: $${Math.round(season.revenue_cents / 100).toLocaleString()} · ${season.bookings} booking${season.bookings !== 1 ? "s" : ""}`);
     }
   }
 
-  // Alerts section
+  // ── Alerts ───────────────────────────────────────────────────────────────
   const issues = extras.issues ?? [];
   if (issues.length) {
     lines.push("");
@@ -278,6 +456,7 @@ export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap, ext
     }
   }
 
+  // ── Quick-reply menu ─────────────────────────────────────────────────────
   lines.push("");
   lines.push("Reply 1-7 or ask anything:");
   lines.push("1 Today's manifest   5 Weather/conditions");
@@ -286,7 +465,7 @@ export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap, ext
   lines.push("4 Ops load");
 
   let text = lines.join("\n");
-  if (text.length > 960) text = smartTruncate(text, 960);
+  if (text.length > 1280) text = smartTruncate(text, 1280);
   return text;
 }
 
@@ -517,16 +696,22 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
   } catch { /* proceed if dedup check fails */ }
 
   // Gather all data in parallel
-  const [todaySlots, hotLeads, weatherSnap, revenue, issues] = await Promise.all([
+  const [todaySlots, manifest, hotLeads, weatherSnap, revenue, seasonRevenue, newBookings, issues] = await Promise.all([
     getTodaysAvailability(client.id, supabase),
+    getTodaysManifest(client.id, crmSupabase),
     getHotLeads(client.id, supabase, 3),
     getWeatherSnapshot(supabase, client.id),
     getWeeklyRevenueEstimate(client.id, supabase, crmSupabase),
+    getSeasonRevenue(client, crmSupabase, supabase),
+    getNewBookingsStats(crmSupabase, supabase),
     detectOperationalIssues(client, supabase, crmSupabase),
   ]);
 
   const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
+    manifest,
     revenue,
+    seasonRevenue,
+    newBookings,
     issues,
     digestTypes: options.digestTypes ?? ["all"],
   });
@@ -734,17 +919,32 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     return await formatUnansweredResponse(client, supabase);
   }
 
-  // BOOKINGS TODAY
+  // BOOKINGS TODAY — prefer real DB2 manifest; fall back to FH openings
   if (msg.match(/\bbookings?\s+(today|for today)\b/) || msg === "bookings today" || msg === "today's bookings" || msg === "todays bookings") {
-    const slots = await getTodaysAvailability(client.id, supabase);
     persist({ intent: "bookings_by_date", date_range: parseDateRange("today"), metric: "bookings" });
+    const manifest = await getTodaysManifest(client.id, crmSupabase);
+    if (manifest.length || crmSupabase) return formatManifestResponse(manifest, "today");
+    const slots = await getTodaysAvailability(client.id, supabase);
     return formatBookingsResponse(slots, "today");
   }
 
-  // BOOKINGS TOMORROW
+  // BOOKINGS TOMORROW — same pattern
   if (msg.match(/\bbookings?\s+(tomorrow|for tomorrow)\b/) || msg === "bookings tomorrow") {
-    const slots = await getTomorrowsAvailability(client.id, supabase);
     persist({ intent: "bookings_by_date", date_range: parseDateRange("tomorrow"), metric: "bookings" });
+    if (crmSupabase) {
+      try {
+        const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() + 1);
+        const end   = new Date(start); end.setDate(end.getDate() + 1);
+        const { data } = await crmSupabase
+          .from("daily_manifest")
+          .select("fareharbor_pk, customer_name, activity, start_at, customer_count, total_cents")
+          .gte("start_at", start.toISOString())
+          .lt("start_at", end.toISOString())
+          .order("start_at", { ascending: true });
+        return formatManifestResponse(data ?? [], "tomorrow");
+      } catch { /* fall through */ }
+    }
+    const slots = await getTomorrowsAvailability(client.id, supabase);
     return formatBookingsResponse(slots, "tomorrow");
   }
 
@@ -922,6 +1122,26 @@ function stripFlagKeywords(message) {
 // ─────────────────────────────────────────────────────────────────────────────
 // RESPONSE FORMATTERS
 // ─────────────────────────────────────────────────────────────────────────────
+
+export function formatManifestResponse(rows, day) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return `${day === "today" ? "TODAY" : "TOMORROW"}\n\nNothing on the manifest yet — quiet ${day === "today" ? "day" : "tomorrow"} so far.`;
+  }
+  const pax    = rows.reduce((s, r) => s + (Number(r.customer_count) || 0), 0);
+  const cents  = rows.reduce((s, r) => s + (Number(r.total_cents) || 0), 0);
+  const header = `${day === "today" ? "TODAY" : "TOMORROW"}: ${rows.length} booking${rows.length !== 1 ? "s" : ""} · ${pax} guest${pax !== 1 ? "s" : ""} · $${Math.round(cents / 100).toLocaleString()}`;
+  const lines  = [header, ""];
+  for (const r of rows.slice(0, 8)) {
+    const time = r.start_at
+      ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
+      : "?";
+    const name = (r.customer_name ?? "?").split(" ")[0];
+    const act  = (r.activity ?? "?").replace(/^.*?[•\-]\s*/, "").slice(0, 30);
+    lines.push(`• ${time} — ${name} (${r.customer_count ?? "?"}p, ${act})`);
+  }
+  if (rows.length > 8) lines.push(`  …+${rows.length - 8} more`);
+  return lines.join("\n");
+}
 
 function formatBookingsResponse(slots, day) {
   if (!slots.length) return `No available slots for ${day} found in cache. Check FareHarbor directly.`;

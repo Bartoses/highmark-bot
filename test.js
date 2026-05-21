@@ -3233,6 +3233,7 @@ async function main() {
     await testSprintAOperatorPhones(); // Sprint A: operator_phones table, isDigestTimeNow, dispatchOperatorDigests
     await testSprintBOperatorUX();     // Sprint B: numeric menu, ops load, unanswered, largest bookings, underbooked, busiest hours, follow-ups, first-timers
     await testSprintCOperatorPortal(); // Sprint C: operator_phones CRUD, auth guards, validation
+    await testBriefingPolish();        // Briefing polish: real manifest + season revenue + new bookings + UX copy
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -13212,14 +13213,14 @@ async function testOperatorMode() {
   chk("4a: buildBriefingText returns string", typeof briefing === "string");
   chk("4a: buildBriefingText ≤ 960 chars", briefing.length <= 960, `got ${briefing.length}`);
   chk("4a: briefing includes business name", briefing.includes("Colorado Sled Rentals"));
-  chk("4a: briefing includes bookings section", briefing.includes("TODAY'S BOOKINGS"));
+  chk("4a: briefing includes today's section header", briefing.includes("TODAY"));
   chk("4a: briefing includes HOT LEADS", briefing.includes("HOT LEADS"));
   chk("4a: briefing includes CONDITIONS", briefing.includes("CONDITIONS"));
   chk("4a: briefing includes numeric reply menu", briefing.includes("Reply 1-7"));
 
   const emptyBriefing = buildBriefingText(mockClient, [], [], null);
   chk("4a: empty briefing ≤ 960 chars", emptyBriefing.length <= 960, `got ${emptyBriefing.length}`);
-  chk("4a: empty briefing has no-bookings message", emptyBriefing.includes("No bookings found"));
+  chk("4a: empty briefing has no-bookings message", emptyBriefing.includes("Nothing on the manifest"));
   chk("4a: empty briefing has no-leads message", emptyBriefing.includes("No open leads"));
 
   // ── Admin trigger endpoint ─────────────────────────────────────────────────
@@ -13267,10 +13268,10 @@ async function testOperatorMode() {
       revenue: { estimated: 3500, bookings: 20, period: "7 days", source: "manifest" },
       issues:  ["Confirmation texts are OFF", "2 new leads uncontacted >4h"],
     });
-    chk("4a: briefingText with extras ≤ 960 chars",
-        briefingWithExtras.length <= 960, `got ${briefingWithExtras.length}`);
-    chk("4a: briefingText includes REVENUE section",
-        briefingWithExtras.includes("REVENUE (7d):"), briefingWithExtras);
+    chk("4a: briefingText with extras ≤ 1280 chars",
+        briefingWithExtras.length <= 1280, `got ${briefingWithExtras.length}`);
+    chk("4a: briefingText includes 7-DAY revenue line",
+        briefingWithExtras.includes("7-DAY"), briefingWithExtras);
     chk("4a: briefingText includes $3,500",
         briefingWithExtras.includes("$3,500"), briefingWithExtras);
     chk("4a: briefingText includes ALERTS section",
@@ -13278,12 +13279,12 @@ async function testOperatorMode() {
     chk("4a: briefingText includes alert text",
         briefingWithExtras.includes("Confirmation texts"), briefingWithExtras);
 
-    // Estimate (not manifest) shows "EST. REVENUE"
+    // Estimate (not manifest) shows "(est)" suffix on the 7-DAY line
     const briefingEstimate = bbt(mc, [], [], null, {
       revenue: { estimated: 350, bookings: 2, period: "7 days", source: "estimate" },
     });
-    chk("4a: briefingText estimate source shows EST. REVENUE",
-        briefingEstimate.includes("EST. REVENUE"), briefingEstimate);
+    chk("4a: briefingText estimate source shows (est)",
+        briefingEstimate.includes("7-DAY (est)"), briefingEstimate);
   }
 
   // ── detectOperationalIssues — unit tests ──────────────────────────────────
@@ -13749,6 +13750,186 @@ async function testSprintBOperatorUX() {
     chk("sprintB: unanswered header includes count (2)", out.includes("UNANSWERED CONVOS (2)"));
     chk("sprintB: unanswered shows handoff flag", out.includes("[handoff]"));
     chk("sprintB: unanswered shows paused flag", out.includes("[paused]"));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Briefing polish — real manifest + season revenue + new bookings + UX copy
+// ─────────────────────────────────────────────────────────────────────────────
+async function testBriefingPolish() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const {
+    buildBriefingText,
+    formatManifestResponse,
+    getSeasonRevenue,
+    getNewBookingsStats,
+    getTodaysManifest,
+  } = await import("./operatorBriefing.js");
+
+  // ── buildBriefingText with real manifest ─────────────────────────────────
+  {
+    const client = { id: "csr_rea", name: "CSR + REA" };
+    const manifest = [
+      { customer_name: "Alice Smith",   activity: "RZR Kremmling", start_at: "2026-05-21T15:00:00Z", customer_count: 4, total_cents: 200000 },
+      { customer_name: "Bob Jones",     activity: "RZR Steamboat", start_at: "2026-05-21T17:00:00Z", customer_count: 2, total_cents: 100000 },
+    ];
+    const text = buildBriefingText(client, [], [], null, {
+      manifest,
+      revenue:       { estimated: 22892, bookings: 41, period: "7 days", source: "manifest" },
+      seasonRevenue: { revenue_cents: 12000000, bookings: 240, period_label: "Summer 2026", source: "manifest", season: "summer" },
+      newBookings:   { last_24h: 3, last_7d: 18, source: "db2" },
+      issues:        [],
+    });
+    chk("polish: shows real manifest count + pax + revenue",
+        text.includes("2 bookings") && text.includes("6 guests") && text.includes("$3,000"), text);
+    chk("polish: lists Alice and Bob with activity", text.includes("Alice") && text.includes("Bob"));
+    chk("polish: NEW BOOKINGS section present",
+        text.includes("NEW BOOKINGS: 3 in last 24h · 18 this week"), text);
+    chk("polish: SEASON revenue line includes label + dollars",
+        text.includes("SUMMER 2026") && text.includes("$120,000"), text);
+    chk("polish: 7-DAY line includes $22,892",
+        text.includes("7-DAY") && text.includes("$22,892"), text);
+    chk("polish: no 'check FareHarbor directly' jargon",
+        !text.includes("check FareHarbor directly"), text);
+  }
+
+  // ── Empty manifest → friendly copy ───────────────────────────────────────
+  {
+    const text = buildBriefingText({ id: "csr_rea", name: "Test" }, [], [], null, {
+      manifest:      [],
+      revenue:       { estimated: 0, bookings: 0 },
+      seasonRevenue: { revenue_cents: 0, bookings: 0, period_label: "Summer 2026", source: "manifest" },
+      newBookings:   { last_24h: 0, last_7d: 0, source: "db2" },
+      issues:        [],
+    });
+    chk("polish: empty manifest uses friendly copy",
+        text.includes("Nothing on the manifest yet"), text);
+    chk("polish: shows 0 bookings · 0 guests · $0 header",
+        text.includes("0 bookings") && text.includes("0 guests"), text);
+    chk("polish: NEW BOOKINGS suppressed when zero",
+        !text.includes("NEW BOOKINGS"), text);
+  }
+
+  // ── formatManifestResponse — direct unit test ────────────────────────────
+  {
+    const rows = [
+      { customer_name: "Alice", activity: "RZR Kremmling", start_at: "2026-05-21T15:00:00Z", customer_count: 4, total_cents: 200000 },
+      { customer_name: "Bob",   activity: "RZR Steamboat", start_at: "2026-05-21T17:00:00Z", customer_count: 2, total_cents: 100000 },
+    ];
+    const today = formatManifestResponse(rows, "today");
+    chk("polish: formatManifestResponse today header",
+        today.startsWith("TODAY: 2 bookings · 6 guests · $3,000"), today);
+    chk("polish: formatManifestResponse lists Alice",
+        today.includes("Alice"));
+
+    const empty = formatManifestResponse([], "today");
+    chk("polish: formatManifestResponse empty uses friendly copy",
+        empty.includes("Nothing on the manifest yet"), empty);
+
+    const tomorrow = formatManifestResponse([], "tomorrow");
+    chk("polish: formatManifestResponse empty tomorrow says 'quiet tomorrow'",
+        tomorrow.includes("quiet tomorrow"), tomorrow);
+  }
+
+  // ── getSeasonRevenue — DB2 manifest path ─────────────────────────────────
+  {
+    const crmStub = {
+      from() {
+        return {
+          select() { return this; },
+          gte()    { return this; },
+          lt()     { return Promise.resolve({ data: [
+            { fareharbor_pk: "CO-1", total_cents: 200000, total: null },
+            { fareharbor_pk: "CO-2", total_cents: 150000, total: null },
+          ], error: null }); },
+        };
+      },
+    };
+    const result = await getSeasonRevenue({ id: "csr_rea" }, crmStub, null);
+    chk("polish: getSeasonRevenue source=manifest", result.source === "manifest", JSON.stringify(result));
+    chk("polish: getSeasonRevenue sums total_cents", result.revenue_cents === 350000, JSON.stringify(result));
+    chk("polish: getSeasonRevenue counts distinct PKs", result.bookings === 2);
+    chk("polish: getSeasonRevenue label includes year",
+        /Summer \d{4}|Winter \d{4}/.test(result.period_label), result.period_label);
+  }
+
+  // ── getSeasonRevenue — DB1 estimate fallback when DB2 returns empty ──────
+  {
+    const crmStub = {
+      from() {
+        return {
+          select() { return this; },
+          gte()    { return this; },
+          lt()     { return Promise.resolve({ data: [], error: null }); },
+        };
+      },
+    };
+    const supaStub = {
+      from() {
+        return {
+          select() { return this; },
+          eq()     { return this; },
+          in()     { return this; },
+          gte()    { return this; },
+          lt()     { return Promise.resolve({ data: [{ id: 1 }, { id: 2 }, { id: 3 }], error: null }); },
+        };
+      },
+    };
+    const result = await getSeasonRevenue({ id: "csr_rea" }, crmStub, supaStub);
+    chk("polish: getSeasonRevenue falls back to estimate when DB2 empty",
+        result.source === "estimate", JSON.stringify(result));
+    chk("polish: estimate uses $175 avg × converted leads",
+        result.revenue_cents === 3 * 17500, JSON.stringify(result));
+  }
+
+  // ── getNewBookingsStats — DB2 happy path ─────────────────────────────────
+  {
+    const crmStub = {
+      from() {
+        return {
+          select() { return this; },
+          gte()    { return Promise.resolve({ data: null, error: null, count: 7 }); },
+        };
+      },
+    };
+    const result = await getNewBookingsStats(crmStub, null);
+    chk("polish: getNewBookingsStats source=db2", result.source === "db2", JSON.stringify(result));
+    chk("polish: getNewBookingsStats returns counts for 24h and 7d",
+        result.last_24h === 7 && result.last_7d === 7, JSON.stringify(result));
+  }
+
+  // ── getNewBookingsStats — falls back to DB1 confirmations_sent ───────────
+  {
+    const crmStub = {
+      from() {
+        return {
+          select() { return this; },
+          gte()    { return Promise.resolve({ data: null, error: { message: "bookings does not exist", code: "42P01" }, count: null }); },
+        };
+      },
+    };
+    const supaStub = {
+      from() {
+        return {
+          select() { return this; },
+          gte()    { return Promise.resolve({ data: null, error: null, count: 5 }); },
+        };
+      },
+    };
+    const result = await getNewBookingsStats(crmStub, supaStub);
+    chk("polish: getNewBookingsStats falls back to db1_confirmations",
+        result.source === "db1_confirmations", JSON.stringify(result));
+    chk("polish: fallback returns correct counts",
+        result.last_24h === 5 && result.last_7d === 5, JSON.stringify(result));
+  }
+
+  // ── getTodaysManifest — graceful when crmSupabase null ───────────────────
+  {
+    const result = await getTodaysManifest("csr_rea", null);
+    chk("polish: getTodaysManifest returns [] when crmSupabase missing",
+        Array.isArray(result) && result.length === 0);
   }
 }
 

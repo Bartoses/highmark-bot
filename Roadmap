@@ -349,6 +349,43 @@ Done when:
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Briefing Polish — Real Manifest + Season Revenue + New Bookings (2026-05-21)
+Owner feedback after the first live preview of the briefing: "Today's bookings"
+was reading from the FH availability cache (which shows OPEN SLOTS, not actual
+bookings) and the empty-state copy referenced FareHarbor directly when summer
+operations run through Polaris/MPWR. Also missing: season revenue and a "new
+bookings created" pulse for the owner to see how fast the funnel is filling.
+
+- operatorBriefing.js:
+  • New getTodaysManifest(clientId, crmSupabase) — DB2 daily_manifest scoped
+    to today's start_at, sorted ascending. Returns real bookings (FH + MPWR
+    via the underlying bookings table).
+  • New getSeasonRevenue(client, crmSupabase, supabase, season?) — current-
+    season window (Summer = May 1 → Oct 31; Winter = Nov 1 → Apr 30 of next
+    year). DB2 sum preferred; DB1 leads estimate fallback ($175 avg).
+  • New getNewBookingsStats(crmSupabase, supabase) — counts bookings created
+    in the last 24h / 7d. Tries DB2 bookings.created_at first (covers FH +
+    MPWR inserts), falls back to DB1 confirmations_sent.confirmation_sent_at
+    on error.
+  • buildBriefingText rewritten to lead with TODAY (real manifest count +
+    pax + revenue subtotal + first 5 bookings by time), NEW BOOKINGS section
+    (suppressed when zero), HOT LEADS, CONDITIONS, 7-DAY + season revenue
+    lines, ALERTS, numeric menu. Empty-state copy is now "Nothing on the
+    manifest yet — quiet day so far" — no platform references.
+  • formatManifestResponse (exported) — shared formatter used by the
+    "bookings today / tomorrow" handlers when crmSupabase is available.
+    Falls back to formatBookingsResponse (FH KB availability) when no CRM.
+  • Briefing length cap raised from 960 → 1280 to accommodate the new
+    sections without truncating.
+- generateDailyBriefing + handlePortalPreviewBriefing: parallelized fetches
+  now include manifest + seasonRevenue + newBookings.
+- Tests: +24 assertions in testBriefingPolish — manifest header, listed
+  bookings, NEW BOOKINGS line, SEASON line, 7-DAY line, no-jargon
+  empty-state, formatManifestResponse today/tomorrow paths,
+  getSeasonRevenue manifest + estimate fallback paths,
+  getNewBookingsStats db2 happy path + db1_confirmations fallback,
+  getTodaysManifest graceful-null. 2316/2316 passing.
+
 ### Sprint C — Operator Intelligence: Portal UI for Per-Phone Tuning (2026-05-21)
 Third sprint of the Daily Operator Briefing upgrade: ships the portal UI that
 lets client_admins manage per-phone digest preferences, send test briefings,
