@@ -1312,6 +1312,7 @@ export async function getConversation(fromNumber, toNumber) {
         leadCaptureAttempted:   bd._leadCaptureAttempted    ?? false,
         leadCapturePendingName: bd._leadCapturePendingName  ?? false,
         commercialState:        bd._commercialState          ?? { recommendationGiven: false, leadCaptureAttempts: 0 },
+        conversationType:       data.conversation_type      ?? null,
       },
     };
   }
@@ -1346,26 +1347,33 @@ export async function saveConversation(fromNumber, toNumber, convo, clientId) {
     _leadCapturePendingName: convo.leadCapturePendingName ?? false,
     _commercialState:      convo.commercialState      ?? { recommendationGiven: false, leadCaptureAttempts: 0 },
   };
-  await supabase.from("conversations").upsert(
-    {
-      from_number:            fromNumber,
-      to_number:              toNumber,
-      messages:               convo.messages,
-      booking_step:           convo.bookingStep,
-      booking_data:           bookingData,
-      handoff:                convo.handoff,
-      consecutive_frustrated: convo.consecutiveFrustrated,
-      session_type:           convo.sessionType,
-      lead_step:              convo.leadStep,
-      lead_data:              convo.leadData,
-      waitlist_pending:       convo.waitlistPending,
-      waitlist_context:       convo.waitlistContext,
-      client_id:              clientId ?? process.env.CLIENT_ID ?? "csr_rea",
-      channel:                "sms",
-      updated_at:             new Date().toISOString(),
-    },
-    { onConflict: "from_number,to_number" }
-  );
+  const row = {
+    from_number:            fromNumber,
+    to_number:              toNumber,
+    messages:               convo.messages,
+    booking_step:           convo.bookingStep,
+    booking_data:           bookingData,
+    handoff:                convo.handoff,
+    consecutive_frustrated: convo.consecutiveFrustrated,
+    session_type:           convo.sessionType,
+    lead_step:              convo.leadStep,
+    lead_data:              convo.leadData,
+    waitlist_pending:       convo.waitlistPending,
+    waitlist_context:       convo.waitlistContext,
+    client_id:              clientId ?? process.env.CLIENT_ID ?? "csr_rea",
+    channel:                "sms",
+    updated_at:             new Date().toISOString(),
+  };
+  // Sprint B: tag operator/owner threads so they stay out of guest analytics
+  if (convo.conversationType === "internal_operator") {
+    row.conversation_type = "internal_operator";
+  }
+  const { error } = await supabase.from("conversations").upsert(row, { onConflict: "from_number,to_number" });
+  // Graceful fallback if the conversation_type column doesn't exist yet
+  if (error && /conversation_type/i.test(error.message ?? "")) {
+    delete row.conversation_type;
+    await supabase.from("conversations").upsert(row, { onConflict: "from_number,to_number" });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

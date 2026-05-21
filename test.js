@@ -3231,6 +3231,7 @@ async function main() {
     await testSettingsPolish();   // Phase 3B: hours/timezone fields, preview-opener, usage endpoints
     await testOperatorMode();     // Sprint 4A: operator briefing, commands, portal
     await testSprintAOperatorPhones(); // Sprint A: operator_phones table, isDigestTimeNow, dispatchOperatorDigests
+    await testSprintBOperatorUX();     // Sprint B: numeric menu, ops load, unanswered, largest bookings, underbooked, busiest hours, follow-ups, first-timers
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -13213,7 +13214,7 @@ async function testOperatorMode() {
   chk("4a: briefing includes bookings section", briefing.includes("TODAY'S BOOKINGS"));
   chk("4a: briefing includes HOT LEADS", briefing.includes("HOT LEADS"));
   chk("4a: briefing includes CONDITIONS", briefing.includes("CONDITIONS"));
-  chk("4a: briefing includes Reply instruction", briefing.includes("Reply:"));
+  chk("4a: briefing includes numeric reply menu", briefing.includes("Reply 1-7"));
 
   const emptyBriefing = buildBriefingText(mockClient, [], [], null);
   chk("4a: empty briefing ≤ 960 chars", emptyBriefing.length <= 960, `got ${emptyBriefing.length}`);
@@ -13543,6 +13544,231 @@ function makeSupabaseStubForDispatch(rows) {
         insert() { return Promise.resolve({ data: null, error: null }); },
         update() { return this; },
       };
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint B — Numeric quick-reply menu + conversation type + expanded handlers
+// ─────────────────────────────────────────────────────────────────────────────
+async function testSprintBOperatorUX() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const {
+    resolveMenuShortcut,
+    OPERATOR_MENU,
+    formatLargestBookings,
+    formatUnderbookedActivities,
+    formatBusiestHours,
+    formatNeedsFollowup,
+    formatFirstTimers,
+    formatOpsLoadResponse,
+    formatUnansweredResponse,
+    buildBriefingText,
+  } = await import("./operatorBriefing.js");
+
+  // ── resolveMenuShortcut — numeric reply routing ──────────────────────────
+  chk("sprintB: shortcut '1' → bookings today",  resolveMenuShortcut("1") === "bookings today");
+  chk("sprintB: shortcut '2' → revenue this week", resolveMenuShortcut("2") === "revenue this week");
+  chk("sprintB: shortcut '3' → leads", resolveMenuShortcut("3") === "leads");
+  chk("sprintB: shortcut '4' → ops load", resolveMenuShortcut("4") === "ops load");
+  chk("sprintB: shortcut '5' → weather", resolveMenuShortcut("5") === "weather");
+  chk("sprintB: shortcut '6' → bookings tomorrow", resolveMenuShortcut("6") === "bookings tomorrow");
+  chk("sprintB: shortcut '7' → unanswered", resolveMenuShortcut("7") === "unanswered");
+  chk("sprintB: shortcut whitespace trimmed", resolveMenuShortcut("  3  ") === "leads");
+  chk("sprintB: shortcut '8' → null", resolveMenuShortcut("8") === null);
+  chk("sprintB: shortcut 'hello' → null", resolveMenuShortcut("hello") === null);
+  chk("sprintB: shortcut '' → null", resolveMenuShortcut("") === null);
+  chk("sprintB: shortcut null → null", resolveMenuShortcut(null) === null);
+  chk("sprintB: OPERATOR_MENU exposes 7 slots", Object.keys(OPERATOR_MENU).length === 7);
+
+  // ── buildBriefingText includes the numeric menu ──────────────────────────
+  {
+    const mc = { id: "csr_rea", name: "Test Co", inboundPhones: ["+18335786496"] };
+    const text = buildBriefingText(mc, [], [], null);
+    chk("sprintB: briefing includes 'Reply 1-7'", text.includes("Reply 1-7"), text.slice(-200));
+    chk("sprintB: briefing menu line 1", text.includes("1 Today's manifest"), text);
+    chk("sprintB: briefing menu line 7", text.includes("7 Unanswered convos"), text);
+  }
+
+  // ── formatOpsLoadResponse — pure formatter ───────────────────────────────
+  {
+    const out = formatOpsLoadResponse(["FH stale 12h ago", "Confirmations OFF"], [{ name: "Jerry" }, { name: "Sara" }], [{ time: "9am" }]);
+    chk("sprintB: ops load header", out.includes("OPS LOAD"));
+    chk("sprintB: ops load shows booking count", out.includes("1 booking"));
+    chk("sprintB: ops load shows hot lead count", out.includes("2 hot"));
+    chk("sprintB: ops load surfaces alerts", out.includes("FH stale"));
+  }
+  {
+    const clear = formatOpsLoadResponse([], [], []);
+    chk("sprintB: ops load clean state", clear.includes("No operational alerts"));
+  }
+
+  // ── formatLargestBookings — DB stub ──────────────────────────────────────
+  {
+    const crmStub = makeCrmStub({
+      daily_manifest: [
+        { fareharbor_pk: "CO-1", customer_name: "Big Group", activity: "RZR Kremmling", start_at: "2026-05-20T10:00:00Z", customer_count: 4, total_cents: 200000 },
+        { fareharbor_pk: "CO-2", customer_name: "Small Group", activity: "RZR Steamboat", start_at: "2026-05-21T10:00:00Z", customer_count: 2, total_cents: 50000 },
+      ],
+    });
+    const range = { start: "2026-05-01T00:00:00Z", end: "2026-06-01T00:00:00Z", label: "May 2026" };
+    const out = await formatLargestBookings({ id: "csr_rea" }, crmStub, range);
+    chk("sprintB: largest bookings header", out.includes("LARGEST BOOKINGS"));
+    chk("sprintB: largest bookings dollar format", out.includes("$2,000"));
+    chk("sprintB: largest bookings includes activity", out.includes("RZR Kremmling"));
+  }
+  {
+    const out = await formatLargestBookings({ id: "csr_rea" }, null, { start: "x", end: "y" });
+    chk("sprintB: largest bookings handles missing crmSupabase",
+        out.includes("CRM data not connected"), out);
+  }
+
+  // ── formatUnderbookedActivities ──────────────────────────────────────────
+  {
+    const crmStub = makeCrmStub({
+      daily_manifest: [
+        { activity: "RZR Kremmling", fareharbor_pk: "CO-A" },
+        { activity: "RZR Kremmling", fareharbor_pk: "CO-B" },
+        { activity: "Rabbit Ears UTV", fareharbor_pk: "CO-C" },
+      ],
+    });
+    const out = await formatUnderbookedActivities({ id: "csr_rea" }, crmStub);
+    chk("sprintB: underbooked header", out.includes("UNDERBOOKED TOURS"));
+    chk("sprintB: underbooked lists Rabbit Ears (1 booking < Kremmling's 2)",
+        out.indexOf("Rabbit Ears UTV") < out.indexOf("RZR Kremmling"), out);
+  }
+  {
+    const out = await formatUnderbookedActivities({ id: "csr_rea" }, null);
+    chk("sprintB: underbooked handles missing crmSupabase",
+        out.includes("CRM data not connected"), out);
+  }
+
+  // ── formatBusiestHours ───────────────────────────────────────────────────
+  {
+    const crmStub = makeCrmStub({
+      daily_manifest: [
+        { start_at: "2026-05-21T15:00:00Z", customer_count: 2 }, // 9am MT
+        { start_at: "2026-05-21T15:30:00Z", customer_count: 4 }, // 9am MT
+        { start_at: "2026-05-21T19:00:00Z", customer_count: 1 }, // 1pm MT
+      ],
+    });
+    const range = { start: "2026-05-21T06:00:00Z", end: "2026-05-22T06:00:00Z", label: "today" };
+    const out = await formatBusiestHours({ id: "csr_rea" }, crmStub, range);
+    chk("sprintB: busiest hours header", out.includes("BUSIEST TIME"));
+    chk("sprintB: busiest hours shows 9am peak", out.includes("9am") && out.includes("2 booking"), out);
+  }
+
+  // ── formatNeedsFollowup ──────────────────────────────────────────────────
+  {
+    const supabaseStub = {
+      from(table) {
+        if (table === "leads") {
+          return {
+            select() { return this; },
+            eq()     { return this; },
+            in()     { return this; },
+            or()     { return this; },
+            order()  { return this; },
+            limit()  { return Promise.resolve({ data: [
+              { name: "Jerry Smith",   service: "snowmobile", status: "contacted", last_contacted_at: new Date(Date.now() - 36 * 36e5).toISOString(), created_at: new Date().toISOString() },
+              { name: "Sara Lee",      service: "rzr",         status: "engaged",   last_contacted_at: null,                                          created_at: new Date().toISOString() },
+            ], error: null }); },
+          };
+        }
+        return { select() { return this; }, eq() { return this; }, single() { return Promise.resolve({ data: null, error: null }); } };
+      },
+    };
+    const out = await formatNeedsFollowup({ id: "csr_rea" }, supabaseStub);
+    chk("sprintB: follow-ups header", out.includes("FOLLOW-UPS DUE"));
+    chk("sprintB: follow-ups list Jerry", out.includes("Jerry"));
+    chk("sprintB: follow-ups shows hours-since-contact", out.includes("36h"));
+    chk("sprintB: follow-ups shows 'never contacted'", out.includes("never contacted"));
+  }
+
+  // ── formatFirstTimers ────────────────────────────────────────────────────
+  {
+    let queryStage = 0;
+    const crmStub = {
+      from(table) {
+        if (table === "daily_manifest") {
+          return {
+            select() { return this; },
+            gte() { return this; },
+            lt() {
+              queryStage = 1;
+              return Promise.resolve({ data: [
+                { fareharbor_pk: "CO-A", customer_name: "Alice", normalized_phone: "+15551110001", activity: "RZR", start_at: "2026-05-21T15:00:00Z", customer_count: 2 },
+                { fareharbor_pk: "CO-B", customer_name: "Bob",   normalized_phone: "+15551110002", activity: "RZR", start_at: "2026-05-21T16:00:00Z", customer_count: 1 },
+              ], error: null });
+            },
+            in() {
+              queryStage = 2;
+              // Alice has 1 booking total → first-timer. Bob has 3 → not.
+              return Promise.resolve({ data: [
+                { normalized_phone: "+15551110001" },
+                { normalized_phone: "+15551110002" },
+                { normalized_phone: "+15551110002" },
+                { normalized_phone: "+15551110002" },
+              ], error: null });
+            },
+          };
+        }
+        return { select() { return this; }, eq() { return this; }, single() { return Promise.resolve({ data: null, error: null }); } };
+      },
+    };
+    const range = { start: "2026-05-21T06:00:00Z", end: "2026-05-22T06:00:00Z", label: "today" };
+    const out = await formatFirstTimers({ id: "csr_rea" }, crmStub, range);
+    chk("sprintB: first-timers header", out.includes("FIRST-TIME GUESTS"));
+    chk("sprintB: first-timers includes Alice (1 total booking)", out.includes("Alice"));
+    chk("sprintB: first-timers excludes Bob (3 total bookings)", !out.includes("• Bob"), out);
+  }
+
+  // ── formatUnansweredResponse ─────────────────────────────────────────────
+  {
+    const supabaseStub = {
+      from(table) {
+        if (table === "conversations") {
+          return {
+            select() { return this; },
+            eq()     { return this; },
+            or()     { return this; },
+            order()  { return this; },
+            limit()  { return Promise.resolve({ data: [
+              { from_number: "+15551112222", handoff: true,  bot_paused: false, updated_at: new Date().toISOString(), messages: [{ role: "user", content: "Help me please" }] },
+              { from_number: "+15553334444", handoff: false, bot_paused: true,  updated_at: new Date().toISOString(), messages: [{ role: "assistant", content: "Got it, hold on" }] },
+            ], error: null }); },
+          };
+        }
+        return { select() { return this; }, eq() { return this; }, single() { return Promise.resolve({ data: null, error: null }); } };
+      },
+    };
+    const out = await formatUnansweredResponse({ id: "csr_rea" }, supabaseStub);
+    chk("sprintB: unanswered header includes count (2)", out.includes("UNANSWERED CONVOS (2)"));
+    chk("sprintB: unanswered shows handoff flag", out.includes("[handoff]"));
+    chk("sprintB: unanswered shows paused flag", out.includes("[paused]"));
+  }
+}
+
+function makeCrmStub(byTable) {
+  return {
+    from(table) {
+      const rows = byTable[table] ?? [];
+      const chain = {
+        select() { return chain; },
+        gte()    { return chain; },
+        lt()     { return chain; },
+        order()  { return chain; },
+        limit()  { return Promise.resolve({ data: rows, error: null }); },
+        in()     { return chain; },
+        // Allow termination at gte/lt for queries without limit/order
+        then(res) {
+          res({ data: rows, error: null });
+          return Promise.resolve();
+        },
+      };
+      return chain;
     },
   };
 }
@@ -13961,7 +14187,7 @@ async function testOperatorBotUpgrade() {
     // 'help' goes through the new parser
     const helpReply = await detectAndHandleOperatorCommand("help", mockClient, mockSupabase);
     chk("opbot: 'help' returns command list",
-        typeof helpReply === "string" && helpReply.toLowerCase().includes("daily summary"),
+        typeof helpReply === "string" && helpReply.toLowerCase().includes("ops load"),
         helpReply);
 
     // 'random nonsense' → null (so orchestrator falls through to Claude)

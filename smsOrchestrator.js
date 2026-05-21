@@ -219,6 +219,9 @@ export async function handleSmsRequest(req, res) {
   const { isNew, convo } = await convoP;
   // Mark UI console sessions as test so they're filterable in the DB
   if (isNew && isUiReq(req)) convo.sessionType = "test";
+  // Sprint B: tag operator/owner threads so saveConversation persists
+  // conversation_type='internal_operator' and they're excluded from guest analytics.
+  if (isOwner) convo.conversationType = "internal_operator";
 
   // 6.5. Bot-paused gate — agent has taken over this conversation.
   //      Save the inbound message (so agent sees it) but send no reply.

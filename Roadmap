@@ -349,6 +349,48 @@ Done when:
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Sprint B — Operator Intelligence: Conversational UX + Expanded Handlers (2026-05-21)
+Second sprint of the Daily Operator Briefing upgrade: turns the briefing into a
+genuine two-way thread. Numeric quick-reply menu, separate operator
+conversation type, and 5 new freeform handlers backed by DB1 leads + DB2
+daily_manifest.
+
+- operatorBriefing.js:
+  • buildBriefingText footer replaced with a 7-row numeric menu
+    (1 Today's manifest / 2 Revenue / 3 Open leads / 4 Ops load /
+     5 Weather / 6 Tomorrow outlook / 7 Unanswered convos) + "or ask anything".
+  • Exported OPERATOR_MENU + resolveMenuShortcut("1"–"7"). The
+    detectAndHandleOperatorCommand entry point resolves the shortcut to its
+    canonical string BEFORE routing, so numeric replies traverse the exact
+    same path as natural-language commands.
+  • Two new menu-backed handlers: formatOpsLoadResponse (issues + hot leads
+    + manifest count) and formatUnansweredResponse (handoff/bot_paused
+    conversations).
+  • Five new freeform handlers — formatLargestBookings (DB2 daily_manifest
+    ORDER BY total_cents), formatUnderbookedActivities (next 14 days, group
+    by activity), formatBusiestHours (group by hour-of-day MT),
+    formatNeedsFollowup (DB1 leads contacted >24h ago or never contacted),
+    formatFirstTimers (per-phone total booking count = 1).
+  • formatHelpResponse rewritten to lead with the numeric menu + list the
+    new freeform queries.
+- db1_conversation_type.sql: ALTER conversations ADD COLUMN conversation_type
+  TEXT NOT NULL DEFAULT 'guest' CHECK IN ('guest','internal_operator') +
+  composite index on (client_id, conversation_type). Migration applied.
+- index.js: saveConversation tags rows with conversation_type='internal_operator'
+  when convo.conversationType is set; falls back gracefully if the column
+  doesn't exist yet (catches "conversation_type" in the error message and
+  retries without it). getConversation hydrates convo.conversationType from
+  the DB row.
+- smsOrchestrator.js: after detectOwner resolves, stamps
+  convo.conversationType = "internal_operator" on the awaited convo so all
+  downstream saveConversation calls persist the tag.
+- Tests: +40 assertions in testSprintBOperatorUX — shortcut routing (1–7,
+  whitespace, invalid), briefing menu rendering, ops load + unanswered
+  formatting, largest bookings dollar formatting + CRM-missing path,
+  underbooked sort order, busiest hours peak detection, follow-up
+  age-since-contact + "never contacted", first-timers per-phone count
+  exclusion. 2274/2274 passing.
+
 ### Sprint A — Operator Intelligence: Multi-Tenant Operator Phones (2026-05-21)
 First sprint of the Daily Operator Briefing upgrade: replaces the static
 `clients.owner_phone` + `clients.operator_phones` JSONB with a normalized

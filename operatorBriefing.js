@@ -279,11 +279,36 @@ export function buildBriefingText(client, todaySlots, hotLeads, weatherSnap, ext
   }
 
   lines.push("");
-  lines.push("Reply: LEADS, BOOKINGS, WEATHER for details.");
+  lines.push("Reply 1-7 or ask anything:");
+  lines.push("1 Today's manifest   5 Weather/conditions");
+  lines.push("2 Revenue            6 Tomorrow outlook");
+  lines.push("3 Open leads         7 Unanswered convos");
+  lines.push("4 Ops load");
 
   let text = lines.join("\n");
   if (text.length > 960) text = smartTruncate(text, 960);
   return text;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NUMERIC QUICK-REPLY MENU
+// Maps "1"-"7" inbound replies to internal operator commands. The mapping is
+// stable across briefings so an operator can scroll back and reply with a
+// number at any time of day.
+// ─────────────────────────────────────────────────────────────────────────────
+export const OPERATOR_MENU = {
+  "1": "bookings today",
+  "2": "revenue this week",
+  "3": "leads",
+  "4": "ops load",
+  "5": "weather",
+  "6": "bookings tomorrow",
+  "7": "unanswered",
+};
+
+export function resolveMenuShortcut(message) {
+  const trimmed = String(message ?? "").trim();
+  return OPERATOR_MENU[trimmed] ?? null;
 }
 
 function buildConditionsLine(snap) {
@@ -649,7 +674,12 @@ export async function dispatchOperatorDigests(supabase, twilioClient, crmSupabas
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function detectAndHandleOperatorCommand(message, client, supabase, crmSupabase = null, convo = null) {
-  const msg = (message ?? "").toLowerCase().trim();
+  // Resolve numeric quick-reply shortcuts up front. "1"–"7" maps to a fixed
+  // operator command string; we then re-enter detection with that command so
+  // the existing parser path handles it (and persistence works the same way).
+  const shortcut = resolveMenuShortcut(message);
+  const effectiveMessage = shortcut ?? message;
+  const msg = (effectiveMessage ?? "").toLowerCase().trim();
   const priorContext = convo?.bookingData?._operator ?? null;
 
   // Persist a successful structured intent's context onto the convo so the
@@ -659,6 +689,50 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     convo.bookingData = convo.bookingData ?? {};
     convo.bookingData._operator = extractOperatorContext(mergedIntent);
   };
+
+  // ── Sprint B: expanded freeform handlers ─────────────────────────────────
+  // LARGEST BOOKINGS — DB2 daily_manifest sorted by total_cents
+  if (msg.match(/\blargest\s+bookings?\b|\bbiggest\s+bookings?\b|\btop\s+bookings?\b|\bhighest[-\s]?value\s+bookings?\b/)) {
+    const range = parseDateRange(msg) ?? parseDateRange("this month");
+    return await formatLargestBookings(client, crmSupabase, range);
+  }
+
+  // UNDERBOOKED ACTIVITIES — activities with low forward-booking volume
+  if (msg.match(/\bunderbooked\b|\blow\s+utilization\b|\bnot\s+selling\b|\bwhich\s+tours?\s+(are\s+)?(under|low)\b/)) {
+    return await formatUnderbookedActivities(client, crmSupabase);
+  }
+
+  // BUSIEST TIME TODAY
+  if (msg.match(/\bbusiest\s+(time|hour|hours|window)\b|\bpeak\s+(time|hour|hours)\b|\bwhat\s+time\s+(is\s+)?busiest\b/)) {
+    const range = parseDateRange(msg) ?? parseDateRange("today");
+    return await formatBusiestHours(client, crmSupabase, range);
+  }
+
+  // NEEDS FOLLOW UP — leads contacted >24h ago but not converted/closed
+  if (msg.match(/\bneeds?\s+follow[-\s]?up\b|\bwho\s+ha(s|sn'?t)\s+replied\s+(yet)?\b|\bfollow[-\s]?ups?\s+(needed|due|owed)\b|\bdue\s+for\s+follow[-\s]?up\b/)) {
+    return await formatNeedsFollowup(client, supabase);
+  }
+
+  // FIRST-TIME GUESTS
+  if (msg.match(/\bfirst[-\s]?(time|timer)s?\s+(guests?|customers?|riders?|booking)?\b|\bnew\s+(guests?|customers?)\s+(today|this\s+week|this\s+month)?\b/)) {
+    const range = parseDateRange(msg) ?? parseDateRange("today");
+    return await formatFirstTimers(client, crmSupabase, range);
+  }
+
+  // OPS LOAD (menu #4) — operational issues + workload at a glance
+  if (msg === "ops load" || msg === "operations" || msg === "staffing" || msg.match(/\boperational\s+load\b/)) {
+    const [issues, hotLeads, todaySlots] = await Promise.all([
+      detectOperationalIssues(client, supabase, crmSupabase),
+      getHotLeads(client.id, supabase, 10),
+      getTodaysAvailability(client.id, supabase),
+    ]);
+    return formatOpsLoadResponse(issues, hotLeads, todaySlots);
+  }
+
+  // UNANSWERED CONVERSATIONS (menu #7) — handoff flags + bot-paused threads
+  if (msg === "unanswered" || msg === "unanswered convos" || msg === "unanswered conversations" || msg.match(/\bwho\s+ha(s|sn'?t)\s+replied\b/)) {
+    return await formatUnansweredResponse(client, supabase);
+  }
 
   // BOOKINGS TODAY
   if (msg.match(/\bbookings?\s+(today|for today)\b/) || msg === "bookings today" || msg === "today's bookings" || msg === "todays bookings") {
@@ -819,14 +893,20 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
 
 function formatHelpResponse() {
   return [
-    "Operator commands you can try:",
-    "• bookings today / tomorrow / this weekend",
-    "• bookings in Feb 2026",
-    "• daily summary",
-    "• new leads / missed leads",
-    "• weather / conditions",
-    "• revenue this week",
-    "• performance",
+    "Reply 1-7 or ask anything:",
+    "1 Today's manifest  5 Weather",
+    "2 Revenue           6 Tomorrow outlook",
+    "3 Open leads        7 Unanswered convos",
+    "4 Ops load",
+    "",
+    "Other things you can ask:",
+    "• largest bookings this month",
+    "• who needs follow up",
+    "• which tours are underbooked",
+    "• first-time guests this week",
+    "• busiest time today",
+    "• bookings in Feb 2026 / by location",
+    "• revenue this winter",
     "• flag <issue>",
   ].join("\n");
 }
@@ -918,6 +998,246 @@ function formatRevenueResponse(rev) {
     return `Revenue (${rev.period}): $${rev.estimated.toLocaleString()} across ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""} (FareHarbor).`;
   }
   return `Est. revenue (${rev.period}): $${rev.estimated.toLocaleString()} (~${rev.bookings} converted leads × $175 avg).\nFor exact figures, check FareHarbor reports.`;
+}
+
+// Compact "operations load" snapshot — combines staffing pressure signals.
+export function formatOpsLoadResponse(issues, hotLeads, todaySlots) {
+  const lines = [];
+  lines.push(`OPS LOAD`);
+  lines.push("");
+  lines.push(`Today: ${todaySlots.length} booking${todaySlots.length !== 1 ? "s" : ""} on the manifest.`);
+  lines.push(`Open leads: ${hotLeads.length} hot.`);
+
+  if (issues.length === 0) {
+    lines.push("");
+    lines.push("No operational alerts.");
+  } else {
+    lines.push("");
+    lines.push(`Alerts (${issues.length}):`);
+    for (const issue of issues.slice(0, 5)) {
+      lines.push(`! ${issue}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint B: expanded freeform operator handlers
+// All handlers are graceful — DB unavailable returns a clean "couldn't pull
+// X right now" message rather than throwing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DOLLARS = (cents) => `$${Math.round((Number(cents) || 0) / 100).toLocaleString()}`;
+
+export async function formatLargestBookings(client, crmSupabase, range) {
+  if (!crmSupabase || !range) {
+    return "LARGEST BOOKINGS\n\nCRM data not connected — can't pull this right now.";
+  }
+  try {
+    const { data, error } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, activity, start_at, customer_count, total_cents, location, company")
+      .gte("start_at", range.start)
+      .lt("start_at", range.end)
+      .order("total_cents", { ascending: false })
+      .limit(5);
+    if (error) throw error;
+    const rows = data ?? [];
+    if (!rows.length) return `LARGEST BOOKINGS (${range.label ?? "range"})\n\nNo bookings found in this window.`;
+    const lines = [`LARGEST BOOKINGS (${range.label ?? "range"})`, ""];
+    for (const r of rows) {
+      const date = r.start_at?.slice(0, 10) ?? "?";
+      lines.push(`• ${DOLLARS(r.total_cents)} — ${r.customer_name ?? "?"} (${r.customer_count ?? "?"} pax, ${r.activity ?? "?"}) ${date}`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    console.warn(`[OPERATOR] formatLargestBookings failed:`, err.message);
+    return "LARGEST BOOKINGS\n\nCouldn't pull biggest bookings right now.";
+  }
+}
+
+export async function formatUnderbookedActivities(client, crmSupabase) {
+  if (!crmSupabase) {
+    return "UNDERBOOKED TOURS\n\nCRM data not connected — can't pull this right now.";
+  }
+  try {
+    const startISO = new Date().toISOString();
+    const endISO   = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await crmSupabase
+      .from("daily_manifest")
+      .select("activity, fareharbor_pk")
+      .gte("start_at", startISO)
+      .lt("start_at", endISO);
+    if (error) throw error;
+    const rows = data ?? [];
+    // Group by activity, count distinct bookings
+    const byActivity = new Map();
+    for (const r of rows) {
+      if (!r.activity) continue;
+      const key = r.activity;
+      if (!byActivity.has(key)) byActivity.set(key, new Set());
+      byActivity.get(key).add(r.fareharbor_pk ?? Math.random());
+    }
+    const sorted = [...byActivity.entries()]
+      .map(([activity, set]) => ({ activity, count: set.size }))
+      .sort((a, b) => a.count - b.count)
+      .slice(0, 5);
+    if (!sorted.length) {
+      return "UNDERBOOKED TOURS\n\nNo upcoming bookings in the next 14 days — every tour is underbooked.";
+    }
+    const lines = ["UNDERBOOKED TOURS (next 14 days)", ""];
+    for (const r of sorted) {
+      lines.push(`• ${r.activity}: ${r.count} booking${r.count !== 1 ? "s" : ""}`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    console.warn(`[OPERATOR] formatUnderbookedActivities failed:`, err.message);
+    return "UNDERBOOKED TOURS\n\nCouldn't pull utilization right now.";
+  }
+}
+
+export async function formatBusiestHours(client, crmSupabase, range) {
+  if (!crmSupabase || !range) {
+    return "BUSIEST TIME\n\nCRM data not connected — can't pull this right now.";
+  }
+  try {
+    const { data, error } = await crmSupabase
+      .from("daily_manifest")
+      .select("start_at, customer_count")
+      .gte("start_at", range.start)
+      .lt("start_at", range.end);
+    if (error) throw error;
+    const rows = data ?? [];
+    if (!rows.length) return `BUSIEST TIME (${range.label ?? "today"})\n\nNo bookings in this window.`;
+    // Group by hour-of-day (MT)
+    const byHour = new Map();
+    for (const r of rows) {
+      if (!r.start_at) continue;
+      const hourStr = new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", hour12: false });
+      const hour = parseInt(hourStr, 10);
+      if (!Number.isFinite(hour)) continue;
+      const cur = byHour.get(hour) ?? { bookings: 0, pax: 0 };
+      cur.bookings += 1;
+      cur.pax += Number(r.customer_count) || 0;
+      byHour.set(hour, cur);
+    }
+    const top = [...byHour.entries()]
+      .map(([hour, v]) => ({ hour, ...v }))
+      .sort((a, b) => b.bookings - a.bookings)
+      .slice(0, 3);
+    const lines = [`BUSIEST TIME (${range.label ?? "today"})`, ""];
+    for (const t of top) {
+      const ampm = t.hour === 0 ? "12am" : t.hour < 12 ? `${t.hour}am` : t.hour === 12 ? "12pm" : `${t.hour - 12}pm`;
+      lines.push(`• ${ampm}: ${t.bookings} booking${t.bookings !== 1 ? "s" : ""} (${t.pax} guests)`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    console.warn(`[OPERATOR] formatBusiestHours failed:`, err.message);
+    return "BUSIEST TIME\n\nCouldn't pull peak-hour data right now.";
+  }
+}
+
+export async function formatNeedsFollowup(client, supabase) {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("leads")
+      .select("name, phone, service, status, last_contacted_at, created_at")
+      .eq("client_id", client.id)
+      .in("status", ["contacted", "engaged"])
+      .or(`last_contacted_at.lte.${cutoff},last_contacted_at.is.null`)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    if (error) throw error;
+    const rows = data ?? [];
+    if (!rows.length) return "FOLLOW-UPS DUE\n\nNo leads waiting on a follow-up.";
+    const lines = [`FOLLOW-UPS DUE (${rows.length})`, ""];
+    for (const r of rows.slice(0, 5)) {
+      const ageH = r.last_contacted_at ? Math.round((Date.now() - new Date(r.last_contacted_at).getTime()) / 36e5) : null;
+      const ageStr = ageH != null ? `${ageH}h since contact` : "never contacted";
+      const firstName = (r.name ?? "Unknown").split(" ")[0];
+      lines.push(`• ${firstName} — ${r.service ?? "n/a"} (${ageStr})`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    console.warn(`[OPERATOR] formatNeedsFollowup failed:`, err.message);
+    return "FOLLOW-UPS DUE\n\nCouldn't pull follow-up list right now.";
+  }
+}
+
+export async function formatFirstTimers(client, crmSupabase, range) {
+  if (!crmSupabase || !range) {
+    return "FIRST-TIME GUESTS\n\nCRM data not connected — can't pull this right now.";
+  }
+  try {
+    // Pull bookings in range with customer info
+    const { data: scoped, error } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, normalized_phone, activity, start_at, customer_count")
+      .gte("start_at", range.start)
+      .lt("start_at", range.end);
+    if (error) throw error;
+    const rows = scoped ?? [];
+    if (!rows.length) return `FIRST-TIME GUESTS (${range.label ?? "range"})\n\nNo bookings in this window.`;
+
+    // For each unique phone in scope, count their TOTAL bookings (any time).
+    // A phone with exactly 1 booking total = first-timer.
+    const phones = [...new Set(rows.map((r) => r.normalized_phone).filter(Boolean))];
+    if (!phones.length) return `FIRST-TIME GUESTS (${range.label ?? "range"})\n\nNo phone-keyed bookings in this window.`;
+
+    const { data: allByPhone } = await crmSupabase
+      .from("daily_manifest")
+      .select("normalized_phone")
+      .in("normalized_phone", phones);
+    const countByPhone = new Map();
+    for (const r of allByPhone ?? []) {
+      countByPhone.set(r.normalized_phone, (countByPhone.get(r.normalized_phone) ?? 0) + 1);
+    }
+    const firstTimers = rows.filter((r) => (countByPhone.get(r.normalized_phone) ?? 0) <= 1);
+    if (!firstTimers.length) return `FIRST-TIME GUESTS (${range.label ?? "range"})\n\nNo first-timers — everyone has booked before.`;
+    const lines = [`FIRST-TIME GUESTS (${range.label ?? "range"}) — ${firstTimers.length}`, ""];
+    for (const r of firstTimers.slice(0, 5)) {
+      const time = r.start_at ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" }) : "";
+      const firstName = (r.customer_name ?? "Unknown").split(" ")[0];
+      lines.push(`• ${firstName} — ${r.activity ?? "?"} ${time} (${r.customer_count ?? "?"} pax)`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    console.warn(`[OPERATOR] formatFirstTimers failed:`, err.message);
+    return "FIRST-TIME GUESTS\n\nCouldn't pull guest history right now.";
+  }
+}
+
+// Surfaces conversations that need an operator response — handoff flag set
+// and/or bot paused. Reads DB1 conversations; falls back gracefully if the
+// column isn't present.
+export async function formatUnansweredResponse(client, supabase) {
+  try {
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("from_number, handoff, bot_paused, updated_at, messages")
+      .eq("client_id", client.id)
+      .or("handoff.eq.true,bot_paused.eq.true")
+      .order("updated_at", { ascending: false })
+      .limit(10);
+    if (error) throw error;
+    const rows = data ?? [];
+    if (!rows.length) {
+      return "UNANSWERED CONVOS\n\nAll conversations are resolved — nothing waiting on you.";
+    }
+    const lines = [`UNANSWERED CONVOS (${rows.length})`, ""];
+    for (const r of rows.slice(0, 5)) {
+      const last = Array.isArray(r.messages) ? r.messages[r.messages.length - 1] : null;
+      const lastBody = (last?.content ?? "").slice(0, 60);
+      const flag = r.handoff ? "handoff" : "paused";
+      const phone = (r.from_number ?? "").replace(/^\+1/, "");
+      lines.push(`• ${phone} [${flag}]: ${lastBody}`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    console.warn(`[OPERATOR] formatUnansweredResponse failed:`, err.message);
+    return "UNANSWERED CONVOS\n\nCouldn't pull conversation status right now.";
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
