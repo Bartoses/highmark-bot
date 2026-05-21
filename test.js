@@ -3236,6 +3236,7 @@ async function main() {
     await testBriefingPolish();        // Briefing polish: real manifest + season revenue + new bookings + UX copy
     await testPolarisConfirmations();  // Polaris (MPWR) confirmation text builder
     await testActionOrientedBriefing();// Action-oriented briefing: detectors + ACTIONS/REVENUE/INSIGHTS/FOLLOW UP format + 1-10 menu
+    await testOperationalBriefing();   // Operational briefing: classifiers + TODAY'S LOAD section + dispatch-sheet manifest
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -13756,6 +13757,181 @@ async function testSprintBOperatorUX() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Operational dispatch briefing — TODAY'S LOAD lead section + manifest grouping
+// ─────────────────────────────────────────────────────────────────────────────
+async function testOperationalBriefing() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const {
+    classifyActivity,
+    classifyDuration,
+    buildTodayLoadSnapshot,
+    formatManifestResponse,
+    buildBriefingText,
+  } = await import("./operatorBriefing.js");
+
+  // ── classifyActivity — every catalog vehicle ─────────────────────────────
+  chk("op: classifyActivity Turbo XP",
+      classifyActivity("2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat").vehicle_type === "turbo_xp");
+  chk("op: classifyActivity RZR Experience",
+      classifyActivity("2025 Polaris RZR Experience • 4 Seater • Kremmling").vehicle_type === "rzr_experience");
+  chk("op: classifyActivity Rabbit Ears guided",
+      classifyActivity("Rabbit Ears Pass - Ride From | Polaris 4 Seater").category === "guided_tour");
+  chk("op: classifyActivity snowmobile tour",
+      classifyActivity("Guided Snowmobile Tour - Steamboat").vehicle_type === "snowmobile");
+  chk("op: classifyActivity unknown falls back gracefully",
+      classifyActivity("Bicycle rental").vehicle_type === "unknown");
+  chk("op: classifyActivity null safe",
+      classifyActivity(null).vehicle_type === "unknown");
+
+  // ── classifyDuration buckets ─────────────────────────────────────────────
+  const dur = (a, b) => classifyDuration(a, b).label;
+  chk("op: duration short (<4h)", dur("2026-07-01T15:00:00Z", "2026-07-01T17:00:00Z") === "short");
+  chk("op: duration half_day (4-8h)", dur("2026-07-01T15:00:00Z", "2026-07-01T22:00:00Z") === "half_day");
+  chk("op: duration full_day (8-24h)", dur("2026-07-01T15:00:00Z", "2026-07-02T13:00:00Z") === "full_day");
+  chk("op: duration overnight (24-48h)", dur("2026-07-01T15:00:00Z", "2026-07-02T20:00:00Z") === "overnight");
+  chk("op: duration multi_day (>48h)", dur("2026-07-01T15:00:00Z", "2026-07-04T15:00:00Z") === "multi_day");
+  chk("op: duration null safe", dur(null, null) === "unknown");
+
+  // ── buildTodayLoadSnapshot — totals + mixes + clusters ───────────────────
+  {
+    // 5 bookings spanning vehicle mix, locations, durations
+    const manifest = [
+      // Morning Kremmling Turbo XP (full-day)
+      { customer_name: "Alice",   activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Kremmling",  location: "Kremmling", start_at: "2026-07-04T15:00:00Z", end_at: "2026-07-05T01:00:00Z", customer_count: 4, total_cents: 200000, balance_due_cents: 0,      waiver_signed: true  },
+      // Morning Kremmling RZR Experience (half-day)
+      { customer_name: "Bob",     activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",     location: "Kremmling", start_at: "2026-07-04T15:30:00Z", end_at: "2026-07-04T21:00:00Z", customer_count: 2, total_cents: 100000, balance_due_cents: 0,      waiver_signed: false },
+      // Afternoon Steamboat Turbo XP (full-day, ends after 5pm)
+      { customer_name: "Charlie", activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat",  location: "Steamboat", start_at: "2026-07-04T18:00:00Z", end_at: "2026-07-05T03:00:00Z", customer_count: 4, total_cents: 200000, balance_due_cents: 50000,  waiver_signed: true  },
+      // Multi-day rental, unpaid
+      { customer_name: "Dana",    activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",     location: "Kremmling", start_at: "2026-07-04T16:00:00Z", end_at: "2026-07-07T16:00:00Z", customer_count: 2, total_cents: 300000, balance_due_cents: 292000, waiver_signed: true  },
+      // Rabbit Ears guided morning
+      { customer_name: "Eli",     activity: "Rabbit Ears Pass - Ride From | Polaris 4 Seater",        location: "Rabbit Ears Pass", start_at: "2026-07-04T14:00:00Z", end_at: "2026-07-04T18:00:00Z", customer_count: 4, total_cents: 80000,  balance_due_cents: 0,      waiver_signed: true  },
+    ];
+    const snap = buildTodayLoadSnapshot(manifest);
+
+    chk("op: snapshot totals.bookings = 5", snap.totals.bookings === 5);
+    chk("op: snapshot totals.pax = 16",     snap.totals.pax === 16);
+    chk("op: snapshot totals.revenue_cents sums",
+        snap.totals.revenue_cents === 200000 + 100000 + 200000 + 300000 + 80000);
+    chk("op: snapshot totals.unpaid_cents sums",
+        snap.totals.unpaid_cents === 50000 + 292000);
+    chk("op: snapshot totals.missing_waivers = 1", snap.totals.missing_waivers === 1);
+
+    chk("op: snapshot vehicle mix lists Turbo XP and RZR Experience and Rabbit Ears",
+        snap.vehicle_mix.find((v) => v.label === "Turbo XP")?.count === 2 &&
+        snap.vehicle_mix.find((v) => v.label === "RZR Experience")?.count === 2 &&
+        snap.vehicle_mix.find((v) => v.label === "Rabbit Ears tour")?.count === 1);
+
+    chk("op: snapshot duration mix has at least 1 multi_day",
+        snap.duration_mix.multi_day === 1, JSON.stringify(snap.duration_mix));
+    chk("op: snapshot duration mix has full_day and half_day entries",
+        (snap.duration_mix.full_day ?? 0) >= 1 && (snap.duration_mix.half_day ?? 0) >= 1, JSON.stringify(snap.duration_mix));
+
+    chk("op: snapshot top_location = Kremmling 60%",
+        snap.top_location?.location === "Kremmling" && snap.top_location?.pct === 60, JSON.stringify(snap.top_location));
+
+    chk("op: snapshot multiday_unpaid surfaces Dana",
+        snap.multiday_unpaid.length === 1 && snap.multiday_unpaid[0].customer_name === "Dana");
+
+    chk("op: snapshot late_returns includes Charlie + Dana (both end past 5pm)",
+        snap.late_returns.length >= 2);
+
+    chk("op: snapshot load_tone steady when 5 bookings",
+        snap.load_tone === "steady", snap.load_tone);
+  }
+
+  // Empty manifest
+  {
+    const empty = buildTodayLoadSnapshot([]);
+    chk("op: empty snapshot totals = 0",     empty.totals.bookings === 0);
+    chk("op: empty snapshot load_tone quiet_day", empty.load_tone === "quiet_day");
+    chk("op: empty snapshot has no top_location", empty.top_location === null);
+  }
+
+  // ── buildBriefingText leads with 🏁 TODAY'S LOAD before ACTIONS ─────────
+  {
+    const manifest = [
+      { customer_name: "Alice", activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Kremmling", location: "Kremmling", start_at: "2026-07-04T15:00:00Z", end_at: "2026-07-04T22:00:00Z", customer_count: 4, total_cents: 200000, balance_due_cents: 0, waiver_signed: true },
+      { customer_name: "Bob",   activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",    location: "Kremmling", start_at: "2026-07-04T15:30:00Z", end_at: "2026-07-04T21:00:00Z", customer_count: 2, total_cents: 100000, balance_due_cents: 0, waiver_signed: false },
+    ];
+    const text = buildBriefingText({ id: "csr_rea", name: "CSR" }, [], [], null, {
+      manifest,
+      unpaid: [{ customer_name: "Jared Torres", balance_due_cents: 292000, start_at: "2026-07-03T15:00:00Z", activity: "RZR" }],
+      missingWaivers: [],
+      overlaps: [],
+      highValue: [],
+      duplicates: [],
+      missingPhones: [],
+      pacing: null,
+      locationMix: [],
+      unresolvedHandoffs: [],
+      revenue: { estimated: 22892, bookings: 41, source: "manifest" },
+      seasonRevenue: null,
+      newBookings: null,
+      issues: [],
+      hotLeads: [],
+    });
+    chk("op: briefing leads with 🏁 TODAY'S LOAD section",
+        text.indexOf("🏁 TODAY'S LOAD") < text.indexOf("⚠ ACTIONS"), text);
+    chk("op: TODAY'S LOAD shows vehicle mix line",
+        text.includes("Vehicles: ") && (text.includes("Turbo XP") || text.includes("RZR Experience")), text);
+    chk("op: TODAY'S LOAD shows location split",
+        text.includes("Locations: ") && text.includes("Kremmling"), text);
+    chk("op: TODAY'S LOAD shows pickups timing",
+        text.includes("Pickups: "), text);
+    chk("op: REVENUE section no longer duplicates today's count",
+        !text.match(/💰 REVENUE[\s\S]+Today: 2 bookings/), text);
+  }
+
+  // Quiet morning still mentions LOAD section gracefully
+  {
+    const text = buildBriefingText({ id: "csr_rea", name: "CSR" }, [], [], null, {
+      manifest: [], unpaid: [], missingWaivers: [], overlaps: [], highValue: [], duplicates: [], missingPhones: [],
+      pacing: null, locationMix: [], unresolvedHandoffs: [], revenue: null, seasonRevenue: null, newBookings: null, issues: [], hotLeads: [],
+    });
+    chk("op: quiet day still shows LOAD header", text.includes("🏁 TODAY'S LOAD"), text);
+    chk("op: quiet day copy mentions 'quiet day'", text.includes("quiet day"), text);
+  }
+
+  // ── formatManifestResponse — dispatch-sheet output ───────────────────────
+  {
+    const rows = [
+      { customer_name: "Alice",   activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat", location: "Steamboat", start_at: "2026-07-04T15:00:00Z", end_at: "2026-07-04T22:00:00Z", customer_count: 4, total_cents: 200000, balance_due_cents: 0,       waiver_signed: true,  phone: "+15551110001" },
+      { customer_name: "Bob",     activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",   location: "Kremmling", start_at: "2026-07-04T16:00:00Z", end_at: "2026-07-04T20:00:00Z", customer_count: 2, total_cents: 100000, balance_due_cents: 25000,   waiver_signed: false, phone: null            },
+      { customer_name: "Charlie", activity: "Rabbit Ears Pass - Ride From | Polaris 4 Seater",      location: "Rabbit Ears Pass", start_at: "2026-07-04T19:30:00Z", end_at: "2026-07-04T23:30:00Z", customer_count: 4, total_cents: 80000,  balance_due_cents: 0,       waiver_signed: true,  phone: "+15551110002" },
+    ];
+    const out = formatManifestResponse(rows, "today");
+    chk("op: dispatch header includes day + count + pax + dollars",
+        out.includes("🏁 TODAY'S MANIFEST") && out.includes("3 bookings") && out.includes("10 guests"), out);
+
+    // Time-block grouping
+    chk("op: dispatch groups by time block (Morning)",
+        out.includes("Morning") || out.includes("Midday"), out);
+    chk("op: dispatch shows vehicle in line",
+        out.includes("Turbo XP") && out.includes("RZR Experience") && out.includes("Rabbit Ears tour"), out);
+    chk("op: dispatch shows location in line",
+        out.includes("Steamboat") && out.includes("Kremmling"), out);
+
+    // Return flow (Charlie ends past 5pm MT → 11:30pm UTC = 5:30pm MT)
+    chk("op: dispatch has RETURN FLOW when late return", out.includes("RETURN FLOW"), out);
+
+    // Watchouts (Bob missing waiver + $250 unpaid + missing phone)
+    chk("op: dispatch WATCHOUTS surfaces unpaid balance", out.includes("$250 unpaid"), out);
+    chk("op: dispatch WATCHOUTS surfaces missing waivers", out.includes("waiver"), out);
+    chk("op: dispatch WATCHOUTS surfaces missing phones", out.includes("missing phone"), out);
+  }
+
+  // Empty manifest
+  {
+    const out = formatManifestResponse([], "today");
+    chk("op: empty manifest uses friendly copy",
+        out.includes("Nothing on the manifest yet"), out);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Action-oriented briefing — detectors + formatters + new menu
 // ─────────────────────────────────────────────────────────────────────────────
 async function testActionOrientedBriefing() {
@@ -14095,8 +14271,8 @@ async function testBriefingPolish() {
       newBookings:   { last_24h: 3, last_7d: 18, source: "db2" },
       issues:        [],
     });
-    chk("polish: REVENUE section shows today count + pax + revenue",
-        text.includes("2 bookings") && text.includes("6p") && text.includes("$3,000"), text);
+    chk("polish: TODAY'S LOAD shows count + pax + revenue",
+        text.includes("2 bookings") && text.includes("6 guests") && text.includes("$3,000"), text);
     chk("polish: REVENUE shows next-7d revenue line",
         text.includes("Next 7d") && text.includes("$22,892"), text);
     chk("polish: REVENUE shows season label + dollars",
@@ -14131,9 +14307,9 @@ async function testBriefingPolish() {
       { customer_name: "Bob",   activity: "RZR Steamboat", start_at: "2026-05-21T17:00:00Z", customer_count: 2, total_cents: 100000 },
     ];
     const today = formatManifestResponse(rows, "today");
-    chk("polish: formatManifestResponse today header",
-        today.startsWith("TODAY: 2 bookings · 6 guests · $3,000"), today);
-    chk("polish: formatManifestResponse lists Alice",
+    chk("polish: dispatch manifest header includes count + pax + dollars",
+        today.includes("🏁 TODAY'S MANIFEST") && today.includes("2 bookings") && today.includes("6 guests") && today.includes("$3,000"), today);
+    chk("polish: dispatch manifest lists Alice",
         today.includes("Alice"));
 
     const empty = formatManifestResponse([], "today");

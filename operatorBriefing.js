@@ -591,6 +591,167 @@ export async function detectUnresolvedHandoffs(supabase, clientId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// OPERATIONAL CLASSIFIERS
+// classifyActivity(name) — maps a daily_manifest.activity string into a
+// dispatch-friendly vehicle / category bucket. Patterns match CSR/REA's
+// current FareHarbor + Polaris catalog. Unknowns route to category="other".
+//
+// classifyDuration(start, end) — returns the operational duration bucket
+// from start_at + end_at timestamps:
+//   short      < 4h
+//   half_day   4–8h
+//   full_day   8–24h
+//   overnight  24–48h
+//   multi_day  > 48h
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function classifyActivity(activityName) {
+  const s = String(activityName ?? "").toLowerCase();
+  if (!s) return { vehicle_type: "unknown", category: "other", short_label: "?" };
+
+  // RZR catalog
+  if (s.includes("turbo") && s.includes("rzr"))
+    return { vehicle_type: "turbo_xp", category: "rzr_rental", short_label: "Turbo XP" };
+  if (s.includes("rzr") && s.includes("experience"))
+    return { vehicle_type: "rzr_experience", category: "rzr_rental", short_label: "RZR Experience" };
+  if (s.includes("rzr"))
+    return { vehicle_type: "rzr_generic", category: "rzr_rental", short_label: "RZR" };
+
+  // Snowmobile (must come before "guided" to catch "Guided Snowmobile Tour")
+  if (s.includes("snowmobile"))
+    return { vehicle_type: "snowmobile", category: "snowmobile_tour", short_label: "Snowmobile" };
+
+  // Guided / Rabbit Ears
+  if (s.includes("rabbit ears"))
+    return { vehicle_type: "rabbit_ears", category: "guided_tour", short_label: "Rabbit Ears tour" };
+  if (s.includes("guided") || s.includes("private tour"))
+    return { vehicle_type: "guided", category: "guided_tour", short_label: "Guided tour" };
+
+  // ATV / UTV catch-all
+  if (s.includes("utv") || s.includes("atv") || s.includes("off-road") || s.includes("off road"))
+    return { vehicle_type: "utv", category: "rzr_rental", short_label: "UTV" };
+
+  return { vehicle_type: "unknown", category: "other", short_label: activityName?.slice(0, 24) ?? "?" };
+}
+
+export function classifyDuration(startAt, endAt) {
+  try {
+    if (!startAt || !endAt) return { label: "unknown", hours: null, is_multi_day: false };
+    const ms = new Date(endAt).getTime() - new Date(startAt).getTime();
+    if (!Number.isFinite(ms) || ms <= 0) return { label: "unknown", hours: null, is_multi_day: false };
+    const hours = ms / (60 * 60 * 1000);
+    if (hours <  4)  return { label: "short",     hours, is_multi_day: false };
+    if (hours <= 8)  return { label: "half_day",  hours, is_multi_day: false };
+    if (hours <= 24) return { label: "full_day",  hours, is_multi_day: false };
+    if (hours <= 48) return { label: "overnight", hours, is_multi_day: true  };
+    return { label: "multi_day", hours, is_multi_day: true };
+  } catch {
+    return { label: "unknown", hours: null, is_multi_day: false };
+  }
+}
+
+// Bucket a Date (or ISO string) into MT hour-of-day → "morning" / "midday" /
+// "afternoon" / "evening". Used for clustering pickups and returns.
+function timeBlock(iso) {
+  if (!iso) return "unknown";
+  try {
+    const hourStr = new Date(iso).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", hour12: false });
+    const h = parseInt(hourStr, 10);
+    if (!Number.isFinite(h)) return "unknown";
+    if (h <  10) return "morning";
+    if (h <  13) return "midday";
+    if (h <  17) return "afternoon";
+    return "evening";
+  } catch { return "unknown"; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TODAY'S LOAD SNAPSHOT — operational dispatch summary
+// Takes a manifest array (from getTodaysManifest) and produces a structured
+// snapshot the briefing can render as the lead section. Pure — no I/O.
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildTodayLoadSnapshot(manifest) {
+  const rows = Array.isArray(manifest) ? manifest : [];
+  const totals = {
+    bookings:        rows.length,
+    pax:             0,
+    revenue_cents:   0,
+    unpaid_cents:    0,
+    missing_waivers: 0,
+  };
+  const vehicleMix  = new Map();   // short_label → { count, pax }
+  const durationMix = { short: 0, half_day: 0, full_day: 0, overnight: 0, multi_day: 0 };
+  const locationMix = new Map();   // location → { count, pax }
+  const clusters    = { morning: 0, midday: 0, afternoon: 0, evening: 0, unknown: 0 };
+  const lateReturns = [];          // bookings whose end_at is after 5pm MT today
+  const multidayUnpaid = [];
+
+  for (const r of rows) {
+    totals.pax += Number(r.customer_count) || 0;
+    totals.revenue_cents += Number(r.total_cents) || 0;
+    totals.unpaid_cents  += Number(r.balance_due_cents) || 0;
+    if (r.waiver_signed === false) totals.missing_waivers += 1;
+
+    const cls = classifyActivity(r.activity);
+    const vKey = cls.short_label;
+    const v    = vehicleMix.get(vKey) ?? { count: 0, pax: 0 };
+    v.count += 1; v.pax += Number(r.customer_count) || 0;
+    vehicleMix.set(vKey, v);
+
+    const dur = classifyDuration(r.start_at, r.end_at);
+    if (dur.label in durationMix) durationMix[dur.label] += 1;
+
+    const loc = r.location ?? "Unknown";
+    const L   = locationMix.get(loc) ?? { count: 0, pax: 0 };
+    L.count += 1; L.pax += Number(r.customer_count) || 0;
+    locationMix.set(loc, L);
+
+    const block = timeBlock(r.start_at);
+    clusters[block] = (clusters[block] ?? 0) + 1;
+
+    // Late returns (full-day / multi-day ending past 5pm today)
+    if (r.end_at) {
+      const endHour = parseInt(new Date(r.end_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", hour12: false }), 10);
+      if (Number.isFinite(endHour) && endHour >= 17) lateReturns.push(r);
+    }
+
+    if (dur.is_multi_day && (Number(r.balance_due_cents) || 0) > 0) {
+      multidayUnpaid.push(r);
+    }
+  }
+
+  const vehicleList  = [...vehicleMix.entries()].map(([label, v]) => ({ label, ...v })).sort((a, b) => b.count - a.count);
+  const locationList = [...locationMix.entries()].map(([location, v]) => ({ location, ...v })).sort((a, b) => b.count - a.count);
+  const topLocation  = locationList[0] ?? null;
+  const totalsLoc    = locationList.reduce((s, l) => s + l.count, 0);
+
+  // Operational tone signals
+  let load_tone = null;
+  if (totals.bookings === 0)       load_tone = "quiet_day";
+  else if (totals.bookings <= 2)   load_tone = "light_day";
+  else if (totals.bookings >= 10)  load_tone = "heavy_day";
+  else                             load_tone = "steady";
+
+  let timing_tone = null;
+  if (clusters.afternoon > clusters.morning + 1) timing_tone = "afternoon_heavy";
+  else if (clusters.morning > clusters.afternoon + 1) timing_tone = "morning_heavy";
+  else timing_tone = "balanced";
+
+  return {
+    totals,
+    vehicle_mix:  vehicleList,
+    duration_mix: durationMix,
+    location_mix: locationList,
+    top_location: topLocation ? { ...topLocation, pct: totalsLoc ? Math.round((topLocation.count / totalsLoc) * 100) : 0 } : null,
+    time_clusters: clusters,
+    late_returns: lateReturns,
+    multiday_unpaid: multidayUnpaid,
+    load_tone,
+    timing_tone,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // BRIEFING TEXT BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -618,6 +779,58 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
   const lines = [];
   lines.push(`🏔 OPERATOR BRIEFING — ${dateStr}`);
   lines.push(`${biz}`);
+
+  // ── 🏁 TODAY'S LOAD — operational dispatch summary (LEAD section) ────────
+  const snap = buildTodayLoadSnapshot(manifest);
+  if (snap.totals.bookings > 0) {
+    lines.push("");
+    lines.push("🏁 TODAY'S LOAD");
+
+    // Header — total bookings · pax · revenue
+    const revUSD = Math.round(snap.totals.revenue_cents / 100).toLocaleString();
+    const headerBits = [`${snap.totals.bookings} booking${snap.totals.bookings !== 1 ? "s" : ""}`, `${snap.totals.pax} guest${snap.totals.pax !== 1 ? "s" : ""}`, `$${revUSD}`];
+    lines.push(`• ${headerBits.join(" · ")}`);
+
+    // Vehicle mix — top 3
+    const vehicleParts = snap.vehicle_mix.slice(0, 3).map((v) => `${v.count} ${v.label}`);
+    if (vehicleParts.length) lines.push(`• Vehicles: ${vehicleParts.join(", ")}`);
+
+    // Duration mix — only surface non-zero buckets
+    const durParts = [];
+    if (snap.duration_mix.full_day)  durParts.push(`${snap.duration_mix.full_day} full-day`);
+    if (snap.duration_mix.half_day)  durParts.push(`${snap.duration_mix.half_day} half-day`);
+    if (snap.duration_mix.short)     durParts.push(`${snap.duration_mix.short} short`);
+    if (snap.duration_mix.overnight) durParts.push(`${snap.duration_mix.overnight} overnight`);
+    if (snap.duration_mix.multi_day) durParts.push(`${snap.duration_mix.multi_day} multi-day`);
+    if (durParts.length) lines.push(`• Durations: ${durParts.join(", ")}`);
+
+    // Location pressure (top 2)
+    if (snap.location_mix.length) {
+      const locParts = snap.location_mix.slice(0, 2).map((l) => `${l.location} ${l.count}`);
+      lines.push(`• Locations: ${locParts.join(" · ")}`);
+    }
+
+    // Timing tone
+    const tc = snap.time_clusters;
+    const timingBits = [];
+    if (tc.morning)   timingBits.push(`${tc.morning} morning`);
+    if (tc.midday)    timingBits.push(`${tc.midday} midday`);
+    if (tc.afternoon) timingBits.push(`${tc.afternoon} afternoon`);
+    if (timingBits.length) {
+      let tone = "";
+      if (snap.timing_tone === "afternoon_heavy") tone = " — heavy afternoon load";
+      else if (snap.timing_tone === "morning_heavy") tone = " — front-loaded morning";
+      lines.push(`• Pickups: ${timingBits.join(" / ")}${tone}`);
+    }
+
+    // Late returns (pressure point)
+    if (snap.late_returns.length) {
+      lines.push(`• ${snap.late_returns.length} return${snap.late_returns.length !== 1 ? "s" : ""} after 5pm`);
+    }
+  } else {
+    lines.push("");
+    lines.push("🏁 TODAY'S LOAD — quiet day, nothing on the manifest yet.");
+  }
 
   // ── ⚠ ACTIONS NEEDED — surface real problems, not metrics ───────────────
   const actions = [];
@@ -659,13 +872,8 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     for (const a of actions.slice(0, 5)) lines.push(`• ${a}`);
   }
 
-  // ── 💰 REVENUE — pipeline + biggest unpaid risk ──────────────────────────
+  // ── 💰 REVENUE — pipeline + biggest unpaid risk (today already in LOAD) ──
   const revLines = [];
-  if (manifest.length) {
-    const todayPax  = manifest.reduce((s, r) => s + (Number(r.customer_count) || 0), 0);
-    const todayCents = manifest.reduce((s, r) => s + (Number(r.total_cents) || 0), 0);
-    revLines.push(`Today: ${manifest.length} booking${manifest.length !== 1 ? "s" : ""} · ${todayPax}p · $${Math.round(todayCents / 100).toLocaleString()}`);
-  }
   if (rev && rev.estimated > 0) {
     const tag = rev.source === "manifest" ? "" : " (est)";
     revLines.push(`Next 7d${tag}: $${rev.estimated.toLocaleString()} · ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""}`);
@@ -1502,23 +1710,88 @@ function stripFlagKeywords(message) {
 // RESPONSE FORMATTERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Dispatch-style manifest — groups bookings by morning/midday/afternoon
+// time blocks, names the vehicle + location per line, and surfaces RETURN
+// FLOW (full-day + multi-day still out) and WATCHOUTS (incomplete waivers,
+// unpaid balances, missing phones). This is the "morning dispatch sheet"
+// the operator should be able to read in 15 seconds.
 export function formatManifestResponse(rows, day) {
+  const dayLabel = day === "today" ? "TODAY" : "TOMORROW";
   if (!Array.isArray(rows) || rows.length === 0) {
-    return `${day === "today" ? "TODAY" : "TOMORROW"}\n\nNothing on the manifest yet — quiet ${day === "today" ? "day" : "tomorrow"} so far.`;
+    return `🏁 ${dayLabel}'S MANIFEST\n\nNothing on the manifest yet — quiet ${day === "today" ? "day" : "tomorrow"} so far.`;
   }
-  const pax    = rows.reduce((s, r) => s + (Number(r.customer_count) || 0), 0);
-  const cents  = rows.reduce((s, r) => s + (Number(r.total_cents) || 0), 0);
-  const header = `${day === "today" ? "TODAY" : "TOMORROW"}: ${rows.length} booking${rows.length !== 1 ? "s" : ""} · ${pax} guest${pax !== 1 ? "s" : ""} · $${Math.round(cents / 100).toLocaleString()}`;
-  const lines  = [header, ""];
-  for (const r of rows.slice(0, 8)) {
-    const time = r.start_at
-      ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
-      : "?";
-    const name = (r.customer_name ?? "?").split(" ")[0];
-    const act  = (r.activity ?? "?").replace(/^.*?[•\-]\s*/, "").slice(0, 30);
-    lines.push(`• ${time} — ${name} (${r.customer_count ?? "?"}p, ${act})`);
+  const snap = buildTodayLoadSnapshot(rows);
+
+  const pax   = snap.totals.pax;
+  const cents = snap.totals.revenue_cents;
+  const lines = [`🏁 ${dayLabel}'S MANIFEST`];
+  lines.push(`${rows.length} booking${rows.length !== 1 ? "s" : ""} · ${pax} guest${pax !== 1 ? "s" : ""} · $${Math.round(cents / 100).toLocaleString()}`);
+
+  // ── Group by time block, list pickups ────────────────────────────────────
+  const byBlock = { morning: [], midday: [], afternoon: [], evening: [], unknown: [] };
+  for (const r of rows) byBlock[timeBlock(r.start_at)].push(r);
+
+  const blockLabel = {
+    morning:   "Morning (before 10 AM)",
+    midday:    "Midday (10 AM – 1 PM)",
+    afternoon: "Afternoon (1 – 5 PM)",
+    evening:   "Evening (after 5 PM)",
+    unknown:   "Unscheduled",
+  };
+
+  for (const key of ["morning", "midday", "afternoon", "evening", "unknown"]) {
+    const block = byBlock[key];
+    if (!block.length) continue;
+    lines.push("");
+    lines.push(blockLabel[key]);
+    for (const r of block.slice(0, 6)) {
+      const time = r.start_at
+        ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
+        : "?";
+      const cls   = classifyActivity(r.activity);
+      const loc   = r.location ?? "?";
+      const first = (r.customer_name ?? "?").split(" ")[0];
+      lines.push(`• ${time} — ${cls.short_label} · ${loc} (${first}, ${r.customer_count ?? "?"}p)`);
+    }
+    if (block.length > 6) lines.push(`  …+${block.length - 6} more`);
   }
-  if (rows.length > 8) lines.push(`  …+${rows.length - 8} more`);
+
+  // ── Return flow — full-day + multi-day still out after 5pm ──────────────
+  if (snap.late_returns.length) {
+    lines.push("");
+    lines.push("↩ RETURN FLOW");
+    for (const r of snap.late_returns.slice(0, 4)) {
+      const cls  = classifyActivity(r.activity);
+      const time = r.end_at
+        ? new Date(r.end_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
+        : "?";
+      const first = (r.customer_name ?? "?").split(" ")[0];
+      lines.push(`• ${time} return — ${cls.short_label} · ${first}`);
+    }
+  }
+  if (snap.duration_mix.multi_day > 0 || snap.duration_mix.overnight > 0) {
+    const overnightCount = (snap.duration_mix.overnight ?? 0) + (snap.duration_mix.multi_day ?? 0);
+    lines.push(`• ${overnightCount} overnight/multi-day rental${overnightCount !== 1 ? "s" : ""} still out`);
+  }
+
+  // ── Watchouts — actionable risks for this manifest ──────────────────────
+  const watch = [];
+  if (snap.totals.missing_waivers > 0) {
+    watch.push(`${snap.totals.missing_waivers} waiver${snap.totals.missing_waivers !== 1 ? "s" : ""} incomplete`);
+  }
+  if (snap.totals.unpaid_cents > 0) {
+    watch.push(`$${Math.round(snap.totals.unpaid_cents / 100).toLocaleString()} unpaid balance remaining`);
+  }
+  const missingPhones = rows.filter((r) => !r.phone && !r.normalized_phone).length;
+  if (missingPhones > 0) {
+    watch.push(`${missingPhones} booking${missingPhones !== 1 ? "s" : ""} missing phone #`);
+  }
+  if (watch.length) {
+    lines.push("");
+    lines.push("⚠ WATCHOUTS");
+    for (const w of watch) lines.push(`• ${w}`);
+  }
+
   return lines.join("\n");
 }
 

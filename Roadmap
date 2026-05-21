@@ -349,6 +349,41 @@ Done when:
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Operational Dispatch Briefing (2026-05-21)
+Owner asked for a morning dispatch sheet, not an analytics dashboard. The
+briefing should answer "what does today LOOK like operationally?" in 15
+seconds — vehicles, pickups, returns, location pressure, watchouts.
+
+- operatorBriefing.js — three new pure helpers:
+  • classifyActivity(name) — maps activity strings into dispatch buckets:
+    Turbo XP, RZR Experience, RZR generic, Rabbit Ears tour, Guided tour,
+    Snowmobile, UTV, unknown. Snowmobile check runs before "guided" so
+    "Guided Snowmobile Tour" classifies correctly.
+  • classifyDuration(start, end) — short/half_day/full_day/overnight/
+    multi_day buckets from start_at + end_at.
+  • buildTodayLoadSnapshot(manifest) — aggregates manifest rows into
+    { totals, vehicle_mix, duration_mix, location_mix, top_location,
+      time_clusters (morning/midday/afternoon/evening), late_returns,
+      multiday_unpaid, load_tone, timing_tone }.
+- buildBriefingText now LEADS with 🏁 TODAY'S LOAD, ahead of ACTIONS:
+  count · guests · revenue, top 3 vehicles, duration mix, top 2 locations,
+  pickup timing (with "heavy afternoon load" / "front-loaded morning"
+  tone), and a late-returns line. Today's count is removed from the
+  REVENUE section to avoid duplication.
+- formatManifestResponse rewritten as a dispatch-style sheet:
+  groups bookings by time block (Morning / Midday / Afternoon / Evening /
+  Unscheduled), shows vehicle + location + first name + pax per line,
+  adds RETURN FLOW (late returns + overnight rentals still out), and
+  WATCHOUTS (waivers incomplete, unpaid balance, missing phones).
+- adminPortal.js handlePortalPreviewBriefing already fetches manifest,
+  so no change needed — the new LOAD section appears in portal preview
+  too.
+- Tests: +43 assertions in testOperationalBriefing — classifier coverage
+  per vehicle and duration bucket, snapshot totals/mixes/clusters/
+  late_returns/multiday_unpaid, briefing structure (LOAD leads ACTIONS),
+  dispatch manifest time-block grouping + RETURN FLOW + WATCHOUTS.
+  2413/2413 passing.
+
 ### Action-Oriented Briefing (2026-05-21)
 Owner feedback after the polished preview: the digest was still summarizing
 data instead of telling the operator what to do. Goal: every line should
