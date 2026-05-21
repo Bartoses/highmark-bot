@@ -23,6 +23,29 @@ let _scrapesTableExists     = true;
 let _bookingOptsTableExists = true;
 let _botConfigTableExists   = true;
 let _bookingConfigTableExists = true;
+let _operatorPhonesTableExists = true;
+
+// Fetch per-phone operator rows for a client. Returns array of normalized rows
+// or null if table doesn't exist / no rows. Caller merges into client object.
+async function fetchOperatorPhones(clientId, supabase) {
+  if (!_operatorPhonesTableExists) return null;
+  try {
+    const { data, error } = await supabase
+      .from("operator_phones")
+      .select("id, phone, label, role, internal_mode_enabled, daily_digest_enabled, digest_times, digest_types, timezone, last_digest_sent_at")
+      .eq("client_id", clientId);
+    if (error) {
+      if (error.message?.includes("does not exist") || error.code === "42P01") {
+        _operatorPhonesTableExists = false;
+        console.log("[CONFIG] operator_phones table not found — falling back to clients.owner_phone + clients.operator_phones JSONB");
+      }
+      return null;
+    }
+    return data?.length ? data : null;
+  } catch {
+    return null;
+  }
+}
 
 // Fetch bot_config row for a client (bot identity + system_prompt_addon overrides).
 // Returns null if table doesn't exist or no row found.
@@ -274,6 +297,32 @@ export async function getRuntimeClientConfig(client, supabase) {
   // humanHandoffEnabled — always a boolean, default true
   if (merged.humanHandoffEnabled == null) {
     merged.humanHandoffEnabled = true;
+  }
+
+  // Operator phones: when the operator_phones table has rows for this client,
+  // it is AUTHORITATIVE — derive both ownerPhone + operatorPhones[] entirely
+  // from the table so per-phone internal_mode_enabled=false is honored.
+  // Falls back to legacy clients.owner_phone + clients.operator_phones JSONB
+  // (already applied via applyDbOverrides above) when the table is empty.
+  if (supabase) {
+    const rows = await fetchOperatorPhones(client.id, supabase);
+    if (rows?.length) {
+      merged.operatorPhoneRows = rows;
+      const internalPhones = rows
+        .filter((r) => r.internal_mode_enabled !== false)
+        .map((r) => r.phone)
+        .filter(Boolean);
+      merged.operatorPhones = internalPhones;
+      // Owner = first row with role=owner AND internal_mode_enabled. If no such
+      // row exists, clear ownerPhone — legacy clients.owner_phone is overridden
+      // by the table's truth.
+      const ownerRow = rows.find((r) => r.role === "owner" && r.internal_mode_enabled !== false);
+      merged.ownerPhone = ownerRow?.phone ?? null;
+    } else {
+      merged.operatorPhoneRows = [];
+    }
+  } else {
+    merged.operatorPhoneRows = [];
   }
 
   // Bot config overrides — applied last so portal edits take precedence over all other sources

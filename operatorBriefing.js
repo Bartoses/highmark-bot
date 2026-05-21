@@ -449,10 +449,16 @@ export async function detectOperationalIssues(client, supabase, crmSupabase = nu
 //   • Operational issues surfaced as ALERTS section
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function generateDailyBriefing(client, supabase, twilioClient, crmSupabase = null) {
-  const ownerPhone = client.owner_phone ?? client.ownerPhone ?? null;
-  if (!ownerPhone) {
-    console.warn(`[BRIEFING] No owner_phone for ${client.id} — skipping`);
+export async function generateDailyBriefing(client, supabase, twilioClient, crmSupabase = null, options = {}) {
+  // Phone resolution: explicit override > client.ownerPhone > client.owner_phone.
+  // The dispatcher passes { toPhone, dedupKey, opRowId } per operator_phones row;
+  // legacy callers (no options) keep the old owner-only behavior.
+  const toPhone  = options.toPhone   ?? client.owner_phone ?? client.ownerPhone ?? null;
+  const dedupKey = options.dedupKey  ?? `${client.id}:owner`;
+  const opRowId  = options.opRowId   ?? null;
+
+  if (!toPhone) {
+    console.warn(`[BRIEFING] No recipient phone for ${client.id} — skipping`);
     return { success: false, reason: "no_owner_phone" };
   }
 
@@ -462,18 +468,25 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     return { success: false, reason: "no_twilio_number" };
   }
 
-  // No-duplicate guard: skip if a briefing was already persisted in the last 20h
+  // No-duplicate guard. Legacy callers (no options) get the original semantics:
+  // any briefing in the last 20h for this client_id blocks. Multi-phone callers
+  // (options.dedupKey provided) get per-key dedup so different operators can
+  // each receive their own digest at their own digest_time.
   try {
     const since = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString();
     const { data: recent } = await supabase
       .from("operator_briefings")
-      .select("id")
+      .select("id, content")
       .eq("client_id", client.id)
       .in("status", ["sent", "test"])
       .gte("sent_at", since)
-      .limit(1);
-    if (recent?.length) {
-      console.log(`[BRIEFING] Already sent today for ${client.id} — skipping`);
+      .limit(50);
+    const hasOptions = options.dedupKey != null;
+    const alreadySent = hasOptions
+      ? (recent ?? []).some((r) => (r.content ?? "").includes(`__DEDUP:${dedupKey}__`))
+      : (recent?.length ?? 0) > 0;
+    if (alreadySent) {
+      console.log(`[BRIEFING] Already sent today for ${dedupKey} — skipping`);
       return { success: false, reason: "already_sent_today" };
     }
   } catch { /* proceed if dedup check fails */ }
@@ -487,13 +500,22 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     detectOperationalIssues(client, supabase, crmSupabase),
   ]);
 
-  const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, { revenue, issues });
+  const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
+    revenue,
+    issues,
+    digestTypes: options.digestTypes ?? ["all"],
+  });
 
   const status = process.env.TEST_MODE === "true" ? "test" : "sent";
   try {
+    // Multi-phone callers stamp a dedup trailer so different operators don't
+    // collide. Legacy callers (no options) persist plain content.
+    const content = options.dedupKey
+      ? `${briefing}\n<!-- __DEDUP:${dedupKey}__ -->`
+      : briefing;
     await supabase.from("operator_briefings").insert({
       client_id: client.id,
-      content:   briefing,
+      content,
       sent_at:   new Date().toISOString(),
       status,
     });
@@ -501,13 +523,124 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     console.warn(`[BRIEFING] Could not persist briefing for ${client.id}:`, err.message);
   }
 
+  // Stamp last_digest_sent_at on the operator_phones row, if we have one
+  if (opRowId && status === "sent") {
+    try {
+      await supabase
+        .from("operator_phones")
+        .update({ last_digest_sent_at: new Date().toISOString() })
+        .eq("id", opRowId);
+    } catch { /* non-fatal */ }
+  }
+
   if (process.env.TEST_MODE === "true") {
     return { success: true, preview: briefing, sent: false, chars: briefing.length, issues };
   }
 
-  await twilioClient.messages.create({ from: twilioNumber, to: ownerPhone, body: briefing });
-  console.log(`[BRIEFING] Sent to ${ownerPhone} for ${client.id} (${briefing.length} chars, ${issues.length} alerts)`);
+  await twilioClient.messages.create({ from: twilioNumber, to: toPhone, body: briefing });
+  console.log(`[BRIEFING] Sent to ${toPhone} for ${client.id} (${briefing.length} chars, ${issues.length} alerts)`);
   return { success: true, preview: briefing, sent: true, chars: briefing.length, issues };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTI-TIME DIGEST WINDOW MATCHER
+// Returns true if the current wall-clock time in `timezone` falls within a
+// 5-minute window starting at any HH:MM in `digestTimes`. Cron fires every
+// 5 min, so we accept the time and the next 4 minutes after it.
+// ─────────────────────────────────────────────────────────────────────────────
+export function isDigestTimeNow(digestTimes, timezone, now = new Date()) {
+  if (!Array.isArray(digestTimes) || digestTimes.length === 0) return false;
+  try {
+    const hhmm = now.toLocaleTimeString("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false });
+    const [h, m] = hhmm.split(":").map(Number);
+    const nowMinutes = h * 60 + m;
+    for (const slot of digestTimes) {
+      const parts = String(slot).split(":");
+      if (parts.length !== 2) continue;
+      const sh = Number(parts[0]);
+      const sm = Number(parts[1]);
+      if (!Number.isFinite(sh) || !Number.isFinite(sm)) continue;
+      const slotMinutes = sh * 60 + sm;
+      const diff = nowMinutes - slotMinutes;
+      if (diff >= 0 && diff < 5) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DISPATCH OPERATOR DIGESTS
+// Called once per cron tick. Fans out per-phone briefings to every operator_phones
+// row whose digest_times window matches the current minute in its timezone.
+//
+//   • Reads operator_phones rows for all DB-backed clients where daily_digest_enabled=true
+//   • Filters by isDigestTimeNow(digest_times, timezone)
+//   • Loads each client config and calls generateDailyBriefing with per-phone options
+//   • Falls back gracefully — if the table is empty, returns { sent: 0, skipped: 0 }
+//
+// Returns { sent, skipped, errors }.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function dispatchOperatorDigests(supabase, twilioClient, crmSupabase = null, now = new Date()) {
+  let rows = [];
+  try {
+    const { data, error } = await supabase
+      .from("operator_phones")
+      .select("id, client_id, phone, role, label, digest_times, digest_types, timezone, daily_digest_enabled")
+      .eq("daily_digest_enabled", true);
+    if (error) {
+      if (error.message?.includes("does not exist") || error.code === "42P01") {
+        console.log("[BRIEFING] operator_phones table not found — skipping per-phone dispatch");
+        return { sent: 0, skipped: 0, errors: 0 };
+      }
+      throw error;
+    }
+    rows = data ?? [];
+  } catch (err) {
+    console.error("[BRIEFING] dispatchOperatorDigests fetch failed:", err.message);
+    return { sent: 0, skipped: 0, errors: 1 };
+  }
+
+  // Filter by current-time window
+  const due = rows.filter((r) => isDigestTimeNow(r.digest_times, r.timezone ?? "America/Denver", now));
+  if (!due.length) return { sent: 0, skipped: rows.length, errors: 0 };
+
+  // Group by client_id so we load each client config once
+  const byClient = due.reduce((acc, r) => {
+    (acc[r.client_id] = acc[r.client_id] ?? []).push(r);
+    return acc;
+  }, {});
+
+  // Look up clients
+  const allClients = getAllClients();
+  let sent = 0, skipped = 0, errors = 0;
+
+  for (const [clientId, recipientRows] of Object.entries(byClient)) {
+    const client = allClients[clientId];
+    if (!client) {
+      console.warn(`[BRIEFING] Unknown client_id ${clientId} — skipping ${recipientRows.length} digests`);
+      skipped += recipientRows.length;
+      continue;
+    }
+    for (const row of recipientRows) {
+      try {
+        const result = await generateDailyBriefing(client, supabase, twilioClient, crmSupabase, {
+          toPhone:     row.phone,
+          dedupKey:    `${clientId}:${row.id}:${row.digest_times?.find((t) => isDigestTimeNow([t], row.timezone ?? "America/Denver", now)) ?? "default"}`,
+          opRowId:     row.id,
+          digestTypes: row.digest_types ?? ["all"],
+        });
+        if (result.success) sent++;
+        else skipped++;
+      } catch (err) {
+        console.error(`[BRIEFING] Failed for ${clientId}/${row.phone}:`, err.message);
+        errors++;
+      }
+    }
+  }
+
+  return { sent, skipped, errors };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

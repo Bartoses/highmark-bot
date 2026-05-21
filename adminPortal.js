@@ -968,6 +968,21 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
     .from("clients").update(updates).eq("id", clientId);
   if (error) return res.status(500).json({ error: error.message });
 
+  // Mirror owner_phone / operator_phones writes into the operator_phones table
+  // so per-phone preferences (digest_times, internal_mode_enabled, etc.) stay in sync.
+  if (updates.owner_phone !== undefined || updates.operator_phones !== undefined) {
+    try {
+      await syncOperatorPhonesTable(clientId, supabase, {
+        ownerPhone:       updates.owner_phone        ?? null,
+        operatorPhones:   updates.operator_phones    ?? null,
+        ownerPhoneSet:    updates.owner_phone        !== undefined,
+        operatorPhonesSet: updates.operator_phones   !== undefined,
+      });
+    } catch (syncErr) {
+      console.warn(`[SETTINGS] operator_phones sync failed for ${clientId}:`, syncErr.message);
+    }
+  }
+
   // Reload runtime client registry
   const { data: allRows } = await supabase.from("clients").select("*").eq("active", true);
   loadDbClients(allRows ?? []);
@@ -977,6 +992,77 @@ export async function handlePortalUpdateSettings(req, res, supabase) {
     clientId,
     updated: Object.keys(updates).filter(k => k !== "updated_at"),
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// syncOperatorPhonesTable — mirror legacy owner_phone + operator_phones[] into
+// the operator_phones table. UPSERT new phones (preserving existing per-phone
+// preferences), DELETE phones removed from the legacy set, and re-tag role:
+//   • The owner_phone value → role='owner', label='Owner'
+//   • Everything else → role='staff' (unless already manually set to manager/sales)
+// ─────────────────────────────────────────────────────────────────────────────
+async function syncOperatorPhonesTable(clientId, supabase, { ownerPhone, operatorPhones, ownerPhoneSet, operatorPhonesSet }) {
+  // Read what's currently in the table so we don't blow away preferences
+  const { data: existing } = await supabase
+    .from("operator_phones")
+    .select("id, phone, role")
+    .eq("client_id", clientId);
+  const existingByPhone = new Map((existing ?? []).map((r) => [r.phone, r]));
+
+  // If a field wasn't included in this update, treat its existing value as
+  // authoritative (don't touch those phones).
+  let canonicalOwner   = ownerPhoneSet     ? ownerPhone : (existing?.find((r) => r.role === "owner")?.phone ?? null);
+  let canonicalStaff   = operatorPhonesSet ? (operatorPhones ?? []) : (existing?.filter((r) => r.role !== "owner").map((r) => r.phone) ?? []);
+
+  const desired = new Set();
+  if (canonicalOwner) desired.add(canonicalOwner);
+  for (const p of canonicalStaff) {
+    if (p) desired.add(p);
+  }
+
+  // INSERT phones that are in desired but not in the table yet
+  const toInsert = [];
+  for (const phone of desired) {
+    if (!existingByPhone.has(phone)) {
+      const isOwner = phone === canonicalOwner;
+      toInsert.push({
+        client_id: clientId,
+        phone,
+        role:  isOwner ? "owner" : "staff",
+        label: isOwner ? "Owner" : null,
+      });
+    }
+  }
+  if (toInsert.length) {
+    await supabase.from("operator_phones").insert(toInsert);
+  }
+
+  // DELETE phones that are no longer in the desired set
+  const toDelete = [];
+  for (const row of existing ?? []) {
+    if (!desired.has(row.phone)) toDelete.push(row.id);
+  }
+  if (toDelete.length) {
+    await supabase.from("operator_phones").delete().in("id", toDelete);
+  }
+
+  // Re-tag role for the owner phone (in case ownerPhone changed but the row exists)
+  if (canonicalOwner && existingByPhone.has(canonicalOwner)) {
+    await supabase
+      .from("operator_phones")
+      .update({ role: "owner", label: existingByPhone.get(canonicalOwner)?.role === "owner" ? undefined : "Owner" })
+      .eq("client_id", clientId)
+      .eq("phone", canonicalOwner);
+  }
+  // Demote any prior owner row that is no longer the owner
+  for (const row of existing ?? []) {
+    if (row.role === "owner" && row.phone !== canonicalOwner) {
+      await supabase
+        .from("operator_phones")
+        .update({ role: "staff", label: null })
+        .eq("id", row.id);
+    }
+  }
 }
 
 // ── POST /portal/api/settings/preview-opener ─────────────────────────────────

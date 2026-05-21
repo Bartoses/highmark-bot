@@ -349,6 +349,52 @@ Done when:
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Sprint A — Operator Intelligence: Multi-Tenant Operator Phones (2026-05-21)
+First sprint of the Daily Operator Briefing upgrade: replaces the static
+`clients.owner_phone` + `clients.operator_phones` JSONB with a normalized
+`operator_phones` table that supports per-phone preferences and per-time
+dispatch. Foundation for Sprints B (conversational UX + numeric menus) and
+C (portal Settings → Internal UI).
+
+- db1_operator_phones.sql: `operator_phones` table — id, client_id (FK), phone
+  (E.164, unique per client), label, role (owner|manager|sales|staff),
+  internal_mode_enabled, daily_digest_enabled, digest_times text[] (HH:MM in
+  timezone), digest_types text[] (all|bookings|revenue|leads|staffing|issues|
+  weather), timezone, last_digest_sent_at, updated_at trigger. Idempotent
+  backfill: clients.owner_phone → role=owner, clients.operator_phones[] →
+  role=staff. Migration applied to DB1 (csr_rea: 1 owner + 4 staff,
+  highmark_demo: 1 owner).
+- clientConfig.js: fetchOperatorPhones() per-request fetch with module-level
+  flag for graceful "table missing" fallback. When rows exist, they are
+  AUTHORITATIVE — derives merged.ownerPhone (role=owner row only) and
+  merged.operatorPhones[] (internal_mode_enabled=true only). Adds
+  merged.operatorPhoneRows for downstream consumers. Falls back to legacy
+  columns when table empty.
+- adminPortal.js: syncOperatorPhonesTable() — after the Settings save writes
+  owner_phone / operator_phones JSONB, mirror into the table:
+  UPSERT new phones (preserving existing per-phone preferences), DELETE rows
+  removed from the legacy set, re-tag role (owner row demoted to staff if
+  ownerPhone changed).
+- operatorBriefing.js:
+  • generateDailyBriefing now accepts options { toPhone, dedupKey, opRowId,
+    digestTypes }. Per-phone dedup via __DEDUP:{key}__ trailer in
+    operator_briefings.content; legacy callers (no options) keep the
+    original "one briefing per client per 20h" semantics.
+  • New isDigestTimeNow(digestTimes, timezone, now) — pure helper that
+    matches a 5-min cron window against HH:MM slots in the row's timezone.
+  • New dispatchOperatorDigests(supabase, twilio, crmSupabase, now) —
+    reads operator_phones rows, filters by daily_digest_enabled +
+    isDigestTimeNow, groups by client_id, fans out per-row briefings,
+    stamps last_digest_sent_at on success.
+- cron-worker.js: replaced isBriefingWindow() + sendOperatorBriefings()
+  with a single dispatchOperatorDigests() call on every cron tick. Each
+  operator_phones row decides its own due time, so multi-time digests
+  (06:30 + 13:00 + 19:00) work without a global window check.
+- Tests: +19 assertions in testSprintAOperatorPhones — isDigestTimeNow
+  positives/negatives/timezone honoring, dispatch happy path, missing-table
+  fallback, detectOwner with config-derived phones, runtime config
+  derivation rules. 2234/2234 passing.
+
 ### Phase X — Operator Intelligence (2026-05-04)
 Three-part upgrade so the owner/operator interface acts like an ops assistant rather than
 a database tool. Every reply is fast, includes one operator-facing insight, and never

@@ -14,9 +14,8 @@ import "dotenv/config";
 import twilio from "twilio";
 import { createClient } from "@supabase/supabase-js";
 import { processScheduledMessages } from "./scheduler.js";
-import { generateDailyBriefing } from "./operatorBriefing.js";
+import { dispatchOperatorDigests } from "./operatorBriefing.js";
 import { evaluateEventCampaigns } from "./campaignTriggers.js";
-import { getAllClients } from "./clients.js";
 import { runMpwrSync } from "./mpwrSync.js";
 
 const required = [
@@ -48,44 +47,14 @@ function isMpwrSyncWindow() {
   return min < 5 || (min >= 30 && min < 35);
 }
 
-// ─── Morning briefing check (7:00 AM MT = 13:00 UTC in MDT / 14:00 UTC in MST) ──
-// Railway cron runs every 5 min — check if we're in the 7am MT briefing window.
-function isBriefingWindow() {
-  const now     = new Date();
-  const utcHour = now.getUTCHours();
-  const utcMin  = now.getUTCMinutes();
-  // Accept 13:00–13:04 UTC (MDT) or 14:00–14:04 UTC (MST) to cover both offsets
-  return (utcHour === 13 || utcHour === 14) && utcMin < 5;
-}
-
+// Per-phone operator digests are dispatched via dispatchOperatorDigests
+// on every cron tick. Each operator_phones row owns its own digest_times +
+// timezone, so the dispatcher decides who is due. No global "briefing window"
+// is needed any more.
 async function sendOperatorBriefings() {
-  console.log("[CRON-WORKER] Running morning operator briefings...");
-  let clients = [];
-  try {
-    // Prefer DB-backed clients list (all active, with owner_phone)
-    const { data } = await supabase
-      .from("clients")
-      .select("*")
-      .not("owner_phone", "is", null);
-    clients = data ?? [];
-  } catch {
-    // Fallback to static clients if DB query fails
-    clients = Object.values(getAllClients()).filter((c) => c.ownerPhone ?? c.owner_phone);
-  }
-
-  let sent = 0;
-  let skipped = 0;
-  for (const client of clients) {
-    try {
-      const result = await generateDailyBriefing(client, supabase, twilioClient, crmSupabase);
-      if (result.success) sent++;
-      else skipped++;
-    } catch (err) {
-      console.error(`[BRIEFING] Failed for ${client.id ?? client.slug}:`, err.message);
-      skipped++;
-    }
-  }
-  console.log(`[CRON-WORKER] Briefings — sent=${sent} skipped=${skipped}`);
+  console.log("[CRON-WORKER] Dispatching per-phone operator digests...");
+  const result = await dispatchOperatorDigests(supabase, twilioClient, crmSupabase);
+  console.log(`[CRON-WORKER] Digests — sent=${result.sent} skipped=${result.skipped} errors=${result.errors}`);
 }
 
 try {
@@ -101,10 +70,8 @@ try {
     await runMpwrSync(crmSupabase);
   }
 
-  // Morning briefing — only runs in the 7am MT window
-  if (isBriefingWindow()) {
-    await sendOperatorBriefings();
-  }
+  // Operator digests — every cron tick, per-phone digest_times decides who's due
+  await sendOperatorBriefings();
 
   process.exit(0);
 } catch (err) {

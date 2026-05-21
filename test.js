@@ -3230,6 +3230,7 @@ async function main() {
     await testLeadsUpgrade();     // Phase 3A: leads filter/PATCH fields, channel column
     await testSettingsPolish();   // Phase 3B: hours/timezone fields, preview-opener, usage endpoints
     await testOperatorMode();     // Sprint 4A: operator briefing, commands, portal
+    await testSprintAOperatorPhones(); // Sprint A: operator_phones table, isDigestTimeNow, dispatchOperatorDigests
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -13385,6 +13386,194 @@ async function testOperatorMode() {
     chk("2b: generateDailyBriefing persists to DB",
         insertCalled, "insert was not called");
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint A — Operator Intelligence per-phone configuration
+//   • isDigestTimeNow time-window matcher
+//   • dispatchOperatorDigests per-row fan-out
+//   • detectOwner consulting operator_phones table via getRuntimeClientConfig
+// ─────────────────────────────────────────────────────────────────────────────
+async function testSprintAOperatorPhones() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const { isDigestTimeNow, dispatchOperatorDigests } = await import("./operatorBriefing.js");
+  const { detectOwner } = await import("./ownerMode.js");
+  const { getRuntimeClientConfig } = await import("./clientConfig.js");
+
+  // ── isDigestTimeNow ──────────────────────────────────────────────────────
+  // Build a stable "now" anchored to MT to avoid wall-clock flakes.
+  const fakeNow = new Date("2026-06-15T12:32:00.000Z"); // 06:32 MT (UTC-6 MDT)
+  chk("sprintA: isDigestTimeNow matches HH:MM in same 5-min window",
+      isDigestTimeNow(["06:30"], "America/Denver", fakeNow) === true);
+  chk("sprintA: isDigestTimeNow matches earliest minute of window",
+      isDigestTimeNow(["06:32"], "America/Denver", fakeNow) === true);
+  chk("sprintA: isDigestTimeNow rejects 5 minutes after slot",
+      isDigestTimeNow(["06:25"], "America/Denver", fakeNow) === false);
+  chk("sprintA: isDigestTimeNow rejects past times",
+      isDigestTimeNow(["05:00"], "America/Denver", fakeNow) === false);
+  chk("sprintA: isDigestTimeNow rejects future times outside window",
+      isDigestTimeNow(["13:00"], "America/Denver", fakeNow) === false);
+  chk("sprintA: isDigestTimeNow matches when any slot in array hits",
+      isDigestTimeNow(["13:00", "06:30", "19:00"], "America/Denver", fakeNow) === true);
+  chk("sprintA: isDigestTimeNow empty array → false",
+      isDigestTimeNow([], "America/Denver", fakeNow) === false);
+  chk("sprintA: isDigestTimeNow null array → false",
+      isDigestTimeNow(null, "America/Denver", fakeNow) === false);
+  chk("sprintA: isDigestTimeNow honors timezone (06:30 ET ≠ 06:30 MT)",
+      isDigestTimeNow(["06:30"], "America/New_York", fakeNow) === false);
+  chk("sprintA: isDigestTimeNow malformed slot → false",
+      isDigestTimeNow(["abc"], "America/Denver", fakeNow) === false);
+
+  // ── dispatchOperatorDigests — happy path ──────────────────────────────────
+  {
+    const rows = [
+      { id: "row-1", client_id: "csr_rea", phone: "+15551110000", role: "owner", digest_times: ["06:30"], digest_types: ["all"], timezone: "America/Denver", daily_digest_enabled: true },
+      { id: "row-2", client_id: "csr_rea", phone: "+15552220000", role: "staff", digest_times: ["13:00"], digest_types: ["leads"], timezone: "America/Denver", daily_digest_enabled: true },
+    ];
+    let twilioCalls = [];
+    const fakeTwilio = { messages: { create: async (args) => { twilioCalls.push(args); return { sid: "SM_" + twilioCalls.length }; } } };
+    const fakeSupabase = makeSupabaseStubForDispatch(rows);
+    const result = await dispatchOperatorDigests(fakeSupabase, fakeTwilio, null, new Date("2026-06-15T12:32:00.000Z"));
+    chk("sprintA: dispatch finds 1 due row at 06:30 MT", result.sent + result.skipped >= 1, JSON.stringify(result));
+    chk("sprintA: dispatch sent owner row only (13:00 not due)", result.sent === 1, JSON.stringify(result));
+  }
+
+  // ── dispatchOperatorDigests — table doesn't exist ─────────────────────────
+  {
+    const fakeSupabase = {
+      from() {
+        return {
+          select() { return this; },
+          eq() {
+            return Promise.resolve({ data: null, error: { message: "relation \"public.operator_phones\" does not exist", code: "42P01" } });
+          },
+        };
+      },
+    };
+    const result = await dispatchOperatorDigests(fakeSupabase, null, null, new Date());
+    chk("sprintA: dispatch handles missing table gracefully",
+        result.sent === 0 && result.skipped === 0 && result.errors === 0,
+        JSON.stringify(result));
+  }
+
+  // ── detectOwner still works with operatorPhones populated by config ───────
+  {
+    const client = { id: "csr_rea", ownerPhone: "+19704201512", operatorPhones: ["+17202892483", "+19708199687"] };
+    chk("sprintA: detectOwner matches ownerPhone",
+        detectOwner("+19704201512", client) === true);
+    chk("sprintA: detectOwner matches operatorPhones[]",
+        detectOwner("+17202892483", client) === true);
+    chk("sprintA: detectOwner rejects unknown phone",
+        detectOwner("+18005550000", client) === false);
+  }
+
+  // ── getRuntimeClientConfig pulls operator_phones rows into client.operatorPhoneRows ──
+  {
+    const rows = [
+      { id: "r1", phone: "+19704201512", label: "Owner",   role: "owner",   internal_mode_enabled: true,  daily_digest_enabled: true, digest_times: ["06:30"], digest_types: ["all"], timezone: "America/Denver" },
+      { id: "r2", phone: "+17202892483", label: null,      role: "staff",   internal_mode_enabled: true,  daily_digest_enabled: true, digest_times: ["06:30"], digest_types: ["all"], timezone: "America/Denver" },
+      { id: "r3", phone: "+18005550001", label: "Disabled", role: "manager", internal_mode_enabled: false, daily_digest_enabled: false, digest_times: ["06:30"], digest_types: ["all"], timezone: "America/Denver" },
+    ];
+    const fakeSupabase = makeSupabaseStubForRuntime(rows);
+    const enriched = await getRuntimeClientConfig({ id: "csr_rea", _fromDb: true }, fakeSupabase);
+    chk("sprintA: runtime config exposes operatorPhoneRows",
+        Array.isArray(enriched.operatorPhoneRows) && enriched.operatorPhoneRows.length === 3);
+    chk("sprintA: runtime config derives operatorPhones[] excluding internal_mode_enabled=false",
+        enriched.operatorPhones.length === 2 && !enriched.operatorPhones.includes("+18005550001"),
+        JSON.stringify(enriched.operatorPhones));
+    chk("sprintA: runtime config derives ownerPhone from role=owner row",
+        enriched.ownerPhone === "+19704201512",
+        enriched.ownerPhone);
+  }
+}
+
+// Stub that satisfies the chain dispatchOperatorDigests uses:
+//   supabase.from("operator_phones").select(...).eq("daily_digest_enabled", true)
+// and also satisfies generateDailyBriefing's downstream reads (dedup + persist).
+function makeSupabaseStubForDispatch(rows) {
+  return {
+    from(table) {
+      if (table === "operator_phones") {
+        return {
+          select() { return this; },
+          eq(_col, val) {
+            // dispatch filter
+            if (val === true) {
+              return Promise.resolve({ data: rows.filter((r) => r.daily_digest_enabled), error: null });
+            }
+            // .update().eq() chain for last_digest_sent_at
+            return Promise.resolve({ data: null, error: null });
+          },
+          update() { return this; },
+        };
+      }
+      if (table === "operator_briefings") {
+        return {
+          select() { return this; },
+          eq()     { return this; },
+          in()     { return this; },
+          gte()    { return Promise.resolve({ data: [], error: null }); },
+          insert() { return Promise.resolve({ data: null, error: null }); },
+        };
+      }
+      if (table === "knowledge_base") {
+        return {
+          select() { return this; },
+          eq()     { return Promise.resolve({ data: [], error: null }); },
+          single() { return Promise.resolve({ data: null, error: null }); },
+        };
+      }
+      if (table === "leads") {
+        return {
+          select() { return this; },
+          eq()     { return this; },
+          neq()    { return this; },
+          order()  { return this; },
+          limit()  { return Promise.resolve({ data: [], error: null }); },
+          gte()    { return Promise.resolve({ data: [], error: null }); },
+          lte()    { return Promise.resolve({ data: [], error: null }); },
+        };
+      }
+      return {
+        select() { return this; },
+        eq()     { return this; },
+        single() { return Promise.resolve({ data: null, error: null }); },
+        insert() { return Promise.resolve({ data: null, error: null }); },
+        update() { return this; },
+      };
+    },
+  };
+}
+
+// Stub for getRuntimeClientConfig that returns the rows for operator_phones
+// and empty results for everything else.
+function makeSupabaseStubForRuntime(operatorPhoneRows) {
+  return {
+    from(table) {
+      if (table === "operator_phones") {
+        return {
+          select() { return this; },
+          eq()     { return Promise.resolve({ data: operatorPhoneRows, error: null }); },
+        };
+      }
+      if (table === "clients") {
+        return {
+          select() { return this; },
+          eq()     { return this; },
+          maybeSingle() { return Promise.resolve({ data: null, error: null }); },
+        };
+      }
+      // Everything else: empty
+      return {
+        select() { return this; },
+        eq()     { return this; },
+        order()  { return Promise.resolve({ data: null, error: null }); },
+        maybeSingle() { return Promise.resolve({ data: null, error: null }); },
+      };
+    },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
