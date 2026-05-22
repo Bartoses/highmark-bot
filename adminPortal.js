@@ -2731,9 +2731,11 @@ export async function handlePortalPreviewBriefing(req, res, supabase, crmSupabas
       buildBriefingText,
       getTodaysAvailability,
       getTodaysManifest,
+      getUpcomingManifest,
       getHotLeads,
       getWeatherSnapshot,
       getWeeklyRevenueEstimate,
+      getUpcomingRevenue,
       getSeasonRevenue,
       getNewBookingsStats,
       detectOperationalIssues,
@@ -2749,14 +2751,16 @@ export async function handlePortalPreviewBriefing(req, res, supabase, crmSupabas
     } = await import("./operatorBriefing.js");
 
     const [
-      todaySlots, manifest, hotLeads, weatherSnap, revenue, seasonRevenue, newBookings, issues,
+      todaySlots, manifest, upcomingManifest, hotLeads, weatherSnap, revenue, upcomingRevenue, seasonRevenue, newBookings, issues,
       unpaid, missingWaivers, overlaps, highValue, duplicates, missingPhones, pacing, locationMix, unresolvedHandoffs,
     ] = await Promise.all([
       getTodaysAvailability(clientId, supabase),
       getTodaysManifest(clientId, crmSupabase),
+      getUpcomingManifest(crmSupabase, 7),
       getHotLeads(clientId, supabase, 3),
       getWeatherSnapshot(supabase, clientId),
       getWeeklyRevenueEstimate(clientId, supabase, crmSupabase),
+      getUpcomingRevenue(clientId, crmSupabase, 7),
       getSeasonRevenue(client, crmSupabase, supabase),
       getNewBookingsStats(crmSupabase, supabase),
       detectOperationalIssues(client, supabase, crmSupabase),
@@ -2772,7 +2776,8 @@ export async function handlePortalPreviewBriefing(req, res, supabase, crmSupabas
     ]);
 
     const preview = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
-      manifest, revenue, seasonRevenue, newBookings, issues,
+      manifest, upcomingManifest, upcomingRevenue,
+      revenue, seasonRevenue, newBookings, issues,
       unpaid, missingWaivers, overlaps, highValue, duplicates, missingPhones, pacing, locationMix, unresolvedHandoffs,
     });
     return res.json({

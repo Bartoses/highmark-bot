@@ -13276,8 +13276,8 @@ async function testOperatorMode() {
     });
     chk("4a: briefingText with extras ≤ 1480 chars",
         briefingWithExtras.length <= 1480, `got ${briefingWithExtras.length}`);
-    chk("4a: briefingText includes next-7d revenue line",
-        briefingWithExtras.includes("Next 7d"), briefingWithExtras);
+    chk("4a: briefingText includes last-7d collected revenue line",
+        briefingWithExtras.includes("Last 7d collected"), briefingWithExtras);
     chk("4a: briefingText includes $3,500",
         briefingWithExtras.includes("$3,500"), briefingWithExtras);
     chk("4a: briefingText surfaces system alert",
@@ -13875,24 +13875,42 @@ async function testOperationalBriefing() {
     });
     chk("op: briefing leads with 🏁 TODAY'S LOAD section",
         text.indexOf("🏁 TODAY'S LOAD") < text.indexOf("⚠ ACTIONS"), text);
-    chk("op: TODAY'S LOAD shows vehicle mix line",
-        text.includes("Vehicles: ") && (text.includes("Turbo XP") || text.includes("RZR Experience")), text);
-    chk("op: TODAY'S LOAD shows location split",
-        text.includes("Locations: ") && text.includes("Kremmling"), text);
-    chk("op: TODAY'S LOAD shows pickups timing",
-        text.includes("Pickups: "), text);
+    chk("op: TODAY'S LOAD lists per-booking detail when ≤8",
+        text.includes("Alice") && text.includes("Turbo RZR XP") && text.includes("Kremmling"), text);
+    chk("op: TODAY'S LOAD per-booking line includes pax",
+        text.includes("4p") && text.includes("2p"), text);
     chk("op: REVENUE section no longer duplicates today's count",
         !text.match(/💰 REVENUE[\s\S]+Today: 2 bookings/), text);
   }
 
-  // Quiet morning still mentions LOAD section gracefully
+  // Quiet morning still mentions today section gracefully
   {
     const text = buildBriefingText({ id: "csr_rea", name: "CSR" }, [], [], null, {
       manifest: [], unpaid: [], missingWaivers: [], overlaps: [], highValue: [], duplicates: [], missingPhones: [],
       pacing: null, locationMix: [], unresolvedHandoffs: [], revenue: null, seasonRevenue: null, newBookings: null, issues: [], hotLeads: [],
     });
-    chk("op: quiet day still shows LOAD header", text.includes("🏁 TODAY'S LOAD"), text);
-    chk("op: quiet day copy mentions 'quiet day'", text.includes("quiet day"), text);
+    chk("op: quiet day shows TODAY header", text.includes("🏁 TODAY"), text);
+    chk("op: quiet day copy mentions 'quiet'", text.includes("quiet"), text);
+  }
+
+  // Heavy day (>8 bookings) falls back to compact summary mode
+  {
+    const manifest = Array.from({ length: 10 }, (_, i) => ({
+      customer_name: `Guest ${i}`,
+      activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat",
+      location: "steamboat",
+      start_at: `2026-07-04T${15 + (i % 4)}:00:00Z`,
+      end_at:   `2026-07-04T${22 + (i % 4)}:00:00Z`,
+      customer_count: 2, total_cents: 100000, balance_due_cents: 0, waiver_signed: true,
+    }));
+    const text = buildBriefingText({ id: "csr_rea", name: "CSR" }, [], [], null, {
+      manifest, unpaid: [], missingWaivers: [], overlaps: [], highValue: [], duplicates: [], missingPhones: [],
+      pacing: null, locationMix: [], unresolvedHandoffs: [], revenue: null, seasonRevenue: null, newBookings: null, issues: [], hotLeads: [],
+    });
+    chk("op: heavy day shows aggregate Vehicles line",
+        text.includes("Vehicles: ") && text.includes("Turbo XP"), text);
+    chk("op: heavy day suggests 'Reply 1' for detail",
+        text.includes("Reply 1"), text);
   }
 
   // ── formatManifestResponse — dispatch-sheet output ───────────────────────
@@ -14273,8 +14291,8 @@ async function testBriefingPolish() {
     });
     chk("polish: TODAY'S LOAD shows count + pax + revenue",
         text.includes("2 bookings") && text.includes("6 guests") && text.includes("$3,000"), text);
-    chk("polish: REVENUE shows next-7d revenue line",
-        text.includes("Next 7d") && text.includes("$22,892"), text);
+    chk("polish: REVENUE shows last-7d collected line",
+        text.includes("Last 7d collected") && text.includes("$22,892"), text);
     chk("polish: REVENUE shows season label + dollars",
         text.includes("Summer 2026") && text.includes("$120,000"), text);
     chk("polish: INSIGHTS shows new-booking pulse",

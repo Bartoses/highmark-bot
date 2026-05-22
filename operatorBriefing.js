@@ -135,7 +135,7 @@ export async function getTodaysManifest(clientId, crmSupabase) {
     endMT.setDate(endMT.getDate() + 1);
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, activity, start_at, customer_count, total_cents, location, status")
+      .select("fareharbor_pk, customer_name, activity, start_at, end_at, arrival_display, customer_count, total_cents, balance_due_cents, waiver_signed, location, phone, status")
       .gte("start_at", startMT.toISOString())
       .lt("start_at", endMT.toISOString())
       .order("start_at", { ascending: true });
@@ -324,32 +324,35 @@ export async function getRecentLeads(clientId, supabase, hours = 24) {
   }
 }
 
+// Trailing 7 days — revenue that has already happened (start_at in past 7d).
+// Used for "Last 7d" line in briefing.
 export async function getWeeklyRevenueEstimate(clientId, supabase, crmSupabase = null) {
-  // Prefer DB2 daily_manifest (real FH revenue data)
+  const nowISO = new Date().toISOString();
+  const since  = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Prefer DB2 daily_manifest (real FH/MPWR revenue data)
   if (crmSupabase) {
     try {
-      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const { data: rows } = await crmSupabase
         .from("daily_manifest")
-        .select("fareharbor_pk, total")
-        .gte("start_at", since);
+        .select("fareharbor_pk, total_cents, total")
+        .gte("start_at", since)
+        .lt("start_at", nowISO);
       if (rows?.length) {
         const seenPks = new Set();
-        let totalRev = 0;
+        let totalCents = 0;
         for (const r of rows) {
           if (r.fareharbor_pk != null) seenPks.add(r.fareharbor_pk);
-          if (r.total != null) totalRev += Number(r.total) || 0;
+          if (r.total_cents != null) totalCents += Number(r.total_cents) || 0;
+          else if (r.total != null) totalCents += (Number(r.total) || 0) * 100;
         }
         const bookings = seenPks.size || rows.length;
-        return { bookings, estimated: Math.round(totalRev), period: "7 days", source: "manifest" };
+        return { bookings, estimated: Math.round(totalCents / 100), period: "7 days", source: "manifest" };
       }
-    } catch {
-      // fall through to estimate
-    }
+    } catch { /* fall through */ }
   }
   // Fallback: estimate from DB1 leads
   try {
-    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data } = await supabase
       .from("leads")
       .select("id")
@@ -361,6 +364,86 @@ export async function getWeeklyRevenueEstimate(clientId, supabase, crmSupabase =
   } catch {
     return { bookings: 0, estimated: 0, period: "7 days", source: "estimate" };
   }
+}
+
+// Upcoming N days — bookings + revenue scheduled in the future window.
+// Used for "Next 7d" line in briefing. Excludes BOT- placeholder PKs when
+// counting bookings (they represent bot-created bookings that may be
+// duplicated by real CO- PKs).
+export async function getUpcomingRevenue(clientId, crmSupabase, days = 7) {
+  if (!crmSupabase) return { bookings: 0, revenue_cents: 0, days, source: "unavailable" };
+  try {
+    const nowISO  = new Date().toISOString();
+    const horizon = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, total_cents, total")
+      .gte("start_at", nowISO)
+      .lt("start_at", horizon);
+    const rows = data ?? [];
+    let cents = 0;
+    let bookings = 0;
+    for (const r of rows) {
+      // Skip BOT- placeholders for booking count (they're often duplicated by real CO-)
+      if (!/^BOT-/i.test(r.fareharbor_pk ?? "")) bookings += 1;
+      if (r.total_cents != null) cents += Number(r.total_cents) || 0;
+      else if (r.total != null)  cents += (Number(r.total) || 0) * 100;
+    }
+    return { bookings, revenue_cents: cents, days, source: "manifest" };
+  } catch {
+    return { bookings: 0, revenue_cents: 0, days, source: "unavailable" };
+  }
+}
+
+// Returns the manifest rows for the next N days, sorted by start_at ascending.
+// Filters out BOT- placeholders when a real CO- exists for the same customer+date.
+export async function getUpcomingManifest(crmSupabase, days = 7) {
+  if (!crmSupabase) return [];
+  try {
+    const nowISO  = new Date().toISOString();
+    const horizon = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, customer_name, activity, location, start_at, end_at, arrival_display, customer_count, total_cents, balance_due_cents, waiver_signed, phone")
+      .gte("start_at", nowISO)
+      .lt("start_at", horizon)
+      .order("start_at", { ascending: true });
+    const rows = data ?? [];
+    // Deduplicate BOT- placeholders: when a CO- exists for the same customer+date, drop the BOT row.
+    const byKey = new Map();
+    for (const r of rows) {
+      const date = (r.start_at ?? "").slice(0, 10);
+      const key  = `${(r.phone ?? r.customer_name ?? "?").toLowerCase()}|${date}`;
+      if (!byKey.has(key)) { byKey.set(key, r); continue; }
+      const existing = byKey.get(key);
+      const newIsReal      = !/^BOT-/i.test(r.fareharbor_pk ?? "");
+      const existingIsReal = !/^BOT-/i.test(existing.fareharbor_pk ?? "");
+      if (newIsReal && !existingIsReal) byKey.set(key, r);
+    }
+    return [...byKey.values()].sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+  } catch {
+    return [];
+  }
+}
+
+// Display helpers — capitalize lowercase DB values for human-friendly output.
+function capLocation(loc) {
+  if (!loc) return "?";
+  return String(loc).split(/[\s-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+function shortPhone(p) {
+  if (!p) return "no phone";
+  return String(p).replace(/^\+1/, "").replace(/(\d{3})(\d{3})(\d{4})/, "$1-$2-$3");
+}
+function compactActivity(name) {
+  if (!name) return "?";
+  // Strip catalog year + "Polaris" prefix; keep the vehicle portion; cut at the
+  // first bullet/pipe (so trailing "• 4 Seater • Kremmling" drops out).
+  return String(name)
+    .replace(/^(20\d{2}\s+)?Polaris\s+/i, "")
+    .split(/\s*[•|]\s*/)[0]
+    .trim()
+    .slice(0, 30);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -791,45 +874,74 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     const headerBits = [`${snap.totals.bookings} booking${snap.totals.bookings !== 1 ? "s" : ""}`, `${snap.totals.pax} guest${snap.totals.pax !== 1 ? "s" : ""}`, `$${revUSD}`];
     lines.push(`• ${headerBits.join(" · ")}`);
 
-    // Vehicle mix — top 3
-    const vehicleParts = snap.vehicle_mix.slice(0, 3).map((v) => `${v.count} ${v.label}`);
-    if (vehicleParts.length) lines.push(`• Vehicles: ${vehicleParts.join(", ")}`);
-
-    // Duration mix — only surface non-zero buckets
-    const durParts = [];
-    if (snap.duration_mix.full_day)  durParts.push(`${snap.duration_mix.full_day} full-day`);
-    if (snap.duration_mix.half_day)  durParts.push(`${snap.duration_mix.half_day} half-day`);
-    if (snap.duration_mix.short)     durParts.push(`${snap.duration_mix.short} short`);
-    if (snap.duration_mix.overnight) durParts.push(`${snap.duration_mix.overnight} overnight`);
-    if (snap.duration_mix.multi_day) durParts.push(`${snap.duration_mix.multi_day} multi-day`);
-    if (durParts.length) lines.push(`• Durations: ${durParts.join(", ")}`);
-
-    // Location pressure (top 2)
-    if (snap.location_mix.length) {
-      const locParts = snap.location_mix.slice(0, 2).map((l) => `${l.location} ${l.count}`);
-      lines.push(`• Locations: ${locParts.join(" · ")}`);
+    // Per-booking detail — name · vehicle · location · pax · phone · time
+    // Shown inline for ≤8 bookings; otherwise we summarize + suggest "Reply 1".
+    if (manifest.length <= 8) {
+      for (const r of manifest) {
+        const time  = r.start_at
+          ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
+          : "?";
+        const name  = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+        const act   = compactActivity(r.activity);
+        const loc   = capLocation(r.location);
+        const phone = shortPhone(r.phone);
+        lines.push(`• ${time} — ${name} · ${act} · ${loc} · ${r.customer_count ?? "?"}p · ${phone}`);
+      }
+    } else {
+      // Compact summary for heavy days
+      const vehicleParts = snap.vehicle_mix.slice(0, 3).map((v) => `${v.count} ${v.label}`);
+      if (vehicleParts.length) lines.push(`• Vehicles: ${vehicleParts.join(", ")}`);
+      if (snap.location_mix.length) {
+        const locParts = snap.location_mix.slice(0, 2).map((l) => `${capLocation(l.location)} ${l.count}`);
+        lines.push(`• Locations: ${locParts.join(" · ")}`);
+      }
+      const tc = snap.time_clusters;
+      const timingBits = [];
+      if (tc.morning)   timingBits.push(`${tc.morning} morning`);
+      if (tc.midday)    timingBits.push(`${tc.midday} midday`);
+      if (tc.afternoon) timingBits.push(`${tc.afternoon} afternoon`);
+      if (timingBits.length) {
+        let tone = "";
+        if (snap.timing_tone === "afternoon_heavy") tone = " — heavy afternoon load";
+        else if (snap.timing_tone === "morning_heavy") tone = " — front-loaded morning";
+        lines.push(`• Pickups: ${timingBits.join(" / ")}${tone}`);
+      }
+      lines.push("Reply 1 for full manifest detail");
     }
 
-    // Timing tone
-    const tc = snap.time_clusters;
-    const timingBits = [];
-    if (tc.morning)   timingBits.push(`${tc.morning} morning`);
-    if (tc.midday)    timingBits.push(`${tc.midday} midday`);
-    if (tc.afternoon) timingBits.push(`${tc.afternoon} afternoon`);
-    if (timingBits.length) {
-      let tone = "";
-      if (snap.timing_tone === "afternoon_heavy") tone = " — heavy afternoon load";
-      else if (snap.timing_tone === "morning_heavy") tone = " — front-loaded morning";
-      lines.push(`• Pickups: ${timingBits.join(" / ")}${tone}`);
-    }
-
-    // Late returns (pressure point)
-    if (snap.late_returns.length) {
+    // Late returns (pressure point) — only meaningful when ≤8 detail mode
+    if (snap.late_returns.length && manifest.length <= 8) {
       lines.push(`• ${snap.late_returns.length} return${snap.late_returns.length !== 1 ? "s" : ""} after 5pm`);
     }
   } else {
     lines.push("");
-    lines.push("🏁 TODAY'S LOAD — quiet day, nothing on the manifest yet.");
+    lines.push("🏁 TODAY — quiet, nothing on the manifest.");
+  }
+
+  // ── 📅 NEXT 7 DAYS — upcoming bookings preview ──────────────────────────
+  const upcomingManifest = Array.isArray(extras.upcomingManifest) ? extras.upcomingManifest : [];
+  const upcomingRev      = extras.upcomingRevenue ?? null;
+  if (upcomingManifest.length > 0 || (upcomingRev && upcomingRev.bookings > 0)) {
+    lines.push("");
+    lines.push("📅 NEXT 7 DAYS");
+    if (upcomingRev && upcomingRev.bookings > 0) {
+      const dol = `$${Math.round((upcomingRev.revenue_cents ?? 0) / 100).toLocaleString()}`;
+      lines.push(`• ${upcomingRev.bookings} booking${upcomingRev.bookings !== 1 ? "s" : ""} · ${dol}`);
+    }
+    // List up to 5 upcoming with date + name + location
+    for (const r of upcomingManifest.slice(0, 5)) {
+      const date = r.start_at
+        ? new Date(r.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", weekday: "short", month: "short", day: "numeric" })
+        : "?";
+      const time = r.start_at
+        ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
+        : "?";
+      const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+      const act  = compactActivity(r.activity);
+      const loc  = capLocation(r.location);
+      lines.push(`• ${date} ${time} — ${name} · ${act} · ${loc} · ${r.customer_count ?? "?"}p`);
+    }
+    if (upcomingManifest.length > 5) lines.push(`  …+${upcomingManifest.length - 5} more`);
   }
 
   // ── ⚠ ACTIONS NEEDED — surface real problems, not metrics ───────────────
@@ -872,11 +984,14 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     for (const a of actions.slice(0, 5)) lines.push(`• ${a}`);
   }
 
-  // ── 💰 REVENUE — pipeline + biggest unpaid risk (today already in LOAD) ──
+  // ── 💰 REVENUE — collected + upcoming + season ──────────────────────────
   const revLines = [];
   if (rev && rev.estimated > 0) {
     const tag = rev.source === "manifest" ? "" : " (est)";
-    revLines.push(`Next 7d${tag}: $${rev.estimated.toLocaleString()} · ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""}`);
+    revLines.push(`Last 7d collected${tag}: $${rev.estimated.toLocaleString()} · ${rev.bookings} booking${rev.bookings !== 1 ? "s" : ""}`);
+  }
+  if (upcomingRev && upcomingRev.bookings > 0 && upcomingRev.revenue_cents > 0) {
+    revLines.push(`Upcoming 7d: $${Math.round(upcomingRev.revenue_cents / 100).toLocaleString()} · ${upcomingRev.bookings} booking${upcomingRev.bookings !== 1 ? "s" : ""}`);
   }
   if (season && season.revenue_cents > 0) {
     const tag = season.source === "manifest" ? "" : " (est)";
@@ -902,7 +1017,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     const top = locationMix[0];
     const second = locationMix[1];
     if (top.pct >= 60) {
-      insights.push(`${top.location} driving ${top.pct}% of bookings — ${second.location} only ${second.pct}%`);
+      insights.push(`${capLocation(top.location)} driving ${top.pct}% of bookings — ${capLocation(second.location)} only ${second.pct}%`);
     }
   }
   if (pacing && pacing.last_week > 5 && pacing.delta_pct != null) {
@@ -1229,14 +1344,16 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
 
   // Gather all data in parallel — operational signals + summary metrics.
   const [
-    todaySlots, manifest, hotLeads, weatherSnap, revenue, seasonRevenue, newBookings, issues,
+    todaySlots, manifest, upcomingManifest, hotLeads, weatherSnap, revenue, upcomingRevenue, seasonRevenue, newBookings, issues,
     unpaid, missingWaivers, overlaps, highValue, duplicates, missingPhones, pacing, locationMix, unresolvedHandoffs,
   ] = await Promise.all([
     getTodaysAvailability(client.id, supabase),
     getTodaysManifest(client.id, crmSupabase),
+    getUpcomingManifest(crmSupabase, 7),
     getHotLeads(client.id, supabase, 3),
     getWeatherSnapshot(supabase, client.id),
     getWeeklyRevenueEstimate(client.id, supabase, crmSupabase),
+    getUpcomingRevenue(client.id, crmSupabase, 7),
     getSeasonRevenue(client, crmSupabase, supabase),
     getNewBookingsStats(crmSupabase, supabase),
     detectOperationalIssues(client, supabase, crmSupabase),
@@ -1253,6 +1370,8 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
 
   const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
     manifest,
+    upcomingManifest,
+    upcomingRevenue,
     revenue,
     seasonRevenue,
     newBookings,
@@ -1745,13 +1864,14 @@ export function formatManifestResponse(rows, day) {
     lines.push("");
     lines.push(blockLabel[key]);
     for (const r of block.slice(0, 6)) {
-      const time = r.start_at
+      const time  = r.start_at
         ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
         : "?";
       const cls   = classifyActivity(r.activity);
-      const loc   = r.location ?? "?";
+      const loc   = capLocation(r.location);
       const first = (r.customer_name ?? "?").split(" ")[0];
-      lines.push(`• ${time} — ${cls.short_label} · ${loc} (${first}, ${r.customer_count ?? "?"}p)`);
+      const phone = shortPhone(r.phone);
+      lines.push(`• ${time} — ${cls.short_label} · ${loc} · ${first} (${r.customer_count ?? "?"}p) · ${phone}`);
     }
     if (block.length > 6) lines.push(`  …+${block.length - 6} more`);
   }
