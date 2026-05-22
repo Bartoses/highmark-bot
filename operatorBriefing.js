@@ -126,6 +126,57 @@ export async function getTomorrowsAvailability(clientId, supabase) {
 // Returns rows shaped like { start_at, activity, customer_name, customer_count,
 // total_cents } sorted by start_at.
 // ─────────────────────────────────────────────────────────────────────────────
+// Standard select shape for daily_manifest. The view exposes pax (not
+// customer_count), receipt_total_cents (not total_cents), phone (not
+// normalized_phone), and does NOT expose end_at (we parse arrival_display
+// when end-time logic is needed).
+const MANIFEST_SELECT =
+  "fareharbor_pk, customer_name, activity, start_at, arrival_display, pax, " +
+  "receipt_total_cents, balance_due_cents, waiver_signed, checked_in, " +
+  "location, phone, category";
+
+// Normalize a daily_manifest row into the internal shape the briefing
+// code expects (customer_count, total_cents). Mutates by returning a new
+// object so callers don't have to know about the column-name remap.
+function normalizeManifestRow(r) {
+  if (!r) return r;
+  return {
+    ...r,
+    customer_count: r.pax,
+    total_cents:    r.receipt_total_cents,
+    normalized_phone: r.phone,
+    end_at:         parseEndAtFromArrival(r.arrival_display, r.start_at),
+  };
+}
+
+// Parse the end-time from arrival_display when end_at isn't on the view.
+// Examples:
+//   "1:00PM - 5:00PM on Aug 14, 2026"
+//   "9:00 AM - 5:00 PM on June 12, 2026"
+//   "9:00 AM on July 03 to 5:00 PM on July 05, 2026"
+// Returns an ISO string (best-effort) or null if unparseable.
+export function parseEndAtFromArrival(display, startAtFallback) {
+  if (!display) return null;
+  try {
+    const s = String(display);
+    // Multi-day "9:00 AM on July 03 to 5:00 PM on July 05, 2026"
+    const mDay = s.match(/(\d{1,2}:\d{2}\s*[AP]M)\s+on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)\s+to\s+(\d{1,2}:\d{2}\s*[AP]M)\s+on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)/i);
+    if (mDay) {
+      const endDate = mDay[4].includes(",") ? mDay[4] : `${mDay[4]}, ${new Date().getFullYear()}`;
+      const parsed = new Date(`${endDate} ${mDay[3]}`);
+      if (!isNaN(parsed)) return parsed.toISOString();
+    }
+    // Single-day "1:00 PM - 5:00 PM on June 12, 2026" (also "1:00PM - 5:00PM on Aug 14, 2026")
+    const mSame = s.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*-\s*(\d{1,2}:\d{2}\s*[AP]M)\s+on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)/i);
+    if (mSame) {
+      const endDate = mSame[3].includes(",") ? mSame[3] : `${mSame[3]}, ${new Date().getFullYear()}`;
+      const parsed = new Date(`${endDate} ${mSame[2]}`);
+      if (!isNaN(parsed)) return parsed.toISOString();
+    }
+    return null;
+  } catch { return null; }
+}
+
 export async function getTodaysManifest(clientId, crmSupabase) {
   if (!crmSupabase) return [];
   try {
@@ -135,11 +186,11 @@ export async function getTodaysManifest(clientId, crmSupabase) {
     endMT.setDate(endMT.getDate() + 1);
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, activity, start_at, end_at, arrival_display, customer_count, total_cents, balance_due_cents, waiver_signed, location, phone, status")
+      .select(MANIFEST_SELECT)
       .gte("start_at", startMT.toISOString())
       .lt("start_at", endMT.toISOString())
       .order("start_at", { ascending: true });
-    return data ?? [];
+    return (data ?? []).map(normalizeManifestRow);
   } catch {
     return [];
   }
@@ -175,7 +226,7 @@ export async function getSeasonRevenue(client, crmSupabase, supabase, season = n
     try {
       const { data } = await crmSupabase
         .from("daily_manifest")
-        .select("fareharbor_pk, total_cents, total")
+        .select("fareharbor_pk, receipt_total_cents, total")
         .gte("start_at", startISO)
         .lt("start_at", endISO);
       if (data?.length) {
@@ -183,8 +234,7 @@ export async function getSeasonRevenue(client, crmSupabase, supabase, season = n
         let totalCents = 0;
         for (const r of data) {
           if (r.fareharbor_pk != null) seenPks.add(r.fareharbor_pk);
-          // total_cents stored in cents; total stored as dollars (legacy)
-          if (r.total_cents != null) totalCents += Number(r.total_cents) || 0;
+          if (r.receipt_total_cents != null) totalCents += Number(r.receipt_total_cents) || 0;
           else if (r.total != null) totalCents += (Number(r.total) || 0) * 100;
         }
         return {
@@ -336,7 +386,7 @@ export async function getWeeklyRevenueEstimate(clientId, supabase, crmSupabase =
     try {
       const { data: rows } = await crmSupabase
         .from("daily_manifest")
-        .select("fareharbor_pk, total_cents, total")
+        .select("fareharbor_pk, receipt_total_cents, total")
         .gte("start_at", since)
         .lt("start_at", nowISO);
       if (rows?.length) {
@@ -344,7 +394,7 @@ export async function getWeeklyRevenueEstimate(clientId, supabase, crmSupabase =
         let totalCents = 0;
         for (const r of rows) {
           if (r.fareharbor_pk != null) seenPks.add(r.fareharbor_pk);
-          if (r.total_cents != null) totalCents += Number(r.total_cents) || 0;
+          if (r.receipt_total_cents != null) totalCents += Number(r.receipt_total_cents) || 0;
           else if (r.total != null) totalCents += (Number(r.total) || 0) * 100;
         }
         const bookings = seenPks.size || rows.length;
@@ -378,17 +428,16 @@ export async function getUpcomingRevenue(clientId, crmSupabase, days = 7) {
     const horizon = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, total_cents, total")
+      .select("fareharbor_pk, receipt_total_cents, total")
       .gte("start_at", nowISO)
       .lt("start_at", horizon);
     const rows = data ?? [];
     let cents = 0;
     let bookings = 0;
     for (const r of rows) {
-      // Skip BOT- placeholders for booking count (they're often duplicated by real CO-)
       if (!/^BOT-/i.test(r.fareharbor_pk ?? "")) bookings += 1;
-      if (r.total_cents != null) cents += Number(r.total_cents) || 0;
-      else if (r.total != null)  cents += (Number(r.total) || 0) * 100;
+      if (r.receipt_total_cents != null) cents += Number(r.receipt_total_cents) || 0;
+      else if (r.total != null)          cents += (Number(r.total) || 0) * 100;
     }
     return { bookings, revenue_cents: cents, days, source: "manifest" };
   } catch {
@@ -405,11 +454,11 @@ export async function getUpcomingManifest(crmSupabase, days = 7) {
     const horizon = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, activity, location, start_at, end_at, arrival_display, customer_count, total_cents, balance_due_cents, waiver_signed, phone")
+      .select(MANIFEST_SELECT)
       .gte("start_at", nowISO)
       .lt("start_at", horizon)
       .order("start_at", { ascending: true });
-    const rows = data ?? [];
+    const rows = (data ?? []).map(normalizeManifestRow);
     // Deduplicate BOT- placeholders: when a CO- exists for the same customer+date, drop the BOT row.
     const byKey = new Map();
     for (const r of rows) {
@@ -461,12 +510,12 @@ export async function detectUnpaidBookings(crmSupabase) {
     const nowISO = new Date().toISOString();
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, activity, location, start_at, arrival_display, balance_due_cents, customer_count")
+      .select("fareharbor_pk, customer_name, activity, location, start_at, arrival_display, balance_due_cents, pax")
       .gt("balance_due_cents", 0)
       .gte("start_at", nowISO)
       .order("balance_due_cents", { ascending: false })
       .limit(10);
-    return data ?? [];
+    return (data ?? []).map(normalizeManifestRow);
   } catch { return []; }
 }
 
@@ -478,18 +527,17 @@ export async function detectMissingWaivers(crmSupabase) {
     const horizon = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, activity, location, start_at, customer_count, waiver_signed")
+      .select("fareharbor_pk, customer_name, activity, location, start_at, pax, waiver_signed")
       .neq("waiver_signed", true)
       .gte("start_at", nowISO)
       .lt("start_at", horizon)
       .order("start_at", { ascending: true })
       .limit(20);
-    return data ?? [];
+    return (data ?? []).map(normalizeManifestRow);
   } catch { return []; }
 }
 
 // 3+ arrivals within the same hour today → operational crunch.
-// Returns array of { hour_label, count, location_breakdown }.
 export async function detectOverlappingArrivals(crmSupabase) {
   if (!crmSupabase) return [];
   try {
@@ -497,7 +545,7 @@ export async function detectOverlappingArrivals(crmSupabase) {
     const end   = new Date(start); end.setDate(end.getDate() + 1);
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("start_at, location, customer_count")
+      .select("start_at, location, pax")
       .gte("start_at", start.toISOString())
       .lt("start_at", end.toISOString());
     const rows = data ?? [];
@@ -508,7 +556,7 @@ export async function detectOverlappingArrivals(crmSupabase) {
       const hourStr = new Date(r.start_at).toLocaleString("en-US", { timeZone: "America/Denver", hour: "numeric", hour12: true });
       const cur = byHour.get(hourStr) ?? { count: 0, locations: {}, pax: 0 };
       cur.count += 1;
-      cur.pax   += Number(r.customer_count) || 0;
+      cur.pax   += Number(r.pax) || 0;
       cur.locations[r.location ?? "?"] = (cur.locations[r.location ?? "?"] ?? 0) + 1;
       byHour.set(hourStr, cur);
     }
@@ -519,7 +567,7 @@ export async function detectOverlappingArrivals(crmSupabase) {
   } catch { return []; }
 }
 
-// Upcoming bookings with total_cents > $1000 (100,000 cents).
+// Upcoming bookings with receipt_total_cents > $1000 (100,000 cents).
 export async function detectHighValueBookings(crmSupabase, minCents = 100000) {
   if (!crmSupabase) return [];
   try {
@@ -527,13 +575,13 @@ export async function detectHighValueBookings(crmSupabase, minCents = 100000) {
     const horizon = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, activity, location, start_at, customer_count, total_cents, balance_due_cents")
-      .gte("total_cents", minCents)
+      .select("fareharbor_pk, customer_name, activity, location, start_at, pax, receipt_total_cents, balance_due_cents")
+      .gte("receipt_total_cents", minCents)
       .gte("start_at", nowISO)
       .lt("start_at", horizon)
-      .order("total_cents", { ascending: false })
+      .order("receipt_total_cents", { ascending: false })
       .limit(5);
-    return data ?? [];
+    return (data ?? []).map(normalizeManifestRow);
   } catch { return []; }
 }
 
@@ -547,17 +595,17 @@ export async function detectDuplicateBookings(crmSupabase) {
     const horizon = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString();
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, start_at, normalized_phone, activity")
+      .select("fareharbor_pk, customer_name, start_at, phone, activity")
       .gte("start_at", since)
       .lt("start_at", horizon);
     const rows = data ?? [];
     if (!rows.length) return [];
 
-    // Group by name + date
+    // Group by phone (or name fallback) + date
     const byKey = new Map();
     for (const r of rows) {
       const date = (r.start_at ?? "").slice(0, 10);
-      const key  = `${(r.normalized_phone ?? r.customer_name ?? "?").toLowerCase()}|${date}`;
+      const key  = `${(r.phone ?? r.customer_name ?? "?").toLowerCase()}|${date}`;
       if (!byKey.has(key)) byKey.set(key, []);
       byKey.get(key).push(r);
     }
@@ -588,12 +636,12 @@ export async function detectMissingPhones(crmSupabase) {
     const end    = new Date(start); end.setDate(end.getDate() + 2);
     const { data } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, activity, location, start_at, customer_count, phone")
+      .select("fareharbor_pk, customer_name, activity, location, start_at, pax, phone")
       .is("phone", null)
       .gte("start_at", start.toISOString())
       .lt("start_at",  end.toISOString())
       .limit(10);
-    return data ?? [];
+    return (data ?? []).map(normalizeManifestRow);
   } catch { return []; }
 }
 
@@ -1656,11 +1704,11 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
         const end   = new Date(start); end.setDate(end.getDate() + 1);
         const { data } = await crmSupabase
           .from("daily_manifest")
-          .select("fareharbor_pk, customer_name, activity, start_at, customer_count, total_cents")
+          .select(MANIFEST_SELECT)
           .gte("start_at", start.toISOString())
           .lt("start_at", end.toISOString())
           .order("start_at", { ascending: true });
-        return formatManifestResponse(data ?? [], "tomorrow");
+        return formatManifestResponse((data ?? []).map(normalizeManifestRow), "tomorrow");
       } catch { /* fall through */ }
     }
     const slots = await getTomorrowsAvailability(client.id, supabase);
@@ -2157,10 +2205,10 @@ export async function formatLargestBookings(client, crmSupabase, range) {
   try {
     const { data, error } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, activity, start_at, customer_count, total_cents, location, company")
+      .select("fareharbor_pk, customer_name, activity, start_at, pax, receipt_total_cents, location, company")
       .gte("start_at", range.start)
       .lt("start_at", range.end)
-      .order("total_cents", { ascending: false })
+      .order("receipt_total_cents", { ascending: false })
       .limit(5);
     if (error) throw error;
     const rows = data ?? [];
@@ -2168,7 +2216,7 @@ export async function formatLargestBookings(client, crmSupabase, range) {
     const lines = [`LARGEST BOOKINGS (${range.label ?? "range"})`, ""];
     for (const r of rows) {
       const date = r.start_at?.slice(0, 10) ?? "?";
-      lines.push(`• ${DOLLARS(r.total_cents)} — ${r.customer_name ?? "?"} (${r.customer_count ?? "?"} pax, ${r.activity ?? "?"}) ${date}`);
+      lines.push(`• ${DOLLARS(r.receipt_total_cents)} — ${r.customer_name ?? "?"} (${r.pax ?? "?"} pax, ${r.activity ?? "?"}) ${date}`);
     }
     return lines.join("\n");
   } catch (err) {
@@ -2224,7 +2272,7 @@ export async function formatBusiestHours(client, crmSupabase, range) {
   try {
     const { data, error } = await crmSupabase
       .from("daily_manifest")
-      .select("start_at, customer_count")
+      .select("start_at, pax")
       .gte("start_at", range.start)
       .lt("start_at", range.end);
     if (error) throw error;
@@ -2239,7 +2287,7 @@ export async function formatBusiestHours(client, crmSupabase, range) {
       if (!Number.isFinite(hour)) continue;
       const cur = byHour.get(hour) ?? { bookings: 0, pax: 0 };
       cur.bookings += 1;
-      cur.pax += Number(r.customer_count) || 0;
+      cur.pax += Number(r.pax) || 0;
       byHour.set(hour, cur);
     }
     const top = [...byHour.entries()]
@@ -2294,7 +2342,7 @@ export async function formatFirstTimers(client, crmSupabase, range) {
     // Pull bookings in range with customer info
     const { data: scoped, error } = await crmSupabase
       .from("daily_manifest")
-      .select("fareharbor_pk, customer_name, normalized_phone, activity, start_at, customer_count")
+      .select("fareharbor_pk, customer_name, phone, activity, start_at, pax")
       .gte("start_at", range.start)
       .lt("start_at", range.end);
     if (error) throw error;
@@ -2303,24 +2351,24 @@ export async function formatFirstTimers(client, crmSupabase, range) {
 
     // For each unique phone in scope, count their TOTAL bookings (any time).
     // A phone with exactly 1 booking total = first-timer.
-    const phones = [...new Set(rows.map((r) => r.normalized_phone).filter(Boolean))];
+    const phones = [...new Set(rows.map((r) => r.phone).filter(Boolean))];
     if (!phones.length) return `FIRST-TIME GUESTS (${range.label ?? "range"})\n\nNo phone-keyed bookings in this window.`;
 
     const { data: allByPhone } = await crmSupabase
       .from("daily_manifest")
-      .select("normalized_phone")
-      .in("normalized_phone", phones);
+      .select("phone")
+      .in("phone", phones);
     const countByPhone = new Map();
     for (const r of allByPhone ?? []) {
-      countByPhone.set(r.normalized_phone, (countByPhone.get(r.normalized_phone) ?? 0) + 1);
+      countByPhone.set(r.phone, (countByPhone.get(r.phone) ?? 0) + 1);
     }
-    const firstTimers = rows.filter((r) => (countByPhone.get(r.normalized_phone) ?? 0) <= 1);
+    const firstTimers = rows.filter((r) => (countByPhone.get(r.phone) ?? 0) <= 1);
     if (!firstTimers.length) return `FIRST-TIME GUESTS (${range.label ?? "range"})\n\nNo first-timers — everyone has booked before.`;
     const lines = [`FIRST-TIME GUESTS (${range.label ?? "range"}) — ${firstTimers.length}`, ""];
     for (const r of firstTimers.slice(0, 5)) {
       const time = r.start_at ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" }) : "";
       const firstName = (r.customer_name ?? "Unknown").split(" ")[0];
-      lines.push(`• ${firstName} — ${r.activity ?? "?"} ${time} (${r.customer_count ?? "?"} pax)`);
+      lines.push(`• ${firstName} — ${r.activity ?? "?"} ${time} (${r.pax ?? "?"} pax)`);
     }
     return lines.join("\n");
   } catch (err) {

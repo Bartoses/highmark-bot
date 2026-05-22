@@ -13614,8 +13614,8 @@ async function testSprintBOperatorUX() {
   {
     const crmStub = makeCrmStub({
       daily_manifest: [
-        { fareharbor_pk: "CO-1", customer_name: "Big Group", activity: "RZR Kremmling", start_at: "2026-05-20T10:00:00Z", customer_count: 4, total_cents: 200000 },
-        { fareharbor_pk: "CO-2", customer_name: "Small Group", activity: "RZR Steamboat", start_at: "2026-05-21T10:00:00Z", customer_count: 2, total_cents: 50000 },
+        { fareharbor_pk: "CO-1", customer_name: "Big Group", activity: "RZR Kremmling", start_at: "2026-05-20T10:00:00Z", pax: 4, receipt_total_cents: 200000 },
+        { fareharbor_pk: "CO-2", customer_name: "Small Group", activity: "RZR Steamboat", start_at: "2026-05-21T10:00:00Z", pax: 2, receipt_total_cents: 50000 },
       ],
     });
     const range = { start: "2026-05-01T00:00:00Z", end: "2026-06-01T00:00:00Z", label: "May 2026" };
@@ -13704,18 +13704,18 @@ async function testSprintBOperatorUX() {
             lt() {
               queryStage = 1;
               return Promise.resolve({ data: [
-                { fareharbor_pk: "CO-A", customer_name: "Alice", normalized_phone: "+15551110001", activity: "RZR", start_at: "2026-05-21T15:00:00Z", customer_count: 2 },
-                { fareharbor_pk: "CO-B", customer_name: "Bob",   normalized_phone: "+15551110002", activity: "RZR", start_at: "2026-05-21T16:00:00Z", customer_count: 1 },
+                { fareharbor_pk: "CO-A", customer_name: "Alice", phone: "+15551110001", activity: "RZR", start_at: "2026-05-21T15:00:00Z", pax: 2 },
+                { fareharbor_pk: "CO-B", customer_name: "Bob",   phone: "+15551110002", activity: "RZR", start_at: "2026-05-21T16:00:00Z", pax: 1 },
               ], error: null });
             },
             in() {
               queryStage = 2;
               // Alice has 1 booking total → first-timer. Bob has 3 → not.
               return Promise.resolve({ data: [
-                { normalized_phone: "+15551110001" },
-                { normalized_phone: "+15551110002" },
-                { normalized_phone: "+15551110002" },
-                { normalized_phone: "+15551110002" },
+                { phone: "+15551110001" },
+                { phone: "+15551110002" },
+                { phone: "+15551110002" },
+                { phone: "+15551110002" },
               ], error: null });
             },
           };
@@ -14373,15 +14373,15 @@ async function testBriefingPolish() {
           select() { return this; },
           gte()    { return this; },
           lt()     { return Promise.resolve({ data: [
-            { fareharbor_pk: "CO-1", total_cents: 200000, total: null },
-            { fareharbor_pk: "CO-2", total_cents: 150000, total: null },
+            { fareharbor_pk: "CO-1", receipt_total_cents: 200000, total: null },
+            { fareharbor_pk: "CO-2", receipt_total_cents: 150000, total: null },
           ], error: null }); },
         };
       },
     };
     const result = await getSeasonRevenue({ id: "csr_rea" }, crmStub, null);
     chk("polish: getSeasonRevenue source=manifest", result.source === "manifest", JSON.stringify(result));
-    chk("polish: getSeasonRevenue sums total_cents", result.revenue_cents === 350000, JSON.stringify(result));
+    chk("polish: getSeasonRevenue sums receipt_total_cents", result.revenue_cents === 350000, JSON.stringify(result));
     chk("polish: getSeasonRevenue counts distinct PKs", result.bookings === 2);
     chk("polish: getSeasonRevenue label includes year",
         /Summer \d{4}|Winter \d{4}/.test(result.period_label), result.period_label);
