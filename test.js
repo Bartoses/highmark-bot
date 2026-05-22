@@ -13652,11 +13652,12 @@ async function testSprintBOperatorUX() {
 
   // ── formatBusiestHours ───────────────────────────────────────────────────
   {
+    // DB2 stores naive timestamps already in MT wall-clock — no TZ conversion.
     const crmStub = makeCrmStub({
       daily_manifest: [
-        { start_at: "2026-05-21T15:00:00Z", customer_count: 2 }, // 9am MT
-        { start_at: "2026-05-21T15:30:00Z", customer_count: 4 }, // 9am MT
-        { start_at: "2026-05-21T19:00:00Z", customer_count: 1 }, // 1pm MT
+        { start_at: "2026-05-21 09:00:00", pax: 2 },
+        { start_at: "2026-05-21 09:30:00", pax: 4 },
+        { start_at: "2026-05-21 13:00:00", pax: 1 },
       ],
     });
     const range = { start: "2026-05-21T06:00:00Z", end: "2026-05-22T06:00:00Z", label: "today" };
@@ -13796,18 +13797,19 @@ async function testOperationalBriefing() {
 
   // ── buildTodayLoadSnapshot — totals + mixes + clusters ───────────────────
   {
-    // 5 bookings spanning vehicle mix, locations, durations
+    // 5 bookings spanning vehicle mix, locations, durations. Naive timestamps
+    // match how DB2 daily_manifest stores them (MT wall-clock).
     const manifest = [
       // Morning Kremmling Turbo XP (full-day)
-      { customer_name: "Alice",   activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Kremmling",  location: "Kremmling", start_at: "2026-07-04T15:00:00Z", end_at: "2026-07-05T01:00:00Z", customer_count: 4, total_cents: 200000, balance_due_cents: 0,      waiver_signed: true  },
+      { customer_name: "Alice",   activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Kremmling",  location: "Kremmling",  start_at: "2026-07-04 09:00:00", arrival_display: "9:00 AM - 5:00 PM on July 4, 2026", customer_count: 4, total_cents: 200000, balance_due_cents: 0,      waiver_signed: true  },
       // Morning Kremmling RZR Experience (half-day)
-      { customer_name: "Bob",     activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",     location: "Kremmling", start_at: "2026-07-04T15:30:00Z", end_at: "2026-07-04T21:00:00Z", customer_count: 2, total_cents: 100000, balance_due_cents: 0,      waiver_signed: false },
-      // Afternoon Steamboat Turbo XP (full-day, ends after 5pm)
-      { customer_name: "Charlie", activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat",  location: "Steamboat", start_at: "2026-07-04T18:00:00Z", end_at: "2026-07-05T03:00:00Z", customer_count: 4, total_cents: 200000, balance_due_cents: 50000,  waiver_signed: true  },
-      // Multi-day rental, unpaid
-      { customer_name: "Dana",    activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",     location: "Kremmling", start_at: "2026-07-04T16:00:00Z", end_at: "2026-07-07T16:00:00Z", customer_count: 2, total_cents: 300000, balance_due_cents: 292000, waiver_signed: true  },
+      { customer_name: "Bob",     activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",     location: "Kremmling",  start_at: "2026-07-04 09:30:00", arrival_display: "9:30 AM - 1:30 PM on July 4, 2026", customer_count: 2, total_cents: 100000, balance_due_cents: 0,      waiver_signed: false },
+      // Afternoon Steamboat Turbo XP (full-day, ends after 5pm — 12h duration)
+      { customer_name: "Charlie", activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat",  location: "Steamboat",  start_at: "2026-07-04 09:00:00", arrival_display: "9:00 AM - 9:00 PM on July 4, 2026", customer_count: 4, total_cents: 200000, balance_due_cents: 50000,  waiver_signed: true  },
+      // Multi-day rental, unpaid (ends on a different day → late return logic)
+      { customer_name: "Dana",    activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",     location: "Kremmling",  start_at: "2026-07-04 10:00:00", arrival_display: "10:00 AM on July 04 to 5:00 PM on July 07, 2026", customer_count: 2, total_cents: 300000, balance_due_cents: 292000, waiver_signed: true  },
       // Rabbit Ears guided morning
-      { customer_name: "Eli",     activity: "Rabbit Ears Pass - Ride From | Polaris 4 Seater",        location: "Rabbit Ears Pass", start_at: "2026-07-04T14:00:00Z", end_at: "2026-07-04T18:00:00Z", customer_count: 4, total_cents: 80000,  balance_due_cents: 0,      waiver_signed: true  },
+      { customer_name: "Eli",     activity: "Rabbit Ears Pass - Ride From | Polaris 4 Seater",        location: "Rabbit Ears Pass", start_at: "2026-07-04 08:00:00", arrival_display: "8:00 AM - 12:00 PM on July 4, 2026", customer_count: 4, total_cents: 80000,  balance_due_cents: 0,      waiver_signed: true  },
     ];
     const snap = buildTodayLoadSnapshot(manifest);
 
@@ -13836,7 +13838,7 @@ async function testOperationalBriefing() {
         snap.multiday_unpaid.length === 1 && snap.multiday_unpaid[0].customer_name === "Dana");
 
     chk("op: snapshot late_returns includes Charlie + Dana (both end past 5pm)",
-        snap.late_returns.length >= 2);
+        snap.late_returns.length >= 2, JSON.stringify(snap.late_returns.map(r => r.customer_name)));
 
     chk("op: snapshot load_tone steady when 5 bookings",
         snap.load_tone === "steady", snap.load_tone);
@@ -13915,10 +13917,11 @@ async function testOperationalBriefing() {
 
   // ── formatManifestResponse — dispatch-sheet output ───────────────────────
   {
+    // Naive timestamps in MT wall-clock (matches DB2 daily_manifest storage).
     const rows = [
-      { customer_name: "Alice",   activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat", location: "Steamboat", start_at: "2026-07-04T15:00:00Z", end_at: "2026-07-04T22:00:00Z", customer_count: 4, total_cents: 200000, balance_due_cents: 0,       waiver_signed: true,  phone: "+15551110001" },
-      { customer_name: "Bob",     activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",   location: "Kremmling", start_at: "2026-07-04T16:00:00Z", end_at: "2026-07-04T20:00:00Z", customer_count: 2, total_cents: 100000, balance_due_cents: 25000,   waiver_signed: false, phone: null            },
-      { customer_name: "Charlie", activity: "Rabbit Ears Pass - Ride From | Polaris 4 Seater",      location: "Rabbit Ears Pass", start_at: "2026-07-04T19:30:00Z", end_at: "2026-07-04T23:30:00Z", customer_count: 4, total_cents: 80000,  balance_due_cents: 0,       waiver_signed: true,  phone: "+15551110002" },
+      { customer_name: "Alice",   activity: "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat", location: "Steamboat",        start_at: "2026-07-04 09:00:00", arrival_display: "9:00 AM - 4:00 PM on July 4, 2026",  pax: 4, receipt_total_cents: 200000, balance_due_cents: 0,     waiver_signed: true,  phone: "+15551110001" },
+      { customer_name: "Bob",     activity: "2025 Polaris RZR Experience • 4 Seater • Kremmling",   location: "Kremmling",        start_at: "2026-07-04 10:00:00", arrival_display: "10:00 AM - 2:00 PM on July 4, 2026", pax: 2, receipt_total_cents: 100000, balance_due_cents: 25000, waiver_signed: false, phone: null },
+      { customer_name: "Charlie", activity: "Rabbit Ears Pass - Ride From | Polaris 4 Seater",      location: "Rabbit Ears Pass", start_at: "2026-07-04 13:30:00", arrival_display: "1:30 PM - 5:30 PM on July 4, 2026",  pax: 4, receipt_total_cents: 80000,  balance_due_cents: 0,     waiver_signed: true,  phone: "+15551110002" },
     ];
     const out = formatManifestResponse(rows, "today");
     chk("op: dispatch header includes day + count + pax + dollars",

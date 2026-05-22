@@ -150,28 +150,62 @@ function normalizeManifestRow(r) {
 }
 
 // Parse the end-time from arrival_display when end_at isn't on the view.
-// Examples:
+// Returns a NAIVE timestamp string ("YYYY-MM-DD HH:MM:SS" in MT wall clock)
+// so downstream comparisons / formatting don't apply host-TZ shifts.
+// Examples handled:
 //   "1:00PM - 5:00PM on Aug 14, 2026"
 //   "9:00 AM - 5:00 PM on June 12, 2026"
 //   "9:00 AM on July 03 to 5:00 PM on July 05, 2026"
-// Returns an ISO string (best-effort) or null if unparseable.
+const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
+                 january:1, february:2, march:3, april:4, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
+function parseMonthDayYear(str) {
+  const m = String(str ?? "").trim().match(/^([A-Za-z]+)\s+(\d{1,2})(?:,\s*(\d{4}))?$/);
+  if (!m) return null;
+  const mon = MONTHS[m[1].toLowerCase()];
+  if (!mon) return null;
+  return {
+    month: mon,
+    day:   parseInt(m[2], 10),
+    year:  m[3] ? parseInt(m[3], 10) : new Date().getFullYear(),
+  };
+}
+function parseAmPm(str) {
+  const m = String(str ?? "").trim().match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const ampm = m[3].toUpperCase();
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+  if (ampm === "PM" && h !== 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return { h, m: min };
+}
+function joinNaive(date, time) {
+  const yyyy = String(date.year).padStart(4, "0");
+  const mm   = String(date.month).padStart(2, "0");
+  const dd   = String(date.day).padStart(2, "0");
+  const hh   = String(time.h).padStart(2, "0");
+  const min  = String(time.m).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}:00`;
+}
+
 export function parseEndAtFromArrival(display, startAtFallback) {
   if (!display) return null;
   try {
     const s = String(display);
-    // Multi-day "9:00 AM on July 03 to 5:00 PM on July 05, 2026"
-    const mDay = s.match(/(\d{1,2}:\d{2}\s*[AP]M)\s+on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)\s+to\s+(\d{1,2}:\d{2}\s*[AP]M)\s+on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)/i);
+    // Multi-day: "...on July 03 to 5:00 PM on July 05, 2026"
+    const mDay = s.match(/on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)\s+to\s+(\d{1,2}:\d{2}\s*[AP]M)\s+on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)/i);
     if (mDay) {
-      const endDate = mDay[4].includes(",") ? mDay[4] : `${mDay[4]}, ${new Date().getFullYear()}`;
-      const parsed = new Date(`${endDate} ${mDay[3]}`);
-      if (!isNaN(parsed)) return parsed.toISOString();
+      const date = parseMonthDayYear(mDay[3]);
+      const time = parseAmPm(mDay[2]);
+      if (date && time) return joinNaive(date, time);
     }
-    // Single-day "1:00 PM - 5:00 PM on June 12, 2026" (also "1:00PM - 5:00PM on Aug 14, 2026")
+    // Single-day: "1:00 PM - 5:00 PM on June 12, 2026"
     const mSame = s.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*-\s*(\d{1,2}:\d{2}\s*[AP]M)\s+on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)/i);
     if (mSame) {
-      const endDate = mSame[3].includes(",") ? mSame[3] : `${mSame[3]}, ${new Date().getFullYear()}`;
-      const parsed = new Date(`${endDate} ${mSame[2]}`);
-      if (!isNaN(parsed)) return parsed.toISOString();
+      const date = parseMonthDayYear(mSame[3]);
+      const time = parseAmPm(mSame[2]);
+      if (date && time) return joinNaive(date, time);
     }
     return null;
   } catch { return null; }
@@ -474,6 +508,58 @@ export async function getUpcomingManifest(crmSupabase, days = 7) {
   } catch {
     return [];
   }
+}
+
+// MT-wall-clock helpers. DB2 daily_manifest stores naive timestamps that are
+// ALREADY in America/Denver wall clock (e.g. "2026-05-22 13:00:00" means 1pm
+// MT). If we run `new Date(...)` on that and then `.toLocaleTimeString({
+// timeZone: "America/Denver" })`, JS treats it as UTC and shifts -6h → wrong.
+// These helpers parse hour/minute/date directly from the string so the
+// rendered time matches the stored wall clock.
+function formatMTTimeFromNaive(naive) {
+  if (!naive) return "?";
+  const m = String(naive).match(/[T ](\d{1,2}):(\d{2})/);
+  if (!m) return "?";
+  let h = parseInt(m[1], 10);
+  const min = m[2];
+  if (!Number.isFinite(h)) return "?";
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return min === "00" ? `${h} ${ampm}` : `${h}:${min} ${ampm}`;
+}
+function formatMTDateFromNaive(naive, opts = { weekday: "short", month: "short", day: "numeric" }) {
+  if (!naive) return "?";
+  const m = String(naive).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return "?";
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.toLocaleDateString("en-US", { timeZone: "UTC", ...opts });
+}
+// Extract hour-of-day from a naive timestamp (0-23) without TZ conversion.
+function hourFromNaive(naive) {
+  if (!naive) return null;
+  const m = String(naive).match(/[T ](\d{1,2}):(\d{2})/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// Parse the END hour (0-23) from an arrival_display string. Handles both
+// "9:00 AM - 5:00 PM on June 12, 2026" and
+// "9:00 AM on July 03 to 5:00 PM on July 05, 2026".
+function endHourFromArrival(display) {
+  if (!display) return null;
+  const s = String(display);
+  // Multi-day form: "...to 5:00 PM on..."
+  let m = s.match(/to\s+(\d{1,2}):(\d{2})\s*([AP]M)/i);
+  if (!m) {
+    // Single-day form: "1:00 PM - 5:00 PM on ..."
+    m = s.match(/-\s*(\d{1,2}):(\d{2})\s*([AP]M)/i);
+  }
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const ampm = m[3].toUpperCase();
+  if (!Number.isFinite(h)) return null;
+  if (ampm === "PM" && h !== 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return h;
 }
 
 // Display helpers — capitalize lowercase DB values for human-friendly output.
@@ -794,19 +880,51 @@ export function classifyDuration(startAt, endAt) {
   }
 }
 
-// Bucket a Date (or ISO string) into MT hour-of-day → "morning" / "midday" /
-// "afternoon" / "evening". Used for clustering pickups and returns.
-function timeBlock(iso) {
-  if (!iso) return "unknown";
-  try {
-    const hourStr = new Date(iso).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", hour12: false });
-    const h = parseInt(hourStr, 10);
-    if (!Number.isFinite(h)) return "unknown";
-    if (h <  10) return "morning";
-    if (h <  13) return "midday";
-    if (h <  17) return "afternoon";
-    return "evening";
-  } catch { return "unknown"; }
+// Naive-timestamp-aware duration classifier. Computes hours by parsing the
+// date+time portions directly so the result doesn't depend on the host TZ.
+// Prefers arrival_display when both start_at and end_at look unreliable.
+export function classifyDurationFromNaive(startNaive, endNaive, arrivalDisplay) {
+  // Multi-day detection from arrival_display: "...on July 03 to ... on July 05..."
+  if (arrivalDisplay && /\bto\b/i.test(arrivalDisplay)) {
+    const m = arrivalDisplay.match(/on\s+([A-Za-z]+\s+\d{1,2})(?:,\s*\d{4})?\s+to\s+(?:[\d:]+\s*[AP]M\s+)?on\s+([A-Za-z]+\s+\d{1,2})/i);
+    if (m) {
+      // Spans multiple calendar days → multi-day (or overnight if just one night)
+      const startDayStr = m[1];
+      const endDayStr   = m[2];
+      // Different-day strings → at least overnight; assume multi_day unless
+      // a more precise day count is parseable.
+      if (startDayStr.trim() !== endDayStr.trim()) {
+        return { label: "multi_day", hours: null, is_multi_day: true };
+      }
+    }
+  }
+
+  // Single-day: parse hours from naive timestamps (works without TZ math).
+  const sH = hourFromNaive(startNaive);
+  // End time: prefer endNaive's hour; fall back to endHourFromArrival.
+  let eH = hourFromNaive(endNaive);
+  if (!Number.isFinite(eH) && arrivalDisplay) eH = endHourFromArrival(arrivalDisplay);
+  if (!Number.isFinite(sH) || !Number.isFinite(eH)) {
+    return { label: "unknown", hours: null, is_multi_day: false };
+  }
+  let hours = eH - sH;
+  if (hours <= 0) hours += 24; // crossed midnight (unlikely for single-day rentals)
+  if (hours <  4)  return { label: "short",     hours, is_multi_day: false };
+  if (hours <= 8)  return { label: "half_day",  hours, is_multi_day: false };
+  if (hours <= 24) return { label: "full_day",  hours, is_multi_day: false };
+  return { label: "multi_day", hours, is_multi_day: true };
+}
+
+// Bucket a naive timestamp string into MT hour-of-day → "morning" / "midday"
+// / "afternoon" / "evening". Uses hourFromNaive so we don't shift by TZ.
+function timeBlock(naive) {
+  if (!naive) return "unknown";
+  const h = hourFromNaive(naive);
+  if (!Number.isFinite(h)) return "unknown";
+  if (h <  10) return "morning";
+  if (h <  13) return "midday";
+  if (h <  17) return "afternoon";
+  return "evening";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -831,33 +949,39 @@ export function buildTodayLoadSnapshot(manifest) {
   const multidayUnpaid = [];
 
   for (const r of rows) {
-    totals.pax += Number(r.customer_count) || 0;
-    totals.revenue_cents += Number(r.total_cents) || 0;
+    // Accept both view shape (pax / receipt_total_cents) and internal shape
+    // (customer_count / total_cents from normalizeManifestRow).
+    const pax   = Number(r.pax ?? r.customer_count) || 0;
+    const cents = Number(r.receipt_total_cents ?? r.total_cents) || 0;
+
+    totals.pax += pax;
+    totals.revenue_cents += cents;
     totals.unpaid_cents  += Number(r.balance_due_cents) || 0;
     if (r.waiver_signed === false) totals.missing_waivers += 1;
 
     const cls = classifyActivity(r.activity);
     const vKey = cls.short_label;
     const v    = vehicleMix.get(vKey) ?? { count: 0, pax: 0 };
-    v.count += 1; v.pax += Number(r.customer_count) || 0;
+    v.count += 1; v.pax += pax;
     vehicleMix.set(vKey, v);
 
-    const dur = classifyDuration(r.start_at, r.end_at);
+    // Duration — prefer explicit end_at, fall back to arrival_display.
+    const endAt = r.end_at ?? (r.arrival_display ? parseEndAtFromArrival(r.arrival_display, r.start_at) : null);
+    const dur   = classifyDurationFromNaive(r.start_at, endAt, r.arrival_display);
     if (dur.label in durationMix) durationMix[dur.label] += 1;
 
     const loc = r.location ?? "Unknown";
     const L   = locationMix.get(loc) ?? { count: 0, pax: 0 };
-    L.count += 1; L.pax += Number(r.customer_count) || 0;
+    L.count += 1; L.pax += pax;
     locationMix.set(loc, L);
 
     const block = timeBlock(r.start_at);
     clusters[block] = (clusters[block] ?? 0) + 1;
 
-    // Late returns (full-day / multi-day ending past 5pm today)
-    if (r.end_at) {
-      const endHour = parseInt(new Date(r.end_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", hour12: false }), 10);
-      if (Number.isFinite(endHour) && endHour >= 17) lateReturns.push(r);
-    }
+    // Late returns (full-day / multi-day ending past 5pm today).
+    // r.arrival_display contains the wall-clock end time directly — parse it.
+    const endHour = endHourFromArrival(r.arrival_display);
+    if (Number.isFinite(endHour) && endHour >= 17) lateReturns.push(r);
 
     if (dur.is_multi_day && (Number(r.balance_due_cents) || 0) > 0) {
       multidayUnpaid.push(r);
@@ -939,14 +1063,12 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     // Shown inline for ≤8 bookings; otherwise we summarize + suggest "Reply 1".
     if (manifest.length <= 8) {
       for (const r of manifest) {
-        const time  = r.start_at
-          ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
-          : "?";
+        const time  = formatMTTimeFromNaive(r.start_at);
         const name  = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
         const act   = compactActivity(r.activity);
         const loc   = capLocation(r.location);
         const phone = shortPhone(r.phone);
-        lines.push(`• ${time} — ${name} · ${act} · ${loc} · ${r.customer_count ?? "?"}p · ${phone}`);
+        lines.push(`• ${time} — ${name} · ${act} · ${loc} · ${r.pax ?? r.customer_count ?? "?"}p · ${phone}`);
       }
     } else {
       // Compact summary for heavy days
@@ -979,7 +1101,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     lines.push("🏁 TODAY — quiet, nothing on the manifest.");
   }
 
-  // ── 📅 NEXT 7 DAYS — upcoming bookings preview ──────────────────────────
+  // ── 📅 NEXT 7 DAYS — summary view (totals + breakdown, not per-booking) ─
   const upcomingManifest = Array.isArray(extras.upcomingManifest) ? extras.upcomingManifest : [];
   const upcomingRev      = extras.upcomingRevenue ?? null;
   if (upcomingManifest.length > 0 || (upcomingRev && upcomingRev.bookings > 0)) {
@@ -987,22 +1109,47 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     lines.push("📅 NEXT 7 DAYS");
     if (upcomingRev && upcomingRev.bookings > 0) {
       const dol = `$${Math.round((upcomingRev.revenue_cents ?? 0) / 100).toLocaleString()}`;
-      lines.push(`• ${upcomingRev.bookings} booking${upcomingRev.bookings !== 1 ? "s" : ""} · ${dol}`);
+      const pax = upcomingManifest.reduce((s, r) => s + (Number(r.pax ?? r.customer_count) || 0), 0);
+      lines.push(`• ${upcomingRev.bookings} bookings · ${pax} guests · ${dol}`);
     }
-    // List up to 5 upcoming with date + name + location
-    for (const r of upcomingManifest.slice(0, 5)) {
-      const date = r.start_at
-        ? new Date(r.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", weekday: "short", month: "short", day: "numeric" })
-        : "?";
-      const time = r.start_at
-        ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
-        : "?";
-      const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
-      const act  = compactActivity(r.activity);
-      const loc  = capLocation(r.location);
-      lines.push(`• ${date} ${time} — ${name} · ${act} · ${loc} · ${r.customer_count ?? "?"}p`);
+    if (upcomingManifest.length) {
+      // Location breakdown
+      const byLoc = new Map();
+      for (const r of upcomingManifest) {
+        const loc = capLocation(r.location);
+        byLoc.set(loc, (byLoc.get(loc) ?? 0) + 1);
+      }
+      const locParts = [...byLoc.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([loc, n]) => `${loc} ${n}`);
+      if (locParts.length) lines.push(`• Locations: ${locParts.join(" · ")}`);
+
+      // Vehicle mix
+      const byVeh = new Map();
+      for (const r of upcomingManifest) {
+        const v = classifyActivity(r.activity).short_label;
+        byVeh.set(v, (byVeh.get(v) ?? 0) + 1);
+      }
+      const vehParts = [...byVeh.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([v, n]) => `${n} ${v}`);
+      if (vehParts.length) lines.push(`• Vehicles: ${vehParts.join(", ")}`);
+
+      // Busiest day of the week ahead
+      const byDay = new Map();
+      for (const r of upcomingManifest) {
+        const d = (r.start_at ?? "").slice(0, 10);
+        byDay.set(d, (byDay.get(d) ?? 0) + 1);
+      }
+      const sortedDays = [...byDay.entries()].sort((a, b) => b[1] - a[1]);
+      if (sortedDays.length && sortedDays[0][1] >= 2) {
+        const [bestDate, count] = sortedDays[0];
+        const label = formatMTDateFromNaive(bestDate, { weekday: "short", month: "short", day: "numeric" });
+        lines.push(`• Busiest day: ${label} (${count} bookings)`);
+      }
     }
-    if (upcomingManifest.length > 5) lines.push(`  …+${upcomingManifest.length - 5} more`);
   }
 
   // ── ⚠ ACTIONS NEEDED — surface real problems, not metrics ───────────────
@@ -1014,7 +1161,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     const top   = unpaid[0];
     const topName = (top.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
     const topAmt  = `$${Math.round((top.balance_due_cents ?? 0) / 100).toLocaleString()}`;
-    const topDate = top.start_at ? new Date(top.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+    const topDate = formatMTDateFromNaive(top.start_at, { month: "short", day: "numeric" });
     actions.push(`$${Math.round(total / 100).toLocaleString()} unpaid across ${unpaid.length} booking${unpaid.length !== 1 ? "s" : ""} — biggest: ${topName} ${topAmt} (${topDate})`);
   }
 
@@ -1061,10 +1208,10 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
   if (highValue.length) {
     const top = highValue[0];
     const name = (top.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
-    const dol  = `$${Math.round((top.total_cents ?? 0) / 100).toLocaleString()}`;
-    const date = top.start_at ? new Date(top.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+    const dol  = `$${Math.round((top.total_cents ?? top.receipt_total_cents ?? 0) / 100).toLocaleString()}`;
+    const date = formatMTDateFromNaive(top.start_at, { month: "short", day: "numeric" });
     const unpaidNote = (top.balance_due_cents ?? 0) > 0 ? " — UNPAID" : "";
-    revLines.push(`Largest upcoming: ${name} ${dol} (${date}, ${top.activity ?? "?"})${unpaidNote}`);
+    revLines.push(`Largest upcoming: ${name} ${dol} (${date}, ${compactActivity(top.activity)})${unpaidNote}`);
   }
   if (revLines.length) {
     lines.push("");
@@ -1107,7 +1254,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     const top  = unpaid[0];
     const name = (top.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
     const dol  = `$${Math.round((top.balance_due_cents ?? 0) / 100).toLocaleString()}`;
-    const date = top.start_at ? new Date(top.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+    const date = formatMTDateFromNaive(top.start_at, { month: "short", day: "numeric" });
     followups.push(`Call ${name} — ${dol} unpaid balance before ${date}`);
   }
   // Hot leads
@@ -1165,13 +1312,12 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
   return text;
 }
 
-// Helper — true if ISO date string is today in MT.
-function isToday(iso) {
-  if (!iso) return false;
-  try {
-    const d = new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Denver" });
-    return d === todayMT();
-  } catch { return false; }
+// Helper — true if the naive timestamp's date portion matches today MT.
+// (DB2 stores dates in MT wall clock, so direct prefix match works.)
+function isToday(naive) {
+  if (!naive) return false;
+  const m = String(naive).match(/^(\d{4}-\d{2}-\d{2})/);
+  return !!m && m[1] === todayMT();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1925,14 +2071,12 @@ export function formatManifestResponse(rows, day) {
     lines.push("");
     lines.push(blockLabel[key]);
     for (const r of block.slice(0, 6)) {
-      const time  = r.start_at
-        ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
-        : "?";
+      const time  = formatMTTimeFromNaive(r.start_at);
       const cls   = classifyActivity(r.activity);
       const loc   = capLocation(r.location);
       const first = (r.customer_name ?? "?").split(" ")[0];
       const phone = shortPhone(r.phone);
-      lines.push(`• ${time} — ${cls.short_label} · ${loc} · ${first} (${r.customer_count ?? "?"}p) · ${phone}`);
+      lines.push(`• ${time} — ${cls.short_label} · ${loc} · ${first} (${r.pax ?? r.customer_count ?? "?"}p) · ${phone}`);
     }
     if (block.length > 6) lines.push(`  …+${block.length - 6} more`);
   }
@@ -1943,11 +2087,16 @@ export function formatManifestResponse(rows, day) {
     lines.push("↩ RETURN FLOW");
     for (const r of snap.late_returns.slice(0, 4)) {
       const cls  = classifyActivity(r.activity);
-      const time = r.end_at
-        ? new Date(r.end_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
-        : "?";
+      // arrival_display contains the return time in wall-clock format.
+      const endHour = endHourFromArrival(r.arrival_display);
+      let timeStr = "late";
+      if (Number.isFinite(endHour)) {
+        const ampm = endHour >= 12 ? "PM" : "AM";
+        const h12 = endHour % 12 || 12;
+        timeStr = `${h12} ${ampm}`;
+      }
       const first = (r.customer_name ?? "?").split(" ")[0];
-      lines.push(`• ${time} return — ${cls.short_label} · ${first}`);
+      lines.push(`• ${timeStr} return — ${cls.short_label} · ${first}`);
     }
   }
   if (snap.duration_mix.multi_day > 0 || snap.duration_mix.overnight > 0) {
@@ -2063,8 +2212,8 @@ export function formatUnpaidResponse(rows) {
   for (const r of rows.slice(0, 8)) {
     const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
     const dol  = `$${Math.round((r.balance_due_cents ?? 0) / 100).toLocaleString()}`;
-    const date = r.start_at ? new Date(r.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
-    const act  = (r.activity ?? "?").replace(/^.*?[•\-]\s*/, "").slice(0, 22);
+    const date = formatMTDateFromNaive(r.start_at, { month: "short", day: "numeric" });
+    const act  = compactActivity(r.activity).slice(0, 22);
     lines.push(`• ${name} — ${dol} (${date}, ${act})`);
   }
   return lines.join("\n");
@@ -2079,9 +2228,9 @@ export function formatMissingWaiversResponse(rows) {
   const lines = [`MISSING WAIVERS — ${rows.length} guest${rows.length !== 1 ? "s" : ""}${arrivingToday.length ? `, ${arrivingToday.length} arriving today` : ""}`, ""];
   for (const r of rows.slice(0, 8)) {
     const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
-    const date = r.start_at ? new Date(r.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
-    const time = r.start_at ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" }) : "?";
-    lines.push(`• ${name} — ${date} ${time} (${r.customer_count ?? "?"}p, ${r.location ?? "?"})`);
+    const date = formatMTDateFromNaive(r.start_at, { month: "short", day: "numeric" });
+    const time = formatMTTimeFromNaive(r.start_at);
+    lines.push(`• ${name} — ${date} ${time} (${r.pax ?? r.customer_count ?? "?"}p, ${capLocation(r.location)})`);
   }
   return lines.join("\n");
 }
@@ -2139,7 +2288,7 @@ export function formatFollowupsResponse({ unpaid, hotLeads, handoffs }) {
     for (const r of unpaid.slice(0, 3)) {
       const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
       const dol  = `$${Math.round((r.balance_due_cents ?? 0) / 100).toLocaleString()}`;
-      const date = r.start_at ? new Date(r.start_at).toLocaleDateString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric" }) : "?";
+      const date = formatMTDateFromNaive(r.start_at, { month: "short", day: "numeric" });
       lines.push(`• ${name} — ${dol} before ${date}`);
     }
   }
@@ -2282,8 +2431,7 @@ export async function formatBusiestHours(client, crmSupabase, range) {
     const byHour = new Map();
     for (const r of rows) {
       if (!r.start_at) continue;
-      const hourStr = new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", hour12: false });
-      const hour = parseInt(hourStr, 10);
+      const hour = hourFromNaive(r.start_at);
       if (!Number.isFinite(hour)) continue;
       const cur = byHour.get(hour) ?? { bookings: 0, pax: 0 };
       cur.bookings += 1;
@@ -2366,9 +2514,9 @@ export async function formatFirstTimers(client, crmSupabase, range) {
     if (!firstTimers.length) return `FIRST-TIME GUESTS (${range.label ?? "range"})\n\nNo first-timers — everyone has booked before.`;
     const lines = [`FIRST-TIME GUESTS (${range.label ?? "range"}) — ${firstTimers.length}`, ""];
     for (const r of firstTimers.slice(0, 5)) {
-      const time = r.start_at ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" }) : "";
+      const time = formatMTTimeFromNaive(r.start_at);
       const firstName = (r.customer_name ?? "Unknown").split(" ")[0];
-      lines.push(`• ${firstName} — ${r.activity ?? "?"} ${time} (${r.pax ?? "?"} pax)`);
+      lines.push(`• ${firstName} — ${compactActivity(r.activity)} ${time} (${r.pax ?? "?"} pax)`);
     }
     return lines.join("\n");
   } catch (err) {
@@ -2434,14 +2582,13 @@ export async function buildOperatorApiData(clientId, supabase, crmSupabase = nul
   // doesn't need to know which source it's reading from.
   const bookings = manifest.length
     ? manifest.map((r) => ({
-        time:     r.start_at
-          ? new Date(r.start_at).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" })
-          : null,
-        name:     `${r.customer_name ?? "?"} — ${r.activity ?? "?"}`,
-        capacity: r.customer_count ?? null,
-        pk:       r.fareharbor_pk,
-        revenue_cents: r.total_cents ?? null,
-        source:   "manifest",
+        time:          formatMTTimeFromNaive(r.start_at),
+        name:          `${r.customer_name ?? "?"} — ${compactActivity(r.activity)}`,
+        capacity:      r.pax ?? r.customer_count ?? null,
+        pk:            r.fareharbor_pk,
+        revenue_cents: r.receipt_total_cents ?? r.total_cents ?? null,
+        location:      capLocation(r.location),
+        source:        "manifest",
       }))
     : todaySlots.map((s) => ({ ...s, source: "fh_kb" }));
 
