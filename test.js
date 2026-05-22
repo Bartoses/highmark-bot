@@ -14181,16 +14181,42 @@ async function testActionOrientedBriefing() {
     chk("action: location concentration computes pct", result[0]?.pct === 68);
   }
 
-  // ── detectPacingSignal ───────────────────────────────────────────────────
+  // ── detectUnresolvedHandoffs filters test sessions + 555 / 999 phones ────
   {
-    // The production code awaits both `.gte(...)` (this week) and
-    // `.gte(...).lt(...)` (last week). Build a chainable thenable so both
-    // resolve to count=8 regardless of whether .lt() was called.
+    const { detectUnresolvedHandoffs } = await import("./operatorBriefing.js");
+    const supabaseStub = {
+      from() {
+        return {
+          select() { return this; },
+          eq()     { return this; },
+          neq()    { return this; },
+          order()  { return this; },
+          limit()  { return Promise.resolve({ data: [
+            { from_number: "+19705551234", messages: [{ role: "user", content: "real customer" }], session_type: "live" },
+            { from_number: "+15550010005", messages: [{ role: "user", content: "test message" }], session_type: "live" },
+            { from_number: "+19999999999", messages: [{ role: "user", content: "placeholder" }], session_type: "live" },
+            { from_number: "+13035551234", messages: [{ role: "user", content: "actually real (970 area + 555 prefix)" }], session_type: "live" },
+          ], error: null }); },
+        };
+      },
+    };
+    const rows = await detectUnresolvedHandoffs(supabaseStub, "csr_rea");
+    chk("action: unresolved handoffs include real customer phone",
+        rows.some((r) => r.from_number === "+19705551234"), JSON.stringify(rows));
+    chk("action: unresolved handoffs exclude +1 555 test prefix",
+        !rows.some((r) => r.from_number === "+15550010005"), JSON.stringify(rows));
+    chk("action: unresolved handoffs exclude +1 999 placeholder prefix",
+        !rows.some((r) => r.from_number === "+19999999999"), JSON.stringify(rows));
+  }
+
+  // ── detectPacingSignal — chains .not("fareharbor_pk", "ilike", "BOT-%") ──
+  {
     const makeChain = (count) => {
       const chain = {
         select() { return chain; },
         gte()    { return chain; },
         lt()     { return chain; },
+        not()    { return chain; },
         then(resolve) { resolve({ data: null, error: null, count }); return Promise.resolve(); },
       };
       return chain;
@@ -14390,16 +14416,14 @@ async function testBriefingPolish() {
         result.revenue_cents === 3 * 17500, JSON.stringify(result));
   }
 
-  // ── getNewBookingsStats — DB2 happy path ─────────────────────────────────
+  // ── getNewBookingsStats — DB2 happy path (excludes BOT-* sync artifacts) ──
   {
-    const crmStub = {
-      from() {
-        return {
-          select() { return this; },
-          gte()    { return Promise.resolve({ data: null, error: null, count: 7 }); },
-        };
-      },
+    const chain = {
+      select() { return chain; },
+      gte()    { return chain; },
+      not()    { return Promise.resolve({ data: null, error: null, count: 7 }); },
     };
+    const crmStub = { from: () => chain };
     const result = await getNewBookingsStats(crmStub, null);
     chk("polish: getNewBookingsStats source=db2", result.source === "db2", JSON.stringify(result));
     chk("polish: getNewBookingsStats returns counts for 24h and 7d",

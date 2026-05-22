@@ -220,20 +220,21 @@ export async function getSeasonRevenue(client, crmSupabase, supabase, season = n
   }
 }
 
-// New bookings created in the last N hours. Tries DB2 bookings.created_at
-// (covers MPWR + FH writes). Falls back to DB1 confirmations_sent on error.
-// Returns { last_24h, last_7d, source } counts.
+// New bookings created in the last N hours — counts ONLY real bookings,
+// excluding BOT- placeholder PKs that get re-inserted by the MPWR sync.
+// Tries DB2 bookings.created_at (covers MPWR + FH writes). Falls back to DB1
+// confirmations_sent on error. Returns { last_24h, last_7d, source } counts.
 export async function getNewBookingsStats(crmSupabase, supabase) {
   const now    = Date.now();
   const since24 = new Date(now -  24 * 60 * 60 * 1000).toISOString();
   const since7d = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Try DB2 bookings table (covers MPWR + FH inserts)
+  // Try DB2 bookings table — filter out BOT-* placeholders (sync artifacts).
   if (crmSupabase) {
     try {
       const [r24, r7] = await Promise.all([
-        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", since24),
-        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", since7d),
+        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", since24).not("fareharbor_pk", "ilike", "BOT-%"),
+        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", since7d).not("fareharbor_pk", "ilike", "BOT-%"),
       ]);
       if (!r24.error && !r7.error) {
         return {
@@ -597,8 +598,9 @@ export async function detectMissingPhones(crmSupabase) {
 }
 
 // Compares this week's new-booking volume vs last week to flag a slowdown.
-// Uses DB2 bookings.created_at; falls back to DB1 confirmations_sent.
-// Returns { this_week, last_week, delta_pct } or null on error.
+// Uses DB2 bookings.created_at, excluding BOT- placeholders (sync artifacts).
+// Falls back to DB1 confirmations_sent. Returns { this_week, last_week,
+// delta_pct } or null on error.
 export async function detectPacingSignal(crmSupabase, supabase) {
   const now      = Date.now();
   const sinceTW  = new Date(now - 7  * 86400 * 1000).toISOString();
@@ -608,8 +610,8 @@ export async function detectPacingSignal(crmSupabase, supabase) {
   if (crmSupabase) {
     try {
       const [tw, lw] = await Promise.all([
-        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", sinceTW),
-        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", sinceLW).lt("created_at", sinceTW),
+        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", sinceTW).not("fareharbor_pk", "ilike", "BOT-%"),
+        crmSupabase.from("bookings").select("id", { count: "exact", head: true }).gte("created_at", sinceLW).lt("created_at", sinceTW).not("fareharbor_pk", "ilike", "BOT-%"),
       ]);
       if (!tw.error && !lw.error) {
         thisWeek = tw.count ?? 0;
@@ -657,19 +659,30 @@ export async function detectLocationConcentration(crmSupabase) {
   } catch { return []; }
 }
 
-// Unresolved handoffs from DB1 conversations.
+// Unresolved handoffs from DB1 conversations. Excludes test sessions and
+// obvious test phone numbers (555-XXX, +1555...) so the briefing only
+// surfaces real customer issues.
 export async function detectUnresolvedHandoffs(supabase, clientId) {
   if (!supabase || !clientId) return [];
   try {
     const { data } = await supabase
       .from("conversations")
-      .select("from_number, updated_at, messages")
+      .select("from_number, updated_at, messages, session_type")
       .eq("client_id", clientId)
       .eq("handoff", true)
       .eq("handoff_resolved", false)
+      .neq("session_type", "test")
       .order("updated_at", { ascending: false })
-      .limit(5);
-    return data ?? [];
+      .limit(10);
+    const rows = data ?? [];
+    // Filter out test phone patterns: anything starting with +1555 / 555 / 999
+    // (Twilio test numbers + obvious placeholders).
+    return rows.filter((r) => {
+      const phone = String(r.from_number ?? "").replace(/^\+1/, "");
+      if (/^555/.test(phone)) return false;
+      if (/^999/.test(phone)) return false;
+      return true;
+    }).slice(0, 5);
   } catch { return []; }
 }
 
