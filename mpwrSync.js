@@ -241,6 +241,25 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
 
   if (error) throw new Error(error.message);
 
+  // Sweep BOT- placeholder for the same booking, if one exists.
+  // BOT- rows are synthetic PKs written by handleImportBooking when an SMS-forwarded
+  // notification arrives before the real CO- PK syncs. They carry $0 / placeholder
+  // data; the CO- row we just wrote is authoritative. handleImportBooking skips
+  // writing a BOT- when a real twin already exists — this sweeps the reverse case.
+  const startAt = toUtcIso(beginDate, startTime);
+  const { data: stalePlaceholder } = await db2.from('bookings')
+    .select('fareharbor_pk')
+    .eq('customer_id', customerId)
+    .eq('start_at', startAt)
+    .like('fareharbor_pk', 'BOT-%')
+    .maybeSingle();
+  if (stalePlaceholder?.fareharbor_pk) {
+    const { error: delErr } = await db2.from('bookings')
+      .delete().eq('fareharbor_pk', stalePlaceholder.fareharbor_pk);
+    if (delErr) console.warn(`[mpwrSync] could not delete BOT- twin ${stalePlaceholder.fareharbor_pk}: ${delErr.message}`);
+    else console.log(`[mpwrSync] swept BOT- twin ${stalePlaceholder.fareharbor_pk} (real ${order.shortId} arrived)`);
+  }
+
   // Mirror to DB2 contacts (CRM) so MPWR bookings are reachable by campaigns,
   // segments, and the operator portal — same pattern as operator_import + sms.
   // Skipped silently when phone is missing (upsertContact requires a phone key).
