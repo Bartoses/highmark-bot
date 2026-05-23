@@ -15,6 +15,7 @@
 // Response: turbo-stream encoded JSON — decoded by decodeTurboStream() below.
 
 import { normalizePhone } from './phoneUtils.js';
+import { upsertContact }  from './crm.js';
 
 const MPWR_BASE = 'https://mpwr-hq.poladv.com';
 
@@ -127,10 +128,22 @@ function buildArrivalDisplay(dateStr, startTime, endTime) {
 
 // ── Fetch orders from MPWR ────────────────────────────────────────────────────
 
-async function fetchOrders(outfitterId, token) {
-  // No filter cookie — the default view returns all active (upcoming) orders.
-  // Custom filter cookies trigger a 202 redirect; the bare request returns 200.
-  const res = await fetch(`${MPWR_BASE}/orders.data`, {
+// MPWR's /orders.data defaults to ~7 days ahead. To include bookings further
+// out, pass `?dateRange={"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD"}`
+// (JSON value, URL-encoded once) — same shape the web UI's "Next 30 days"
+// preset emits. We pull 90 days forward to cover the booking pipeline.
+const FETCH_DAYS_AHEAD = 90;
+
+export function buildDateRangeParam(daysAhead = FETCH_DAYS_AHEAD) {
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  const today = new Date();
+  const end   = new Date(); end.setDate(end.getDate() + daysAhead);
+  return encodeURIComponent(JSON.stringify({ startDate: fmt(today), endDate: fmt(end) }));
+}
+
+async function fetchOrders(outfitterId, token, daysAhead = FETCH_DAYS_AHEAD) {
+  const url = `${MPWR_BASE}/orders.data?dateRange=${buildDateRangeParam(daysAhead)}`;
+  const res = await fetch(url, {
     headers: {
       'Accept':          '*/*',
       'Cookie':          `__xauth=Bearer ${token}; __outfitter_session=${outfitterId}`,
@@ -227,6 +240,27 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
   }, { onConflict: 'fareharbor_pk' });
 
   if (error) throw new Error(error.message);
+
+  // Mirror to DB2 contacts (CRM) so MPWR bookings are reachable by campaigns,
+  // segments, and the operator portal — same pattern as operator_import + sms.
+  // Skipped silently when phone is missing (upsertContact requires a phone key).
+  if (phone) {
+    const status   = order.reservationStatus;
+    const isBooked = (STATUS_MAP[status] ?? 'booked') === 'booked';
+    const tags     = ['rzr', (locationLabel ?? '').toLowerCase()].filter(Boolean);
+    if (isBooked) tags.push('booked');
+    try {
+      await upsertContact(phone, {
+        firstName:         order.customerFirstName ?? null,
+        lastName:          order.customerLastName  ?? null,
+        source:            'mpwr_sync',
+        tags,
+        incrementBookings: false, // upsert is idempotent per sync cycle — don't double-count
+      }, db2);
+    } catch (err) {
+      console.warn(`[mpwrSync] contact mirror failed for ${order.shortId}: ${err.message}`);
+    }
+  }
 
   // Fire confirmation text (idempotent, gated by per-client toggle).
   // Status "booked" only — cancellations / completed don't trigger.

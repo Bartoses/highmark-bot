@@ -14287,6 +14287,24 @@ async function testPolarisConfirmations() {
     chk("polaris: handles missing time gracefully",
         !text.includes("undefined") && !text.includes("NaN"), text);
   }
+
+  // Date range param — pulls 90-day window so future bookings sync
+  {
+    const { buildDateRangeParam } = await import("./mpwrSync.js");
+    const raw = decodeURIComponent(buildDateRangeParam(90));
+    const obj = JSON.parse(raw);
+    chk("mpwr: dateRange param is JSON {startDate,endDate}",
+        typeof obj.startDate === "string" && typeof obj.endDate === "string", raw);
+    chk("mpwr: dateRange uses YYYY-MM-DD format",
+        /^\d{4}-\d{2}-\d{2}$/.test(obj.startDate) && /^\d{4}-\d{2}-\d{2}$/.test(obj.endDate), raw);
+    const start = new Date(obj.startDate + "T00:00:00Z");
+    const end   = new Date(obj.endDate   + "T00:00:00Z");
+    const days  = Math.round((end - start) / 86400000);
+    chk("mpwr: dateRange spans ~90 days", days === 90, `got ${days} days`);
+    chk("mpwr: param is URL-encoded (% present, no raw quotes)",
+        buildDateRangeParam(90).includes("%22") && !buildDateRangeParam(90).includes("\""),
+        buildDateRangeParam(90));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
