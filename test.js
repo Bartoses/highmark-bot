@@ -14305,6 +14305,61 @@ async function testPolarisConfirmations() {
         buildDateRangeParam(90).includes("%22") && !buildDateRangeParam(90).includes("\""),
         buildDateRangeParam(90));
   }
+
+  // Location derivation from productTitle
+  {
+    const { deriveLocationFromTitle } = await import("./mpwrSync.js");
+    chk("mpwr: Rabbit Ears product → rabbit_ears",
+        deriveLocationFromTitle("Rabbit Ears UTV Rentals | Ride From Trailhead (Remote Backcountry)") === "rabbit_ears");
+    chk("mpwr: North Routt guided → north_routt",
+        deriveLocationFromTitle("North Routt Guided RZR Tour | Private Backcountry Adventure Near Steamboat") === "north_routt");
+    chk("mpwr: North Routt rental → north_routt",
+        deriveLocationFromTitle("North Routt RZR Rentals | Ride From Trailhead (Remote Backcountry)") === "north_routt");
+    chk("mpwr: Kremmling → kremmling",
+        deriveLocationFromTitle("Kremmling RZR Rentals | Easy Access Off-Road Adventures") === "kremmling");
+    chk("mpwr: Steamboat → steamboat",
+        deriveLocationFromTitle("Steamboat RZR Rentals | Explore Colorado Backcountry (Trailer Pickup)") === "steamboat");
+    chk("mpwr: AVA Kremmling affiliate → kremmling",
+        deriveLocationFromTitle("AVA Kremmling SXS - ColoradoRafting.net") === "kremmling");
+    chk("mpwr: unknown product → null", deriveLocationFromTitle("Boulder Snowshoe Tour") === null);
+    chk("mpwr: null safe", deriveLocationFromTitle(null) === null);
+    chk("mpwr: empty string safe", deriveLocationFromTitle("") === null);
+  }
+
+  // Vehicle resolution from order detail
+  {
+    const { resolveVehicleFromDetail } = await import("./mpwrSync.js");
+    // 8 vehicles, all same family
+    const calvin = {
+      reservation: { vehicles: Array(8).fill({ assetFamilyId: "fam-rzr-pro-s4" }) },
+      assetFamilies: [
+        { id: "fam-rzr-pro-s4", name: "RZR PRO S4" },
+        { id: "fam-something-else", name: "Ranger XP" },
+      ],
+    };
+    chk("mpwr: vehicle resolved from single-family booking",
+        resolveVehicleFromDetail(calvin) === "RZR PRO S4");
+
+    // Mixed families — return most common
+    const mixed = {
+      reservation: { vehicles: [
+        { assetFamilyId: "f1" }, { assetFamilyId: "f1" }, { assetFamilyId: "f2" },
+      ] },
+      assetFamilies: [
+        { id: "f1", name: "RZR PRO S4" },
+        { id: "f2", name: "Ranger" },
+      ],
+    };
+    chk("mpwr: vehicle picks dominant family on mixed booking",
+        resolveVehicleFromDetail(mixed) === "RZR PRO S4");
+
+    // Empty/missing data → null
+    chk("mpwr: null detail → null", resolveVehicleFromDetail(null) === null);
+    chk("mpwr: empty vehicles → null",
+        resolveVehicleFromDetail({ reservation: { vehicles: [] }, assetFamilies: [{ id: "x", name: "X" }] }) === null);
+    chk("mpwr: vehicle without family in lookup → null",
+        resolveVehicleFromDetail({ reservation: { vehicles: [{ assetFamilyId: "unknown" }] }, assetFamilies: [{ id: "f1", name: "X" }] }) === null);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -32,6 +32,27 @@ const STATUS_MAP = {
   NoShow:        'no_show',
 };
 
+// Map MPWR productTitle prefix → DB2 location string.
+// Order matters — most specific prefixes first. Fallback uses the outfitter label.
+const LOCATION_PREFIXES = [
+  { match: /^rabbit ears/i, location: 'rabbit_ears' },
+  { match: /^north routt/i, location: 'north_routt' },
+  { match: /^kremmling/i,   location: 'kremmling'   },
+  { match: /^steamboat/i,   location: 'steamboat'   },
+  { match: /^ava kremmling/i, location: 'kremmling' },
+];
+
+// Derive a DB2 `bookings.location` value from the MPWR productTitle.
+// Returns null when no prefix matches — caller may fall back to outfitter label.
+export function deriveLocationFromTitle(productTitle) {
+  if (!productTitle) return null;
+  const trimmed = String(productTitle).trim();
+  for (const { match, location } of LOCATION_PREFIXES) {
+    if (match.test(trimmed)) return location;
+  }
+  return null;
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 // Returns the stored JWT and warns if it's within 2 hours of expiry.
@@ -141,6 +162,70 @@ export function buildDateRangeParam(daysAhead = FETCH_DAYS_AHEAD) {
   return encodeURIComponent(JSON.stringify({ startDate: fmt(today), endDate: fmt(end) }));
 }
 
+// Per-order detail endpoint — exposes reservation.vehicles[] + assetFamilies[]
+// so we can resolve the actual asset family name booked (e.g. "RZR PRO S4").
+// Streaming response: main JSON array, optionally followed by `Pn:[[…]]` chunks
+// of deferred data we don't need. Strip those before parsing.
+async function fetchOrderDetail(shortId, outfitterId, token) {
+  const url = `${MPWR_BASE}/orders/${shortId}.data`;
+  const res = await fetch(url, {
+    headers: {
+      'Accept':  '*/*',
+      'Cookie':  `__xauth=Bearer ${token}; __outfitter_session=${outfitterId}`,
+      'Referer': `${MPWR_BASE}/orders/${shortId}`,
+    },
+  });
+  if (!res.ok) throw new Error(`MPWR detail ${shortId} returned ${res.status}`);
+  const raw = await res.text();
+  const main = raw.split(/\nP\d+:/)[0];
+
+  // The detail response has self-referential objects; use a memoizing decoder.
+  const arr  = JSON.parse(main);
+  const memo = new Map();
+  function deref(i) {
+    if (i == null || (typeof i === 'number' && i < 0)) return null;
+    if (typeof i !== 'number') return null;
+    if (memo.has(i)) return memo.get(i);
+    const placeholder = {};
+    memo.set(i, placeholder);
+    const v = decode(arr[i]);
+    memo.set(i, v);
+    return v;
+  }
+  function decode(elem) {
+    if (elem === -5 || elem == null) return null;
+    if (typeof elem !== 'object') return elem;
+    if (Array.isArray(elem)) return elem.map(deref);
+    const out = {};
+    for (const [k, v] of Object.entries(elem)) {
+      if (!k.startsWith('_')) continue;
+      const keyName = arr[parseInt(k.slice(1), 10)];
+      if (typeof keyName === 'string') out[keyName] = deref(v);
+    }
+    return out;
+  }
+  return deref(0)?.['routes/_authenticated/_customer-orders/orders.$orderShortId/_layout']?.data ?? null;
+}
+
+// Resolve the booked vehicle asset-family name from order detail.
+// Returns a single string (the dominant family) or null if unresolved.
+// When multiple distinct families are booked (rare), returns the most common.
+export function resolveVehicleFromDetail(detail) {
+  const vehicles      = detail?.reservation?.vehicles ?? [];
+  const assetFamilies = detail?.assetFamilies ?? [];
+  if (!vehicles.length || !assetFamilies.length) return null;
+  const familyById = new Map(assetFamilies.map(f => [f?.id, f?.name]).filter(([id]) => id));
+  const counts     = new Map();
+  for (const v of vehicles) {
+    const name = familyById.get(v?.assetFamilyId);
+    if (!name) continue;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  if (!counts.size) return null;
+  // Pick most common; ties broken alphabetically for determinism.
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+}
+
 async function fetchOrders(outfitterId, token, daysAhead = FETCH_DAYS_AHEAD) {
   const url = `${MPWR_BASE}/orders.data?dateRange=${buildDateRangeParam(daysAhead)}`;
   const res = await fetch(url, {
@@ -175,7 +260,7 @@ async function fetchOrders(outfitterId, token, daysAhead = FETCH_DAYS_AHEAD) {
 
 // ── Upsert one order into DB2 ─────────────────────────────────────────────────
 
-async function upsertOrder(order, activityId, db2, { db1, twilioClient, locationLabel } = {}) {
+async function upsertOrder(order, activityId, db2, { db1, twilioClient, locationLabel, outfitterId, token } = {}) {
   const rawPhone = order.customerPhoneNumber;
   const phone    = rawPhone ? normalizePhone(rawPhone) : null;
   const name     = (
@@ -184,6 +269,25 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
   ) || null;
 
   if (!name) return 'skipped:no-name';
+
+  // Derive location from the productTitle prefix; fall back to outfitter label.
+  // E.g. "Rabbit Ears UTV Rentals | …" → 'rabbit_ears', distinct from the
+  // outfitter (58 → Steamboat). productTitle missing → outfitter fallback.
+  const productTitle = order.productTitle ?? null;
+  const location     = deriveLocationFromTitle(productTitle) ?? (locationLabel ?? '').toLowerCase() ?? null;
+
+  // Resolve booked vehicle by fetching the order detail and matching
+  // reservation.vehicles[].assetFamilyId against assetFamilies[]. Best-effort —
+  // a detail failure shouldn't block the booking upsert.
+  let vehicle = null;
+  if (outfitterId && token) {
+    try {
+      const detail = await fetchOrderDetail(order.shortId, outfitterId, token);
+      vehicle = resolveVehicleFromDetail(detail);
+    } catch (err) {
+      console.warn(`[mpwrSync] detail fetch failed for ${order.shortId}: ${err.message}`);
+    }
+  }
 
   // ── Step 1: upsert customer ─────────────────────────────────────────────────
   let customerId = null;
@@ -237,6 +341,9 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
     arrival_time:        toUtcIso(beginDate, startTime),
     arrival_display:     buildArrivalDisplay(beginDate, startTime, endTime),
     company:             'coloradosledrentals',
+    location,
+    product_title:       productTitle,
+    vehicle,
   }, { onConflict: 'fareharbor_pk' });
 
   if (error) throw new Error(error.message);
@@ -428,7 +535,7 @@ async function syncLocation(outfitterId, db2, opts = {}) {
   for (const order of orders) {
     if (!order?.shortId) { skipped++; continue; }
     try {
-      const r = await upsertOrder(order, activityId, db2, opts);
+      const r = await upsertOrder(order, activityId, db2, { ...opts, outfitterId, token });
       r === 'upserted' ? upserted++ : skipped++;
     } catch (err) {
       console.error(`[mpwrSync] ${order.shortId}: ${err.message}`);

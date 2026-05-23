@@ -224,9 +224,42 @@ export async function getTodaysManifest(clientId, crmSupabase) {
       .gte("start_at", startMT.toISOString())
       .lt("start_at", endMT.toISOString())
       .order("start_at", { ascending: true });
-    return (data ?? []).map(normalizeManifestRow);
+    const normalized = (data ?? []).map(normalizeManifestRow);
+    return await enrichManifestRows(normalized, crmSupabase);
   } catch {
     return [];
+  }
+}
+
+// Enrich manifest rows with MPWR-only fields (location, product_title, vehicle)
+// from the bookings table. The daily_manifest view exposes `location` via the
+// activities join, which is too coarse for MPWR products (Rabbit Ears vs
+// Steamboat both join to "steamboat"). When bookings.location is populated
+// (MPWR sync writes it), it overrides the view's location and adds vehicle.
+// Returns the same rows shape, with extra fields when enrichment data exists.
+async function enrichManifestRows(rows, crmSupabase) {
+  if (!Array.isArray(rows) || rows.length === 0 || !crmSupabase) return rows;
+  const pks = rows.map(r => r?.fareharbor_pk).filter(Boolean);
+  if (!pks.length) return rows;
+  try {
+    const { data: extras } = await crmSupabase
+      .from("bookings")
+      .select("fareharbor_pk, location, product_title, vehicle")
+      .in("fareharbor_pk", pks);
+    if (!extras?.length) return rows;
+    const byPk = new Map(extras.map(e => [e.fareharbor_pk, e]));
+    return rows.map(r => {
+      const e = byPk.get(r?.fareharbor_pk);
+      if (!e) return r;
+      return {
+        ...r,
+        location:      e.location      ?? r.location,
+        product_title: e.product_title ?? null,
+        vehicle:       e.vehicle       ?? null,
+      };
+    });
+  } catch {
+    return rows;
   }
 }
 
@@ -563,9 +596,11 @@ function endHourFromArrival(display) {
 }
 
 // Display helpers — capitalize lowercase DB values for human-friendly output.
+// Splits on whitespace, hyphen, AND underscore so DB values like "rabbit_ears"
+// render as "Rabbit Ears".
 function capLocation(loc) {
   if (!loc) return "?";
-  return String(loc).split(/[\s-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  return String(loc).split(/[\s_-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 function shortPhone(p) {
   if (!p) return "no phone";
@@ -1854,7 +1889,9 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
           .gte("start_at", start.toISOString())
           .lt("start_at", end.toISOString())
           .order("start_at", { ascending: true });
-        return formatManifestResponse((data ?? []).map(normalizeManifestRow), "tomorrow");
+        const normalized = (data ?? []).map(normalizeManifestRow);
+        const enriched   = await enrichManifestRows(normalized, crmSupabase);
+        return formatManifestResponse(enriched, "tomorrow");
       } catch { /* fall through */ }
     }
     const slots = await getTomorrowsAvailability(client.id, supabase);
@@ -2072,11 +2109,15 @@ export function formatManifestResponse(rows, day) {
     lines.push(blockLabel[key]);
     for (const r of block.slice(0, 6)) {
       const time  = formatMTTimeFromNaive(r.start_at);
+      // Prefer MPWR-synced vehicle ("RZR PRO S4", "Ranger XP General") when
+      // available — it's the actual booked asset. Fall back to the activity
+      // classifier for legacy bookings without enrichment.
       const cls   = classifyActivity(r.activity);
+      const label = r.vehicle ?? cls.short_label;
       const loc   = capLocation(r.location);
       const first = (r.customer_name ?? "?").split(" ")[0];
       const phone = shortPhone(r.phone);
-      lines.push(`• ${time} — ${cls.short_label} · ${loc} · ${first} (${r.pax ?? r.customer_count ?? "?"}p) · ${phone}`);
+      lines.push(`• ${time} — ${label} · ${loc} · ${first} (${r.pax ?? r.customer_count ?? "?"}p) · ${phone}`);
     }
     if (block.length > 6) lines.push(`  …+${block.length - 6} more`);
   }
