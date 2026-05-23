@@ -2642,3 +2642,206 @@ export async function buildOperatorApiData(clientId, supabase, crmSupabase = nul
     date:         todayMT(),
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OPERATOR LIVE SNAPSHOT
+// Compact text block injected into the system prompt for owner-mode Claude
+// fallbacks. Grounds freeform questions in current DB2 numbers so Claude
+// stops refusing or hallucinating. Pulls per-message; cap ~600 chars.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SNAPSHOT_CHAR_BUDGET = 1200;
+
+function fmtMoney(cents) {
+  const dollars = Math.round((Number(cents) || 0) / 100);
+  return "$" + dollars.toLocaleString();
+}
+
+function isoNDaysAgo(n) {
+  return new Date(Date.now() - n * 86400000).toISOString();
+}
+
+function isoNDaysAhead(n) {
+  return new Date(Date.now() + n * 86400000).toISOString();
+}
+
+// Sum bookings + revenue_cents in a date window from DB2 daily_manifest.
+// Filters out BOT- placeholders so we don't double-count synthetic rows.
+async function sumWindow(crmSupabase, startISO, endISO) {
+  if (!crmSupabase) return { bookings: 0, revenue_cents: 0 };
+  try {
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, receipt_total_cents, total")
+      .gte("start_at", startISO)
+      .lt("start_at", endISO);
+    let cents = 0, bookings = 0;
+    for (const r of data ?? []) {
+      if (/^BOT-/i.test(r.fareharbor_pk ?? "")) continue;
+      bookings += 1;
+      if (r.receipt_total_cents != null) cents += Number(r.receipt_total_cents) || 0;
+      else if (r.total != null)          cents += (Number(r.total) || 0) * 100;
+    }
+    return { bookings, revenue_cents: cents };
+  } catch { return { bookings: 0, revenue_cents: 0 }; }
+}
+
+// Top-N location breakdown from DB2 bookings (uses the new `location` column
+// populated by mpwrSync). Returns { location: count } sorted desc.
+async function topLocationsRecent(crmSupabase, days = 7) {
+  if (!crmSupabase) return [];
+  try {
+    const { data } = await crmSupabase
+      .from("bookings")
+      .select("location")
+      .gte("start_at", isoNDaysAgo(0))
+      .lt("start_at", isoNDaysAhead(days))
+      .not("location", "is", null)
+      .not("fareharbor_pk", "ilike", "BOT-%");
+    const counts = new Map();
+    for (const r of data ?? []) counts.set(r.location, (counts.get(r.location) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+  } catch { return []; }
+}
+
+// Open-issue counts (missing waivers, unpaid balances) from DB2 daily_manifest.
+async function getOpenIssues(crmSupabase, days = 7) {
+  if (!crmSupabase) return { missing_waivers: 0, unpaid_count: 0, unpaid_cents: 0 };
+  try {
+    const { data } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, waiver_signed, balance_due_cents, due")
+      .gte("start_at", isoNDaysAgo(0))
+      .lt("start_at", isoNDaysAhead(days));
+    let waivers = 0, unpaidN = 0, unpaidC = 0;
+    for (const r of data ?? []) {
+      if (/^BOT-/i.test(r.fareharbor_pk ?? "")) continue;
+      if (r.waiver_signed === false) waivers += 1;
+      const dueC = r.balance_due_cents ?? (r.due != null ? Number(r.due) * 100 : 0);
+      if (dueC > 0) { unpaidN += 1; unpaidC += dueC; }
+    }
+    return { missing_waivers: waivers, unpaid_count: unpaidN, unpaid_cents: unpaidC };
+  } catch { return { missing_waivers: 0, unpaid_count: 0, unpaid_cents: 0 }; }
+}
+
+// Build the live snapshot text block. Runs all queries in parallel.
+// Returns a compact, readable string suitable for system prompt injection.
+export async function buildOperatorSnapshot(client, supabase, crmSupabase) {
+  const now      = new Date();
+  const startToday = new Date(now); startToday.setHours(0, 0, 0, 0);
+  const endToday   = new Date(startToday); endToday.setDate(endToday.getDate() + 1);
+  const startThisWeek = new Date(startToday); startThisWeek.setDate(startThisWeek.getDate() - 7);
+  const startLastWeek = new Date(startThisWeek); startLastWeek.setDate(startLastWeek.getDate() - 7);
+
+  const [todayManifest, thisWeek, lastWeek, next7d, topLocs, issues, hotLeads, recentLeads] = await Promise.all([
+    getTodaysManifest(client?.id, crmSupabase),
+    sumWindow(crmSupabase, startThisWeek.toISOString(), startToday.toISOString()),
+    sumWindow(crmSupabase, startLastWeek.toISOString(), startThisWeek.toISOString()),
+    getUpcomingRevenue(client?.id, crmSupabase, 7),
+    topLocationsRecent(crmSupabase, 7),
+    getOpenIssues(crmSupabase, 7),
+    getHotLeads(client?.id, supabase, 3).catch(() => []),
+    getRecentLeads(client?.id, supabase, 24).catch(() => []),
+  ]);
+
+  const lines = [];
+  lines.push(`LIVE BUSINESS SNAPSHOT (${now.toLocaleString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} MT)`);
+
+  // TODAY
+  let todayCents = 0, todayPax = 0;
+  for (const r of todayManifest) {
+    if (/^BOT-/i.test(r.fareharbor_pk ?? "")) continue;
+    todayCents += Number(r.receipt_total_cents) || 0;
+    todayPax   += Number(r.pax ?? r.customer_count) || 0;
+  }
+  const todayN = todayManifest.filter(r => !/^BOT-/i.test(r.fareharbor_pk ?? "")).length;
+  const todayPreview = todayManifest.slice(0, 3).map(r => {
+    const first = (r.customer_name ?? "?").split(" ")[0];
+    const time  = formatMTTimeFromNaive(r.start_at);
+    const veh   = r.vehicle ?? classifyActivity(r.activity).short_label;
+    return `${first} ${time} ${capLocation(r.location)} ${veh}`;
+  }).join(" · ");
+  lines.push(`TODAY: ${todayN} bookings · ${todayPax} guests · ${fmtMoney(todayCents)}${todayPreview ? " — " + todayPreview : ""}`);
+
+  // WEEK-OVER-WEEK
+  const trend = thisWeek.revenue_cents > lastWeek.revenue_cents ? "↑" : thisWeek.revenue_cents < lastWeek.revenue_cents ? "↓" : "→";
+  lines.push(`LAST 7D: ${thisWeek.bookings} bookings · ${fmtMoney(thisWeek.revenue_cents)} (prior 7d: ${lastWeek.bookings} · ${fmtMoney(lastWeek.revenue_cents)}) ${trend}`);
+
+  // PIPELINE
+  lines.push(`NEXT 7D PIPELINE: ${next7d.bookings} bookings · ${fmtMoney(next7d.revenue_cents)}`);
+
+  // TOP LOCATIONS
+  if (topLocs.length) {
+    lines.push(`TOP LOCATIONS (next 7d): ${topLocs.map(([loc, n]) => `${capLocation(loc)} ${n}`).join(", ")}`);
+  }
+
+  // OPEN ISSUES
+  const issueBits = [];
+  if (issues.missing_waivers > 0) issueBits.push(`${issues.missing_waivers} missing waiver${issues.missing_waivers !== 1 ? "s" : ""}`);
+  if (issues.unpaid_count    > 0) issueBits.push(`${fmtMoney(issues.unpaid_cents)} unpaid (${issues.unpaid_count})`);
+  if (issueBits.length) lines.push(`OPEN ISSUES: ${issueBits.join(" · ")}`);
+
+  // LEADS
+  if (recentLeads.length || hotLeads.length) {
+    lines.push(`LEADS: ${recentLeads.length} in 24h, ${hotLeads.length} hot`);
+  }
+
+  let out = lines.join("\n");
+  if (out.length > SNAPSHOT_CHAR_BUDGET) out = out.slice(0, SNAPSHOT_CHAR_BUDGET - 1) + "…";
+  return out;
+}
+
+// Detect "FirstName LastName" sequences in a message, then look up matching
+// customers + recent bookings in DB2. Returns a compact text block or null
+// if no plausible name match was found. Used by the orchestrator to attach
+// customer context when an operator asks about a specific guest.
+export async function lookupCustomerByName(message, crmSupabase) {
+  if (!message || !crmSupabase) return null;
+  // Match capitalized 2-3 word sequences. Skip leading sentence capitalizations
+  // by requiring NOT preceded by a sentence-start punctuation.
+  const matches = String(message).match(/\b([A-Z][a-z]{1,15})(?:\s+([A-Z][a-z]{1,15})){1,2}\b/g);
+  if (!matches?.length) return null;
+
+  // Ignore common false positives (place names, day names, brand names).
+  const STOPWORDS = new Set([
+    "Steamboat Springs", "Rabbit Ears", "North Routt", "Colorado Sled",
+    "Kremmling RZR", "RZR Pro", "Pro S4", "Ranger XP", "XP General",
+    "Today Tomorrow", "Last Week", "This Week", "Next Week", "Monday",
+    "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    "Polaris Adventures",
+  ]);
+  const candidates = [...new Set(matches)].filter(n => !STOPWORDS.has(n)).slice(0, 3);
+  if (!candidates.length) return null;
+
+  try {
+    const blocks = [];
+    for (const name of candidates) {
+      const { data: customers } = await crmSupabase
+        .from("customers").select("id, name, normalized_phone, company")
+        .ilike("name", `%${name}%`).limit(2);
+      if (!customers?.length) continue;
+
+      for (const c of customers) {
+        // bookings table doesn't expose balance_due_cents (that's view-only);
+        // derive it from total_cents - total_paid_cents.
+        const { data: bookings } = await crmSupabase
+          .from("bookings")
+          .select("fareharbor_pk, start_at, status, location, product_title, vehicle, customer_count, total_cents, amount_paid_cents, total_paid_cents")
+          .eq("customer_id", c.id)
+          .order("start_at", { ascending: false })
+          .limit(3);
+        const bkLines = (bookings ?? []).slice(0, 3).map(b => {
+          const when = (b.start_at ?? "").slice(0, 10);
+          const loc  = capLocation(b.location ?? "");
+          const veh  = b.vehicle ?? "";
+          const due  = (b.total_cents ?? 0) - (b.total_paid_cents ?? b.amount_paid_cents ?? 0);
+          const paid = due > 0 ? "(unpaid)" : "";
+          return `  • ${when} ${loc} ${veh} ${b.status} ${fmtMoney(b.total_cents)} ${paid}`.replace(/\s+/g, " ").trim();
+        });
+        blocks.push(`${c.name} (${c.normalized_phone ?? "no phone"})\n${bkLines.join("\n") || "  (no bookings)"}`);
+      }
+    }
+    if (!blocks.length) return null;
+    return "CUSTOMER LOOKUP:\n" + blocks.join("\n");
+  } catch { return null; }
+}

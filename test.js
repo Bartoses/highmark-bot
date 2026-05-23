@@ -14360,6 +14360,32 @@ async function testPolarisConfirmations() {
     chk("mpwr: vehicle without family in lookup → null",
         resolveVehicleFromDetail({ reservation: { vehicles: [{ assetFamilyId: "unknown" }] }, assetFamilies: [{ id: "f1", name: "X" }] }) === null);
   }
+
+  // Operator snapshot + customer lookup — exported helpers compose without DB.
+  // Full DB integration is exercised manually; here we verify the wiring + null
+  // safety so the orchestrator never explodes when crmSupabase is unavailable.
+  {
+    const { buildOperatorSnapshot, lookupCustomerByName } = await import("./operatorBriefing.js");
+
+    // Snapshot with no DB clients → still returns a string (degrades gracefully).
+    const snap = await buildOperatorSnapshot({ id: "csr_rea", name: "CSR" }, null, null);
+    chk("operator: snapshot is a non-empty string even with null DBs",
+        typeof snap === "string" && snap.length > 0, snap?.slice(0, 80));
+    chk("operator: snapshot starts with LIVE BUSINESS SNAPSHOT",
+        snap.startsWith("LIVE BUSINESS SNAPSHOT"));
+    chk("operator: snapshot stays under char budget",
+        snap.length <= 1200, `got ${snap.length}`);
+
+    // Customer lookup name detection — returns null when no DB or no name.
+    chk("operator: customer lookup null on null supabase",
+        await lookupCustomerByName("what about Brad Tooley?", null) === null);
+    chk("operator: customer lookup null on lowercase name",
+        await lookupCustomerByName("what about brad tooley", null) === null);
+    chk("operator: customer lookup null on empty message",
+        await lookupCustomerByName("", null) === null);
+    chk("operator: customer lookup null when no capitalized name",
+        await lookupCustomerByName("how is business today?", null) === null);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

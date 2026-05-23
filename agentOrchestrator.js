@@ -42,7 +42,7 @@ import {
   isAffirmative,
   isNegative,
 } from "./ownerMode.js";
-import { detectAndHandleOperatorCommand } from "./operatorBriefing.js";
+import { detectAndHandleOperatorCommand, buildOperatorSnapshot, lookupCustomerByName } from "./operatorBriefing.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ORCHESTRATOR CONSTANTS
@@ -210,10 +210,26 @@ export async function runOrchestrator(params) {
       knowledgeContext: fullKnowledgeContext,
     });
 
-    // Owner mode: append operator instruction to override guest-facing behavior
-    const systemPrompt = ownerMode
-      ? `${baseSystemPrompt}\n\n${buildOwnerInstruction(client)}`
-      : baseSystemPrompt;
+    // Owner mode: append operator instruction + live DB2 snapshot + optional
+    // customer lookup so Claude has real numbers (not just tone guidance) when
+    // answering freeform questions that fell past the deterministic routes.
+    let systemPrompt = baseSystemPrompt;
+    if (ownerMode) {
+      const [snapshot, customerCtx] = await Promise.all([
+        buildOperatorSnapshot(client, supabase, crmSupabase).catch((err) => {
+          console.warn(`[ORCHESTRATOR] snapshot build failed: ${err.message}`);
+          return null;
+        }),
+        lookupCustomerByName(msg, crmSupabase).catch((err) => {
+          console.warn(`[ORCHESTRATOR] customer lookup failed: ${err.message}`);
+          return null;
+        }),
+      ]);
+      const parts = [baseSystemPrompt, buildOwnerInstruction(client)];
+      if (snapshot)    parts.push(snapshot);
+      if (customerCtx) parts.push(customerCtx);
+      systemPrompt = parts.join("\n\n");
+    }
 
     // ── Step 6: Claude API call ───────────────────────────────────────────────
     const history = buildHistory(convo);
