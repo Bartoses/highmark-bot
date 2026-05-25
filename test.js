@@ -14429,6 +14429,68 @@ async function testPolarisConfirmations() {
     chk("messaging: booking >8d in past → too_stale skip",
         r.scheduled === false && r.reason === "too_stale", JSON.stringify(r));
   }
+
+  // Campaign duplicate-name guard — prevents the next "129 active duplicates"
+  // spam loop. createCampaign() refuses to insert when a same-name live row
+  // already exists for that client.
+  {
+    const { createCampaign } = await import("./campaigns.js");
+    const existingId = "11111111-2222-3333-4444-555555555555";
+
+    function makeFakeSupabase({ duplicateStatus = "active" } = {}) {
+      return {
+        from: (table) => ({
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                in: () => ({
+                  limit: () => ({
+                    maybeSingle: async () => ({
+                      data: duplicateStatus ? { id: existingId, status: duplicateStatus } : null,
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+          insert: () => ({
+            select: () => ({
+              single: async () => ({
+                data: { id: "new-row", name: "X" },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      };
+    }
+
+    let threw = null;
+    try {
+      await createCampaign(makeFakeSupabase({ duplicateStatus: "active" }), {
+        clientId: "csr_rea",
+        name:     "4B Test Snow Campaign",
+        messageBody: "Fresh powder",
+        campaignType: "event_triggered",
+        triggerType: "snow_fresh",
+      });
+    } catch (e) { threw = e; }
+    chk("campaigns: createCampaign refuses duplicate live name", threw !== null && threw.code === "DUPLICATE_CAMPAIGN_NAME", threw?.message);
+    chk("campaigns: duplicate error exposes existingId for portal jump",
+        threw?.existingId === existingId, String(threw?.existingId));
+
+    // Sent / failed rows should NOT block a re-creation (name reuse over time)
+    let okResult = null;
+    try {
+      okResult = await createCampaign(makeFakeSupabase({ duplicateStatus: null }), {
+        clientId: "csr_rea",
+        name:     "Spring Reopen Promo",
+        messageBody: "We're back!",
+      });
+    } catch (e) { okResult = { error: e.message }; }
+    chk("campaigns: no live duplicate → insert succeeds",
+        okResult && !okResult.error, JSON.stringify(okResult));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -59,6 +59,35 @@ export async function createCampaign(supabase, {
   // Event-triggered campaigns are always "active" (ready to fire); manual campaigns start as draft
   const initialStatus = campaignType === "event_triggered" ? "active" : (scheduledAt ? "scheduled" : "draft");
 
+  // Duplicate guard — refuse to create a second live campaign with the same
+  // (client_id, name). Sent / failed rows are NOT considered duplicates so
+  // operators can re-run a campaign of the same name in the future. The
+  // partial UNIQUE index in db1_campaigns_unique_name.sql is the authoritative
+  // gate; this pre-check just gives a friendly error before hitting Postgres.
+  // Defensive: errors here (e.g. older test mocks) must not block valid creates.
+  try {
+    const LIVE_STATUSES = ["draft", "scheduled", "active", "sending"];
+    const { data: dup } = await supabase
+      .from("campaigns")
+      .select("id, status")
+      .eq("client_id", clientId)
+      .eq("name", name)
+      .in("status", LIVE_STATUSES)
+      .limit(1)
+      .maybeSingle();
+    if (dup?.id) {
+      const err = new Error(`A campaign named "${name}" is already live (status=${dup.status}, id=${dup.id}). Edit or archive it before creating another with the same name.`);
+      err.code = "DUPLICATE_CAMPAIGN_NAME";
+      err.existingId = dup.id;
+      throw err;
+    }
+  } catch (preCheckErr) {
+    if (preCheckErr?.code === "DUPLICATE_CAMPAIGN_NAME") throw preCheckErr;
+    // Any other error from the pre-check (mock incompatibility, transient
+    // network) is non-fatal — fall through to the INSERT and let the partial
+    // UNIQUE index catch the dup if there is one.
+  }
+
   const { data, error } = await supabase
     .from("campaigns")
     .insert({
@@ -78,7 +107,17 @@ export async function createCampaign(supabase, {
     .select()
     .single();
 
-  if (error) throw new Error(`[CAMPAIGNS] createCampaign failed: ${error.message}`);
+  if (error) {
+    // 23505 = Postgres unique-constraint violation — the partial UNIQUE index
+    // on (client_id, name) caught a race the pre-check missed. Re-throw with
+    // the same typed error the pre-check would have raised.
+    if (error.code === "23505" && /campaigns_unique_live_name/i.test(error.message ?? "")) {
+      const err = new Error(`A campaign named "${name}" is already live for this client. Edit or archive it before creating another.`);
+      err.code = "DUPLICATE_CAMPAIGN_NAME";
+      throw err;
+    }
+    throw new Error(`[CAMPAIGNS] createCampaign failed: ${error.message}`);
+  }
 
   console.log(`[CAMPAIGNS] Created "${name}" (id=${data.id}, type=${audienceType}, client=${clientId})`);
 

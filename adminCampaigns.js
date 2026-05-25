@@ -60,6 +60,9 @@ export async function handleCreateCampaign(req, res, supabase) {
     return res.status(201).json({ campaign });
   } catch (err) {
     console.error("[ADMIN CAMPAIGNS] create error:", err.message);
+    if (err.code === "DUPLICATE_CAMPAIGN_NAME") {
+      return res.status(409).json({ error: err.message, code: err.code, existing_id: err.existingId ?? null });
+    }
     return res.status(400).json({ error: err.message });
   }
 }
