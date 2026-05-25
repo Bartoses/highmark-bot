@@ -27,15 +27,15 @@ import { scheduleMessage } from "./scheduler.js";
 // Placeholders: {name} {activity} {date} {time} {phone} {booking_link}
 
 export const DEFAULT_TEMPLATES = {
-  confirmation:      "Hey {name}! You're confirmed for {activity} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
+  confirmation:      "Hey {name}! You're confirmed for {activity} at {location} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
   // 30-min post-booking nudge: simple recap + open door. Tips moved to same-day
   // reminder so guests get them when they're most actionable.
-  booking_followup:  "Hey {name}! Thanks for booking {activity} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
-  reminder_24h:      "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
+  booking_followup:  "Hey {name}! Thanks for booking {activity} at {location} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
+  reminder_24h:      "Reminder: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
   // Same-day: reminder + the prep tips guests actually need that morning.
-  reminder_same_day: "Today's the day! Your {activity} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
+  reminder_same_day: "Today's the day! Your {activity} at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
-  post_experience:   "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
+  post_experience:   "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity} at {location}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };
 
 // ── Template Resolution ───────────────────────────────────────────────────────
@@ -46,9 +46,16 @@ export function resolveTemplate(config, type, data) {
 
   const firstName = (data.name ?? "there").split(" ")[0];
 
+  // Capitalize location (e.g. "rabbit_ears" → "Rabbit Ears") for display.
+  const locRaw   = data.location ?? "";
+  const location = locRaw
+    ? String(locRaw).split(/[\s_-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
+    : "";
+
   return template
     .replace(/\{name\}/g,         firstName)
     .replace(/\{activity\}/g,     data.activity     ?? "your booking")
+    .replace(/\{location\}/g,     location)
     .replace(/\{date\}/g,         data.date         ?? "")
     .replace(/\{time\}/g,         data.time         ?? "")
     .replace(/\{phone\}/g,        data.phone        ?? "")

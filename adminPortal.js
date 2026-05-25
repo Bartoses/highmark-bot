@@ -635,20 +635,29 @@ export async function handlePortalBulkDeleteCampaigns(req, res, supabase) {
 }
 
 // ── GET /portal/api/messaging/activity-options ───────────────────────────────
-// Distinct product_titles from DB2 bookings for this client — fuels the
-// "Activity" dropdown in the test sender so operators can preview a template
-// against the actual product names guests would see.
+// Distinct (product_title, location) pairs from DB2 bookings for this client —
+// fuels the "Activity" dropdown in the test sender so operators can preview a
+// template against the actual products + locations guests would see. Each
+// option includes both fields so the UI can display them together and the
+// test-send handler can substitute {location} accurately.
 export async function handlePortalActivityOptions(req, res, crmSupabase) {
   if (!crmSupabase) return res.json({ options: [] });
   try {
     const { data } = await crmSupabase
       .from("bookings")
-      .select("product_title")
+      .select("product_title, location")
       .not("product_title", "is", null)
-      .limit(500);
-    const set = new Set();
-    for (const r of data ?? []) if (r.product_title) set.add(r.product_title);
-    const options = [...set].sort();
+      .limit(1000);
+    // Dedup on (product_title, location) so the same product at multiple
+    // locations shows up once per location.
+    const seen = new Map();
+    for (const r of data ?? []) {
+      const key = `${r.product_title}|${r.location ?? ""}`;
+      if (!seen.has(key)) seen.set(key, { product_title: r.product_title, location: r.location ?? null });
+    }
+    const options = [...seen.values()].sort((a, b) =>
+      (a.product_title ?? "").localeCompare(b.product_title ?? "")
+    );
     return res.json({ options });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -1898,27 +1907,24 @@ export async function handlePortalTestSend(req, res, supabase, twilioClient) {
 
   const { DEFAULT_TEMPLATES, resolveTemplate } = await import("./messagingEngine.js");
   let body;
+  // Common substitution vars — pulled from vars{} with safe defaults so the
+  // test sender works even when the operator leaves a field blank.
+  const tplVars = {
+    name:        vars.name        ?? "Test",
+    activity:    vars.activity    ?? "your booking",
+    location:    vars.location    ?? "",
+    date:        vars.date        ?? "Saturday",
+    time:        vars.time        ?? "10:00 AM",
+    bookingLink: vars.booking_link ?? "",
+    reviewUrl:   cfg?.review_url  ?? "",
+    websiteUrl:  cfg?.website_url ?? "",
+  };
+
   if (typeof custom_body === "string" && custom_body.trim().length) {
     // Allow ad-hoc copy; still pass through resolveTemplate to honor {placeholders}
-    body = resolveTemplate({ custom_templates: { [type]: custom_body } }, type, {
-      name:        vars.name        ?? "Test",
-      activity:    vars.activity    ?? "your booking",
-      date:        vars.date        ?? "Saturday",
-      time:        vars.time        ?? "10:00 AM",
-      bookingLink: vars.booking_link ?? "",
-      reviewUrl:   cfg?.review_url  ?? "",
-      websiteUrl:  cfg?.website_url ?? "",
-    });
+    body = resolveTemplate({ custom_templates: { [type]: custom_body } }, type, tplVars);
   } else if (cfg?.custom_templates?.[type] || DEFAULT_TEMPLATES[type]) {
-    body = resolveTemplate(cfg, type, {
-      name:        vars.name        ?? "Test",
-      activity:    vars.activity    ?? "your booking",
-      date:        vars.date        ?? "Saturday",
-      time:        vars.time        ?? "10:00 AM",
-      bookingLink: vars.booking_link ?? "",
-      reviewUrl:   cfg?.review_url  ?? "",
-      websiteUrl:  cfg?.website_url ?? "",
-    });
+    body = resolveTemplate(cfg, type, tplVars);
   } else {
     return res.status(400).json({ error: `no template configured for type ${type} — set one in custom_templates or pass custom_body` });
   }

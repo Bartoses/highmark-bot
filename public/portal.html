@@ -8045,11 +8045,11 @@ function renderMessagingSection(cfg, editable) {
   const templatesSection = editable ? `
     <div style="margin-top:20px;">
       <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Custom Message Templates</div>
-      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override default message text. Use {name}, {activity}, {date}, {time}, {phone}, {booking_link}, {review_url}, {website_url} as placeholders. Leave blank to use the default.</div>
-      ${tplField('tpl_confirmation',     'Booking confirmation (immediate)', 'confirmation', 'Hey {name}! You\'re confirmed for {activity} on {date} at {time}. Save this number for any questions — we\'ll send a reminder before. See you out there! 🏔')}
-      ${tplField('tpl_booking_followup', '30-min post-booking nudge',       'booking_followup', 'Hey {name}! Thanks for booking {activity} on {date}. You\'re all set — we\'ll send a reminder before. Questions in the meantime? Just reply, we\'re here.')}
-      ${tplField('tpl_reminder_24h',     '24-hour reminder',   'reminder_24h',     'Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.')}
-      ${tplField('tpl_reminder_same_day','Same-day reminder (prep tips)',  'reminder_same_day','Today\'s the day! Your {activity} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!')}
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override default message text. Use {name}, {activity}, {location}, {date}, {time}, {phone}, {booking_link}, {review_url}, {website_url} as placeholders. Leave blank to use the default.</div>
+      ${tplField('tpl_confirmation',     'Booking confirmation (immediate)', 'confirmation', 'Hey {name}! You\'re confirmed for {activity} at {location} on {date} at {time}. Save this number for any questions — we\'ll send a reminder before. See you out there! 🏔')}
+      ${tplField('tpl_booking_followup', '30-min post-booking nudge',       'booking_followup', 'Hey {name}! Thanks for booking {activity} at {location} on {date}. You\'re all set — we\'ll send a reminder before. Questions in the meantime? Just reply, we\'re here.')}
+      ${tplField('tpl_reminder_24h',     '24-hour reminder',   'reminder_24h',     'Reminder: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.')}
+      ${tplField('tpl_reminder_same_day','Same-day reminder (prep tips)',  'reminder_same_day','Today\'s the day! Your {activity} at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!')}
       ${tplField('tpl_cancel_rebook',    'Rebooking offer (in cancellation text)', 'cancellation_rebook', 'Want to pick a new date? {booking_link}')}
       ${tplField('tpl_post_experience',  'Post-experience follow-up', 'post_experience', 'Hey {name}! Thanks for riding with us 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}.')}
     </div>` : '';
@@ -8244,32 +8244,47 @@ function renderTestSenderCard(currentUserPhone) {
 // the final string from the actual config on send.
 // Mirror of server-side messagingEngine.DEFAULT_TEMPLATES — keep in sync.
 const TS_DEFAULT_TEMPLATES = {
-  confirmation:        "Hey {name}! You're confirmed for {activity} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
-  booking_followup:    "Hey {name}! Thanks for booking {activity} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
-  reminder_24h:        "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
-  reminder_same_day:   "Today's the day! Your {activity} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
+  confirmation:        "Hey {name}! You're confirmed for {activity} at {location} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
+  booking_followup:    "Hey {name}! Thanks for booking {activity} at {location} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
+  reminder_24h:        "Reminder: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
+  reminder_same_day:   "Today's the day! Your {activity} at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
-  post_experience:     "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
+  post_experience:     "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity} at {location}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };
 
-// Populate the test sender's Activity dropdown with distinct product_titles
-// from DB2 bookings — operators preview against the real products guests see.
+// Populate the test sender's Activity dropdown with distinct (product, location)
+// pairs from DB2 bookings — operators pick the real product + location combo
+// so {activity} and {location} both substitute against real data.
+// The <option>'s value is the product_title; data-location stashes the
+// location so testSenderPreview() + sendTestMessage() can include it.
+function capLoc(loc) {
+  if (!loc) return '';
+  return String(loc).split(/[\s_-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
 async function loadTestSenderActivities() {
   const sel = document.getElementById('ts_activity');
   if (!sel) return;
   const r = await apiFetch('/messaging/activity-options');
   if (!r || !r.options?.length) return;  // keep fallback default
   const current = sel.value;
-  sel.innerHTML = r.options.map(o => `<option>${escHtml(o)}</option>`).join('');
-  // Restore prior selection if still present, else first option
-  if (r.options.includes(current)) sel.value = current;
+  sel.innerHTML = r.options.map(o => {
+    const loc = capLoc(o.location);
+    const label = loc ? `${o.product_title} — ${loc}` : o.product_title;
+    return `<option value="${escHtml(o.product_title)}" data-location="${escHtml(o.location ?? '')}">${escHtml(label)}</option>`;
+  }).join('');
+  if (r.options.some(o => o.product_title === current)) sel.value = current;
   testSenderPreview();
 }
 
 function testSenderPreview() {
   const type     = document.getElementById('ts_type')?.value ?? 'reminder_24h';
   const name     = document.getElementById('ts_name')?.value ?? 'Sean';
-  const activity = document.getElementById('ts_activity')?.value ?? 'your booking';
+  const actSel   = document.getElementById('ts_activity');
+  const activity = actSel?.value ?? 'your booking';
+  // Location comes off the selected <option>'s data-location (set by
+  // loadTestSenderActivities from DB2 bookings.location).
+  const locRaw   = actSel?.selectedOptions?.[0]?.dataset?.location ?? '';
+  const location = capLoc(locRaw);
   const date     = document.getElementById('ts_date')?.value ?? '';
   const time     = document.getElementById('ts_time')?.value ?? '';
   const custom   = document.getElementById('ts_custom')?.value?.trim();
@@ -8280,6 +8295,7 @@ function testSenderPreview() {
   const out = tpl
     .replace(/\{name\}/g, (name || 'there').split(" ")[0])
     .replace(/\{activity\}/g, activity || 'your booking')
+    .replace(/\{location\}/g, location)
     .replace(/\{date\}/g, date || '')
     .replace(/\{time\}/g, time || '')
     .replace(/\{review_url\}/g, review)
@@ -8297,9 +8313,13 @@ async function sendTestMessage() {
   if (phones.length > 5) { alert('Maximum 5 phones per test send'); return; }
   const type   = document.getElementById('ts_type').value;
   const custom = document.getElementById('ts_custom').value.trim();
+  const actSel = document.getElementById('ts_activity');
   const vars = {
     name:     document.getElementById('ts_name').value,
-    activity: document.getElementById('ts_activity').value,
+    activity: actSel.value,
+    // Pass the raw DB location ("rabbit_ears", "kremmling", …); the server
+    // capitalizes it before substitution into {location}.
+    location: actSel.selectedOptions?.[0]?.dataset?.location ?? '',
     date:     document.getElementById('ts_date').value,
     time:     document.getElementById('ts_time').value,
   };
