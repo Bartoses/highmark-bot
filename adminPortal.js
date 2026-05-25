@@ -1778,6 +1778,160 @@ export async function handlePortalRunPostExperience(req, res, supabase, crmSupab
   return res.json({ scheduled, skipped, results });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SEND TEST MESSAGE — preview an SMS template against real phone(s)
+// POST /portal/api/messaging/test-send
+// Body: { type, phones: [...], vars?: { name, activity, date, time, booking_link }, custom_body? }
+// Auth: client_admin / internal_admin only.
+// Sends immediately via Twilio, records to scheduled_messages with
+// message_type='test_<type>' for the activity report.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handlePortalTestSend(req, res, supabase, twilioClient) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!twilioClient) return res.status(503).json({ error: "Twilio unavailable" });
+  if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) {
+    return res.status(403).json({ error: "Forbidden — admin role required" });
+  }
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const { type, phones, vars = {}, custom_body } = req.body ?? {};
+  const VALID_TYPES = [
+    "confirmation", "reminder_24h", "reminder_same_day",
+    "cancellation_rebook", "booking_followup", "post_experience",
+  ];
+  if (!type || !VALID_TYPES.includes(type)) {
+    return res.status(400).json({ error: `type must be one of: ${VALID_TYPES.join(", ")}` });
+  }
+  if (!Array.isArray(phones) || !phones.length) {
+    return res.status(400).json({ error: "phones (array of E.164 strings) required" });
+  }
+  if (phones.length > 5) {
+    return res.status(400).json({ error: "test sends are limited to 5 phones at a time" });
+  }
+  // Normalize phones to E.164 (best-effort)
+  const { normalizePhone } = await import("./phoneUtils.js");
+  const normalized = phones.map(p => normalizePhone(p)).filter(Boolean);
+  if (!normalized.length) return res.status(400).json({ error: "no valid phone numbers in request" });
+
+  // Load template + URLs from messaging_config (with safe defaults)
+  const { data: cfg } = await supabase
+    .from("messaging_config")
+    .select("custom_templates, review_url, website_url")
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  const { DEFAULT_TEMPLATES, resolveTemplate } = await import("./messagingEngine.js");
+  let body;
+  if (typeof custom_body === "string" && custom_body.trim().length) {
+    // Allow ad-hoc copy; still pass through resolveTemplate to honor {placeholders}
+    body = resolveTemplate({ custom_templates: { [type]: custom_body } }, type, {
+      name:        vars.name        ?? "Test",
+      activity:    vars.activity    ?? "your booking",
+      date:        vars.date        ?? "Saturday",
+      time:        vars.time        ?? "10:00 AM",
+      bookingLink: vars.booking_link ?? "",
+      reviewUrl:   cfg?.review_url  ?? "",
+      websiteUrl:  cfg?.website_url ?? "",
+    });
+  } else if (cfg?.custom_templates?.[type] || DEFAULT_TEMPLATES[type]) {
+    body = resolveTemplate(cfg, type, {
+      name:        vars.name        ?? "Test",
+      activity:    vars.activity    ?? "your booking",
+      date:        vars.date        ?? "Saturday",
+      time:        vars.time        ?? "10:00 AM",
+      bookingLink: vars.booking_link ?? "",
+      reviewUrl:   cfg?.review_url  ?? "",
+      websiteUrl:  cfg?.website_url ?? "",
+    });
+  } else {
+    return res.status(400).json({ error: `no template configured for type ${type} — set one in custom_templates or pass custom_body` });
+  }
+  body = body.slice(0, 320);
+
+  // Resolve from-number: per-client env var → global fallback
+  const fromKey   = `${clientId.toUpperCase()}_TWILIO_NUMBER`;
+  const fromPhone = process.env[fromKey] || process.env.TWILIO_PHONE_NUMBER || null;
+  if (!fromPhone) return res.status(503).json({ error: "no outbound Twilio number configured" });
+
+  // Send + audit per phone
+  const results = [];
+  for (const phone of normalized) {
+    try {
+      const msg = await twilioClient.messages.create({ body, from: fromPhone, to: phone });
+      // Audit the test send so it appears in the activity report
+      try {
+        await supabase.from("scheduled_messages").insert({
+          phone,
+          body,
+          message_type: `test_${type}`,
+          client_id:    clientId,
+          send_at:      new Date().toISOString(),
+          sent_at:      new Date().toISOString(),
+          status:       "sent",
+          twilio_sid:   msg.sid,
+          attempts:     1,
+          metadata:     {
+            from_phone:   fromPhone,
+            test:         true,
+            triggered_by: req.portalUser?.email ?? null,
+          },
+        });
+      } catch (auditErr) {
+        console.warn("[TEST-SEND] audit insert failed:", auditErr.message);
+      }
+      results.push({ phone, success: true, twilio_sid: msg.sid });
+    } catch (err) {
+      results.push({ phone, success: false, error: err.message });
+    }
+  }
+  const sent = results.filter(r => r.success).length;
+  console.log(`[PORTAL] test-send type=${type} client=${clientId} sent=${sent}/${normalized.length} by=${req.portalUser?.email ?? "?"}`);
+  return res.json({ sent, failed: results.length - sent, body_preview: body, results });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MESSAGE ACTIVITY REPORT — recent scheduled_messages for this client
+// GET /portal/api/messaging/activity?days=7&type=&status=&phone=&limit=200
+// Returns the most recent rows for the client with the filters applied.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handlePortalMessagingActivity(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const days    = Math.max(1, Math.min(90, Number(req.query?.days) || 7));
+  const type    = req.query?.type    || null;
+  const status  = req.query?.status  || null;
+  const phone   = req.query?.phone   || null;
+  const limit   = Math.max(1, Math.min(500, Number(req.query?.limit) || 200));
+
+  const since = new Date(Date.now() - days * 86400 * 1000).toISOString();
+
+  let q = supabase
+    .from("scheduled_messages")
+    .select("id, phone, message_type, status, body, send_at, sent_at, attempts, max_attempts, twilio_sid, error, metadata, created_at")
+    .eq("client_id", clientId)
+    .gte("send_at", since)
+    .order("send_at", { ascending: false })
+    .limit(limit);
+
+  if (type)   q = q.eq("message_type", type);
+  if (status) q = q.eq("status", status);
+  if (phone)  q = q.ilike("phone", `%${phone}%`);
+
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Aggregate by status + type for the summary header
+  const summary = { total: data?.length ?? 0, byStatus: {}, byType: {} };
+  for (const r of data ?? []) {
+    summary.byStatus[r.status]      = (summary.byStatus[r.status]      ?? 0) + 1;
+    summary.byType[r.message_type]  = (summary.byType[r.message_type]  ?? 0) + 1;
+  }
+  return res.json({ messages: data ?? [], summary, window_days: days });
+}
+
 // ── GET /portal/api/bot-config ────────────────────────────────────────────────
 // Returns bot_config row for client, falling back to the clients-table values
 // (bot_name, tone, opener_text) when no per-client override row exists yet.

@@ -36,7 +36,7 @@ import {
   handleListConversations, handleConversationBadgeCount, handleGetConversation,
   handlePauseConversation, handleResumeConversation, handleSendAgentMessage, handleSuggestReply,
 } from "./adminConversations.js";
-import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalCreateClient, handlePortalUpdateClient, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption, handlePortalCrawlPages, handlePortalIntegrations, handlePortalMessaging, handlePortalUpdateMessaging, handlePortalPastBookings, handlePortalRunPostExperience,
+import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalCreateClient, handlePortalUpdateClient, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption, handlePortalCrawlPages, handlePortalIntegrations, handlePortalMessaging, handlePortalUpdateMessaging, handlePortalPastBookings, handlePortalRunPostExperience, handlePortalTestSend, handlePortalMessagingActivity,
   handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
   handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
   handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync,
@@ -1894,6 +1894,8 @@ app.get( "/portal/api/messaging",      requirePortalAuth, (req, res) => handlePo
 app.patch("/portal/api/messaging",     requirePortalAuth, (req, res) => handlePortalUpdateMessaging(req, res, supabase));
 app.get( "/portal/api/messaging/past-bookings",       requirePortalAuth, (req, res) => handlePortalPastBookings(req, res, supabase, crmSupabase));
 app.post("/portal/api/messaging/post-experience/run", requirePortalAuth, (req, res) => handlePortalRunPostExperience(req, res, supabase, crmSupabase));
+app.post("/portal/api/messaging/test-send",           requirePortalAuth, (req, res) => handlePortalTestSend(req, res, supabase, twilioClient));
+app.get( "/portal/api/messaging/activity",            requirePortalAuth, (req, res) => handlePortalMessagingActivity(req, res, supabase));
 app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePortalBotConfig(req, res, supabase));
 app.patch("/portal/api/bot-config",   requirePortalAuth, (req, res) => handlePortalUpdateBotConfig(req, res, supabase));
 app.get( "/portal/api/booking-config",  requirePortalAuth, (req, res) => handlePortalBookingConfig(req, res, supabase));

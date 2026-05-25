@@ -15793,6 +15793,21 @@ async function testSmartCampaigns() {
 
   // ── POST /admin/campaigns — event_triggered type ───────────────────────────
   {
+    // Test cleanup: the duplicate-name guard (added 2026-05-25) will refuse a
+    // second create with the same (client_id, name) while a live row exists.
+    // Park any prior test rows in a terminal status so the create succeeds.
+    if (typeof crmSupabase === "undefined" || true) {
+      try {
+        const { createClient } = await import("@supabase/supabase-js");
+        const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY);
+        await db.from("campaigns")
+          .update({ status: "failed", updated_at: new Date().toISOString() })
+          .eq("client_id", "csr_rea")
+          .eq("name", "4B Test Snow Campaign")
+          .in("status", ["draft", "scheduled", "active", "sending"]);
+      } catch { /* fixture cleanup — non-fatal */ }
+    }
+
     const r = await fetch(`${BASE_URL}/admin/campaigns`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

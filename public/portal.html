@@ -7909,10 +7909,21 @@ async function loadMessaging() {
   _msgData = data;
   const editable = me?.isAdmin || me?.isClientAdmin;
   try {
-    wrap.innerHTML = renderMessagingSection(data, editable);
+    // Existing config card + optional test-sender + activity log (admins only)
+    let html = renderMessagingSection(data, editable);
+    if (editable) {
+      html += renderTestSenderCard(me?.phone ?? '');
+      html += renderActivityCard();
+    }
+    wrap.innerHTML = html;
     // If post-experience follow-up is on, populate the past-bookings selector.
     if (data.enable_post_experience_followup && document.getElementById('pastBookingsList')) {
       loadPastBookings().catch(err => console.error('[pastBookings]', err));
+    }
+    // Run initial activity load + preview so the cards aren't empty
+    if (editable) {
+      testSenderPreview();
+      loadMessagingActivity().catch(err => console.error('[activity]', err));
     }
   } catch (e) {
     console.error('[Messaging] render error:', e);
@@ -8089,6 +8100,218 @@ async function runPostExperienceForSelected() {
   showToast(`Scheduled ${r.scheduled} · skipped ${r.skipped}`);
   await loadPastBookings();
   updatePostExpBtn();
+}
+
+// ── Test message sender ──────────────────────────────────────────────────────
+const TEST_MSG_TYPES = [
+  { value: "confirmation",       label: "Booking confirmation" },
+  { value: "reminder_24h",       label: "24-hour reminder" },
+  { value: "reminder_same_day",  label: "Same-day reminder" },
+  { value: "cancellation_rebook",label: "Cancellation / rebooking" },
+  { value: "booking_followup",   label: "30-min post-booking follow-up" },
+  { value: "post_experience",    label: "Post-experience (review)" },
+];
+
+function renderTestSenderCard(currentUserPhone) {
+  const opts = TEST_MSG_TYPES.map(t => `<option value="${t.value}">${t.label}</option>`).join("");
+  return `<div class="card" id="testSenderCard" style="margin-top:16px;">
+    <div class="card-title" style="margin-bottom:4px;">Send Test Message</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">Preview any template against a real phone. Test sends are limited to 5 numbers and tagged <code style="background:var(--panel2);padding:1px 4px;border-radius:3px;">test_*</code> in the activity log.</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
+      <div>
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Message type</div>
+        <select id="ts_type" onchange="testSenderPreview()" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+          ${opts}
+        </select>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Recipient(s) — comma-separated</div>
+        <input id="ts_phones" type="text" placeholder="+17202892483, +13035550199" value="${escHtml(currentUserPhone ?? '')}" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+      <div>
+        <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text2);">Name</div>
+        <input id="ts_name" type="text" value="Sean" oninput="testSenderPreview()" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text2);">Activity</div>
+        <input id="ts_activity" type="text" value="Kremmling RZR Tour" oninput="testSenderPreview()" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text2);">Date</div>
+        <input id="ts_date" type="text" value="Saturday June 14" oninput="testSenderPreview()" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text2);">Time</div>
+        <input id="ts_time" type="text" value="10:00 AM" oninput="testSenderPreview()" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+      </div>
+    </div>
+
+    <div style="margin-bottom:10px;">
+      <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text2);">Custom body (optional — overrides the saved template)</div>
+      <textarea id="ts_custom" rows="2" placeholder="Leave blank to use the saved template for the selected type" oninput="testSenderPreview()" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;resize:vertical;"></textarea>
+    </div>
+
+    <div id="ts_preview" style="font-size:12px;color:var(--text2);padding:10px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;margin-bottom:10px;font-family:ui-monospace,monospace;white-space:pre-wrap;">Preview will appear here…</div>
+
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn btn-primary" onclick="sendTestMessage()" id="ts_send_btn">Send Test</button>
+      <span id="ts_result" style="font-size:12px;color:var(--text2);"></span>
+    </div>
+  </div>`;
+}
+
+// Local preview — mirrors server-side template logic so the operator sees
+// the substituted text without round-tripping. The server still resolves
+// the final string from the actual config on send.
+const TS_DEFAULT_TEMPLATES = {
+  reminder_24h:        "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
+  reminder_same_day:   "Today's the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.",
+  cancellation_rebook: "Want to pick a new date? {booking_link}",
+  post_experience:     "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
+  confirmation:        "Hey {name}, your {activity} is confirmed for {date} at {time}. Reply here with any questions!",
+  booking_followup:    "Hey {name}! Just confirming we got your booking for {activity}. Anything else you need before {date}?",
+};
+
+function testSenderPreview() {
+  const type     = document.getElementById('ts_type')?.value ?? 'reminder_24h';
+  const name     = document.getElementById('ts_name')?.value ?? 'Sean';
+  const activity = document.getElementById('ts_activity')?.value ?? 'your booking';
+  const date     = document.getElementById('ts_date')?.value ?? '';
+  const time     = document.getElementById('ts_time')?.value ?? '';
+  const custom   = document.getElementById('ts_custom')?.value?.trim();
+  const savedTpl = _msgData?.custom_templates?.[type];
+  const tpl      = custom || savedTpl || TS_DEFAULT_TEMPLATES[type] || "(no template — pick a different type or enter a custom body)";
+  const review   = _msgData?.review_url  ?? '';
+  const website  = _msgData?.website_url ?? '';
+  const out = tpl
+    .replace(/\{name\}/g, (name || 'there').split(" ")[0])
+    .replace(/\{activity\}/g, activity || 'your booking')
+    .replace(/\{date\}/g, date || '')
+    .replace(/\{time\}/g, time || '')
+    .replace(/\{review_url\}/g, review)
+    .replace(/\{website_url\}/g, website)
+    .replace(/\{booking_link\}/g, '');
+  const lenMark = out.length > 320 ? ` <span style="color:var(--err);">⚠ ${out.length}/320 — will be truncated</span>` : ` <span style="color:var(--text3);">${out.length}/320</span>`;
+  const el = document.getElementById('ts_preview');
+  if (el) el.innerHTML = escHtml(out.slice(0, 320)) + lenMark;
+}
+
+async function sendTestMessage() {
+  const phonesRaw = document.getElementById('ts_phones')?.value ?? '';
+  const phones = phonesRaw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!phones.length) { alert('Add at least one phone number'); return; }
+  if (phones.length > 5) { alert('Maximum 5 phones per test send'); return; }
+  const type   = document.getElementById('ts_type').value;
+  const custom = document.getElementById('ts_custom').value.trim();
+  const vars = {
+    name:     document.getElementById('ts_name').value,
+    activity: document.getElementById('ts_activity').value,
+    date:     document.getElementById('ts_date').value,
+    time:     document.getElementById('ts_time').value,
+  };
+  if (!confirm(`Send a test ${type} to ${phones.length} number${phones.length !== 1 ? 's' : ''}?`)) return;
+  const btn = document.getElementById('ts_send_btn');
+  const out = document.getElementById('ts_result');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  if (out) out.textContent = '';
+  const body = { type, phones, vars };
+  if (custom) body.custom_body = custom;
+  const r = await apiFetch('/messaging/test-send', { method: 'POST', body: JSON.stringify(body) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Send Test'; }
+  if (!r || r.error) { alert(r?.error ?? 'Send failed'); return; }
+  if (out) out.textContent = `Sent ${r.sent}/${r.sent + r.failed}` + (r.failed ? ` — failures: ${r.results.filter(x => !x.success).map(x => x.phone).join(', ')}` : '');
+  showToast(`Test sent to ${r.sent} of ${r.sent + r.failed}`);
+  // Refresh activity log if it's mounted
+  if (typeof loadMessagingActivity === 'function') loadMessagingActivity();
+}
+
+// ── Activity report ──────────────────────────────────────────────────────────
+function renderActivityCard() {
+  return `<div class="card" id="msgActivityCard" style="margin-top:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div>
+        <div class="card-title" style="margin-bottom:0;">Message Activity</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:2px;">All SMS sent or queued for this client — every test, reminder, follow-up, and campaign.</div>
+      </div>
+      <button class="btn btn-secondary" onclick="loadMessagingActivity()">Refresh</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:10px;">
+      <div>
+        <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;">Range</div>
+        <select id="act_days" onchange="loadMessagingActivity()" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+          <option value="1">Last 24h</option>
+          <option value="7" selected>Last 7d</option>
+          <option value="30">Last 30d</option>
+          <option value="90">Last 90d</option>
+        </select>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;">Status</div>
+        <select id="act_status" onchange="loadMessagingActivity()" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+          <option value="">Any</option>
+          <option>sent</option><option>pending</option><option>failed</option><option>cancelled</option>
+        </select>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;">Type contains</div>
+        <input id="act_type" type="text" placeholder="e.g. reminder, test_, post_experience" onchange="loadMessagingActivity()" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;width:200px;">
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;">Phone</div>
+        <input id="act_phone" type="text" placeholder="last 4 or full" onchange="loadMessagingActivity()" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;width:160px;">
+      </div>
+    </div>
+    <div id="msgActivityList"><div class="loading">Loading…</div></div>
+  </div>`;
+}
+
+async function loadMessagingActivity() {
+  const wrap = document.getElementById('msgActivityList');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  const days   = document.getElementById('act_days')?.value   ?? '7';
+  const status = document.getElementById('act_status')?.value ?? '';
+  const type   = document.getElementById('act_type')?.value   ?? '';
+  const phone  = document.getElementById('act_phone')?.value  ?? '';
+  const qs = new URLSearchParams({ days });
+  if (status) qs.set('status', status);
+  if (type)   qs.set('type', type);
+  if (phone)  qs.set('phone', phone);
+  const r = await apiFetch('/messaging/activity?' + qs.toString());
+  if (!r || r.error) { wrap.innerHTML = `<div style="color:var(--err);font-size:12px;">${r?.error ?? 'Failed to load'}</div>`; return; }
+  const rows = r.messages ?? [];
+  if (!rows.length) { wrap.innerHTML = '<div style="font-size:12px;color:var(--text2);">No messages match these filters.</div>'; return; }
+
+  const sum = r.summary ?? { total: 0, byStatus: {}, byType: {} };
+  const statusChip = (s, n) => {
+    const color = s === 'sent' ? 'var(--accent)' : s === 'pending' ? 'var(--warn)' : s === 'failed' ? 'var(--err)' : 'var(--text3)';
+    return `<span style="font-size:11px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:2px 8px;margin-right:6px;"><span style="color:${color};">●</span> ${escHtml(s)}: ${n}</span>`;
+  };
+  const summaryRow = `<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${sum.total} message${sum.total !== 1 ? 's' : ''} — ${Object.entries(sum.byStatus).map(([s,n]) => statusChip(s,n)).join('')}</div>`;
+
+  const fmtTime = (iso) => { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { return iso ?? '?'; } };
+  const rowsHtml = rows.map(m => {
+    const statusColor = m.status === 'sent' ? 'var(--accent)' : m.status === 'pending' ? 'var(--warn)' : m.status === 'failed' ? 'var(--err)' : 'var(--text3)';
+    return `<tr>
+      <td style="white-space:nowrap;">${fmtTime(m.sent_at ?? m.send_at)}</td>
+      <td><code style="font-size:11px;">${escHtml(m.phone ?? '')}</code></td>
+      <td><span style="font-size:11px;background:var(--panel2);border-radius:3px;padding:2px 5px;">${escHtml(m.message_type ?? '')}</span></td>
+      <td><span style="color:${statusColor};">●</span> ${escHtml(m.status ?? '')}</td>
+      <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(m.body ?? '')}">${escHtml((m.body ?? '').slice(0, 90))}</td>
+      <td>${m.attempts ?? 0}${m.max_attempts ? '/' + m.max_attempts : ''}</td>
+      <td style="color:var(--err);font-size:11px;">${escHtml(m.error ?? '')}</td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = summaryRow + `<div style="max-height:520px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;">
+    <table class="data-table" style="width:100%;">
+      <thead><tr><th>When</th><th>Phone</th><th>Type</th><th>Status</th><th>Body</th><th>Tries</th><th>Error</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  </div>`;
 }
 
 async function saveMessagingConfig() {
