@@ -408,6 +408,43 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
     }
   }
 
+  // Schedule pre-experience reminders (24h + same-day) for MPWR bookings,
+  // gated by messaging_config.enable_reminders. The FareHarbor webhook path
+  // wires these via bookingConfirmations.js; MPWR didn't until now, so RZR
+  // bookings (~all of CSR/REA) got zero pre-arrival texts. scheduleReminders
+  // is idempotent (checks scheduled_messages by booking_pk+type), so calling
+  // it on every 30-min sync tick is safe — no duplicates.
+  if (db1 && phone && (STATUS_MAP[order.reservationStatus] ?? 'booked') === 'booked') {
+    try {
+      const { data: cfg } = await db1
+        .from('messaging_config')
+        .select('enable_reminders, reminder_24h, reminder_same_day, custom_templates')
+        .eq('client_id', 'csr_rea')
+        .maybeSingle();
+      if (cfg?.enable_reminders) {
+        const { scheduleReminders } = await import('./messagingEngine.js');
+        const mockBooking = {
+          pk:      order.shortId,
+          contact: { name },
+          availability: {
+            start_at: toUtcIso(beginDate, startTime),
+            item:     { name: order.productTitle ?? 'your booking' },
+          },
+        };
+        await scheduleReminders(
+          db1,
+          mockBooking,
+          phone,
+          process.env.CSR_REA_TWILIO_NUMBER || process.env.TWILIO_PHONE_NUMBER || null,
+          cfg,
+          'csr_rea',
+        );
+      }
+    } catch (err) {
+      console.warn(`[mpwrSync] reminder scheduling failed for ${order.shortId}: ${err.message}`);
+    }
+  }
+
   // Schedule the post-experience follow-up (idempotent — skipped if already
   // queued). Gated by messaging_config.enable_post_experience_followup for
   // csr_rea so it can be toggled per client without code changes.

@@ -2474,9 +2474,11 @@ async function init() {
       const shortLabel = n => n.length > 26 ? n.slice(0, 24) + '…' : n;
       sel.innerHTML = clients.map(c => `<option value="${c.id}">${shortLabel(c.name)}</option>`).join('');
       sel.style.display = '';
-      // Pre-select first client
-      me.clientId = clients[0].id;
-      me.clientName = clients[0].name;
+      // Default to csr_rea when present (primary client) — otherwise first in list.
+      const defaultClient = clients.find(c => c.id === 'csr_rea') ?? clients[0];
+      me.clientId = defaultClient.id;
+      me.clientName = defaultClient.name;
+      sel.value = defaultClient.id;
       window.initPortalChat?.(me.clientId, me.clientName);
       sel.addEventListener('change', () => {
         const chosen = clients.find(c => c.id === sel.value);

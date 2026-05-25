@@ -79,8 +79,22 @@ export async function scheduleReminders(supabase, booking, sendTo, fromPhone, co
   const tplData = { name, activity, date: dateStr, time: timeStr };
   const scheduled = [];
 
+  // Idempotency: when this is called from a recurring sync (MPWR runs every
+  // 30 min), avoid queuing duplicate reminders for the same (booking_pk, type).
+  // Cheap pre-check: pull existing scheduled_messages rows for this booking,
+  // then skip the corresponding insert below if one already exists.
+  const existingTypes = new Set();
+  try {
+    const { data: existing } = await supabase
+      .from("scheduled_messages")
+      .select("message_type")
+      .in("message_type", ["reminder_24h", "reminder_same_day"])
+      .eq("metadata->>booking_pk", String(bookingPk));
+    for (const r of existing ?? []) existingTypes.add(r.message_type);
+  } catch { /* non-fatal — fall through; worst case we double-schedule */ }
+
   // 24h reminder — send 24 hours before start_at (if still in the future)
-  if (config.reminder_24h !== false) {
+  if (config.reminder_24h !== false && !existingTypes.has("reminder_24h")) {
     const send24h = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
     if (send24h.getTime() > now + 5 * 60 * 1000) {   // at least 5 min away
       try {
@@ -100,7 +114,7 @@ export async function scheduleReminders(supabase, booking, sendTo, fromPhone, co
   }
 
   // Same-day reminder — send 2 hours before start_at (if still in the future)
-  if (config.reminder_same_day) {
+  if (config.reminder_same_day && !existingTypes.has("reminder_same_day")) {
     const sendSameDay = new Date(startAt.getTime() - 2 * 60 * 60 * 1000);
     if (sendSameDay.getTime() > now + 5 * 60 * 1000) {
       try {
