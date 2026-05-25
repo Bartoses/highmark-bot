@@ -30,6 +30,7 @@ export const DEFAULT_TEMPLATES = {
   reminder_24h:     "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
   reminder_same_day:"Today's the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
+  post_experience:  "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };
 
 // ── Template Resolution ───────────────────────────────────────────────────────
@@ -46,7 +47,10 @@ export function resolveTemplate(config, type, data) {
     .replace(/\{date\}/g,         data.date         ?? "")
     .replace(/\{time\}/g,         data.time         ?? "")
     .replace(/\{phone\}/g,        data.phone        ?? "")
-    .replace(/\{booking_link\}/g, data.bookingLink  ?? "");
+    .replace(/\{booking_link\}/g, data.bookingLink  ?? "")
+    .replace(/\{review_url\}/g,   data.reviewUrl    ?? "")
+    .replace(/\{website_url\}/g,  data.websiteUrl   ?? "")
+    .replace(/\{business\}/g,     data.business     ?? "");
 }
 
 // ── Reminder Scheduling ───────────────────────────────────────────────────────
@@ -117,6 +121,79 @@ export async function scheduleReminders(supabase, booking, sendTo, fromPhone, co
     console.log(`[MSG] Reminders scheduled for booking ${bookingPk}: ${scheduled.join(", ")}`);
   }
   return { scheduled: scheduled.length, types: scheduled };
+}
+
+// ── Post-experience follow-up ─────────────────────────────────────────────────
+// Schedules ONE SMS at end_at + post_experience_hours_after (default 24h).
+// Idempotent: checks scheduled_messages for an existing post_experience row on
+// the same booking_pk before inserting. Returns:
+//   { scheduled: true,  send_at }                — newly queued
+//   { scheduled: false, reason: "..." }          — gated, duplicate, or invalid
+// Inputs:
+//   booking — { booking_pk, end_at (ISO), phone, name?, activity?, business? }
+//   options — { reviewUrl, websiteUrl, fromPhone, hoursAfter, template, clientId }
+export async function schedulePostExperienceFollowUp(booking, supabase, options = {}) {
+  if (!booking?.booking_pk || !booking?.end_at || !booking?.phone) {
+    return { scheduled: false, reason: "missing_required_field" };
+  }
+  if (!supabase) return { scheduled: false, reason: "no_supabase" };
+
+  const hoursAfter = Number.isFinite(options.hoursAfter) ? options.hoursAfter : 24;
+  const sendAt     = new Date(new Date(booking.end_at).getTime() + hoursAfter * 3600 * 1000);
+  // Skip if we'd be sending more than 7 days in the past — too stale to be useful.
+  const staleMs    = Date.now() - sendAt.getTime();
+  if (staleMs > 7 * 86400 * 1000) {
+    return { scheduled: false, reason: "too_stale" };
+  }
+
+  // Idempotency: have we already scheduled (or sent) a post_experience for this booking?
+  try {
+    const { data: existing } = await supabase
+      .from("scheduled_messages")
+      .select("id, status")
+      .eq("message_type", "post_experience")
+      .eq("metadata->>booking_pk", String(booking.booking_pk))
+      .limit(1)
+      .maybeSingle();
+    if (existing?.id) return { scheduled: false, reason: "already_scheduled", existing_id: existing.id };
+  } catch { /* table missing or query error → fall through, scheduleMessage will surface */ }
+
+  const tplCfg = options.template
+    ? { custom_templates: { post_experience: options.template } }
+    : null;
+
+  const body = resolveTemplate(tplCfg, "post_experience", {
+    name:        booking.name        ?? "there",
+    activity:    booking.activity    ?? "your adventure",
+    reviewUrl:   options.reviewUrl   ?? "",
+    websiteUrl:  options.websiteUrl  ?? "",
+    business:    booking.business    ?? "us",
+  }).slice(0, 320);
+
+  // Send-at must be at least 1 min in the future (otherwise drop send_at to now+1min
+  // so the next scheduler tick picks it up immediately for backfill cases).
+  const finalSendAt = sendAt.getTime() < Date.now() + 60000
+    ? new Date(Date.now() + 60 * 1000).toISOString()
+    : sendAt.toISOString();
+
+  try {
+    await scheduleMessage(supabase, {
+      phone:        booking.phone,
+      body,
+      message_type: "post_experience",
+      client_id:    options.clientId ?? null,
+      send_at:      finalSendAt,
+      metadata:     {
+        from_phone: options.fromPhone ?? null,
+        booking_pk: String(booking.booking_pk),
+      },
+    });
+    console.log(`[MSG] post_experience scheduled for booking ${booking.booking_pk} @ ${finalSendAt}`);
+    return { scheduled: true, send_at: finalSendAt };
+  } catch (err) {
+    console.error(`[MSG] post_experience schedule failed for ${booking.booking_pk}: ${err.message}`);
+    return { scheduled: false, reason: "scheduler_error", error: err.message };
+  }
 }
 
 // ── Intent Detection ──────────────────────────────────────────────────────────

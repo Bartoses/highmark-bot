@@ -408,6 +408,38 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
     }
   }
 
+  // Schedule the post-experience follow-up (idempotent — skipped if already
+  // queued). Gated by messaging_config.enable_post_experience_followup for
+  // csr_rea so it can be toggled per client without code changes.
+  if (db1 && phone && (STATUS_MAP[order.reservationStatus] ?? 'booked') !== 'cancelled') {
+    try {
+      const { data: cfg } = await db1
+        .from('messaging_config')
+        .select('enable_post_experience_followup, post_experience_hours_after, review_url, website_url, custom_templates')
+        .eq('client_id', 'csr_rea')
+        .maybeSingle();
+      if (cfg?.enable_post_experience_followup) {
+        const { schedulePostExperienceFollowUp } = await import('./messagingEngine.js');
+        await schedulePostExperienceFollowUp({
+          booking_pk: order.shortId,
+          end_at:     toUtcIso(endDate, endTime),
+          phone,
+          name,
+          activity:   order.productTitle ?? 'your adventure',
+        }, db1, {
+          hoursAfter: cfg.post_experience_hours_after ?? 24,
+          template:   cfg.custom_templates?.post_experience ?? null,
+          reviewUrl:  cfg.review_url  ?? '',
+          websiteUrl: cfg.website_url ?? '',
+          fromPhone:  process.env.CSR_REA_TWILIO_NUMBER || process.env.TWILIO_PHONE_NUMBER || null,
+          clientId:   'csr_rea',
+        });
+      }
+    } catch (err) {
+      console.warn(`[mpwrSync] post-experience schedule failed for ${order.shortId}: ${err.message}`);
+    }
+  }
+
   return 'upserted';
 }
 

@@ -7910,6 +7910,10 @@ async function loadMessaging() {
   const editable = me?.isAdmin || me?.isClientAdmin;
   try {
     wrap.innerHTML = renderMessagingSection(data, editable);
+    // If post-experience follow-up is on, populate the past-bookings selector.
+    if (data.enable_post_experience_followup && document.getElementById('pastBookingsList')) {
+      loadPastBookings().catch(err => console.error('[pastBookings]', err));
+    }
   } catch (e) {
     console.error('[Messaging] render error:', e);
     wrap.innerHTML = '<div class="error-msg" style="display:block">Error rendering messaging config.</div>';
@@ -7959,10 +7963,44 @@ function renderMessagingSection(cfg, editable) {
   const templatesSection = editable ? `
     <div style="margin-top:20px;">
       <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Custom Message Templates</div>
-      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override default message text. Use {name}, {activity}, {date}, {time}, {phone}, {booking_link} as placeholders. Leave blank to use the default.</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override default message text. Use {name}, {activity}, {date}, {time}, {phone}, {booking_link}, {review_url}, {website_url} as placeholders. Leave blank to use the default.</div>
       ${tplField('tpl_reminder_24h',     '24-hour reminder',   'reminder_24h',     'Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.')}
       ${tplField('tpl_reminder_same_day','Same-day reminder',  'reminder_same_day','Today\'s the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.')}
       ${tplField('tpl_cancel_rebook',    'Rebooking offer (in cancellation text)', 'cancellation_rebook', 'Want to pick a new date? {booking_link}')}
+      ${tplField('tpl_post_experience',  'Post-experience follow-up', 'post_experience', 'Hey {name}! Thanks for riding with us 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}.')}
+    </div>` : '';
+
+  // Post-experience subsection — hours after end_at + review/website URLs
+  const postExpEditable = editable;
+  const postExpSubToggles = (cfg.enable_post_experience_followup || !editable) ? `
+    <div style="padding:8px 0 12px 16px;border-bottom:1px solid var(--border);background:var(--panel2);border-radius:0 0 6px 6px;margin-top:-1px;">
+      <div style="display:flex;gap:16px;align-items:end;flex-wrap:wrap;">
+        <div style="flex:0 0 auto;">
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Hours after end time</div>
+          <input id="msg_post_exp_hours" type="number" min="1" max="168" value="${cfg.post_experience_hours_after ?? 24}" ${postExpEditable ? '' : 'disabled'} style="width:80px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+        </div>
+        <div style="flex:1 1 280px;min-width:240px;">
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Review URL</div>
+          <input id="msg_review_url" type="url" placeholder="https://g.page/r/.../review" value="${escHtml(cfg.review_url ?? '')}" ${postExpEditable ? '' : 'disabled'} style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+        </div>
+        <div style="flex:1 1 280px;min-width:240px;">
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Website URL ("come back" CTA)</div>
+          <input id="msg_website_url" type="url" placeholder="https://coloradosledrentals.com/" value="${escHtml(cfg.website_url ?? '')}" ${postExpEditable ? '' : 'disabled'} style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+        </div>
+      </div>
+    </div>` : '';
+
+  // Past-bookings selector — only when the feature is enabled, to keep the
+  // settings page clean for clients who haven't turned it on.
+  const pastBookingsSection = (cfg.enable_post_experience_followup) ? `
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border);">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Send follow-up to past bookings</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Bookings completed in the last 30 days. Check the ones you want, then send. Already-scheduled or already-sent rows are flagged.</div>
+      <div id="pastBookingsList"><div class="loading">Loading…</div></div>
+      <div style="margin-top:12px;display:flex;gap:8px;">
+        <button class="btn btn-secondary" onclick="loadPastBookings()">Refresh</button>
+        <button class="btn btn-primary" onclick="runPostExperienceForSelected()" id="sendPostExpBtn" disabled>Send to selected</button>
+      </div>
     </div>` : '';
 
   return `<div class="card">
@@ -7973,9 +8011,84 @@ function renderMessagingSection(cfg, editable) {
     ${toggle('msg_rebooking', 'Rebooking Suggestions', cfg.enable_rebooking, 'Include a rebooking link in cancellation texts')}
     ${toggle('msg_reminders', 'Reminders', cfg.enable_reminders, 'Send automated reminders before the booking date')}
     ${reminderSubToggles}
+    ${toggle('msg_post_exp', 'Post-Experience Follow-up', cfg.enable_post_experience_followup, 'After the booking end time, thank the guest, ask for a review, and invite them back')}
+    ${postExpSubToggles}
     ${templatesSection}
     ${saveBtn}
+    ${pastBookingsSection}
   </div>`;
+}
+
+// ── Past bookings selector for post-experience follow-up ────────────────────
+async function loadPastBookings() {
+  const wrap = document.getElementById('pastBookingsList');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  const r = await apiFetch('/messaging/past-bookings?days=30');
+  if (!r || r.error) { wrap.innerHTML = `<div style="color:var(--err);font-size:12px;">${r?.error ?? 'Failed to load'}</div>`; return; }
+  const rows = r.bookings ?? [];
+  if (!rows.length) { wrap.innerHTML = '<div style="font-size:12px;color:var(--text2);">No completed bookings in the last 30 days.</div>'; return; }
+  const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return iso ?? '?'; } };
+  const fmtMoney = (c) => '$' + Math.round((Number(c)||0)/100).toLocaleString();
+  const html = `<div style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;">
+    <table class="data-table" style="width:100%;">
+      <thead><tr>
+        <th style="width:28px;"><input type="checkbox" id="pbSelectAll" onclick="togglePastBookingsAll(this.checked)"></th>
+        <th>Date</th><th>Customer</th><th>Location</th><th>Vehicle</th><th>Pax</th><th>Total</th><th>Follow-up</th>
+      </tr></thead>
+      <tbody>
+      ${rows.map(b => {
+        const status = b.followup_status;
+        const statusBadge = status === 'sent'    ? '<span style="color:var(--accent);font-size:11px;">✓ sent</span>'
+                          : status === 'pending' ? '<span style="color:var(--warn);font-size:11px;">queued</span>'
+                          : status === 'failed'  ? '<span style="color:var(--err);font-size:11px;">failed</span>'
+                          : '<span style="color:var(--text3);font-size:11px;">—</span>';
+        const disabled = (status === 'sent' || status === 'pending') ? 'disabled' : '';
+        const noPhone  = !b.phone;
+        return `<tr>
+          <td><input type="checkbox" class="pb-row" data-pk="${escHtml(b.booking_pk)}" ${disabled || noPhone ? 'disabled' : ''} onclick="updatePostExpBtn()"></td>
+          <td>${fmtDate(b.end_at)}</td>
+          <td>${escHtml(b.customer_name ?? '?')}${noPhone ? ' <span style="color:var(--err);font-size:10px;">no phone</span>' : ''}</td>
+          <td>${escHtml(b.location ?? '')}</td>
+          <td>${escHtml(b.vehicle ?? '?')}</td>
+          <td>${b.customer_count ?? '?'}</td>
+          <td>${fmtMoney(b.total_cents)}</td>
+          <td>${statusBadge}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table></div>
+    <div style="font-size:11px;color:var(--text3);margin-top:6px;">${rows.length} bookings · select to enable Send</div>`;
+  wrap.innerHTML = html;
+}
+
+function togglePastBookingsAll(checked) {
+  document.querySelectorAll('.pb-row:not([disabled])').forEach(el => { el.checked = checked; });
+  updatePostExpBtn();
+}
+
+function updatePostExpBtn() {
+  const btn = document.getElementById('sendPostExpBtn');
+  if (!btn) return;
+  const n = document.querySelectorAll('.pb-row:checked').length;
+  btn.disabled = n === 0;
+  btn.textContent = n > 0 ? `Send to ${n} selected` : 'Send to selected';
+}
+
+async function runPostExperienceForSelected() {
+  const pks = [...document.querySelectorAll('.pb-row:checked')].map(el => el.dataset.pk);
+  if (!pks.length) return;
+  if (!confirm(`Send a post-experience follow-up SMS to ${pks.length} customer${pks.length !== 1 ? 's' : ''}?`)) return;
+  const btn = document.getElementById('sendPostExpBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  const r = await apiFetch('/messaging/post-experience/run', {
+    method: 'POST',
+    body: JSON.stringify({ booking_pks: pks }),
+  });
+  if (!r || r.error) { alert(r?.error ?? 'Send failed'); if (btn) btn.disabled = false; return; }
+  showToast(`Scheduled ${r.scheduled} · skipped ${r.skipped}`);
+  await loadPastBookings();
+  updatePostExpBtn();
 }
 
 async function saveMessagingConfig() {
@@ -7992,6 +8105,11 @@ async function saveMessagingConfig() {
   const tpl24h  = document.getElementById('tpl_reminder_24h');
   const tplSame = document.getElementById('tpl_reminder_same_day');
   const tplCanc = document.getElementById('tpl_cancel_rebook');
+  const tplPostExp = document.getElementById('tpl_post_experience');
+  const postExp    = document.getElementById('msg_post_exp');
+  const postExpHrs = document.getElementById('msg_post_exp_hours');
+  const reviewUrl  = document.getElementById('msg_review_url');
+  const websiteUrl = document.getElementById('msg_website_url');
 
   if (conf)  body.enable_confirmation_texts = conf.checked;
   if (canc)  body.enable_cancellations      = canc.checked;
@@ -7999,11 +8117,16 @@ async function saveMessagingConfig() {
   if (r24h)  body.reminder_24h             = r24h.checked;
   if (rSame) body.reminder_same_day        = rSame.checked;
   if (rebo)  body.enable_rebooking         = rebo.checked;
+  if (postExp)    body.enable_post_experience_followup = postExp.checked;
+  if (postExpHrs) body.post_experience_hours_after     = Number(postExpHrs.value) || 24;
+  if (reviewUrl)  body.review_url  = reviewUrl.value.trim() || null;
+  if (websiteUrl) body.website_url = websiteUrl.value.trim() || null;
 
   const custom_templates = {};
-  if (tpl24h  && tpl24h.value.trim())  custom_templates.reminder_24h        = tpl24h.value.trim();
-  if (tplSame && tplSame.value.trim()) custom_templates.reminder_same_day   = tplSame.value.trim();
-  if (tplCanc && tplCanc.value.trim()) custom_templates.cancellation_rebook = tplCanc.value.trim();
+  if (tpl24h     && tpl24h.value.trim())     custom_templates.reminder_24h        = tpl24h.value.trim();
+  if (tplSame    && tplSame.value.trim())    custom_templates.reminder_same_day   = tplSame.value.trim();
+  if (tplCanc    && tplCanc.value.trim())    custom_templates.cancellation_rebook = tplCanc.value.trim();
+  if (tplPostExp && tplPostExp.value.trim()) custom_templates.post_experience     = tplPostExp.value.trim();
   if (Object.keys(custom_templates).length > 0) body.custom_templates = custom_templates;
 
   const r = await apiFetch('/messaging', { method: 'PATCH', body: JSON.stringify(body) });
@@ -8011,6 +8134,8 @@ async function saveMessagingConfig() {
   if (!r || r.error) { alert(r?.error ?? 'Save failed'); return; }
   showToast('Messaging settings saved');
   _msgData = r;
+  // Re-render to reflect new toggle state (e.g., show/hide post-exp subtoggles + past-bookings selector)
+  if (typeof loadMessagingConfig === 'function') await loadMessagingConfig();
 }
 
 // ── Bot Config section ─────────────────────────────────────────────────────

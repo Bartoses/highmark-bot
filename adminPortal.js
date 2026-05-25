@@ -1515,14 +1515,18 @@ export async function handlePortalCrawlPages(req, res, supabase) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MESSAGING_DEFAULTS = {
-  enable_confirmation_texts: false,
-  enable_reminders:          false,
-  reminder_hours_before:     24,
-  reminder_24h:              true,
-  reminder_same_day:         false,
-  enable_cancellations:      true,
-  enable_rebooking:          false,
-  custom_templates:          {},
+  enable_confirmation_texts:       false,
+  enable_reminders:                false,
+  reminder_hours_before:           24,
+  reminder_24h:                    true,
+  reminder_same_day:               false,
+  enable_cancellations:            true,
+  enable_rebooking:                false,
+  enable_post_experience_followup: false,
+  post_experience_hours_after:     24,
+  review_url:                      null,
+  website_url:                     null,
+  custom_templates:                {},
 };
 
 // ── GET /portal/api/messaging ────────────────────────────────────────────────
@@ -1534,7 +1538,7 @@ export async function handlePortalMessaging(req, res, supabase) {
 
   const { data, error } = await supabase
     .from("messaging_config")
-    .select("client_id, enable_confirmation_texts, enable_reminders, reminder_hours_before, reminder_24h, reminder_same_day, enable_cancellations, enable_rebooking, custom_templates")
+    .select("client_id, enable_confirmation_texts, enable_reminders, reminder_hours_before, reminder_24h, reminder_same_day, enable_cancellations, enable_rebooking, enable_post_experience_followup, post_experience_hours_after, review_url, website_url, custom_templates")
     .eq("client_id", clientId)
     .maybeSingle();
 
@@ -1563,7 +1567,7 @@ export async function handlePortalUpdateMessaging(req, res, supabase) {
   const body = req.body ?? {};
   const updates = { client_id: clientId, updated_at: new Date().toISOString() };
 
-  const boolFields = ["enable_confirmation_texts", "enable_reminders", "reminder_24h", "reminder_same_day", "enable_cancellations", "enable_rebooking"];
+  const boolFields = ["enable_confirmation_texts", "enable_reminders", "reminder_24h", "reminder_same_day", "enable_cancellations", "enable_rebooking", "enable_post_experience_followup"];
   for (const f of boolFields) {
     if (body[f] !== undefined) updates[f] = !!body[f];
   }
@@ -1576,12 +1580,31 @@ export async function handlePortalUpdateMessaging(req, res, supabase) {
     updates.reminder_hours_before = hrs;
   }
 
+  if (body.post_experience_hours_after !== undefined) {
+    const hrs = Number(body.post_experience_hours_after);
+    if (!Number.isInteger(hrs) || hrs < 1 || hrs > 168) {
+      return res.status(400).json({ error: "post_experience_hours_after must be an integer between 1 and 168" });
+    }
+    updates.post_experience_hours_after = hrs;
+  }
+
+  for (const urlField of ["review_url", "website_url"]) {
+    if (body[urlField] !== undefined) {
+      const v = body[urlField];
+      if (v === null || v === "") { updates[urlField] = null; continue; }
+      if (typeof v !== "string" || v.length > 500 || !/^https?:\/\//i.test(v)) {
+        return res.status(400).json({ error: `${urlField} must be a valid http(s) URL ≤ 500 chars` });
+      }
+      updates[urlField] = v;
+    }
+  }
+
   if (body.custom_templates !== undefined) {
     if (typeof body.custom_templates !== "object" || Array.isArray(body.custom_templates)) {
       return res.status(400).json({ error: "custom_templates must be an object" });
     }
     // Sanitize: only allow known template keys, values must be strings ≤ 400 chars
-    const VALID_TEMPLATE_KEYS = ["reminder_24h", "reminder_same_day", "cancellation_rebook"];
+    const VALID_TEMPLATE_KEYS = ["reminder_24h", "reminder_same_day", "cancellation_rebook", "post_experience"];
     const sanitized = {};
     for (const [k, v] of Object.entries(body.custom_templates)) {
       if (VALID_TEMPLATE_KEYS.includes(k) && typeof v === "string") {
@@ -1610,6 +1633,146 @@ export async function handlePortalUpdateMessaging(req, res, supabase) {
 
   console.log(`[PORTAL] messaging config updated for ${clientId}`);
   return res.json(data);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAST BOOKINGS — for the "Send follow-up to selected" UI
+// GET /portal/api/messaging/past-bookings?days=30  → DB2 completed bookings
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handlePortalPastBookings(req, res, supabase, crmSupabase) {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const days = Math.max(1, Math.min(90, Number(req.query?.days) || 30));
+  const cutoff = new Date(Date.now() - days * 86400 * 1000).toISOString();
+  const now    = new Date().toISOString();
+
+  try {
+    const { data: bookings, error } = await crmSupabase
+      .from("bookings")
+      .select("fareharbor_pk, customer_id, start_at, end_at, status, location, product_title, vehicle, customer_count, total_cents")
+      .gte("end_at", cutoff)
+      .lte("end_at", now)
+      .not("fareharbor_pk", "ilike", "BOT-%")
+      .order("end_at", { ascending: false })
+      .limit(200);
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Resolve customer name/phone in one batched query
+    const custIds = [...new Set((bookings ?? []).map(b => b.customer_id).filter(Boolean))];
+    let custMap = new Map();
+    if (custIds.length) {
+      const { data: custs } = await crmSupabase
+        .from("customers")
+        .select("id, name, normalized_phone")
+        .in("id", custIds);
+      custMap = new Map((custs ?? []).map(c => [c.id, c]));
+    }
+
+    // Annotate with already-scheduled-or-sent state so the UI can hide/disable
+    const pks = (bookings ?? []).map(b => b.fareharbor_pk);
+    let scheduledByPk = new Map();
+    if (pks.length) {
+      const { data: scheduled } = await supabase
+        .from("scheduled_messages")
+        .select("status, metadata")
+        .eq("message_type", "post_experience")
+        .in("metadata->>booking_pk", pks);
+      for (const s of scheduled ?? []) {
+        const pk = s.metadata?.booking_pk;
+        if (pk) scheduledByPk.set(pk, s.status);
+      }
+    }
+
+    const out = (bookings ?? []).map(b => {
+      const cust = custMap.get(b.customer_id) ?? {};
+      return {
+        booking_pk:        b.fareharbor_pk,
+        customer_name:     cust.name ?? null,
+        phone:             cust.normalized_phone ?? null,
+        end_at:            b.end_at,
+        start_at:          b.start_at,
+        location:          b.location,
+        product_title:     b.product_title,
+        vehicle:           b.vehicle,
+        customer_count:    b.customer_count,
+        total_cents:       b.total_cents,
+        followup_status:   scheduledByPk.get(b.fareharbor_pk) ?? null, // null | pending | sent | failed
+      };
+    });
+    return res.json({ bookings: out, count: out.length, window_days: days });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RUN POST-EXPERIENCE FOLLOW-UPS for the selected booking_pks
+// POST /portal/api/messaging/post-experience/run
+// Body: { booking_pks: ["CO-XXX", ...] }
+// Returns: { scheduled, skipped, results: [{ booking_pk, status, reason? }] }
+// ─────────────────────────────────────────────────────────────────────────────
+export async function handlePortalRunPostExperience(req, res, supabase, crmSupabase) {
+  if (!supabase || !crmSupabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!req.portalUser?.isAdmin && !req.portalUser?.isClientAdmin) {
+    return res.status(403).json({ error: "Forbidden — admin role required" });
+  }
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const pks = Array.isArray(req.body?.booking_pks) ? req.body.booking_pks.slice(0, 100) : [];
+  if (!pks.length) return res.status(400).json({ error: "booking_pks (array) required" });
+
+  // Load config (template + URLs + hours)
+  const { data: cfg } = await supabase
+    .from("messaging_config")
+    .select("post_experience_hours_after, review_url, website_url, custom_templates")
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  // Look up bookings + customer info
+  const { data: bookings } = await crmSupabase
+    .from("bookings")
+    .select("fareharbor_pk, customer_id, end_at, product_title, vehicle, location")
+    .in("fareharbor_pk", pks);
+  const custIds = [...new Set((bookings ?? []).map(b => b.customer_id).filter(Boolean))];
+  const { data: custs } = await crmSupabase
+    .from("customers")
+    .select("id, name, normalized_phone")
+    .in("id", custIds);
+  const custMap = new Map((custs ?? []).map(c => [c.id, c]));
+
+  const { schedulePostExperienceFollowUp } = await import("./messagingEngine.js");
+  const fromPhone = process.env.CSR_REA_TWILIO_NUMBER || process.env.TWILIO_PHONE_NUMBER || null;
+
+  const results = [];
+  for (const b of bookings ?? []) {
+    const cust = custMap.get(b.customer_id);
+    if (!cust?.normalized_phone || !b.end_at) {
+      results.push({ booking_pk: b.fareharbor_pk, scheduled: false, reason: "missing_phone_or_end_at" });
+      continue;
+    }
+    const r = await schedulePostExperienceFollowUp({
+      booking_pk: b.fareharbor_pk,
+      end_at:     b.end_at,
+      phone:      cust.normalized_phone,
+      name:       cust.name ?? null,
+      activity:   b.vehicle ?? b.product_title ?? "your adventure",
+    }, supabase, {
+      hoursAfter: cfg?.post_experience_hours_after ?? 24,
+      template:   cfg?.custom_templates?.post_experience ?? null,
+      reviewUrl:  cfg?.review_url ?? "",
+      websiteUrl: cfg?.website_url ?? "",
+      fromPhone,
+      clientId,
+    });
+    results.push({ booking_pk: b.fareharbor_pk, ...r });
+  }
+
+  const scheduled = results.filter(r => r.scheduled).length;
+  const skipped   = results.length - scheduled;
+  return res.json({ scheduled, skipped, results });
 }
 
 // ── GET /portal/api/bot-config ────────────────────────────────────────────────

@@ -14386,6 +14386,49 @@ async function testPolarisConfirmations() {
     chk("operator: customer lookup null when no capitalized name",
         await lookupCustomerByName("how is business today?", null) === null);
   }
+
+  // Post-experience follow-up scheduler
+  {
+    const { schedulePostExperienceFollowUp, DEFAULT_TEMPLATES, resolveTemplate } = await import("./messagingEngine.js");
+
+    // Default template includes the new placeholders
+    chk("messaging: post_experience default template exists",
+        typeof DEFAULT_TEMPLATES.post_experience === "string" && DEFAULT_TEMPLATES.post_experience.length > 0);
+    chk("messaging: post_experience default mentions a review",
+        /review/i.test(DEFAULT_TEMPLATES.post_experience));
+    chk("messaging: post_experience default fits in 320 chars",
+        DEFAULT_TEMPLATES.post_experience.length <= 320, `len=${DEFAULT_TEMPLATES.post_experience.length}`);
+
+    // resolveTemplate substitutes {review_url} and {website_url}
+    const out = resolveTemplate(null, "post_experience", {
+      name: "Brad", activity: "Rabbit Ears UTV",
+      reviewUrl: "https://g.page/r/X/review",
+      websiteUrl: "https://example.com/",
+    });
+    chk("messaging: resolveTemplate replaces {review_url}",  out.includes("https://g.page/r/X/review"));
+    chk("messaging: resolveTemplate replaces {website_url}", out.includes("https://example.com/"));
+    chk("messaging: resolveTemplate uses first name",        out.includes("Brad"));
+
+    // Guard rails: missing fields → not scheduled
+    const fakeDb = { from: () => ({ insert: () => ({ select: () => ({ single: async () => ({ data: { id: "x" }, error: null }) }) }), select: () => ({ eq: () => ({ eq: () => ({ limit: () => ({ maybeSingle: async () => ({ data: null }) }) }) }) }) }) };
+    chk("messaging: missing booking_pk → not_scheduled",
+        (await schedulePostExperienceFollowUp({ end_at: "2026-05-01T17:00Z", phone: "+1234" }, fakeDb)).scheduled === false);
+    chk("messaging: missing end_at → not_scheduled",
+        (await schedulePostExperienceFollowUp({ booking_pk: "CO-X", phone: "+1234" }, fakeDb)).scheduled === false);
+    chk("messaging: missing phone → not_scheduled",
+        (await schedulePostExperienceFollowUp({ booking_pk: "CO-X", end_at: "2026-05-01T17:00Z" }, fakeDb)).scheduled === false);
+    chk("messaging: null supabase → not_scheduled",
+        (await schedulePostExperienceFollowUp({ booking_pk: "CO-X", end_at: "2026-05-01T17:00Z", phone: "+1234" }, null)).scheduled === false);
+
+    // Stale skip — booking ended > 8 days ago
+    const stale = new Date(Date.now() - 9 * 86400 * 1000).toISOString();
+    const r = await schedulePostExperienceFollowUp(
+      { booking_pk: "CO-OLD", end_at: stale, phone: "+1234" },
+      fakeDb, { hoursAfter: 24 }
+    );
+    chk("messaging: booking >8d in past → too_stale skip",
+        r.scheduled === false && r.reason === "too_stale", JSON.stringify(r));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
