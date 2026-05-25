@@ -8222,8 +8222,10 @@ async function sendTestMessage() {
   if (custom) body.custom_body = custom;
   const r = await apiFetch('/messaging/test-send', { method: 'POST', body: JSON.stringify(body) });
   if (btn) { btn.disabled = false; btn.textContent = 'Send Test'; }
-  if (!r || r.error) { alert(r?.error ?? 'Send failed'); return; }
-  if (out) out.textContent = `Sent ${r.sent}/${r.sent + r.failed}` + (r.failed ? ` — failures: ${r.results.filter(x => !x.success).map(x => x.phone).join(', ')}` : '');
+  // apiFetch returns null on non-2xx and stashes the message in _lastApiError.
+  // Surface that — otherwise the alert is a useless "Send failed".
+  if (!r || r.error) { alert(r?.error ?? _lastApiError ?? 'Send failed'); return; }
+  if (out) out.textContent = `Sent ${r.sent}/${r.sent + r.failed}` + (r.failed ? ` — failures: ${r.results.filter(x => !x.success).map(x => x.phone + ' (' + x.error + ')').join(', ')}` : '');
   showToast(`Test sent to ${r.sent} of ${r.sent + r.failed}`);
   // Refresh activity log if it's mounted
   if (typeof loadMessagingActivity === 'function') loadMessagingActivity();

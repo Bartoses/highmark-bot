@@ -1849,16 +1849,51 @@ export async function handlePortalTestSend(req, res, supabase, twilioClient) {
   }
   body = body.slice(0, 320);
 
-  // Resolve from-number: per-client env var → global fallback
+  // Resolve from-number, in priority order:
+  //   1. clients.outbound_phone (DB) — the canonical per-client number
+  //   2. {CLIENT_ID}_TWILIO_NUMBER env var — legacy convention
+  //   3. TWILIO_PHONE_NUMBER — global fallback (only useful when the client
+  //      shares the main Highmark Twilio account)
+  // Resolve subaccount creds if the client has them, so we don't try to send
+  // from a number we don't own under the wrong account.
+  const { data: clientRow } = await supabase
+    .from("clients")
+    .select("outbound_phone, twilio_account_sid, twilio_auth_token, messaging_service_sid")
+    .eq("id", clientId)
+    .maybeSingle();
+
   const fromKey   = `${clientId.toUpperCase()}_TWILIO_NUMBER`;
-  const fromPhone = process.env[fromKey] || process.env.TWILIO_PHONE_NUMBER || null;
-  if (!fromPhone) return res.status(503).json({ error: "no outbound Twilio number configured" });
+  const fromPhone = clientRow?.outbound_phone || process.env[fromKey] || process.env.TWILIO_PHONE_NUMBER || null;
+  const msgServiceSid = clientRow?.messaging_service_sid || process.env.TWILIO_MESSAGING_SERVICE_SID || null;
+
+  if (!fromPhone && !msgServiceSid) {
+    return res.status(503).json({
+      error: `No outbound Twilio number configured for client "${clientId}". Set outbound_phone in Settings → Identity, or add ${fromKey} to Railway env.`,
+    });
+  }
+
+  // If the client has its own Twilio subaccount, use those creds — otherwise
+  // the inherited shared client may not be authorized to send from the number.
+  let sendClient = twilioClient;
+  if (clientRow?.twilio_account_sid && clientRow?.twilio_auth_token) {
+    try {
+      const twilio = (await import("twilio")).default;
+      sendClient = twilio(clientRow.twilio_account_sid, clientRow.twilio_auth_token);
+    } catch (err) {
+      console.warn(`[TEST-SEND] subaccount init failed for ${clientId}: ${err.message} — falling back to shared client`);
+    }
+  }
 
   // Send + audit per phone
   const results = [];
   for (const phone of normalized) {
     try {
-      const msg = await twilioClient.messages.create({ body, from: fromPhone, to: phone });
+      // Prefer Messaging Service SID over a bare from-number when set —
+      // Twilio routes through the right pool + applies the right country rules.
+      const sendOpts = msgServiceSid
+        ? { body, messagingServiceSid: msgServiceSid, to: phone }
+        : { body, from: fromPhone, to: phone };
+      const msg = await sendClient.messages.create(sendOpts);
       // Audit the test send so it appears in the activity report
       try {
         await supabase.from("scheduled_messages").insert({
