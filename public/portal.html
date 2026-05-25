@@ -8269,10 +8269,10 @@ async function loadTestSenderActivities() {
   const current = sel.value;
   sel.innerHTML = r.options.map(o => {
     const loc = capLoc(o.location);
-    const label = loc ? `${o.product_title} — ${loc}` : o.product_title;
-    return `<option value="${escHtml(o.product_title)}" data-location="${escHtml(o.location ?? '')}">${escHtml(label)}</option>`;
+    const label = loc ? `${o.activity} — ${loc}` : o.activity;
+    return `<option value="${escHtml(o.activity)}" data-location="${escHtml(o.location ?? '')}">${escHtml(label)}</option>`;
   }).join('');
-  if (r.options.some(o => o.product_title === current)) sel.value = current;
+  if (r.options.some(o => o.activity === current)) sel.value = current;
   testSenderPreview();
 }
 

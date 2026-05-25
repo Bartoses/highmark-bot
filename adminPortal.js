@@ -635,28 +635,45 @@ export async function handlePortalBulkDeleteCampaigns(req, res, supabase) {
 }
 
 // ── GET /portal/api/messaging/activity-options ───────────────────────────────
-// Distinct (product_title, location) pairs from DB2 bookings for this client —
-// fuels the "Activity" dropdown in the test sender so operators can preview a
-// template against the actual products + locations guests would see. Each
-// option includes both fields so the UI can display them together and the
-// test-send handler can substitute {location} accurately.
+// Distinct (activity display_name, location) pairs derived from DB2 bookings —
+// activity comes from the `activities` table's display_name (short friendly
+// name like "RZR Experience 4-Seater"), and location prefers
+// bookings.location (MPWR-enriched, surfaces sub-locations like Rabbit Ears)
+// falling back to activities.location.
+// Filters: archived activities + BOT- placeholder bookings excluded.
 export async function handlePortalActivityOptions(req, res, crmSupabase) {
   if (!crmSupabase) return res.json({ options: [] });
   try {
-    const { data } = await crmSupabase
+    // 1. Pull bookings — we only need activity_id + (override) location
+    const { data: bookings } = await crmSupabase
       .from("bookings")
-      .select("product_title, location")
-      .not("product_title", "is", null)
-      .limit(1000);
-    // Dedup on (product_title, location) so the same product at multiple
-    // locations shows up once per location.
+      .select("activity_id, location")
+      .not("activity_id", "is", null)
+      .not("fareharbor_pk", "ilike", "BOT-%")
+      .limit(5000);
+
+    const activityIds = [...new Set((bookings ?? []).map(b => b.activity_id).filter(Boolean))];
+    if (!activityIds.length) return res.json({ options: [] });
+
+    // 2. Look up activity display_name + fallback location + archived flag
+    const { data: activities } = await crmSupabase
+      .from("activities")
+      .select("id, display_name, location, is_archived")
+      .in("id", activityIds);
+    const actMap = new Map((activities ?? []).map(a => [a.id, a]));
+
+    // 3. Dedup (activity, location) tuples; bookings.location wins
     const seen = new Map();
-    for (const r of data ?? []) {
-      const key = `${r.product_title}|${r.location ?? ""}`;
-      if (!seen.has(key)) seen.set(key, { product_title: r.product_title, location: r.location ?? null });
+    for (const b of bookings ?? []) {
+      const a = actMap.get(b.activity_id);
+      if (!a || a.is_archived) continue;
+      if (!a.display_name) continue;
+      const location = b.location ?? a.location ?? null;
+      const key = `${a.display_name}|${location ?? ""}`;
+      if (!seen.has(key)) seen.set(key, { activity: a.display_name, location });
     }
     const options = [...seen.values()].sort((a, b) =>
-      (a.product_title ?? "").localeCompare(b.product_title ?? "")
+      (a.activity ?? "").localeCompare(b.activity ?? "")
     );
     return res.json({ options });
   } catch (err) {
