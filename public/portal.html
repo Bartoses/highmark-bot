@@ -3315,7 +3315,7 @@ async function loadCampaigns() {
   const isAdmin = me?.isAdmin || me?.isClientAdmin;
   const bulkBar = isAdmin ? `
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-      <button class="btn btn-secondary" id="campBulkDelete" disabled onclick="bulkDeleteCampaigns()">Delete selected</button>
+      <button type="button" class="btn btn-secondary" id="campBulkDelete" disabled>Delete selected</button>
       <span id="campSelCount" class="text-muted text-xs">No rows selected</span>
     </div>` : '';
 
@@ -3340,7 +3340,7 @@ async function loadCampaigns() {
           <td class="text-muted text-xs" style="text-align:center;">${c.fire_count ?? 0}</td>
           <td>
             <span class="row-action camp-view" data-cid="${c.id}">View</span>
-            ${isAdmin ? ` · <span class="row-action" style="color:var(--err);cursor:pointer;" onclick="deleteOneCampaign('${c.id}', ${JSON.stringify(c.name)})">Delete</span>` : ''}
+            ${isAdmin ? ` · <span class="row-action camp-del" style="color:var(--err);cursor:pointer;" data-cid="${c.id}" data-cname="${escHtml(c.name)}">Delete</span>` : ''}
           </td>
         </tr>`;
       }).join('')}</tbody>
@@ -3349,6 +3349,13 @@ async function loadCampaigns() {
   document.querySelectorAll('.camp-view[data-cid]').forEach(el => {
     el.addEventListener('click', () => openCampaignDetail(el.dataset.cid));
   });
+  // Delegated handlers — inline onclick with quoted args broke when the
+  // campaign name contained quotes/special chars.
+  document.querySelectorAll('.camp-del[data-cid]').forEach(el => {
+    el.addEventListener('click', () => deleteOneCampaign(el.dataset.cid, el.dataset.cname));
+  });
+  const bulkBtn = document.getElementById('campBulkDelete');
+  if (bulkBtn) bulkBtn.addEventListener('click', bulkDeleteCampaigns);
 }
 
 function toggleAllCampaigns(checked) {
@@ -3367,21 +3374,35 @@ function updateCampBulkBtn() {
 }
 
 async function deleteOneCampaign(id, name) {
+  console.log('[campaigns] delete one:', id, name);
   if (!confirm(`Delete campaign "${name}"? This stops any pending sends and removes the row permanently.`)) return;
-  const r = await apiFetch(`/campaigns/${id}`, { method: 'DELETE' });
-  if (!r || r.error) { alert(r?.error ?? _lastApiError ?? 'Delete failed'); return; }
-  showToast('Campaign deleted');
-  await loadCampaigns();
+  try {
+    const r = await apiFetch(`/campaigns/${id}`, { method: 'DELETE' });
+    console.log('[campaigns] delete one result:', r, '_lastApiError=', _lastApiError);
+    if (!r || r.error) { alert(r?.error ?? _lastApiError ?? 'Delete failed'); return; }
+    showToast('Campaign deleted');
+    await loadCampaigns();
+  } catch (err) {
+    console.error('[campaigns] delete one threw:', err);
+    alert('Delete threw: ' + err.message);
+  }
 }
 
 async function bulkDeleteCampaigns() {
   const ids = [...document.querySelectorAll('.camp-row:checked')].map(el => el.dataset.cid);
-  if (!ids.length) return;
+  console.log('[campaigns] bulk delete clicked — ids:', ids.length);
+  if (!ids.length) { alert('No campaigns selected'); return; }
   if (!confirm(`Delete ${ids.length} campaign${ids.length !== 1 ? 's' : ''}? This stops any pending sends and removes the rows permanently.`)) return;
-  const r = await apiFetch('/campaigns', { method: 'DELETE', body: JSON.stringify({ ids }) });
-  if (!r || r.error) { alert(r?.error ?? _lastApiError ?? 'Delete failed'); return; }
-  showToast(`Deleted ${r.deleted}${r.skipped ? ` · ${r.skipped} skipped` : ''}`);
-  await loadCampaigns();
+  try {
+    const r = await apiFetch('/campaigns', { method: 'DELETE', body: JSON.stringify({ ids }) });
+    console.log('[campaigns] bulk delete result:', r, '_lastApiError=', _lastApiError);
+    if (!r || r.error) { alert(r?.error ?? _lastApiError ?? 'Delete failed'); return; }
+    showToast(`Deleted ${r.deleted}${r.skipped ? ` · ${r.skipped} skipped` : ''}`);
+    await loadCampaigns();
+  } catch (err) {
+    console.error('[campaigns] bulk delete threw:', err);
+    alert('Bulk delete threw: ' + err.message);
+  }
 }
 
 const CAMPAIGN_TEMPLATES = {
