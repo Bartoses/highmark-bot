@@ -7975,6 +7975,8 @@ function renderMessagingSection(cfg, editable) {
     <div style="margin-top:20px;">
       <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Custom Message Templates</div>
       <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override default message text. Use {name}, {activity}, {date}, {time}, {phone}, {booking_link}, {review_url}, {website_url} as placeholders. Leave blank to use the default.</div>
+      ${tplField('tpl_confirmation',     'Booking confirmation (immediate)', 'confirmation', 'Hey {name}! You\'re confirmed for {activity} on {date} at {time}. Save this number for any questions — we\'ll send a reminder before. See you out there! 🏔')}
+      ${tplField('tpl_booking_followup', '30-min post-booking follow-up',   'booking_followup', 'Hey {name}! Excited to have you out for {activity} on {date}. Quick tip: dress in layers, bring water, and arrive ~15 min early. Anything you need before then? Just reply.')}
       ${tplField('tpl_reminder_24h',     '24-hour reminder',   'reminder_24h',     'Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.')}
       ${tplField('tpl_reminder_same_day','Same-day reminder',  'reminder_same_day','Today\'s the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.')}
       ${tplField('tpl_cancel_rebook',    'Rebooking offer (in cancellation text)', 'cancellation_rebook', 'Want to pick a new date? {booking_link}')}
@@ -8167,13 +8169,14 @@ function renderTestSenderCard(currentUserPhone) {
 // Local preview — mirrors server-side template logic so the operator sees
 // the substituted text without round-tripping. The server still resolves
 // the final string from the actual config on send.
+// Mirror of server-side messagingEngine.DEFAULT_TEMPLATES — keep in sync.
 const TS_DEFAULT_TEMPLATES = {
+  confirmation:        "Hey {name}! You're confirmed for {activity} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
+  booking_followup:    "Hey {name}! Excited to have you out for {activity} on {date}. Quick tip: dress in layers, bring water, and arrive ~15 min early. Anything you need before then? Just reply.",
   reminder_24h:        "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
   reminder_same_day:   "Today's the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
   post_experience:     "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
-  confirmation:        "Hey {name}, your {activity} is confirmed for {date} at {time}. Reply here with any questions!",
-  booking_followup:    "Hey {name}! Just confirming we got your booking for {activity}. Anything else you need before {date}?",
 };
 
 function testSenderPreview() {
@@ -8327,6 +8330,8 @@ async function saveMessagingConfig() {
   const r24h    = document.getElementById('msg_reminder_24h');
   const rSame   = document.getElementById('msg_reminder_same_day');
   const rebo    = document.getElementById('msg_rebooking');
+  const tplConf      = document.getElementById('tpl_confirmation');
+  const tplBookFollow= document.getElementById('tpl_booking_followup');
   const tpl24h  = document.getElementById('tpl_reminder_24h');
   const tplSame = document.getElementById('tpl_reminder_same_day');
   const tplCanc = document.getElementById('tpl_cancel_rebook');
@@ -8348,10 +8353,12 @@ async function saveMessagingConfig() {
   if (websiteUrl) body.website_url = websiteUrl.value.trim() || null;
 
   const custom_templates = {};
-  if (tpl24h     && tpl24h.value.trim())     custom_templates.reminder_24h        = tpl24h.value.trim();
-  if (tplSame    && tplSame.value.trim())    custom_templates.reminder_same_day   = tplSame.value.trim();
-  if (tplCanc    && tplCanc.value.trim())    custom_templates.cancellation_rebook = tplCanc.value.trim();
-  if (tplPostExp && tplPostExp.value.trim()) custom_templates.post_experience     = tplPostExp.value.trim();
+  if (tplConf       && tplConf.value.trim())       custom_templates.confirmation        = tplConf.value.trim();
+  if (tplBookFollow && tplBookFollow.value.trim()) custom_templates.booking_followup    = tplBookFollow.value.trim();
+  if (tpl24h        && tpl24h.value.trim())        custom_templates.reminder_24h        = tpl24h.value.trim();
+  if (tplSame       && tplSame.value.trim())       custom_templates.reminder_same_day   = tplSame.value.trim();
+  if (tplCanc       && tplCanc.value.trim())       custom_templates.cancellation_rebook = tplCanc.value.trim();
+  if (tplPostExp    && tplPostExp.value.trim())    custom_templates.post_experience     = tplPostExp.value.trim();
   if (Object.keys(custom_templates).length > 0) body.custom_templates = custom_templates;
 
   const r = await apiFetch('/messaging', { method: 'PATCH', body: JSON.stringify(body) });

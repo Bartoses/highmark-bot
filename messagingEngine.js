@@ -27,10 +27,12 @@ import { scheduleMessage } from "./scheduler.js";
 // Placeholders: {name} {activity} {date} {time} {phone} {booking_link}
 
 export const DEFAULT_TEMPLATES = {
-  reminder_24h:     "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
-  reminder_same_day:"Today's the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.",
+  confirmation:      "Hey {name}! You're confirmed for {activity} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
+  booking_followup:  "Hey {name}! Excited to have you out for {activity} on {date}. Quick tip: dress in layers, bring water, and arrive ~15 min early. Anything you need before then? Just reply.",
+  reminder_24h:      "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
+  reminder_same_day: "Today's the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
-  post_experience:  "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
+  post_experience:   "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };
 
 // ── Template Resolution ───────────────────────────────────────────────────────

@@ -1607,7 +1607,7 @@ export async function handlePortalUpdateMessaging(req, res, supabase) {
       return res.status(400).json({ error: "custom_templates must be an object" });
     }
     // Sanitize: only allow known template keys, values must be strings ≤ 400 chars
-    const VALID_TEMPLATE_KEYS = ["reminder_24h", "reminder_same_day", "cancellation_rebook", "post_experience"];
+    const VALID_TEMPLATE_KEYS = ["confirmation", "booking_followup", "reminder_24h", "reminder_same_day", "cancellation_rebook", "post_experience"];
     const sanitized = {};
     for (const [k, v] of Object.entries(body.custom_templates)) {
       if (VALID_TEMPLATE_KEYS.includes(k) && typeof v === "string") {
