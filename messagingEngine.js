@@ -28,9 +28,12 @@ import { scheduleMessage } from "./scheduler.js";
 
 export const DEFAULT_TEMPLATES = {
   confirmation:      "Hey {name}! You're confirmed for {activity} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
-  booking_followup:  "Hey {name}! Excited to have you out for {activity} on {date}. Quick tip: dress in layers, bring water, and arrive ~15 min early. Anything you need before then? Just reply.",
+  // 30-min post-booking nudge: simple recap + open door. Tips moved to same-day
+  // reminder so guests get them when they're most actionable.
+  booking_followup:  "Hey {name}! Thanks for booking {activity} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
   reminder_24h:      "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
-  reminder_same_day: "Today's the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.",
+  // Same-day: reminder + the prep tips guests actually need that morning.
+  reminder_same_day: "Today's the day! Your {activity} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
   post_experience:   "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };

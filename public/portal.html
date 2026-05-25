@@ -3312,29 +3312,76 @@ async function loadCampaigns() {
     return;
   }
 
-  document.getElementById('campaignsTable').innerHTML = `
+  const isAdmin = me?.isAdmin || me?.isClientAdmin;
+  const bulkBar = isAdmin ? `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+      <button class="btn btn-secondary" id="campBulkDelete" disabled onclick="bulkDeleteCampaigns()">Delete selected</button>
+      <span id="campSelCount" class="text-muted text-xs">No rows selected</span>
+    </div>` : '';
+
+  document.getElementById('campaignsTable').innerHTML = bulkBar + `
     <div class="tbl-wrap"><table>
-      <thead><tr><th>Name</th><th>Type</th><th>Audience</th><th>Status</th><th>Last Fired</th><th>Times Fired</th><th></th></tr></thead>
+      <thead><tr>
+        ${isAdmin ? '<th style="width:24px;"><input type="checkbox" id="campSelAll" onclick="toggleAllCampaigns(this.checked)"></th>' : ''}
+        <th>Name</th><th>Type</th><th>Audience</th><th>Status</th><th>Last Fired</th><th>Times Fired</th><th></th>
+      </tr></thead>
       <tbody>${d.campaigns.map(c => {
         const isEvent = c.campaign_type === 'event_triggered';
         const typeLabel = isEvent ? '<span title="Smart Event Campaign" style="color:var(--warn);">⚡ Smart</span>' : '📣 Manual';
         const audience = (c.audience_filter || c.audience_type || '').replace(/_/g,' ') || '—';
         const lastFired = c.last_fired_at ? fmt(c.last_fired_at) : '—';
         return `<tr>
+          ${isAdmin ? `<td><input type="checkbox" class="camp-row" data-cid="${c.id}" data-cname="${escHtml(c.name)}" onclick="updateCampBulkBtn()"></td>` : ''}
           <td><strong>${escHtml(c.name)}</strong></td>
           <td style="white-space:nowrap;">${typeLabel}</td>
           <td class="text-muted">${audience}</td>
           <td>${pill(c.status)}</td>
           <td class="text-muted text-xs">${lastFired}</td>
           <td class="text-muted text-xs" style="text-align:center;">${c.fire_count ?? 0}</td>
-          <td><span class="row-action" data-cid="${c.id}">View →</span></td>
+          <td>
+            <span class="row-action camp-view" data-cid="${c.id}">View</span>
+            ${isAdmin ? ` · <span class="row-action" style="color:var(--err);cursor:pointer;" onclick="deleteOneCampaign('${c.id}', ${JSON.stringify(c.name)})">Delete</span>` : ''}
+          </td>
         </tr>`;
       }).join('')}</tbody>
     </table></div>`;
 
-  document.querySelectorAll('[data-cid]').forEach(el => {
+  document.querySelectorAll('.camp-view[data-cid]').forEach(el => {
     el.addEventListener('click', () => openCampaignDetail(el.dataset.cid));
   });
+}
+
+function toggleAllCampaigns(checked) {
+  document.querySelectorAll('.camp-row').forEach(el => { el.checked = checked; });
+  updateCampBulkBtn();
+}
+
+function updateCampBulkBtn() {
+  const checked = [...document.querySelectorAll('.camp-row:checked')];
+  const btn = document.getElementById('campBulkDelete');
+  const cnt = document.getElementById('campSelCount');
+  if (btn) btn.disabled = checked.length === 0;
+  if (cnt) cnt.textContent = checked.length === 0
+    ? 'No rows selected'
+    : `${checked.length} selected`;
+}
+
+async function deleteOneCampaign(id, name) {
+  if (!confirm(`Delete campaign "${name}"? This stops any pending sends and removes the row permanently.`)) return;
+  const r = await apiFetch(`/campaigns/${id}`, { method: 'DELETE' });
+  if (!r || r.error) { alert(r?.error ?? _lastApiError ?? 'Delete failed'); return; }
+  showToast('Campaign deleted');
+  await loadCampaigns();
+}
+
+async function bulkDeleteCampaigns() {
+  const ids = [...document.querySelectorAll('.camp-row:checked')].map(el => el.dataset.cid);
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} campaign${ids.length !== 1 ? 's' : ''}? This stops any pending sends and removes the rows permanently.`)) return;
+  const r = await apiFetch('/campaigns', { method: 'DELETE', body: JSON.stringify({ ids }) });
+  if (!r || r.error) { alert(r?.error ?? _lastApiError ?? 'Delete failed'); return; }
+  showToast(`Deleted ${r.deleted}${r.skipped ? ` · ${r.skipped} skipped` : ''}`);
+  await loadCampaigns();
 }
 
 const CAMPAIGN_TEMPLATES = {
@@ -7925,6 +7972,7 @@ async function loadMessaging() {
     // Run initial activity load + preview so the cards aren't empty
     if (editable) {
       testSenderPreview();
+      loadTestSenderActivities().catch(err => console.error('[ts-activities]', err));
       loadMessagingActivity().catch(err => console.error('[activity]', err));
     }
   } catch (e) {
@@ -7978,9 +8026,9 @@ function renderMessagingSection(cfg, editable) {
       <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Custom Message Templates</div>
       <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override default message text. Use {name}, {activity}, {date}, {time}, {phone}, {booking_link}, {review_url}, {website_url} as placeholders. Leave blank to use the default.</div>
       ${tplField('tpl_confirmation',     'Booking confirmation (immediate)', 'confirmation', 'Hey {name}! You\'re confirmed for {activity} on {date} at {time}. Save this number for any questions — we\'ll send a reminder before. See you out there! 🏔')}
-      ${tplField('tpl_booking_followup', '30-min post-booking follow-up',   'booking_followup', 'Hey {name}! Excited to have you out for {activity} on {date}. Quick tip: dress in layers, bring water, and arrive ~15 min early. Anything you need before then? Just reply.')}
+      ${tplField('tpl_booking_followup', '30-min post-booking nudge',       'booking_followup', 'Hey {name}! Thanks for booking {activity} on {date}. You\'re all set — we\'ll send a reminder before. Questions in the meantime? Just reply, we\'re here.')}
       ${tplField('tpl_reminder_24h',     '24-hour reminder',   'reminder_24h',     'Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.')}
-      ${tplField('tpl_reminder_same_day','Same-day reminder',  'reminder_same_day','Today\'s the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.')}
+      ${tplField('tpl_reminder_same_day','Same-day reminder (prep tips)',  'reminder_same_day','Today\'s the day! Your {activity} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!')}
       ${tplField('tpl_cancel_rebook',    'Rebooking offer (in cancellation text)', 'cancellation_rebook', 'Want to pick a new date? {booking_link}')}
       ${tplField('tpl_post_experience',  'Post-experience follow-up', 'post_experience', 'Hey {name}! Thanks for riding with us 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}.')}
     </div>` : '';
@@ -8142,7 +8190,9 @@ function renderTestSenderCard(currentUserPhone) {
       </div>
       <div>
         <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text2);">Activity</div>
-        <input id="ts_activity" type="text" value="Kremmling RZR Tour" oninput="testSenderPreview()" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+        <select id="ts_activity" onchange="testSenderPreview()" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text1);font-size:12px;">
+          <option>Kremmling RZR Tour</option>
+        </select>
       </div>
       <div>
         <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text2);">Date</div>
@@ -8174,12 +8224,26 @@ function renderTestSenderCard(currentUserPhone) {
 // Mirror of server-side messagingEngine.DEFAULT_TEMPLATES — keep in sync.
 const TS_DEFAULT_TEMPLATES = {
   confirmation:        "Hey {name}! You're confirmed for {activity} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
-  booking_followup:    "Hey {name}! Excited to have you out for {activity} on {date}. Quick tip: dress in layers, bring water, and arrive ~15 min early. Anything you need before then? Just reply.",
+  booking_followup:    "Hey {name}! Thanks for booking {activity} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
   reminder_24h:        "Reminder: Your {activity} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
-  reminder_same_day:   "Today's the day! Your {activity} starts at {time}. See you out there! Questions? Reply anytime.",
+  reminder_same_day:   "Today's the day! Your {activity} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
   post_experience:     "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };
+
+// Populate the test sender's Activity dropdown with distinct product_titles
+// from DB2 bookings — operators preview against the real products guests see.
+async function loadTestSenderActivities() {
+  const sel = document.getElementById('ts_activity');
+  if (!sel) return;
+  const r = await apiFetch('/messaging/activity-options');
+  if (!r || !r.options?.length) return;  // keep fallback default
+  const current = sel.value;
+  sel.innerHTML = r.options.map(o => `<option>${escHtml(o)}</option>`).join('');
+  // Restore prior selection if still present, else first option
+  if (r.options.includes(current)) sel.value = current;
+  testSenderPreview();
+}
 
 function testSenderPreview() {
   const type     = document.getElementById('ts_type')?.value ?? 'reminder_24h';

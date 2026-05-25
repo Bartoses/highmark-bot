@@ -580,6 +580,81 @@ export async function handlePortalUpdateCampaign(req, res, supabase) {
   return res.json({ campaign: data });
 }
 
+// ── DELETE /portal/api/campaigns/:id ─────────────────────────────────────────
+// Single-campaign delete. client_admin only; client-scope enforced.
+export async function handlePortalDeleteCampaign(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  const { id } = req.params;
+  const { data: campaign } = await supabase.from("campaigns").select("client_id").eq("id", id).maybeSingle();
+  if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+  if (clientId && campaign.client_id !== clientId) return res.status(403).json({ error: "Access denied" });
+
+  // Cascade: cancel any pending sends + remove campaign_recipients before the campaign row
+  await supabase.from("scheduled_messages")
+    .update({ status: "cancelled", error: "campaign deleted" })
+    .eq("status", "pending")
+    .eq("metadata->>campaign_id", id);
+  await supabase.from("campaign_recipients").delete().eq("campaign_id", id);
+  const { error } = await supabase.from("campaigns").delete().eq("id", id);
+  if (error) return res.status(500).json({ error: error.message });
+  console.log(`[PORTAL] campaign deleted: ${id} (by ${req.portalUser?.email ?? "?"})`);
+  return res.json({ deleted: 1 });
+}
+
+// ── DELETE /portal/api/campaigns ─────────────────────────────────────────────
+// Bulk delete. Body: { ids: ["uuid1", "uuid2", ...] } — ≤100 per request.
+// Useful for purging duplicate test rows. client-scope enforced server-side.
+export async function handlePortalBulkDeleteCampaigns(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.slice(0, 100) : [];
+  if (!ids.length) return res.status(400).json({ error: "ids (array of campaign UUIDs) required" });
+
+  // Filter to rows owned by this client (defense in depth — RLS may not be on)
+  let q = supabase.from("campaigns").select("id, client_id").in("id", ids);
+  if (clientId) q = q.eq("client_id", clientId);
+  const { data: scoped } = await q;
+  const allowedIds = (scoped ?? []).map(r => r.id);
+  if (!allowedIds.length) return res.json({ deleted: 0, skipped: ids.length, reason: "no rows in scope" });
+
+  // Cancel pending sends + remove recipients for the entire batch
+  for (const id of allowedIds) {
+    await supabase.from("scheduled_messages")
+      .update({ status: "cancelled", error: "campaign bulk-deleted" })
+      .eq("status", "pending")
+      .eq("metadata->>campaign_id", id);
+  }
+  await supabase.from("campaign_recipients").delete().in("campaign_id", allowedIds);
+  const { error } = await supabase.from("campaigns").delete().in("id", allowedIds);
+  if (error) return res.status(500).json({ error: error.message });
+  console.log(`[PORTAL] campaigns bulk-deleted: ${allowedIds.length} (by ${req.portalUser?.email ?? "?"})`);
+  return res.json({ deleted: allowedIds.length, skipped: ids.length - allowedIds.length });
+}
+
+// ── GET /portal/api/messaging/activity-options ───────────────────────────────
+// Distinct product_titles from DB2 bookings for this client — fuels the
+// "Activity" dropdown in the test sender so operators can preview a template
+// against the actual product names guests would see.
+export async function handlePortalActivityOptions(req, res, crmSupabase) {
+  if (!crmSupabase) return res.json({ options: [] });
+  try {
+    const { data } = await crmSupabase
+      .from("bookings")
+      .select("product_title")
+      .not("product_title", "is", null)
+      .limit(500);
+    const set = new Set();
+    for (const r of data ?? []) if (r.product_title) set.add(r.product_title);
+    const options = [...set].sort();
+    return res.json({ options });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 // ── POST /portal/api/campaigns/:id/send ──────────────────────────────────────
 export async function handlePortalSendCampaign(req, res, supabase, crmSupabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });

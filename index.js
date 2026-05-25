@@ -36,7 +36,7 @@ import {
   handleListConversations, handleConversationBadgeCount, handleGetConversation,
   handlePauseConversation, handleResumeConversation, handleSendAgentMessage, handleSuggestReply,
 } from "./adminConversations.js";
-import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalCreateClient, handlePortalUpdateClient, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption, handlePortalCrawlPages, handlePortalIntegrations, handlePortalMessaging, handlePortalUpdateMessaging, handlePortalPastBookings, handlePortalRunPostExperience, handlePortalTestSend, handlePortalMessagingActivity,
+import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalUpdateLead, handlePortalCampaigns, handlePortalCreateCampaign, handlePortalGetCampaign, handlePortalUpdateCampaign, handlePortalSendCampaign, handlePortalDeleteCampaign, handlePortalBulkDeleteCampaigns, handlePortalActivityOptions, handlePortalAnalytics, handlePortalSettings, handlePortalUpdateSettings, handleCreatePortalUser, handleListPortalUsers, handlePortalClients, handlePortalCreateClient, handlePortalUpdateClient, handlePortalScrapeSources, handlePortalCreateScrapeSource, handlePortalUpdateScrapeSource, handlePortalDeleteScrapeSource, handlePortalBookingOptions, handlePortalCreateBookingOption, handlePortalUpdateBookingOption, handlePortalDeleteBookingOption, handlePortalCrawlPages, handlePortalIntegrations, handlePortalMessaging, handlePortalUpdateMessaging, handlePortalPastBookings, handlePortalRunPostExperience, handlePortalTestSend, handlePortalMessagingActivity,
   handlePortalBotConfig, handlePortalUpdateBotConfig, handlePortalBookingConfig, handlePortalUpdateBookingConfig,
   handleOnboardingAnalyze, handleOnboardingGetDraft, handleOnboardingUpdateDraft, handleOnboardingSave,
   handleOnboardingCreateClient, handlePortalFhTest, handlePortalFhSync,
@@ -1774,6 +1774,8 @@ app.get(  "/portal/api/campaigns/audience-preview", requirePortalAuth, (req, res
 app.get(  "/portal/api/campaigns/:id",              requirePortalAuth, (req, res) => handlePortalGetCampaign(req, res, supabase));
 app.patch("/portal/api/campaigns/:id",              requirePortalAuth, (req, res) => handlePortalUpdateCampaign(req, res, supabase));
 app.post( "/portal/api/campaigns/:id/send",         requirePortalAuth, (req, res) => handlePortalSendCampaign(req, res, supabase, crmSupabase));
+app.delete("/portal/api/campaigns",                 requirePortalAuth, (req, res) => handlePortalBulkDeleteCampaigns(req, res, supabase));
+app.delete("/portal/api/campaigns/:id",             requirePortalAuth, (req, res) => handlePortalDeleteCampaign(req, res, supabase));
 app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
 app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res, supabase));
 app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));
@@ -1896,6 +1898,7 @@ app.get( "/portal/api/messaging/past-bookings",       requirePortalAuth, (req, r
 app.post("/portal/api/messaging/post-experience/run", requirePortalAuth, (req, res) => handlePortalRunPostExperience(req, res, supabase, crmSupabase));
 app.post("/portal/api/messaging/test-send",           requirePortalAuth, (req, res) => handlePortalTestSend(req, res, supabase, twilioClient));
 app.get( "/portal/api/messaging/activity",            requirePortalAuth, (req, res) => handlePortalMessagingActivity(req, res, supabase));
+app.get( "/portal/api/messaging/activity-options",    requirePortalAuth, (req, res) => handlePortalActivityOptions(req, res, crmSupabase));
 app.get( "/portal/api/bot-config",    requirePortalAuth, (req, res) => handlePortalBotConfig(req, res, supabase));
 app.patch("/portal/api/bot-config",   requirePortalAuth, (req, res) => handlePortalUpdateBotConfig(req, res, supabase));
 app.get( "/portal/api/booking-config",  requirePortalAuth, (req, res) => handlePortalBookingConfig(req, res, supabase));
