@@ -27,13 +27,16 @@ import { scheduleMessage } from "./scheduler.js";
 // Placeholders: {name} {activity} {date} {time} {phone} {booking_link}
 
 export const DEFAULT_TEMPLATES = {
-  confirmation:      "Hey {name}! You're confirmed for {activity} at {location} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
+  // Brand mentioned in every customer-facing message so guests know who
+  // they booked with — operators can override per client via the portal
+  // template editor (covers non-CSR clients without code changes).
+  confirmation:      "Hey {name}! You're booked with Colorado Sled Rentals for {activity} at {location} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
   // 30-min post-booking nudge: simple recap + open door. Tips moved to same-day
   // reminder so guests get them when they're most actionable.
-  booking_followup:  "Hey {name}! Thanks for booking {activity} at {location} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
-  reminder_24h:      "Reminder: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
+  booking_followup:  "Hey {name}! Thanks for booking {activity} with Colorado Sled Rentals at {location} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
+  reminder_24h:      "Reminder from Colorado Sled Rentals: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
   // Same-day: reminder + the prep tips guests actually need that morning.
-  reminder_same_day: "Today's the day! Your {activity} at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
+  reminder_same_day: "Today's the day! Your {activity} with Colorado Sled Rentals at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
   post_experience:   "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity} at {location}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };

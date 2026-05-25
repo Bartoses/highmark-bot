@@ -8046,10 +8046,10 @@ function renderMessagingSection(cfg, editable) {
     <div style="margin-top:20px;">
       <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Custom Message Templates</div>
       <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override default message text. Use {name}, {activity}, {location}, {date}, {time}, {phone}, {booking_link}, {review_url}, {website_url} as placeholders. Leave blank to use the default.</div>
-      ${tplField('tpl_confirmation',     'Booking confirmation (immediate)', 'confirmation', 'Hey {name}! You\'re confirmed for {activity} at {location} on {date} at {time}. Save this number for any questions — we\'ll send a reminder before. See you out there! 🏔')}
-      ${tplField('tpl_booking_followup', '30-min post-booking nudge',       'booking_followup', 'Hey {name}! Thanks for booking {activity} at {location} on {date}. You\'re all set — we\'ll send a reminder before. Questions in the meantime? Just reply, we\'re here.')}
-      ${tplField('tpl_reminder_24h',     '24-hour reminder',   'reminder_24h',     'Reminder: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.')}
-      ${tplField('tpl_reminder_same_day','Same-day reminder (prep tips)',  'reminder_same_day','Today\'s the day! Your {activity} at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!')}
+      ${tplField('tpl_confirmation',     'Booking confirmation (immediate)', 'confirmation', 'Hey {name}! You\'re booked with Colorado Sled Rentals for {activity} at {location} on {date} at {time}. Save this number for any questions — we\'ll send a reminder before. See you out there! 🏔')}
+      ${tplField('tpl_booking_followup', '30-min post-booking nudge',       'booking_followup', 'Hey {name}! Thanks for booking {activity} with Colorado Sled Rentals at {location} on {date}. You\'re all set — we\'ll send a reminder before. Questions in the meantime? Just reply, we\'re here.')}
+      ${tplField('tpl_reminder_24h',     '24-hour reminder',   'reminder_24h',     'Reminder from Colorado Sled Rentals: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.')}
+      ${tplField('tpl_reminder_same_day','Same-day reminder (prep tips)',  'reminder_same_day','Today\'s the day! Your {activity} with Colorado Sled Rentals at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!')}
       ${tplField('tpl_cancel_rebook',    'Rebooking offer (in cancellation text)', 'cancellation_rebook', 'Want to pick a new date? {booking_link}')}
       ${tplField('tpl_post_experience',  'Post-experience follow-up', 'post_experience', 'Hey {name}! Thanks for riding with us 🏔 Hope you had a blast on the {activity}. Quick review? {review_url} Already missing the trails? Book again: {website_url}.')}
     </div>` : '';
@@ -8244,10 +8244,10 @@ function renderTestSenderCard(currentUserPhone) {
 // the final string from the actual config on send.
 // Mirror of server-side messagingEngine.DEFAULT_TEMPLATES — keep in sync.
 const TS_DEFAULT_TEMPLATES = {
-  confirmation:        "Hey {name}! You're confirmed for {activity} at {location} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
-  booking_followup:    "Hey {name}! Thanks for booking {activity} at {location} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
-  reminder_24h:        "Reminder: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
-  reminder_same_day:   "Today's the day! Your {activity} at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
+  confirmation:        "Hey {name}! You're booked with Colorado Sled Rentals for {activity} at {location} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
+  booking_followup:    "Hey {name}! Thanks for booking {activity} with Colorado Sled Rentals at {location} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
+  reminder_24h:        "Reminder from Colorado Sled Rentals: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
+  reminder_same_day:   "Today's the day! Your {activity} with Colorado Sled Rentals at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
   post_experience:     "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity} at {location}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };
