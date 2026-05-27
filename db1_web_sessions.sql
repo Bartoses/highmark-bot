@@ -17,15 +17,15 @@ CREATE TABLE IF NOT EXISTS web_sessions (
 CREATE INDEX IF NOT EXISTS idx_web_sessions_client_id  ON web_sessions(client_id);
 CREATE INDEX IF NOT EXISTS idx_web_sessions_session_id ON web_sessions(session_id);
 
--- RLS: service role (bot) can read/write all; anon cannot
+-- RLS: service role (bot) can read/write all; anon cannot.
+-- Must specify TO service_role — without it the policy defaults to `public`
+-- and anon/authenticated keys gain unrestricted access.
 ALTER TABLE web_sessions ENABLE ROW LEVEL SECURITY;
 
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies
-    WHERE tablename = 'web_sessions' AND policyname = 'service_role_all'
-  ) THEN
-    CREATE POLICY service_role_all ON web_sessions
-      USING (true) WITH CHECK (true);
-  END IF;
-END $$;
+DROP POLICY IF EXISTS service_role_all ON web_sessions;
+CREATE POLICY service_role_all ON web_sessions
+  AS PERMISSIVE
+  FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
