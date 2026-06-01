@@ -13768,6 +13768,7 @@ async function testOperationalBriefing() {
     classifyActivity,
     classifyDuration,
     buildTodayLoadSnapshot,
+    buildPartnerMix,
     formatManifestResponse,
     buildBriefingText,
   } = await import("./operatorBriefing.js");
@@ -13850,6 +13851,64 @@ async function testOperationalBriefing() {
     chk("op: empty snapshot totals = 0",     empty.totals.bookings === 0);
     chk("op: empty snapshot load_tone quiet_day", empty.load_tone === "quiet_day");
     chk("op: empty snapshot has no top_location", empty.top_location === null);
+  }
+
+  // ── buildPartnerMix — third-party partner share, house/platform excluded ──
+  {
+    const rows = [
+      { affiliate: "movingmountains" },       // lodge
+      { affiliate: "movingmountains" },        // lodge
+      { affiliate: "viator" },                 // OTA
+      { affiliate: "coloradosledrentals" },    // house — excluded
+      { affiliate: "polarisindustries" },      // platform — excluded
+      { affiliate: null },                     // direct — excluded
+      { affiliate: "" },                       // direct — excluded
+    ];
+    const mix = buildPartnerMix(rows);
+    chk("op: partner mix counts only third-party affiliates", mix.partner_bookings === 3, JSON.stringify(mix));
+    chk("op: partner mix total is full manifest size", mix.total === 7, String(mix.total));
+    chk("op: partner mix pct = 43%", mix.pct === 43, String(mix.pct));
+    chk("op: partner mix ranks Moving Mountains first w/ pretty label",
+        mix.partners[0].name === "Moving Mountains" && mix.partners[0].count === 2, JSON.stringify(mix.partners));
+    chk("op: partner mix prettifies Viator", mix.partners.some(p => p.name === "Viator"));
+    chk("op: partner mix excludes house + platform + direct",
+        !mix.partners.some(p => ["coloradosledrentals", "polarisindustries"].includes(p.slug)));
+
+    // No partners → empty, zero, no throw.
+    const none = buildPartnerMix([{ affiliate: "coloradosledrentals" }, { affiliate: null }]);
+    chk("op: partner mix none → partner_bookings 0", none.partner_bookings === 0 && none.pct === 0);
+    chk("op: partner mix null-safe", buildPartnerMix(null).partner_bookings === 0);
+
+    // Unknown affiliate slug → title-cased fallback (no crash).
+    const unknown = buildPartnerMix([{ affiliate: "highcountrylodge" }]);
+    chk("op: partner mix title-cases unknown slug", unknown.partners[0].name === "Highcountrylodge", JSON.stringify(unknown.partners));
+  }
+
+  // ── buildBriefingText renders Partners line when partner bookings present ──
+  {
+    const manifest = [
+      { customer_name: "Sonya Gales", activity: "Rabbit Ears UTV Rentals", location: "rabbit_ears", start_at: "2026-07-04 09:00:00", arrival_display: "9:00 AM - 12:00 PM on July 4, 2026", customer_count: 3, total_cents: 112974, balance_due_cents: 0, waiver_signed: true, affiliate: "movingmountains" },
+      { customer_name: "Bob Direct", activity: "2025 Polaris RZR Experience • Kremmling", location: "kremmling", start_at: "2026-07-04 09:30:00", arrival_display: "9:30 AM - 1:30 PM on July 4, 2026", customer_count: 2, total_cents: 100000, balance_due_cents: 0, waiver_signed: true, affiliate: null },
+    ];
+    const text = buildBriefingText({ id: "csr_rea", name: "CSR" }, [], [], null, {
+      manifest,
+      upcomingManifest: [
+        ...manifest,
+        { customer_name: "Lodge Guest", activity: "RZR", location: "kremmling", start_at: "2026-07-06 09:00:00", customer_count: 2, affiliate: "movingmountains" },
+        { customer_name: "OTA Guest", activity: "RZR", location: "kremmling", start_at: "2026-07-07 09:00:00", customer_count: 1, affiliate: "viator" },
+      ],
+      upcomingRevenue: { bookings: 4, revenue_cents: 400000 },
+    });
+    chk("op: TODAY'S LOAD shows Partners line w/ lodge name",
+        /• Partners:.*Moving Mountains 1/.test(text), text);
+    chk("op: NEXT 7 DAYS shows Partners share line",
+        /• Partners:.*Moving Mountains 2.*\(3 of 4, 75%\)/.test(text), text);
+
+    // No partner-sourced bookings → no Partners line at all.
+    const noPartners = buildBriefingText({ id: "csr_rea", name: "CSR" }, [], [], null, {
+      manifest: [{ customer_name: "Direct Only", activity: "RZR", location: "kremmling", start_at: "2026-07-04 09:00:00", customer_count: 2, affiliate: null }],
+    });
+    chk("op: no Partners line when all bookings are direct", !noPartners.includes("Partners:"), noPartners);
   }
 
   // ── buildBriefingText leads with 🏁 TODAY'S LOAD before ACTIONS ─────────

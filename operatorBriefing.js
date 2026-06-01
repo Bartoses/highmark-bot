@@ -133,7 +133,7 @@ export async function getTomorrowsAvailability(clientId, supabase) {
 const MANIFEST_SELECT =
   "fareharbor_pk, customer_name, activity, start_at, arrival_display, pax, " +
   "receipt_total_cents, balance_due_cents, waiver_signed, checked_in, " +
-  "location, phone, category";
+  "location, phone, category, affiliate";
 
 // Normalize a daily_manifest row into the internal shape the briefing
 // code expects (customer_count, total_cents). Mutates by returning a new
@@ -615,6 +615,53 @@ function compactActivity(name) {
     .split(/\s*[•|]\s*/)[0]
     .trim()
     .slice(0, 30);
+}
+
+// Affiliate slugs the operator wouldn't think of as a "partner": their own house
+// tag and the booking platforms (Polaris online, Google/organic). Excluded from
+// the partner mix so the line only surfaces real lodges/resellers/OTAs.
+const NON_PARTNER_AFFILIATES = new Set(["coloradosledrentals", "polarisindustries", "google", "direct"]);
+
+// Pretty display names for the affiliate slugs we know. Slugs are lowercase
+// alphanumeric (FareHarbor convention), so a generic fallback can't re-split
+// concatenated words — known partners get a clean label, the rest title-case.
+const AFFILIATE_LABELS = {
+  movingmountains:      "Moving Mountains",
+  fourseasonssteamboat: "Four Seasons Steamboat",
+  avaraftingandzipline: "AVA Rafting & Zipline",
+  viator:               "Viator",
+};
+function prettifyAffiliate(slug) {
+  if (!slug) return null;
+  const key = String(slug).toLowerCase();
+  if (AFFILIATE_LABELS[key]) return AFFILIATE_LABELS[key];
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+// Partner mix from a manifest array — counts third-party-sourced bookings by
+// affiliate, excluding house/platform tags. Pure, null-safe. Returns the ranked
+// partner list plus how much of the total load they represent, so the briefing
+// can render one high-signal line (commission exposure + who to coordinate with).
+export function buildPartnerMix(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const byPartner = new Map();
+  let partnerBookings = 0;
+  for (const r of list) {
+    const slug = (r?.affiliate ?? "").trim().toLowerCase();
+    if (!slug || NON_PARTNER_AFFILIATES.has(slug)) continue;
+    byPartner.set(slug, (byPartner.get(slug) ?? 0) + 1);
+    partnerBookings += 1;
+  }
+  const partners = [...byPartner.entries()]
+    .map(([slug, count]) => ({ slug, name: prettifyAffiliate(slug), count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  const total = list.length;
+  return {
+    partners,
+    partner_bookings: partnerBookings,
+    total,
+    pct: total ? Math.round((partnerBookings / total) * 100) : 0,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1131,6 +1178,15 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     if (snap.late_returns.length && manifest.length <= 8) {
       lines.push(`• ${snap.late_returns.length} return${snap.late_returns.length !== 1 ? "s" : ""} after 5pm`);
     }
+
+    // Partner-sourced bookings today — flag who to coordinate with (lodges
+    // arrange pickups, OTAs need confirmations). Only shown when present.
+    const todayPartners = buildPartnerMix(manifest);
+    if (todayPartners.partner_bookings > 0) {
+      const names = todayPartners.partners.slice(0, 2).map(p => `${p.name} ${p.count}`).join(" · ");
+      const more  = todayPartners.partners.length > 2 ? " +more" : "";
+      lines.push(`• Partners: ${names}${more}`);
+    }
   } else {
     lines.push("");
     lines.push("🏁 TODAY — quiet, nothing on the manifest.");
@@ -1183,6 +1239,14 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
         const [bestDate, count] = sortedDays[0];
         const label = formatMTDateFromNaive(bestDate, { weekday: "short", month: "short", day: "numeric" });
         lines.push(`• Busiest day: ${label} (${count} bookings)`);
+      }
+
+      // Partner-sourced share of the pipeline — top sources + how much of the
+      // week's load comes through lodges/resellers (commission + coordination).
+      const partnerMix = buildPartnerMix(upcomingManifest);
+      if (partnerMix.partner_bookings > 0) {
+        const parts = partnerMix.partners.slice(0, 3).map(p => `${p.name} ${p.count}`);
+        lines.push(`• Partners: ${parts.join(" · ")} (${partnerMix.partner_bookings} of ${partnerMix.total}, ${partnerMix.pct}%)`);
       }
     }
   }
