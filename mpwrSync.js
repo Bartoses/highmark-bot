@@ -226,6 +226,44 @@ export function resolveVehicleFromDetail(detail) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
 }
 
+// Resolve the booking-contact email + affiliate from order detail.
+// MPWR stores the guest email on detail.riders[] — the primary rider is the one
+// whose customerId matches the order's customerId (multi-rider bookings include
+// passengers with no email). The email is captured even when it belongs to a
+// lodging company / reseller (e.g. Moving Mountains booking on a guest's behalf).
+//
+// detail.affiliates[] is the outfitter's full affiliate registry. When the guest
+// email matches one of those entries, the booking came in through that affiliate,
+// so we surface its name as bookings.affiliate. Returns { email, affiliate }.
+export function extractGuestContact(detail, order = {}) {
+  const riders = detail?.riders ?? [];
+  const custId = order?.customerId ?? detail?.order?.customerId ?? null;
+
+  const primary =
+    (custId && riders.find(r => r?.customerId === custId)) ||
+    riders.find(r => r?.email) ||
+    riders[0] ||
+    null;
+
+  const email = primary?.email?.trim() || null;
+
+  let affiliate = null;
+  if (email) {
+    const match = (detail?.affiliates ?? []).find(
+      a => (a?.email ?? '').trim().toLowerCase() === email.toLowerCase()
+    );
+    // Normalize to the FareHarbor-style affiliate slug (lowercase, alphanumeric
+    // only) so MPWR- and FH-sourced bookings collapse to one value in reporting:
+    // "Moving Mountains" → "movingmountains".
+    if (match?.name) {
+      const slug = match.name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      affiliate = slug || null;
+    }
+  }
+
+  return { email, affiliate };
+}
+
 async function fetchOrders(outfitterId, token, daysAhead = FETCH_DAYS_AHEAD) {
   const url = `${MPWR_BASE}/orders.data?dateRange=${buildDateRangeParam(daysAhead)}`;
   const res = await fetch(url, {
@@ -279,11 +317,16 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
   // Resolve booked vehicle by fetching the order detail and matching
   // reservation.vehicles[].assetFamilyId against assetFamilies[]. Best-effort —
   // a detail failure shouldn't block the booking upsert.
-  let vehicle = null;
+  let vehicle    = null;
+  let guestEmail = null;
+  let affiliate  = null;
   if (outfitterId && token) {
     try {
       const detail = await fetchOrderDetail(order.shortId, outfitterId, token);
       vehicle = resolveVehicleFromDetail(detail);
+      const contact = extractGuestContact(detail, order);
+      guestEmail = contact.email;
+      affiliate  = contact.affiliate;
     } catch (err) {
       console.warn(`[mpwrSync] detail fetch failed for ${order.shortId}: ${err.message}`);
     }
@@ -292,9 +335,13 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
   // ── Step 1: upsert customer ─────────────────────────────────────────────────
   let customerId = null;
 
+  // email is included only when present so an emailless re-sync never nulls a
+  // previously-captured address. Captured even when it's a lodging/reseller email.
+  const emailField = guestEmail ? { email: guestEmail } : {};
+
   if (phone) {
     await db2.from('customers').upsert(
-      { name, normalized_phone: phone, company: 'coloradosledrentals' },
+      { name, normalized_phone: phone, company: 'coloradosledrentals', ...emailField },
       { onConflict: 'normalized_phone' }
     );
     const { data: c } = await db2.from('customers')
@@ -307,9 +354,10 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
       .eq('name', name).is('normalized_phone', null).maybeSingle();
     if (c) {
       customerId = c.id;
+      if (guestEmail) await db2.from('customers').update(emailField).eq('id', c.id);
     } else {
       const { data: n } = await db2.from('customers')
-        .insert({ name, company: 'coloradosledrentals' }).select('id').single();
+        .insert({ name, company: 'coloradosledrentals', ...emailField }).select('id').single();
       customerId = n?.id ?? null;
     }
   }
@@ -344,6 +392,7 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
     location,
     product_title:       productTitle,
     vehicle,
+    affiliate,
   }, { onConflict: 'fareharbor_pk' });
 
   if (error) throw new Error(error.message);

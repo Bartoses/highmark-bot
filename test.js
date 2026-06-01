@@ -14361,6 +14361,61 @@ async function testPolarisConfirmations() {
         resolveVehicleFromDetail({ reservation: { vehicles: [{ assetFamilyId: "unknown" }] }, assetFamilies: [{ id: "f1", name: "X" }] }) === null);
   }
 
+  // extractGuestContact — pull booking-contact email + affiliate from order detail.
+  {
+    const { extractGuestContact } = await import("./mpwrSync.js");
+
+    // Lodge booking: single rider whose email matches an affiliate registry entry.
+    const lodge = {
+      order: { customerId: "cust-sonya" },
+      riders: [{ customerId: "cust-sonya", firstName: "Sonya", lastName: "Gales", email: "guestservices@movingmountains.com", phone: "7046172792" }],
+      affiliates: [
+        { name: "Moving Mountains", email: "guestservices@movingmountains.com" },
+        { name: "Four Season Steamboat", email: "info@fourseasonssteamboat.com" },
+      ],
+    };
+    const lodgeOut = extractGuestContact(lodge, { customerId: "cust-sonya" });
+    chk("mpwr: lodge email captured", lodgeOut.email === "guestservices@movingmountains.com", lodgeOut.email);
+    chk("mpwr: lodge email maps to affiliate slug (FH-consistent)", lodgeOut.affiliate === "movingmountains", lodgeOut.affiliate);
+
+    // Direct multi-rider booking: pick the rider matching order.customerId, not a passenger.
+    const direct = {
+      order: { customerId: "cust-sherri" },
+      riders: [
+        { customerId: null, firstName: "Jaxon", lastName: "Cordell", email: null },
+        { customerId: "cust-sherri", firstName: "sherri", lastName: "rush", email: "sherrirn9@yahoo.com" },
+        { customerId: "cust-jolynn", firstName: "JOLYNN", email: "jolynnwestbrook@yahoo.com" },
+      ],
+      affiliates: [{ name: "AVA Rafting and Zipline", email: "ryan@theoutlawgroup.com" }],
+    };
+    const directOut = extractGuestContact(direct, { customerId: "cust-sherri" });
+    chk("mpwr: direct booking picks primary rider email", directOut.email === "sherrirn9@yahoo.com", directOut.email);
+    chk("mpwr: direct booking has no affiliate", directOut.affiliate === null, directOut.affiliate);
+
+    // Affiliate match is case-insensitive on email.
+    const mixedCase = extractGuestContact({
+      order: { customerId: "x" },
+      riders: [{ customerId: "x", email: "GuestServices@MovingMountains.com" }],
+      affiliates: [{ name: "Moving Mountains", email: "guestservices@movingmountains.com" }],
+    }, { customerId: "x" });
+    chk("mpwr: affiliate email match is case-insensitive", mixedCase.affiliate === "movingmountains", mixedCase.affiliate);
+
+    // No customerId match → fall back to first rider with an email.
+    const fallback = extractGuestContact({
+      riders: [{ customerId: "a", email: null }, { customerId: "b", email: "first@found.com" }],
+      affiliates: [],
+    }, {});
+    chk("mpwr: falls back to first rider with email", fallback.email === "first@found.com", fallback.email);
+
+    // No riders / null detail → null email + null affiliate, no throw.
+    chk("mpwr: null detail → empty contact",
+        extractGuestContact(null, {}).email === null && extractGuestContact(null, {}).affiliate === null);
+    chk("mpwr: no riders → empty contact",
+        extractGuestContact({ riders: [], affiliates: [] }, {}).email === null);
+    chk("mpwr: email present but no matching affiliate → null affiliate",
+        extractGuestContact({ riders: [{ customerId: "z", email: "joe@gmail.com" }], affiliates: [{ name: "X", email: "x@x.com" }] }, { customerId: "z" }).affiliate === null);
+  }
+
   // Operator snapshot + customer lookup — exported helpers compose without DB.
   // Full DB integration is exercised manually; here we verify the wiring + null
   // safety so the orchestrator never explodes when crmSupabase is unavailable.
