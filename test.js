@@ -12916,6 +12916,16 @@ async function testP0Hardening() {
       (() => { const r = evaluateFareharborWebhook({ expected: "tok123", provided: "wrong!" }); return r.allow === false && r.reason === "invalid_secret"; })());
   chk("p0-2: configured + missing secret → deny",
       (() => { const r = evaluateFareharborWebhook({ expected: "tok123", provided: null }); return r.allow === false && r.reason === "missing_secret"; })());
+
+  // ── P0-4: inbound MessageSid idempotency classifier ─────────────────────
+  const { classifyClaimResult } = await import("./index.js");
+  chk("p0-4: no error → fresh (process)", classifyClaimResult(null) === "fresh");
+  chk("p0-4: pg unique_violation code → duplicate (drop)",
+      classifyClaimResult({ code: "23505", message: "duplicate key value violates unique constraint" }) === "duplicate");
+  chk("p0-4: 'duplicate' message → duplicate", classifyClaimResult({ message: "duplicate key" }) === "duplicate");
+  chk("p0-4: 'unique' message → duplicate", classifyClaimResult({ message: "unique constraint" }) === "duplicate");
+  chk("p0-4: other DB error → error (fail-open / process)",
+      classifyClaimResult({ code: "08006", message: "connection refused" }) === "error");
 }
 await testP0Hardening();
 

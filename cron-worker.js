@@ -100,6 +100,14 @@ try {
     console.log("[CRON-WORKER] FareHarbor poll complete.");
   }
 
+  // P0-4 retention: prune inbound-idempotency keys older than 3 days (only needs
+  // to outlive Twilio's retry window). Runs hourly (top-of-hour tick).
+  if (new Date().getUTCMinutes() < 5) {
+    const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const { error } = await supabase.from("processed_messages").delete().lt("processed_at", cutoff);
+    if (error) console.warn(`[CRON-WORKER] processed_messages prune failed: ${error.message}`);
+  }
+
   process.exit(0);
 } catch (err) {
   console.error("[CRON-WORKER] Fatal error:", err.message);

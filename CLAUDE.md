@@ -80,7 +80,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled)
 
 ---
 
@@ -175,7 +175,13 @@ Expected: `{"status":"Highmark running ✅", ...}`
 ## Architecture Notes
 
 ### SMS Flow (per message, in order)
+0. Twilio signature validation (P0-1) → 403 on forgery
 1. Rate limiting (IP + phone)
+1.5. **ACK-first + idempotency (P0-4, real SMS only):** respond `<Response></Response>`
+   to Twilio immediately, then `claimInboundMessage(MessageSid)` — a duplicate (Twilio
+   retry) is dropped. The reply is delivered out-of-band via `messages.create`, so the
+   webhook never blocks on Claude (no 15s-timeout retry storms). TEST_MODE/UI keep the
+   synchronous JSON response. `ack()` helper sends the empty TwiML exactly once.
 2. STOP/HELP/START keywords (TCPA — processed before anything else)
 3. Opted-out gate (silently drop)
 4. Load conversation from Supabase
@@ -185,8 +191,9 @@ Expected: `{"status":"Highmark running ✅", ...}`
 8. Intent + sentiment classification
 9. Booking mode routing (per client.bookingMode)
 10. Claude called with system prompt + KB context
-11. Save conversation to Supabase, return TwiML
+11. Save conversation to Supabase
 12. CRM upsert/tagging — only if `client.crmEnabled` is true
+(`processed_messages` table = idempotency keys; cron worker prunes rows >3 days old.)
 
 ### Conversation Stage Machine
 `new → discovery → engaged → considering → high_intent → lead_captured → closed | handoff`

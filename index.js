@@ -1382,6 +1382,32 @@ export async function saveConversation(fromNumber, toNumber, convo, clientId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// INBOUND IDEMPOTENCY (P0-4) — dedup Twilio webhook retries by MessageSid
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Pure classifier for the result of the claim INSERT. Exported for tests.
+//   no error            → "fresh"      (first time — process it)
+//   unique violation    → "duplicate"  (Twilio retry — drop it)
+//   any other DB error  → "error"      (fail open — process, never blackhole a guest)
+export function classifyClaimResult(error) {
+  if (!error) return "fresh";
+  if (error.code === "23505" || /duplicate|unique/i.test(error.message ?? "")) return "duplicate";
+  return "error";
+}
+
+// Atomically claim an inbound MessageSid. Returns true if this call should process
+// the message (first time, or fail-open on DB error), false if it's a retry to drop.
+export async function claimInboundMessage(messageSid) {
+  if (!messageSid) return true; // no SID (non-Twilio caller) → process
+  const { error } = await supabase.from("processed_messages").insert({ message_sid: messageSid });
+  const result = classifyClaimResult(error);
+  if (result === "error") {
+    console.error("[SMS] MessageSid claim error (processing anyway):", error.message);
+  }
+  return result !== "duplicate";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CLAUDE CALL — Phase 11.4: delegates to callClaudeForChannel (messageEngine.js)
 // Kept as a thin wrapper so all existing call sites in the SMS handler stay
 // unchanged. New channels call callClaudeForChannel directly.

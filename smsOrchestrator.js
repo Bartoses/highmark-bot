@@ -42,7 +42,7 @@ import { extractDateFromMessage } from "./dateExtract.js";
 import {
   supabase, crmSupabase, twilioClient, anthropic,
   isUiReq, enforceLength, getSeasonalOpener, getCurrentSeason,
-  getConversation, saveConversation,
+  getConversation, saveConversation, claimInboundMessage,
   detectIntent, detectSentiment, isReturningGuest, detectBuyingSignals,
   updateConversationStage, shouldAttemptLeadCapture, needsExpertiseFirst,
   buildLeadCapturePrompt, buildResponsePlan, formatResponsePlanInstruction,
@@ -59,10 +59,35 @@ export async function handleSmsRequest(req, res) {
   // Resolve which client this inbound number belongs to
   let client = resolveClient(toNumber);
 
+  // P0-4: send the empty TwiML response exactly once. For real SMS we ACK first
+  // (below) and deliver the reply out-of-band via twilioClient.messages.create,
+  // so the webhook never holds the connection through the Claude call → no Twilio
+  // 15s-timeout retries. ack() is idempotent, so every legacy res.send site can
+  // call it safely. TEST_MODE/UI keep returning JSON synchronously (ack unused).
+  let acked = false;
+  const ack = () => {
+    if (acked) return;
+    acked = true;
+    res.set("Content-Type", "text/xml");
+    res.send("<Response></Response>");
+  };
+  const isRealSms = process.env.TEST_MODE !== "true" && !isUiReq(req);
+
   // 1. Parse + validate
   if (!rawBody || !fromNumber) {
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+    ack();
+    return;
+  }
+
+  // P0-4: ACK-first + inbound idempotency (real Twilio SMS only).
+  if (isRealSms) {
+    ack(); // respond to Twilio immediately; processing continues below
+    const messageSid = req.body?.MessageSid ?? req.body?.SmsMessageSid ?? null;
+    const fresh = await claimInboundMessage(messageSid);
+    if (!fresh) {
+      console.log(`[SMS] Duplicate inbound MessageSid ${messageSid} — dropping retry`);
+      return;
+    }
   }
 
   // 2. Normalize for keyword checks
@@ -73,16 +98,16 @@ export async function handleSmsRequest(req, res) {
   if (OPT_OUT_KEYWORDS.includes(msgUpper)) {
     await handleOptOutKeyword(fromNumber, toNumber, twilioClient, supabase, crmSupabase, client?.name);
     if (isUiReq(req)) return res.json({ reply: `You've been unsubscribed${client?.name ? ` from ${client.name}` : ""}. Reply START to resubscribe.` });
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+    ack();
+    return;
   }
 
   // 4. OPT-IN check
   if (OPT_IN_KEYWORDS.includes(msgUpper)) {
     await handleOptInKeyword(fromNumber, toNumber, twilioClient, supabase, crmSupabase, client?.name);
     if (isUiReq(req)) return res.json({ reply: `You're resubscribed${client?.name ? ` to ${client.name} messages` : ""}. Text us anytime.` });
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+    ack();
+    return;
   }
 
   // 4.5. HELP keyword — required by TCPA/CTIA. Works even if opted out.
@@ -91,8 +116,8 @@ export async function handleSmsRequest(req, res) {
     if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply: helpText });
     await twilioClient.messages.create({ body: helpText, from: toNumber, to: fromNumber })
       .catch((err) => console.error("[HELP] Twilio send error:", err.message));
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+    ack();
+    return;
   }
 
   // 4.6. RESETNOW — universal reset keyword (owner / demo use).
@@ -111,8 +136,8 @@ export async function handleSmsRequest(req, res) {
       if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply: opener });
       await twilioClient.messages.create({ body: opener, from: toNumber, to: fromNumber })
         .catch((err) => console.error("[RESET] Twilio send error:", err.message));
-      res.set("Content-Type", "text/xml");
-      return res.send("<Response></Response>");
+      ack();
+      return;
     }
   }
 
@@ -132,8 +157,8 @@ export async function handleSmsRequest(req, res) {
     runtimeCfgP.catch(() => {});
     convoP.catch(() => {});
     if (isUiReq(req)) return res.json({ reply: "[opted out — message dropped]" });
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+    ack();
+    return;
   }
 
   // 5.5. Mark lead ENGAGED if this is a reply from a lead we've been following up with.
@@ -164,8 +189,8 @@ export async function handleSmsRequest(req, res) {
     if (process.env.TEST_MODE === "true" || isUiReq(req)) return res.json({ reply, meta });
     await twilioClient.messages.create({ body: reply, from: toNumber, to: fromNumber })
       .catch((err) => console.error("[DEMO] Twilio send error:", err.message));
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+    ack();
+    return;
   }
 
   // 7. DEMO triggers — reset conversation and send appropriate opener
@@ -211,8 +236,8 @@ export async function handleSmsRequest(req, res) {
       }
     }
 
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+    ack();
+    return;
   }
 
   // 6. Load conversation from Supabase (reads kicked off in parallel at step 5)
@@ -236,8 +261,8 @@ export async function handleSmsRequest(req, res) {
     await saveConversation(fromNumber, toNumber, convo, client?.id);
     console.log(`[BOT_PAUSED] Message from ${fromNumber} saved, no reply sent`);
     if (isUiReq(req)) return res.json({ reply: "[bot paused — message saved for agent]" });
-    res.set("Content-Type", "text/xml");
-    return res.send("<Response></Response>");
+    ack();
+    return;
   }
 
   // Phase 11.8: SMS→Web — for new or short conversations, check if this phone
@@ -934,6 +959,5 @@ export async function handleSmsRequest(req, res) {
   }
 
   // 27. Respond to Twilio
-  res.set("Content-Type", "text/xml");
-  res.send("<Response></Response>");
+  ack();
 }
