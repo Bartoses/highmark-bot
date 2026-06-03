@@ -41,6 +41,8 @@ A guest texts the business number. Summit (the AI persona) responds instantly wi
 ```
 clients.js              — per-client config registry + resolveClient(toNumber) — ADD NEW CLIENTS HERE
 index.js                — Express server, SMS webhook, all bot logic, rate limiting, booking state machine
+voice.js                — Voice AI Phase 1: Twilio Voice webhooks (/voice/incoming|status|recording), per-client agent config, TwiML builders, call logging
+db1_voice.sql           — migration: voice_numbers, voice_agents, voice_calls (Voice AI Phase 1)
 knowledgeBase.js        — FH items (24hr) + availability (3hr) + weather (1hr) + website scraper (7 days)
 bookingConfirmations.js — FareHarbor webhook receiver + 30-min polling + confirmation/follow-up texts
 crm.js                  — contacts, campaigns, TCPA opt-out/opt-in, auto-tagging
@@ -293,6 +295,27 @@ Default 320 chars (2 texts). `enforceLength(text, max=320)` — never truncates 
 - Sends 30-min follow-up text
 - Idempotency log in `confirmations_sent` table (never double-sends)
 - `CONFIRMATIONS_ENABLED=false` until tested end-to-end
+
+---
+
+## Voice AI — Phase 1 (voice.js)
+
+The AI employee that answers phone calls, not just texts — a first-class,
+multi-tenant module on the same clients/CRM/knowledge as the SMS bot.
+
+- Twilio Voice webhook → `https://your-railway-url/voice/incoming` (HTTP POST)
+- Answers with a per-client greeting, then **forwards to a human** (in business
+  hours + an E.164 transfer target) or **takes a voicemail** — never drops a call
+- Every call logged to `voice_calls` keyed by Twilio `CallSid` (idempotent);
+  `/voice/status` + `/voice/recording` callbacks patch the same row
+- Portal: `GET /portal/api/voice/calls` → client-scoped log + dashboard counters
+- Same `validateTwilioSignature` (P0-1) guard as `/sms`
+- Go live: run `db1_voice.sql` in DB1, add a `voice_numbers` row (+ optional
+  `voice_agents` row with `forwarding_number` / `business_hours`), point the Twilio
+  number's Voice webhook at `/voice/incoming`
+- Outcomes: spam · lead · customer · booking · support · voicemail · transferred ·
+  completed · no_answer. Realtime AI conversation, lead scoring, missed-call SMS
+  recovery, and a shared spam network land in Phases 2–5.
 
 ---
 
