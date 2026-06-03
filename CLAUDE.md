@@ -206,8 +206,15 @@ reconstructed request URL + POST params using `TWILIO_AUTH_TOKEN`.
 - Validation is ACTIVE in prod whenever `TWILIO_AUTH_TOKEN` is set. If legit inbound SMS
   starts returning 403, set `TWILIO_VALIDATE=false` to restore service immediately, then
   fix `PUBLIC_BASE_URL`.
-- `evaluateTwilioRequest` (pure) is unit-tested; the FareHarbor webhook is still
-  unauthenticated (P0-2, open).
+- `evaluateTwilioRequest` (pure) is unit-tested.
+
+**FareHarbor webhook auth (P0-2)** — `/fareharbor/webhook` (+ `/fareharbor/webhook/:token`)
+gated by a shared secret in `FAREHARBOR_WEBHOOK_SECRET`. Secret accepted via path
+segment (most robust), `?token=`, or `x-webhook-secret` header; forged requests → 403.
+- **Opt-in / non-breaking:** if the env var is UNSET, the webhook stays open (current
+  behavior) and logs an "UNAUTHENTICATED" warning. To enable: set the env var AND append
+  the secret to the FareHarbor dashboard callback URL (e.g. `.../fareharbor/webhook/<secret>`).
+- `secretsMatch` (constant-time) + `evaluateFareharborWebhook` (pure) are unit-tested.
 
 ### Rate Limiting
 - **IP limiter** — 30 req/min per IP (express-rate-limit)
@@ -270,7 +277,13 @@ Outbound SMS to filtered audience (`all_leads`, `engaged_leads`, `new_leads`). T
 `scheduleMessage()` inserts row; `processScheduledMessages()` worker: claim → opt-out check → send → update status. Retry: 5 min, 15 min, then `failed`. Stale lock recovery after 5 min. Railway cron service (`highmark-cron`) runs every 5 min.
 
 ### Booking Confirmations (bookingConfirmations.js)
-FH webhook + 30-min poller. Confirmation link: `fareharbor.com/embeds/book/{shortname}/items/{pk}/booking/{uuid}/`. Cancellations idempotent via `cancellation_sent` column. Rebooking: cancel old + confirm new.
+FH webhook (authenticated — see Webhook Security/P0-2) + 30-min poller (runs in the cron
+worker). Confirmation link: `fareharbor.com/embeds/book/{shortname}/items/{pk}/booking/{uuid}/`.
+**Idempotency (P0-2):** the "booked" path now does an atomic CLAIM — inserts the
+`confirmations_sent` row (UNIQUE `booking_pk`) BEFORE sending; only the winning caller
+texts, so webhook + poll can't double-send. On Twilio send failure the claim is rolled
+back (deleted) so the poll retries. Cancellations idempotent via `cancellation_sent`
+column. Rebooking: cancel old + confirm new.
 
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).

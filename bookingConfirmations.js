@@ -9,9 +9,36 @@
 //   5. Save and verify test ping → check Railway logs for "FareHarbor webhook received"
 // ─────────────────────────────────────────────────────────────────────────────
 import fetch from "node-fetch";
+import { timingSafeEqual } from "crypto";
 import { scheduleMessage } from "./scheduler.js";
 import { getAllClients } from "./clients.js";
 import { scheduleReminders } from "./messagingEngine.js";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WEBHOOK AUTH (P0-2) — authenticate the FareHarbor webhook with a shared secret
+// FareHarbor doesn't HMAC-sign webhooks, so we gate on a secret carried in the
+// configured callback URL path (/fareharbor/webhook/:token), a ?token= query, or
+// an x-webhook-secret header. Pure helpers below are unit-tested.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Constant-time compare; true only when both non-empty, same length, and equal.
+export function secretsMatch(provided, expected) {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(String(provided));
+  const b = Buffer.from(String(expected));
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+// Allow/deny decision for an inbound FareHarbor webhook.
+//   no expected secret configured → allow (back-compat) with reason "unconfigured"
+//   expected set + provided matches → allow
+//   otherwise → deny (missing_secret | invalid_secret)
+export function evaluateFareharborWebhook({ expected = null, provided = null } = {}) {
+  if (!expected) return { allow: true, reason: "unconfigured" };
+  if (secretsMatch(provided, expected)) return { allow: true, reason: "valid_secret" };
+  return { allow: false, reason: provided ? "invalid_secret" : "missing_secret" };
+}
 
 const FAREHARBOR_BASE = "https://fareharbor.com/api/external/v1";
 
@@ -268,18 +295,6 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
   // Only process confirmed bookings
   if (status !== "booked") return;
 
-  // Idempotency check — skip if already confirmed
-  const { data: existing } = await supabase
-    .from("confirmations_sent")
-    .select("id")
-    .eq("booking_pk", bookingPk)
-    .single();
-
-  if (existing) {
-    console.log(`[CONFIRM] Booking ${bookingPk} already confirmed — skipping.`);
-    return;
-  }
-
   // Per-client gate: if msgConfig row exists, respect enable_confirmation_texts (default true)
   const confirmEnabled = msgConfig ? msgConfig.enable_confirmation_texts : true;
   if (!confirmEnabled) {
@@ -287,19 +302,11 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
     return;
   }
 
-  const confirmText = buildConfirmationText(booking);
-
-  // Send confirmation
-  try {
-    await twilioClient.messages.create({ body: confirmText, from: fromNumber, to: sendTo });
-    console.log(`[CONFIRM] Confirmation sent to ${sendTo} for booking ${bookingPk}${testMode ? " [TEST MODE]" : ""}`);
-  } catch (err) {
-    console.error(`[CONFIRM] Confirmation send failed:`, err.message);
-    return;
-  }
-
-  // Log to confirmations_sent
-  await supabase.from("confirmations_sent").insert({
+  // P0-2: atomic idempotency CLAIM before sending. Insert the row first; the
+  // UNIQUE(booking_pk) constraint means only one caller wins — the webhook and
+  // the 30-min poll can no longer both send a confirmation for the same booking.
+  // (Old code did select-then-send-then-insert, leaving a duplicate-send window.)
+  const { error: claimErr } = await supabase.from("confirmations_sent").insert({
     booking_pk:  bookingPk,
     guest_phone: guestPhone,
     guest_name:  booking.contact?.name ?? null,
@@ -308,6 +315,30 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
     start_at:    booking.availability?.start_at ?? new Date().toISOString(),
     source,
   });
+  if (claimErr) {
+    if (claimErr.code === "23505" || /duplicate|unique/i.test(claimErr.message ?? "")) {
+      console.log(`[CONFIRM] Booking ${bookingPk} already claimed/confirmed — skipping.`);
+    } else {
+      // Couldn't claim → can't guarantee at-most-once → don't send.
+      console.error(`[CONFIRM] Idempotency claim failed for ${bookingPk}:`, claimErr.message);
+    }
+    return;
+  }
+
+  const confirmText = buildConfirmationText(booking);
+
+  // Send confirmation. On failure, roll back the claim so the poll can retry
+  // (preserves at-least-once for transient Twilio errors without duplicate texts).
+  try {
+    await twilioClient.messages.create({ body: confirmText, from: fromNumber, to: sendTo });
+    console.log(`[CONFIRM] Confirmation sent to ${sendTo} for booking ${bookingPk}${testMode ? " [TEST MODE]" : ""}`);
+  } catch (err) {
+    console.error(`[CONFIRM] Confirmation send failed:`, err.message);
+    await supabase.from("confirmations_sent").delete().eq("booking_pk", bookingPk)
+      .then(() => console.log(`[CONFIRM] Rolled back claim for ${bookingPk} (send failed) — will retry`))
+      .catch((e) => console.error(`[CONFIRM] Claim rollback failed for ${bookingPk}:`, e.message));
+    return;
+  }
 
   // Pre-seed conversation so Summit has context when guest replies
   await preSeedConversation(booking, confirmText, supabase, fromNumber);
@@ -452,7 +483,21 @@ export async function pollNewBookings(twilioClient, supabase, crmSupabase) {
 // WEBHOOK ROUTE
 // ─────────────────────────────────────────────────────────────────────────────
 export function registerWebhookRoute(app, twilioClient, supabase, crmSupabase) {
-  app.post("/fareharbor/webhook", (req, res) => {
+  const handleWebhook = (req, res) => {
+    // P0-2: authenticate before doing anything. Secret may arrive via path param,
+    // ?token= query, or x-webhook-secret header (FH config flexibility).
+    const provided = req.params?.token ?? req.query?.token ?? req.get("x-webhook-secret") ?? req.get("x-fareharbor-secret");
+    const expected = process.env.FAREHARBOR_WEBHOOK_SECRET ?? null;
+    const decision = evaluateFareharborWebhook({ expected, provided });
+
+    if (!decision.allow) {
+      console.warn(`[CONFIRM] Rejected FareHarbor webhook (${decision.reason}) ip=${req.ip}`);
+      return res.sendStatus(403);
+    }
+    if (decision.reason === "unconfigured") {
+      console.warn("[CONFIRM] FAREHARBOR_WEBHOOK_SECRET unset — webhook is UNAUTHENTICATED. Set it (and append the secret to the FareHarbor callback URL) to enable P0-2 auth.");
+    }
+
     // Respond immediately so FareHarbor doesn't retry
     res.sendStatus(200);
 
@@ -468,7 +513,12 @@ export function registerWebhookRoute(app, twilioClient, supabase, crmSupabase) {
     processBookingEvent(booking, "webhook", twilioClient, supabase, crmSupabase).catch(
       (err) => console.error("[CONFIRM] Webhook processing error:", err.message)
     );
-  });
+  };
+
+  // Two shapes so the secret can live in the configured callback URL path
+  // (most robust — FH always forwards the path) or via query/header.
+  app.post("/fareharbor/webhook", handleWebhook);
+  app.post("/fareharbor/webhook/:token", handleWebhook);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

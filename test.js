@@ -12893,12 +12893,29 @@ async function testP0Hardening() {
   chk("p0-3: a quiet off-schedule minute returns no jobs", at(13, 17).length === 0);
 
   // ── P0-3: FareHarbor poll window ────────────────────────────────────────
-  const { isFareHarborPollDue } = await import("./bookingConfirmations.js");
+  const { isFareHarborPollDue, secretsMatch, evaluateFareharborWebhook } = await import("./bookingConfirmations.js");
   const dt = (m) => new Date(Date.UTC(2026, 5, 2, 10, m, 0));
   chk("p0-3: FH poll due at :00", isFareHarborPollDue(dt(0)) === true);
   chk("p0-3: FH poll due at :30", isFareHarborPollDue(dt(30)) === true);
   chk("p0-3: FH poll NOT due at :15", isFareHarborPollDue(dt(15)) === false);
   chk("p0-3: FH poll NOT due at :45", isFareHarborPollDue(dt(45)) === false);
+
+  // ── P0-2: FareHarbor webhook secret auth ────────────────────────────────
+  chk("p0-2: secretsMatch equal → true",        secretsMatch("s3cr3t", "s3cr3t") === true);
+  chk("p0-2: secretsMatch different → false",   secretsMatch("s3cr3t", "nope") === false);
+  chk("p0-2: secretsMatch length mismatch → false", secretsMatch("abc", "abcd") === false);
+  chk("p0-2: secretsMatch empty provided → false", secretsMatch("", "x") === false);
+  chk("p0-2: secretsMatch empty expected → false", secretsMatch("x", "") === false);
+  chk("p0-2: secretsMatch both null → false",   secretsMatch(null, null) === false);
+
+  chk("p0-2: unconfigured (no expected) → allow",
+      (() => { const r = evaluateFareharborWebhook({ expected: null, provided: null }); return r.allow === true && r.reason === "unconfigured"; })());
+  chk("p0-2: configured + matching secret → allow",
+      (() => { const r = evaluateFareharborWebhook({ expected: "tok123", provided: "tok123" }); return r.allow === true && r.reason === "valid_secret"; })());
+  chk("p0-2: configured + wrong secret → deny",
+      (() => { const r = evaluateFareharborWebhook({ expected: "tok123", provided: "wrong!" }); return r.allow === false && r.reason === "invalid_secret"; })());
+  chk("p0-2: configured + missing secret → deny",
+      (() => { const r = evaluateFareharborWebhook({ expected: "tok123", provided: null }); return r.allow === false && r.reason === "missing_secret"; })());
 }
 await testP0Hardening();
 
