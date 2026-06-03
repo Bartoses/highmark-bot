@@ -193,9 +193,25 @@ Expected: `{"status":"Highmark running ✅", ...}`
 Stored in `booking_data._stage` (no schema migration needed). Never downgrades. Frustrated → handoff.
 Commercial Decision Layer (`buildResponsePlan`) runs before every Claude call: enforces answer-first, expertise-first behavior. `containsPhoneAsk()` post-validates and regenerates if needed.
 
+### Webhook Security (P0-1)
+`/sms` is guarded by `validateTwilioSignature` (twilioSignature.js) BEFORE the rate
+limiters — forged requests get `403 <Response></Response>` and never reach the handler
+or burn Claude/Twilio spend. Verifies the `X-Twilio-Signature` HMAC against the
+reconstructed request URL + POST params using `TWILIO_AUTH_TOKEN`.
+- **Bypasses** (no signature expected): `TEST_MODE=true`, and authenticated UI/console
+  requests (`isUiReq`, x-internal-key).
+- **Env knobs:** `TWILIO_VALIDATE=false` = ops kill-switch to disable validation without
+  a deploy; `PUBLIC_BASE_URL` = override the signed-URL base if proxy host reconstruction
+  is wrong (set to `https://highmark-bot-production.up.railway.app` if needed).
+- Validation is ACTIVE in prod whenever `TWILIO_AUTH_TOKEN` is set. If legit inbound SMS
+  starts returning 403, set `TWILIO_VALIDATE=false` to restore service immediately, then
+  fix `PUBLIC_BASE_URL`.
+- `evaluateTwilioRequest` (pure) is unit-tested; the FareHarbor webhook is still
+  unauthenticated (P0-2, open).
+
 ### Rate Limiting
 - **IP limiter** — 30 req/min per IP (express-rate-limit)
-- **Phone limiter** — 10 msg/min per phone number (in-memory Map)
+- **Phone limiter** — 10 msg/min per phone number (in-memory Map; per-instance — see audit P0-5)
 Both return `<Response></Response>` TwiML on 429.
 
 ### Conversation Store
@@ -279,7 +295,15 @@ Two-layer system. **Layer 1** (deterministic, ~95% of operator queries): `detect
 **Owner detection** (`ownerMode.detectOwner`). Matches `fromNumber` against `client.ownerPhone` (preferred) or `operatorPhones[]`, both normalized to E.164. When true, the orchestrator: (1) intercepts pending-action YES/NO confirmations, (2) tries `detectAndHandleOperatorCommand` for a deterministic reply, (3) falls through to Claude with `buildOwnerInstruction` appended. Customer-only actions (`capture_lead`, `escalate_to_human`) blocked via `isOwnerActionAllowed`.
 
 ### Knowledge Base Refresh
-| Data | Cron | Method |
+All recurring refresh jobs run in the **cron worker** (`cron-worker.js`), NOT the web
+process (P0-3). The worker ticks every 5 min; `knowledgeBase.dueKnowledgeJobs(now)`
+maps each schedule below to a UTC window check, so each job fires exactly once per
+occurrence regardless of how many web instances run. The web process only does a
+one-shot, staleness-gated **boot warm-up** in `initKnowledgeBase`. The FareHarbor
+fallback poll likewise moved to the worker (`pollNewBookings` + `isFareHarborPollDue`,
+:00/:30 windows); the web keeps only the `/fareharbor/webhook` route.
+
+| Data | Schedule (UTC) | Method |
 |---|---|---|
 | FH items (catalog, pricing) | Daily 2am | JS from FH API |
 | FH availability | Every 3hr | JS from FH minimal endpoint |
@@ -287,6 +311,7 @@ Two-layer system. **Layer 1** (deterministic, ~95% of operator queries): `detect
 | Snow conditions | Every 3hr (:30) | SNOTEL 4 stations + CAIC avalanche danger |
 | Website | Monday 3am | Single Haiku call, hash-gated |
 | Whole-site crawl | Monday 4am | crawler.js BFS + per-page Haiku |
+| Optimization analysis | Daily 5am | optimizationEngine per client |
 
 ### Season Detection
 - `getCurrentSeason()` → `winter` (Nov-Mar), `shoulder` (Apr-May), `summer` (Jun-Oct)

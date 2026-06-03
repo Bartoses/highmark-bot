@@ -9,7 +9,6 @@
 //   5. Save and verify test ping → check Railway logs for "FareHarbor webhook received"
 // ─────────────────────────────────────────────────────────────────────────────
 import fetch from "node-fetch";
-import cron from "node-cron";
 import { scheduleMessage } from "./scheduler.js";
 import { getAllClients } from "./clients.js";
 import { scheduleReminders } from "./messagingEngine.js";
@@ -368,7 +367,15 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
 // ─────────────────────────────────────────────────────────────────────────────
 // POLLING — fallback if webhooks miss bookings
 // ─────────────────────────────────────────────────────────────────────────────
-async function pollNewBookings(twilioClient, supabase, crmSupabase) {
+// P0-3: true when the current worker tick falls in a FareHarbor poll window.
+// Original schedule was node-cron "*/30 * * * *" (top + half of each hour);
+// the worker ticks every 5 min, so match the :00 and :30 ticks (UTC).
+export function isFareHarborPollDue(date = new Date()) {
+  const m = date.getUTCMinutes();
+  return m < 5 || (m >= 30 && m < 35);
+}
+
+export async function pollNewBookings(twilioClient, supabase, crmSupabase) {
   if (process.env.FAREHARBOR_ENABLED !== "true") return;
 
   const companies = [
@@ -468,14 +475,9 @@ export function registerWebhookRoute(app, twilioClient, supabase, crmSupabase) {
 // INIT
 // ─────────────────────────────────────────────────────────────────────────────
 export async function initBookingConfirmations(app, twilioClient, supabase, crmSupabase) {
+  // Web process owns only the webhook ROUTE. The fallback poll (P0-3) moved to
+  // the cron worker — running it here would fire on every web instance and send
+  // duplicate confirmation texts under horizontal scaling.
   registerWebhookRoute(app, twilioClient, supabase, crmSupabase);
-
-  // Poll every 30 minutes as a fallback (Tier 2 only)
-  if (process.env.FAREHARBOR_ENABLED === "true") {
-    cron.schedule("*/30 * * * *", () => {
-      pollNewBookings(twilioClient, supabase, crmSupabase);
-    });
-  }
-
-  console.log("[CONFIRM] Booking confirmations initialized.");
+  console.log("[CONFIRM] Booking confirmations initialized (webhook route only; poll runs in cron worker).");
 }

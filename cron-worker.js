@@ -12,11 +12,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import "dotenv/config";
 import twilio from "twilio";
+import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import { processScheduledMessages } from "./scheduler.js";
 import { dispatchOperatorDigests } from "./operatorBriefing.js";
 import { evaluateEventCampaigns } from "./campaignTriggers.js";
 import { runMpwrSync } from "./mpwrSync.js";
+import { runScheduledKnowledgeJobs } from "./knowledgeBase.js";
+import { pollNewBookings, isFareHarborPollDue } from "./bookingConfirmations.js";
+import { loadDbClients } from "./clients.js";
 
 const required = [
   "TWILIO_ACCOUNT_SID",
@@ -38,6 +42,7 @@ const supabase     = createClient(process.env.SUPABASE_URL, process.env.SUPABASE
 const crmSupabase  = process.env.CRM_SUPABASE_URL
   ? createClient(process.env.CRM_SUPABASE_URL, process.env.CRM_SUPABASE_KEY)
   : null;
+const anthropic    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 console.log(`[CRON-WORKER] Starting at ${new Date().toISOString()}`);
 
@@ -58,6 +63,15 @@ async function sendOperatorBriefings() {
 }
 
 try {
+  // Hydrate DB-backed clients into the registry so KB jobs cover them too
+  // (the web process does this at startup; the worker must do it per invocation).
+  try {
+    const { data } = await supabase.from("clients").select("*").eq("active", true);
+    loadDbClients(data ?? []);
+  } catch (err) {
+    console.warn(`[CRON-WORKER] DB client load failed (using static config): ${err.message}`);
+  }
+
   // Always process scheduled messages
   const result = await processScheduledMessages(supabase, twilioClient, crmSupabase);
   console.log(`[CRON-WORKER] Done — processed=${result.processed} sent=${result.sent} cancelled=${result.cancelled} failed=${result.failed}`);
@@ -74,6 +88,17 @@ try {
 
   // Operator digests — every cron tick, per-phone digest_times decides who's due
   await sendOperatorBriefings();
+
+  // Knowledge-base refresh jobs (P0-3) — moved out of the web process so they
+  // fire exactly once per schedule here, not N× across web instances.
+  const ranKb = await runScheduledKnowledgeJobs(supabase, anthropic);
+  if (ranKb.length) console.log(`[CRON-WORKER] KB jobs ran: ${ranKb.join(", ")}`);
+
+  // FareHarbor fallback poll (P0-3) — :00 and :30 windows, Tier 2 only.
+  if (process.env.FAREHARBOR_ENABLED === "true" && isFareHarborPollDue()) {
+    await pollNewBookings(twilioClient, supabase, crmSupabase);
+    console.log("[CRON-WORKER] FareHarbor poll complete.");
+  }
 
   process.exit(0);
 } catch (err) {

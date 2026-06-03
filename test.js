@@ -12833,6 +12833,75 @@ async function testAnalytics() {
 
 await testAnalytics();
 
+// ── P0 hardening: Twilio signature validation + cron→worker scheduling ───────
+// Pure unit tests (no server / network) — run during module load like the other
+// pure suites above. Counts roll into the final tally.
+async function testP0Hardening() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || "expected truthy");
+
+  // ── P0-1: evaluateTwilioRequest ─────────────────────────────────────────
+  const { evaluateTwilioRequest, buildWebhookUrl } = await import("./twilioSignature.js");
+  const yes = () => true;   // validator stub: signature valid
+  const no  = () => false;  // validator stub: signature invalid
+
+  chk("p0-1: TEST_MODE bypasses validation",
+      evaluateTwilioRequest({ testMode: true, validator: no }).allow === true);
+  chk("p0-1: UI request bypasses validation",
+      evaluateTwilioRequest({ isUi: true, validator: no }).allow === true);
+  chk("p0-1: TWILIO_VALIDATE=false escape hatch allows",
+      evaluateTwilioRequest({ validateDisabled: true, validator: no }).allow === true);
+  chk("p0-1: missing auth token allows (dev) but not validated",
+      (() => { const r = evaluateTwilioRequest({ authToken: null, validator: no }); return r.allow === true && r.validated === false && r.reason === "no_auth_token"; })());
+  chk("p0-1: present token + missing signature → DENY",
+      evaluateTwilioRequest({ authToken: "tok", signature: null, validator: yes }).allow === false);
+  chk("p0-1: valid signature → ALLOW + validated",
+      (() => { const r = evaluateTwilioRequest({ authToken: "tok", signature: "sig", url: "u", params: {}, validator: yes }); return r.allow === true && r.validated === true && r.reason === "valid_signature"; })());
+  chk("p0-1: invalid signature → DENY + validated",
+      (() => { const r = evaluateTwilioRequest({ authToken: "tok", signature: "sig", validator: no }); return r.allow === false && r.validated === true && r.reason === "invalid_signature"; })());
+  chk("p0-1: validator throwing is treated as invalid (fail closed)",
+      evaluateTwilioRequest({ authToken: "tok", signature: "sig", validator: () => { throw new Error("boom"); } }).allow === false);
+  chk("p0-1: validator receives reconstructed url + params",
+      (() => { let seen = null; evaluateTwilioRequest({ authToken: "tok", signature: "s", url: "https://x/sms", params: { From: "+1" }, validator: (t, s, u, p) => { seen = { u, p }; return true; } }); return seen.u === "https://x/sms" && seen.p.From === "+1"; })());
+
+  // buildWebhookUrl — PUBLIC_BASE_URL preferred (trailing slash trimmed)
+  const reqStub = { originalUrl: "/sms", protocol: "https", get: () => "host.example" };
+  chk("p0-1: buildWebhookUrl uses PUBLIC_BASE_URL when set",
+      buildWebhookUrl(reqStub, "https://base.example/") === "https://base.example/sms");
+  chk("p0-1: buildWebhookUrl falls back to proxy host",
+      buildWebhookUrl(reqStub, undefined) === "https://host.example/sms");
+
+  // ── P0-3: dueKnowledgeJobs schedule mapping (UTC) ───────────────────────
+  const { dueKnowledgeJobs } = await import("./knowledgeBase.js");
+  const at = (h, m, dow = 2) => { // dow 2 = Tuesday (non-Monday) unless overridden
+    const d = new Date(Date.UTC(2026, 5, 2, h, m, 0)); // 2026-06-02 is a Tuesday
+    if (dow !== d.getUTCDay()) {
+      // shift to desired weekday within the same week
+      d.setUTCDate(d.getUTCDate() + (dow - d.getUTCDay()));
+    }
+    return dueKnowledgeJobs(d);
+  };
+  chk("p0-3: weather due at top of every hour", at(13, 0).includes("weather"));
+  chk("p0-3: weather NOT due mid-hour", !at(13, 12).includes("weather"));
+  chk("p0-3: fh_items due at 02:00 only", at(2, 0).includes("fh_items") && !at(3, 0).includes("fh_items"));
+  chk("p0-3: fh_availability due on 3-hour boundary", at(3, 0).includes("fh_availability") && at(6, 0).includes("fh_availability"));
+  chk("p0-3: fh_availability NOT due off-boundary", !at(4, 0).includes("fh_availability"));
+  chk("p0-3: snow due at :30 on 3-hour boundary", at(3, 30).includes("snow") && !at(3, 0).includes("snow"));
+  chk("p0-3: optimization due at 05:00", at(5, 0).includes("optimization"));
+  chk("p0-3: website due Monday 03:00 only", at(3, 0, 1).includes("website") && !at(3, 0, 2).includes("website"));
+  chk("p0-3: crawler due Monday 04:00 only", at(4, 0, 1).includes("crawler") && !at(4, 0, 2).includes("crawler"));
+  chk("p0-3: a quiet off-schedule minute returns no jobs", at(13, 17).length === 0);
+
+  // ── P0-3: FareHarbor poll window ────────────────────────────────────────
+  const { isFareHarborPollDue } = await import("./bookingConfirmations.js");
+  const dt = (m) => new Date(Date.UTC(2026, 5, 2, 10, m, 0));
+  chk("p0-3: FH poll due at :00", isFareHarborPollDue(dt(0)) === true);
+  chk("p0-3: FH poll due at :30", isFareHarborPollDue(dt(30)) === true);
+  chk("p0-3: FH poll NOT due at :15", isFareHarborPollDue(dt(15)) === false);
+  chk("p0-3: FH poll NOT due at :45", isFareHarborPollDue(dt(45)) === false);
+}
+await testP0Hardening();
+
 // HTTP tests for /portal/api/performance — must run after server starts (called from main)
 async function testAnalyticsHttp() {
   // ── /portal/api/performance requires auth ───────────────────────────────

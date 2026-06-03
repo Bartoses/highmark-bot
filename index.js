@@ -78,6 +78,7 @@ import { callClaudeForChannel } from "./messageEngine.js";
 import { sendOperatorBriefing, buildOperatorApiData } from "./operatorBriefing.js";
 import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
+import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -144,6 +145,9 @@ export function isUiReq(req) {
   if (!UI_SECRET) return false;
   return req.headers["x-internal-key"] === UI_SECRET;
 }
+
+// P0-1: Twilio webhook signature middleware (bypasses TEST_MODE + UI requests).
+const validateTwilioSignature = makeTwilioSignatureMiddleware({ isUiReq });
 
 // Middleware: allow if TEST_MODE OR valid UI key (query param for initial GET, header for API calls)
 function requireUiAccess(req, res, next) {
@@ -1390,7 +1394,10 @@ export async function getClaudeReply(convo, client, season, knowledgeContext, ex
 // SMS WEBHOOK — Twilio calls this on every inbound text
 // Processing order is intentional — do not reorder.
 // ─────────────────────────────────────────────────────────────────────────────
-app.post("/sms", ipLimiter, phoneRateLimit, (req, res) => handleSmsRequest(req, res));
+// P0-1: validateTwilioSignature runs first so forged requests are rejected with
+// 403 before consuming rate-limit budget or reaching the handler. Bypassed in
+// TEST_MODE and for authenticated UI/console requests (see twilioSignature.js).
+app.post("/sms", validateTwilioSignature, ipLimiter, phoneRateLimit, (req, res) => handleSmsRequest(req, res));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RESET — TEST_MODE only

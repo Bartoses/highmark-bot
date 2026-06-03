@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // KNOWLEDGE BASE — FareHarbor refresh + website scraper
-// Keeps Summit's knowledge fresh. Runs on startup and on cron schedule.
+// Keeps Summit's knowledge fresh. Boot warm-up runs in the web process;
+// recurring refresh runs in the cron worker via runScheduledKnowledgeJobs (P0-3).
 // All functions fail gracefully — never crash the server.
 //
 // Token strategy:
@@ -12,7 +13,6 @@
 import fetch from "node-fetch";
 import { createHash } from "crypto";
 import { parse as parseHtml } from "node-html-parser";
-import cron from "node-cron";
 import { getDefaultClient, getAllClients } from "./clients.js";
 import { runCrawlerForClient, buildCrawlerContext } from "./crawler.js";
 import { runOptimizationAnalysis } from "./optimizationEngine.js";
@@ -738,71 +738,93 @@ export async function initKnowledgeBase(supabase, anthropic) {
     console.error("[KB] Init failed (non-fatal):", err.message);
   }
 
-  // ── Crons — each job iterates all relevant clients ─────────────────────────
+  // P0-3: recurring refresh jobs no longer run here. They used to be node-cron
+  // schedules inside the web process, which fire N× under horizontal scaling
+  // (N× API calls + duplicate work). They now run in the single cron worker via
+  // runScheduledKnowledgeJobs(). The block above is a one-shot, staleness-gated
+  // boot warm-up only — not a recurring cron.
+  console.log("[KB] Knowledge base warm-up complete (recurring refresh runs in the cron worker).");
+}
 
-  // FH items: refresh every 24 hours (catalog rarely changes)
-  cron.schedule("0 2 * * *", () => {
-    for (const c of Object.values(getAllClients())) {
-      if (c.fareharborEnabled && c.fareharborCompanies?.length) refreshFareHarborItems(supabase, c);
+// ─────────────────────────────────────────────────────────────────────────────
+// SCHEDULED REFRESH JOBS — run from the cron worker (P0-3), not the web process
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Maps the original node-cron expressions to "is this job due in the current
+// 5-minute worker tick" checks. UTC-based to match node-cron's server-TZ
+// behavior on Railway. Pure + exported so the schedule is unit-testable.
+//   fh_items        0 2 * * *      fh_availability  0 */3 * * *
+//   weather         0 * * * *      snow             30 */3 * * *
+//   website         0 3 * * 1      crawler          0 4 * * 1
+//   optimization    0 5 * * *
+export function dueKnowledgeJobs(date = new Date()) {
+  const m   = date.getUTCMinutes();
+  const h   = date.getUTCHours();
+  const dow = date.getUTCDay();          // 0=Sun … 1=Mon
+  const top = m < 5;                     // first 5-min tick of the hour ("0 …")
+  const due = [];
+  if (h === 2 && top)                     due.push("fh_items");
+  if (h % 3 === 0 && top)                 due.push("fh_availability");
+  if (top)                                due.push("weather");
+  if (h % 3 === 0 && m >= 30 && m < 35)   due.push("snow");
+  if (dow === 1 && h === 3 && top)        due.push("website");
+  if (dow === 1 && h === 4 && top)        due.push("crawler");
+  if (h === 5 && top)                     due.push("optimization");
+  return due;
+}
+
+// Runs whichever scheduled refresh jobs are due at `date`, plus a self-gated
+// "never crawled" bootstrap for newly-enabled crawler clients. Safe to call on
+// every worker tick — each job no-ops when not due. Returns the labels that ran.
+export async function runScheduledKnowledgeJobs(supabase, anthropic, date = new Date()) {
+  const due     = dueKnowledgeJobs(date);
+  const clients = Object.values(getAllClients());
+  const ran     = [];
+
+  const run = async (label, fn) => {
+    try { await fn(); ran.push(label); }
+    catch (err) { console.error(`[KB-CRON] ${label} failed: ${err.message}`); }
+  };
+
+  if (due.includes("fh_items")) {
+    for (const c of clients) if (c.fareharborEnabled && c.fareharborCompanies?.length) await run("fh_items", () => refreshFareHarborItems(supabase, c));
+  }
+  if (due.includes("fh_availability")) {
+    for (const c of clients) if (c.fareharborEnabled && c.fareharborCompanies?.length) await run("fh_availability", () => refreshFareHarborAvailability(supabase, c));
+  }
+  if (due.includes("weather")) {
+    await run("weather",        () => refreshWeatherKnowledge(supabase));
+    await run("weather_custom", () => refreshCustomWeatherLocations(supabase));
+  }
+  if (due.includes("snow")) {
+    const sc = clients.find((c) => c.snotelStations?.length > 0);
+    if (sc) await run("snow", () => refreshSnowConditions(supabase, sc));
+  }
+  if (due.includes("website")) {
+    for (const c of clients) if (c.scrapeUrls?.length || c.scrapeSources?.length) await run("website", () => refreshWebsiteKnowledge(supabase, anthropic, c));
+  }
+  if (due.includes("crawler")) {
+    for (const c of clients) if (c.crawlSettings?.enabled) await run("crawler", () => runCrawlerForClient(supabase, anthropic, c));
+  }
+  if (due.includes("optimization")) {
+    for (const c of clients) {
+      if (c.id === "highmark_demo") continue; // skip demo client
+      await run("optimization", () => runOptimizationAnalysis(supabase, c));
     }
-  });
-
-  // FH availability: refresh every 3 hours (slots change throughout the day)
-  cron.schedule("0 */3 * * *", () => {
-    for (const c of Object.values(getAllClients())) {
-      if (c.fareharborEnabled && c.fareharborCompanies?.length) refreshFareHarborAvailability(supabase, c);
-    }
-  });
-
-  // Weather: refresh every hour (cheap, zero Claude)
-  cron.schedule("0 * * * *", () => {
-    refreshWeatherKnowledge(supabase);
-    refreshCustomWeatherLocations(supabase);
-  });
-
-  // Snow conditions (SNOTEL + CAIC): refresh every 3 hours
-  cron.schedule("30 */3 * * *", () => {
-    const sc = Object.values(getAllClients()).find((c) => c.snotelStations?.length > 0);
-    if (sc) refreshSnowConditions(supabase, sc);
-  });
-
-  // Website: check every 7 days (hash-gated, Haiku only when content changes)
-  cron.schedule("0 3 * * 1", () => {
-    for (const c of Object.values(getAllClients())) {
-      if (c.scrapeUrls?.length || c.scrapeSources?.length) refreshWebsiteKnowledge(supabase, anthropic, c);
-    }
-  });
-
-  // Crawler (Phase 2): whole-site crawl every 7 days — per client with crawlSettings.enabled
-  cron.schedule("0 4 * * 1", () => {
-    for (const c of Object.values(getAllClients())) {
-      if (c.crawlSettings?.enabled) runCrawlerForClient(supabase, anthropic, c);
-    }
-  });
-
-  // Crawler startup: run if enabled and never crawled (no rows in client_pages)
-  for (const c of Object.values(getAllClients())) {
-    if (!c.crawlSettings?.enabled) continue;
-    supabase
-      .from("client_pages")
-      .select("id")
-      .eq("client_id", c.id)
-      .limit(1)
-      .then(({ data }) => {
-        if (!data?.length) runCrawlerForClient(supabase, anthropic, c);
-      })
-      .catch(() => {});
   }
 
-  // Optimization Engine (Phase 7): daily at 5am — analyze all active clients
-  cron.schedule("0 5 * * *", () => {
-    for (const c of Object.values(getAllClients())) {
-      if (c.id === "highmark_demo") continue; // skip demo client
-      runOptimizationAnalysis(supabase, c).catch(() => {});
-    }
-  });
+  // Crawler bootstrap — crawl any enabled client that has never been crawled.
+  // Self-gating: only fires when client_pages is empty, so it runs at most once
+  // per client. Cheap indexed lookup; safe on every tick.
+  for (const c of clients) {
+    if (!c.crawlSettings?.enabled) continue;
+    try {
+      const { data } = await supabase.from("client_pages").select("id").eq("client_id", c.id).limit(1);
+      if (!data?.length) await run("crawler_bootstrap", () => runCrawlerForClient(supabase, anthropic, c));
+    } catch { /* non-fatal */ }
+  }
 
-  console.log("[KB] Knowledge base initialized.");
+  return ran;
 }
 
 // Returns a combined context string for injection into the system prompt.
