@@ -16986,6 +16986,10 @@ async function testVoiceAI() {
     validateVoiceConfigInput,
     handlePortalVoiceConfig,
     handlePortalUpdateVoiceConfig,
+    // Phase 3 — hours, seasons, missed-call recovery
+    resolveVoiceSeason,
+    buildMissedCallSms,
+    normalizeBusinessHoursInput,
   } = await import("./voice.js");
 
   // ── Constants ───────────────────────────────────────────────────────────────
@@ -17153,6 +17157,31 @@ async function testVoiceAI() {
       return v.errors.length === 0 && v.values.forwarding_number === "+17202892483" && v.values.ai_enabled === true; })());
   chk("voice2: validate empty forwarding clears to null",
     validateVoiceConfigInput({ forwarding_number: "" }).values.forwarding_number === null);
+
+  // ── Phase 3: hours honored, seasons, missed-call recovery ──────────────────────────
+  const csrSeason = { seasonConfig: { summer: { start: "04-01", end: "10-31" }, winter: { start: "12-01", end: "03-31" } } };
+  chk("voice3: season summer from config", resolveVoiceSeason(csrSeason, new Date("2026-07-15T12:00:00Z")) === "summer");
+  chk("voice3: season winter wraps year-end", resolveVoiceSeason(csrSeason, new Date("2026-01-15T12:00:00Z")) === "winter");
+  chk("voice3: season shoulder between windows", resolveVoiceSeason(csrSeason, new Date("2026-11-15T12:00:00Z")) === "shoulder");
+  chk("voice3: missed-call SMS after-hours includes STOP",
+    /closed right now/i.test(buildMissedCallSms({ name: "CSR" }, { afterHours: true })) && /STOP/.test(buildMissedCallSms({ name: "CSR" }, { afterHours: true })));
+  chk("voice3: missed-call SMS in-hours says missed you",
+    /missed you/i.test(buildMissedCallSms({ name: "CSR" }, { afterHours: false })));
+  chk("voice3: normalizeBusinessHoursInput valid day",
+    normalizeBusinessHoursInput({ timezone: "America/Denver", hours: { "1": { open: "09:00", close: "17:00" } } }).value.hours["1"].open === "09:00");
+  chk("voice3: normalizeBusinessHoursInput empty = always open",
+    JSON.stringify(normalizeBusinessHoursInput({}).value) === "{}");
+  chk("voice3: normalizeBusinessHoursInput rejects bad time", !!normalizeBusinessHoursInput({ hours: { "1": { open: "9am", close: "17:00" } } }).error);
+  chk("voice3: normalizeBusinessHoursInput rejects open>=close", !!normalizeBusinessHoursInput({ hours: { "1": { open: "18:00", close: "09:00" } } }).error);
+  {
+    const open = buildReceptionistSystemPrompt({ client: { name: "X" }, agentCfg: { forwardingNumber: "+15551112222" }, season: "summer", liveAgentAvailable: true });
+    const closed = buildReceptionistSystemPrompt({ client: { name: "X" }, agentCfg: { forwardingNumber: "+15551112222" }, season: "winter", liveAgentAvailable: false });
+    chk("voice3: in-hours prompt allows transfer + names season", open.includes("[TRANSFER]") && /summer season/i.test(open));
+    chk("voice3: after-hours prompt blocks transfer, takes a message",
+      !closed.includes("[TRANSFER]") && /not available to take a live call/i.test(closed) && /take a message/i.test(closed));
+  }
+  chk("voice3: validate accepts business_hours",
+    validateVoiceConfigInput({ business_hours: { hours: { "1": { open: "09:00", close: "17:00" } } } }).errors.length === 0);
 
   // ── handlePortalVoiceConfig / Update — guards (no HTTP / DB) ────────────────────────
   function mockResV() {

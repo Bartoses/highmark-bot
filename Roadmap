@@ -186,6 +186,26 @@ Done when:
 
 ## COMPLETED SPRINTS
 
+### Voice AI — Phase 3: Hours, Seasons, Missed-Call Recovery + Voice AI tab (2026-06-04)
+- Business hours honored: withinHours computed at answer time + cached on the call;
+  the receptionist only transfers to a human during open hours — outside them it
+  switches to "take a message" mode and never dials. Per-day hours editor in the
+  new Voice AI tab.
+- Season awareness: resolveVoiceSeason reads the client's seasonConfig MM-DD ranges
+  (winter wraps year-end) and injects the current season into the prompt so the AI
+  only offers in-season activities.
+- Missed-call recovery + lead scoring: summarizeVoiceCall now returns lead_score;
+  runMissedCallRecovery logs every real caller as a lead (saveLead, source "voice")
+  and texts back genuinely missed callers (after-hours/no-answer/voicemail) with a
+  TCPA-safe recovery SMS. Idempotent via metadata.recovery_done.
+- Persona: warm local expert, never reveals it's an AI, engages with a follow-up
+  after each answer.
+- Voice AI moved to its own mobile-friendly portal section (sec-voice): receptionist
+  config + business-hours editor + call log with stat chips. GET/PATCH
+  /portal/api/voice/config now also handles business_hours (normalizeBusinessHoursInput).
+- Tests: testVoiceAI extended (season, hours normalize/validate, missed-call SMS,
+  prompt open/closed gating).
+
 ### Voice AI — Phase 2.1: Spam Guard + Latency + Portal Config (2026-06-04)
 Follow-ups after the first live AI-receptionist call test.
 - Spam/solicitor guard so they never reach the human transfer line: deterministic

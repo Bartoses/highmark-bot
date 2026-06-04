@@ -675,6 +675,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="partners">
         <span class="nav-icon">🤝</span> Partners
       </div>
+      <div class="nav-item client-admin-only" data-section="voice">
+        <span class="nav-icon">📞</span> Voice AI
+      </div>
       <div class="nav-section-label client-admin-only" style="padding:10px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Admin</div>
       <div class="nav-item client-admin-only" data-section="operations">
         <span class="nav-icon">🛠</span> Operations
@@ -1109,6 +1112,35 @@ tr:hover td { background: var(--panel2); }
         </p>
         <div id="partnersContent"><div class="loading">Loading…</div></div>
       </div><!-- /sec-partners -->
+
+      <!-- VOICE AI — config + business hours + call log -->
+      <div class="section client-admin-only" id="sec-voice">
+        <div class="section-header">
+          <span class="section-title">📞 Voice AI</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadVoiceSection()">↻ Refresh</button>
+        </div>
+        <p style="font-size:13px;color:var(--text2);margin:8px 0 16px;">
+          When someone calls your voice number, the receptionist answers in a friendly local voice, helps from your knowledge base, screens out spam, and transfers to a real person — but only during your business hours.
+        </p>
+
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title">Receptionist</div>
+          <div id="voiceConfigBox"><div class="loading">Loading…</div></div>
+        </div>
+
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title">Business hours</div>
+          <div class="form-hint" style="margin-bottom:12px;">
+            Calls only transfer to a live person during these hours. Outside them, the receptionist takes a message and we text the caller back. Leave all days unchecked = available anytime.
+          </div>
+          <div id="voiceHoursBox"><div class="loading">Loading…</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Recent calls</div>
+          <div id="voiceCallsBox"><div class="loading">Loading…</div></div>
+        </div>
+      </div><!-- /sec-voice -->
 
 
       <!-- ONBOARDING — New Client (internal_admin only) -->
@@ -1647,6 +1679,10 @@ tr:hover td { background: var(--panel2); }
             </div>
             <div class="more-link-item" onclick="switchSection('partners')">
               <span>🤝</span> Partners
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item client-admin-only" onclick="switchSection('voice')">
+              <span>📞</span> Voice AI
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item client-admin-only" onclick="switchSection('users')">
@@ -2567,7 +2603,7 @@ const sectionTitles = {
   analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
   integrations: 'Integrations', messaging: 'Messaging', partners: 'Partners',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
-  operator: 'Operator View', operations: 'Operations',
+  operator: 'Operator View', operations: 'Operations', voice: 'Voice AI',
 };
 function switchSection(name, tabParam) {
   // Close any open modals before navigating
@@ -2584,6 +2620,7 @@ function switchSection(name, tabParam) {
   if (name === 'onboarding'  && !me?.isAdmin)       name = 'dashboard';
   if (name === 'operator'    && !me?.isClientAdmin) name = 'dashboard';
   if (name === 'operations'  && !me?.isClientAdmin) name = 'dashboard';
+  if (name === 'voice'       && !me?.isClientAdmin) name = 'dashboard';
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.mob-nav-item').forEach(n => n.classList.remove('active'));
@@ -2609,6 +2646,7 @@ function switchSection(name, tabParam) {
   if (name === 'onboarding')    resetOnboarding();
   if (name === 'operator')      loadOperator();
   if (name === 'operations')    { opsHydrateRangeFromUrl(); opsHydrateFiltersFromUrl(); loadOperations(); }
+  if (name === 'voice')         loadVoiceSection();
 }
 
 function switchSettingsTab(tab) {
@@ -4351,17 +4389,6 @@ async function loadSettings() {
       <pre id="briefingPreviewBox" hidden style="margin-top:14px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:480px;overflow:auto;"></pre>
     </div>
 
-    <!-- Voice AI — call forwarding number + AI receptionist on/off + greeting -->
-    <div class="card" style="margin-top:16px;">
-      <div class="card-title">📞 Voice AI</div>
-      <div class="form-hint" style="margin-bottom:14px;">
-        When someone calls your voice number, the AI receptionist answers, helps from your knowledge base, screens out spam/solicitors, and transfers to the number below when a caller asks for a person.
-      </div>
-      <div id="voiceConfigBox">
-        <div style="font-size:12px;color:var(--text2);padding:12px 0;">Loading voice settings…</div>
-      </div>
-    </div>
-
     <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);">
       <div style="display:flex;align-items:center;justify-content:space-between;">
         <div>
@@ -4668,7 +4695,6 @@ async function loadSettings() {
   onBookingModeChange(); // init conditional visibility
   loadPlanUsage();       // async — loads into #planUsageContent
   loadOperatorIntelligence(); // Sprint C: per-phone digest preferences
-  loadVoiceConfig();     // Voice AI: forwarding number + AI receptionist toggle
 }
 
 function onBookingModeChange() {
@@ -5803,7 +5829,14 @@ function addOperatorPhoneRow(value = '') {
   list.appendChild(row);
 }
 
-// ─── Voice AI config (forwarding number + AI receptionist toggle + greeting) ──
+// ─── Voice AI tab (config + business hours + call log) ────────────────────────
+const VOICE_DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+function loadVoiceSection() {
+  loadVoiceConfig();
+  loadVoiceCalls();
+}
+
 async function loadVoiceConfig() {
   const box = document.getElementById('voiceConfigBox');
   if (!box) return;
@@ -5827,7 +5860,7 @@ async function loadVoiceConfig() {
     <div class="form-group">
       <label>Call forwarding number</label>
       <input type="text" class="form-input" id="voiceForwarding" value="${escHtml(fwd)}" placeholder="+17202892483">
-      <div class="form-hint">Where calls transfer when a caller asks for a person. Use E.164 format, e.g. +17202892483.</div>
+      <div class="form-hint">Where calls transfer when a caller asks for a person (during business hours). Use E.164 format, e.g. +17202892483.</div>
     </div>
     <div class="form-group">
       <label>Greeting <span style="color:var(--text2);font-weight:400;">(optional)</span></label>
@@ -5836,6 +5869,40 @@ async function loadVoiceConfig() {
     <button class="btn btn-primary btn-sm" onclick="saveVoiceConfig()">Save voice settings</button>
     <span id="voiceSaveMsg" style="margin-left:10px;font-size:12px;"></span>
   `;
+  renderVoiceHours(agent.business_hours ?? {});
+}
+
+function renderVoiceHours(bh) {
+  const box = document.getElementById('voiceHoursBox');
+  if (!box) return;
+  const hours = (bh && typeof bh === 'object' && bh.hours) ? bh.hours : {};
+  const tz = (bh && bh.timezone) || 'America/Denver';
+  const rows = VOICE_DAYS.map((label, i) => {
+    const w = hours[String(i)] || null;
+    return `
+      <div class="vh-row" data-day="${i}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <label style="display:flex;align-items:center;gap:6px;min-width:84px;font-size:13px;cursor:pointer;">
+          <input type="checkbox" class="vh-open" ${w ? 'checked' : ''}> ${label}
+        </label>
+        <input type="time" class="form-input vh-from" style="width:120px;" value="${w?.open || '09:00'}">
+        <span style="color:var(--text2);">to</span>
+        <input type="time" class="form-input vh-to" style="width:120px;" value="${w?.close || '17:00'}">
+      </div>`;
+  }).join('');
+  box.innerHTML = `<div data-tz="${escHtml(tz)}">${rows}</div>
+    <div class="form-hint" style="margin-top:8px;">Timezone: ${escHtml(tz)}. Uncheck a day to mark it closed; uncheck all to be available anytime.</div>`;
+}
+
+function collectVoiceHours() {
+  const wrap = document.querySelector('#voiceHoursBox [data-tz]');
+  if (!wrap) return undefined;
+  const hours = {};
+  wrap.querySelectorAll('.vh-row').forEach(row => {
+    if (!row.querySelector('.vh-open')?.checked) return;
+    const d = row.getAttribute('data-day');
+    hours[d] = { open: row.querySelector('.vh-from').value, close: row.querySelector('.vh-to').value };
+  });
+  return { timezone: wrap.getAttribute('data-tz') || 'America/Denver', hours };
 }
 
 async function saveVoiceConfig() {
@@ -5851,10 +5918,43 @@ async function saveVoiceConfig() {
     ai_enabled: document.getElementById('voiceAiEnabled')?.checked ?? false,
     forwarding_number: fwd,
     welcome_prompt: document.getElementById('voiceGreeting')?.value ?? '',
+    business_hours: collectVoiceHours(),
   };
   const r = await apiFetch('/voice/config', { method: 'PATCH', body: JSON.stringify(body) });
   if (!r) { setMsg(_lastApiError ?? 'Save failed', 'var(--danger)'); return; }
   setMsg('Saved ✓', '#22c55e');
+}
+
+async function loadVoiceCalls() {
+  const box = document.getElementById('voiceCallsBox');
+  if (!box) return;
+  const r = await apiFetch('/voice/calls?limit=50');
+  if (!r) {
+    box.innerHTML = `<div class="form-hint" style="color:var(--danger);">Couldn't load calls: ${_lastApiError ?? 'unknown'}</div>`;
+    return;
+  }
+  const calls = r.calls ?? [];
+  const s = r.stats ?? {};
+  const chip = (label, val) => `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;min-width:72px;">
+    <div style="font-size:18px;font-weight:700;">${val ?? 0}</div><div style="font-size:11px;color:var(--text2);">${label}</div></div>`;
+  const stats = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+    ${chip('Calls', s.total)}${chip('Leads', s.lead)}${chip('Bookings', s.booking)}${chip('Transferred', s.transferred)}${chip('Voicemail', s.voicemail)}${chip('Spam', s.spam)}</div>`;
+  if (!calls.length) { box.innerHTML = stats + `<div class="form-hint">No calls logged yet.</div>`; return; }
+  const rows = calls.map(c => {
+    const when = c.started_at ? new Date(c.started_at).toLocaleString() : '—';
+    const dur  = c.duration != null ? `${c.duration}s` : '—';
+    const oc   = c.outcome || c.status || '—';
+    return `<tr>
+      <td style="white-space:nowrap;">${when}</td>
+      <td>${escHtml(formatPhone(c.caller_number || '—'))}</td>
+      <td><span style="text-transform:capitalize;">${escHtml(oc)}</span></td>
+      <td>${dur}</td>
+      <td style="color:var(--text2);">${escHtml(c.summary || '')}</td>
+    </tr>`;
+  }).join('');
+  box.innerHTML = stats + `<div style="overflow-x:auto;"><table class="data-table" style="width:100%;font-size:13px;">
+    <thead><tr><th>When</th><th>Caller</th><th>Outcome</th><th>Length</th><th>Summary</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
 }
 
 // ─── Operator Intelligence (Sprint C) ────────────────────────────────────────
