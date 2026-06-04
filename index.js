@@ -79,7 +79,7 @@ import { sendOperatorBriefing, buildOperatorApiData } from "./operatorBriefing.j
 import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
-import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls } from "./voice.js";
+import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls, handlePortalVoiceConfig, handlePortalUpdateVoiceConfig } from "./voice.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1855,8 +1855,10 @@ app.post(  "/portal/api/partners",               requirePortalAuth, (req, res) =
 app.patch( "/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalUpdatePartner(req, res, supabase));
 app.delete("/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalDeletePartner(req, res, supabase));
 
-// ── Voice AI (Phase 1) — client-scoped call log + dashboard counters ────────
+// ── Voice AI — call log + dashboard counters + editable agent config ─────────
 app.get(   "/portal/api/voice/calls",              requirePortalAuth, (req, res) => handlePortalVoiceCalls(req, res, supabase, resolvePortalClientId));
+app.get(   "/portal/api/voice/config",             requirePortalAuth, (req, res) => handlePortalVoiceConfig(req, res, supabase, resolvePortalClientId));
+app.patch( "/portal/api/voice/config",             requirePortalAuth, (req, res) => handlePortalUpdateVoiceConfig(req, res, supabase, resolvePortalClientId));
 
 // ── Operator phones (Sprint C) ─────────────────────────────────────────────
 app.get(   "/portal/api/operator-phones",          requirePortalAuth, (req, res) => handlePortalOperatorPhones(req, res, supabase));

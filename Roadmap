@@ -186,6 +186,24 @@ Done when:
 
 ## COMPLETED SPRINTS
 
+### Voice AI — Phase 2.1: Spam Guard + Latency + Portal Config (2026-06-04)
+Follow-ups after the first live AI-receptionist call test.
+- Spam/solicitor guard so they never reach the human transfer line: deterministic
+  detectSpamSignals (SPAM_PHRASES) short-circuits to a polite decline + hangup +
+  outcome=spam; Claude can also emit a [SPAM] control token. Neither path dials.
+- Latency: cache client_id + forwarding in voice_calls.metadata at answer time
+  (skips 2 DB reads/turn), cap injected KB to ~2800 chars, and generateVoiceReply
+  now uses a raw API call with cache_control:ephemeral on the system block (prompt
+  caching across turns) with SDK fallback. max_tokens 160.
+- Portal: GET/PATCH /portal/api/voice/config + Settings "📞 Voice AI" card to edit
+  the call forwarding number (E.164-validated), AI receptionist on/off, and
+  greeting per client. handlePortalVoiceConfig / handlePortalUpdateVoiceConfig /
+  validateVoiceConfigInput.
+- CSR/REA voice number +18335786496 provisioned (voice_numbers + voice_agents,
+  ai_enabled, forwarding +17202892483).
+- Tests: testVoiceAI extended (spam helpers, [SPAM] parse, validate input, config
+  route guards). Pre-answer robocall hard-block via Twilio Lookup is a Phase 4 item.
+
 ### Voice AI — Phase 2: Conversational AI Receptionist (2026-06-04)
 The AI now TALKS to callers instead of just forwarding. When a client's
 voice_agents.ai_enabled=true, the call becomes a two-way conversation: caller
