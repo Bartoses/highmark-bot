@@ -17120,6 +17120,8 @@ async function testVoiceAI() {
     const sp = buildReceptionistSystemPrompt({ client: { name: "Acme" }, agentCfg: { forwardingNumber: "+15551112222" }, knowledge: "Hours: 9-5" });
     chk("voice2: system prompt includes business + KB + transfer rule",
       sp.includes("Acme") && sp.includes("Hours: 9-5") && sp.includes("[TRANSFER]"));
+    chk("voice2: system prompt forbids revealing AI + requires engaging follow-up",
+      /never say or imply you are an ai/i.test(sp) && /anything else i can help/i.test(sp));
     const sp2 = buildReceptionistSystemPrompt({ client: { name: "Acme" }, agentCfg: { forwardingNumber: null }, knowledge: "" });
     chk("voice2: system prompt with no agent notes take-a-message", sp2.includes("take a message"));
   }
