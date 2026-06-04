@@ -1441,6 +1441,8 @@ const voiceDeps = {
   supabase,
   anthropic,
   getKnowledgeContext,
+  twilioClient,   // Phase 3: missed-call recovery SMS
+  saveLead,       // Phase 3: log voice calls as leads
   baseUrl: process.env.PUBLIC_BASE_URL || null,
 };
 app.post("/voice/incoming",  validateTwilioSignature, ipLimiter, (req, res) => handleVoiceIncoming(req, res, voiceDeps));

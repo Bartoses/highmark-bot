@@ -310,25 +310,66 @@ export function detectSpamSignals(text) {
   return SPAM_PHRASES.some((p) => s.includes(p));
 }
 
+// ── resolveVoiceSeason ──────────────────────────────────────────────────────────
+// Current season honoring the client's configured MM-DD ranges (Season Ranges in
+// the portal), falling back to month-based defaults. Winter ranges wrap year-end.
+export function resolveVoiceSeason(client = {}, now = new Date()) {
+  const md = `${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const inRange = (start, end) => {
+    if (!start || !end) return false;
+    return start <= end ? (md >= start && md <= end) : (md >= start || md <= end);
+  };
+  const sc = client.seasonConfig;
+  if (sc && typeof sc === "object") {
+    if (sc.winter && inRange(sc.winter.start, sc.winter.end)) return "winter";
+    if (sc.summer && inRange(sc.summer.start, sc.summer.end)) return "summer";
+    if (sc.winter || sc.summer) return "shoulder"; // configured but between windows
+  }
+  const m = now.getMonth() + 1;
+  if ([11, 12, 1, 2, 3].includes(m)) return "winter";
+  if ([4, 5].includes(m)) return "shoulder";
+  return "summer";
+}
+
+// ── buildMissedCallSms ──────────────────────────────────────────────────────────
+// Phase 3: text a caller back when we couldn't connect them (after hours, no
+// answer, or voicemail) so a missed call becomes a lead. Always TCPA-safe (STOP).
+export function buildMissedCallSms(client = {}, { afterHours = false } = {}) {
+  const biz = client.name || client.botName || "us";
+  const lead = afterHours
+    ? `Thanks for calling ${biz}! We're closed right now, but we got your call.`
+    : `Thanks for calling ${biz}! Sorry we missed you.`;
+  return `${lead} Reply here and we'll help you out — happy to answer questions or get you booked. (Reply STOP to opt out.)`;
+}
+
 // ── buildReceptionistSystemPrompt ───────────────────────────────────────────────
 // Persona + rules + the client's knowledge base. Tuned for SPOKEN replies.
-export function buildReceptionistSystemPrompt({ client = {}, agentCfg = {}, knowledge = "" } = {}) {
+// `season` makes seasonal answers accurate; `liveAgentAvailable` controls whether
+// the AI may transfer to a human (false outside business hours → take a message).
+export function buildReceptionistSystemPrompt({ client = {}, agentCfg = {}, knowledge = "", season = null, liveAgentAvailable = true } = {}) {
   const biz = client.name || client.botName || "the business";
-  const canTransfer = isE164(agentCfg.forwardingNumber);
+  const canTransfer = isE164(agentCfg.forwardingNumber) && liveAgentAvailable;
+  const transferRule = canTransfer
+    ? `- Answer using the KNOWLEDGE below. If you don't know or it needs a human (booking changes, complex pricing, complaints, or the caller asks for a person), warmly say you'll connect them and end your message with the token [TRANSFER].`
+    : `- Answer using the KNOWLEDGE below. Our team is NOT available to take a live call right now, so do NOT offer to transfer or connect them to a person. If something needs a human (booking changes, complex pricing, the caller asks for someone), warmly offer to take a message and have the team follow up — get their name and the best number — then end your message with the token [END].`;
+  const seasonLine = season
+    ? `- It is currently ${season.toUpperCase()} season. Only discuss offerings that are actually available in this season; if something is out of season, say when it returns and suggest what's available now. Use the KNOWLEDGE for specifics.`
+    : null;
   return [
     `You are part of the team at ${biz}, answering the phone like a warm, upbeat local expert who genuinely loves this place and what you do. Make every caller feel welcome and glad they called. You are speaking out loud on a live phone call, so:`,
     `- Sound like a real person and a local in-the-know — friendly, enthusiastic, conversational. NEVER say or imply you are an AI, a bot, a virtual assistant, or automated. If someone asks, just say you're with the ${biz} team.`,
     `- Keep replies SHORT — 1 to 2 spoken sentences. No lists, no markdown, no emojis, never read out URLs. Use the caller's own words back to them.`,
     `- After you answer something, keep the conversation going: finish with a quick, friendly invitation like "Anything else I can help you with?" or a natural nudge toward what they might want next — UNLESS you're transferring, ending, or declining the call.`,
-    `- Answer using the KNOWLEDGE below. If you don't know or it needs a human (booking changes, complex pricing, complaints, or the caller asks for a person), warmly say you'll connect them and end your message with the token [TRANSFER]${canTransfer ? "" : " (note: no live agent is available right now, so instead offer to take a message)"}.`,
+    transferRule,
+    seasonLine,
     `- When the caller is finished or says goodbye, give a brief warm sign-off and end your message with the token [END].`,
     `- If the caller is a salesperson or solicitor (SEO, Google/Yelp listing, website or marketing services, merchant services, insurance, extended warranty, business loans, etc.), do NOT help them and do NOT transfer. Politely say we're not interested and end your message with the token [SPAM].`,
-    `- Never invent prices, dates, availability, or policies that aren't in the KNOWLEDGE. If unsure, offer to transfer.`,
-    `- Control tokens [TRANSFER], [END], and [SPAM] must be the LAST thing in your message and are never spoken.`,
+    `- Never invent prices, dates, availability, or policies that aren't in the KNOWLEDGE. If unsure, offer to ${canTransfer ? "transfer" : "take a message"}.`,
+    `- Control tokens ${canTransfer ? "[TRANSFER], " : ""}[END], and [SPAM] must be the LAST thing in your message and are never spoken.`,
     ``,
     `KNOWLEDGE:`,
-    (knowledge && knowledge.trim()) ? knowledge.trim() : `(No extra knowledge available — keep answers general and transfer for specifics.)`,
-  ].join("\n");
+    (knowledge && knowledge.trim()) ? knowledge.trim() : `(No extra knowledge available — keep answers general and ${canTransfer ? "transfer" : "take a message"} for specifics.)`,
+  ].filter(Boolean).join("\n");
 }
 
 // ── buildGatherTwiml ────────────────────────────────────────────────────────────
@@ -414,25 +455,28 @@ export async function generateVoiceReply({ anthropic, system, turns, model = VOI
 // ── summarizeVoiceCall (Claude call) ─────────────────────────────────────────────
 // Post-call: condense the transcript into a one-line summary + an outcome bucket.
 export async function summarizeVoiceCall({ anthropic, transcript, model = VOICE_AI_MODEL }) {
-  const fallback = { summary: null, outcome: null };
+  const fallback = { summary: null, outcome: null, lead_score: null };
   if (!anthropic || !transcript || !transcript.trim()) return fallback;
   try {
     const res = await anthropic.messages.create({
       model,
-      max_tokens: 200,
+      max_tokens: 220,
       system:
-        `Summarize this phone call transcript in ONE short sentence, then classify the outcome. ` +
-        `Respond ONLY as compact JSON: {"summary": string, "outcome": one of ${VOICE_OUTCOMES.join("|")}}. ` +
+        `Summarize this phone call transcript in ONE short sentence, classify the outcome, and score how strong a sales lead it is. ` +
+        `Respond ONLY as compact JSON: {"summary": string, "outcome": one of ${VOICE_OUTCOMES.join("|")}, "lead_score": number 0..1}. ` +
         `Use "lead" if the caller is a potential customer asking about services, "booking" if they booked or tried to book, ` +
-        `"customer" for an existing customer, "support" for a question/issue, "spam" for solicitation, "transferred" if handed to a human.`,
+        `"customer" for an existing customer, "support" for a question/issue, "spam" for solicitation, "transferred" if handed to a human. ` +
+        `lead_score: 0 for spam/wrong-number, ~0.4 for a general question, ~0.7 for clear interest, ~0.9 if they wanted to book or asked about price/availability.`,
       messages: [{ role: "user", content: transcript.slice(0, 6000) }],
     });
     const text = (res?.content ?? []).map((b) => b.text || "").join(" ").trim();
     const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return { summary: text.slice(0, 240) || null, outcome: null };
+    if (!match) return { summary: text.slice(0, 240) || null, outcome: null, lead_score: null };
     const parsed = JSON.parse(match[0]);
     const outcome = VOICE_OUTCOMES.includes(parsed.outcome) ? parsed.outcome : null;
-    return { summary: parsed.summary ? String(parsed.summary).slice(0, 280) : null, outcome };
+    let lead_score = Number(parsed.lead_score);
+    lead_score = Number.isFinite(lead_score) ? Math.max(0, Math.min(1, lead_score)) : null;
+    return { summary: parsed.summary ? String(parsed.summary).slice(0, 280) : null, outcome, lead_score };
   } catch (err) {
     console.error("[VOICE] summary error:", err?.message);
     return fallback;
@@ -589,12 +633,17 @@ export async function handleVoiceIncoming(req, res, deps = {}) {
     // When the agent has AI enabled and we have a model wired, greet + listen for
     // speech, then hand each turn to /voice/respond. Falls back to Phase 1 below.
     if (cfg.aiEnabled && cfg.enabled && deps.anthropic) {
+      // Resolve once at answer time and cache on the call row: transfer target,
+      // whether we're inside business hours (controls live transfer), and the season.
+      const withinHours = isWithinBusinessHours(cfg.businessHours);
+      const season = resolveVoiceSeason(client);
       if (callSid && supabase) {
-        // Cache routing facts (client + transfer target) so each turn skips the
-        // voice_agents / voice_numbers lookups → lower per-turn latency.
+        // Cache routing facts so each turn skips the voice_agents / voice_numbers
+        // lookups → lower per-turn latency.
         claimCall(supabase, {
           callSid, clientId: client.id, from, to, direction: "inbound",
-          metadata: { ai: true, turns: [], no_input: 0, client_id: client.id, fwd: cfg.forwardingNumber || null },
+          metadata: { ai: true, turns: [], no_input: 0, client_id: client.id,
+                      fwd: cfg.forwardingNumber || null, within_hours: withinHours, season },
         }).catch(() => {});
       }
       return sendTwiml(res, buildGatherTwiml({
@@ -658,13 +707,17 @@ export async function handleVoiceRespond(req, res, deps = {}) {
     client = client || {};
 
     let fwd = meta.fwd;
-    if (fwd === undefined) {
+    let withinHours = meta.within_hours;
+    if (fwd === undefined || withinHours === undefined) {
       const agentRow = supabase ? await getVoiceAgent(supabase, client.id) : null;
-      fwd = buildVoiceAgentConfig(client, agentRow, supabase ? await getVoiceNumber(supabase, to) : null).forwardingNumber;
-      meta.fwd = fwd || null;
+      const c2 = buildVoiceAgentConfig(client, agentRow, supabase ? await getVoiceNumber(supabase, to) : null);
+      if (fwd === undefined)        { fwd = c2.forwardingNumber; meta.fwd = fwd || null; }
+      if (withinHours === undefined) { withinHours = isWithinBusinessHours(c2.businessHours); meta.within_hours = withinHours; }
     }
+    const season = meta.season ?? resolveVoiceSeason(client);
     const cfg = { forwardingNumber: fwd };
-    const canTransfer = isE164(fwd);
+    // Only transfer to a human when we have a dialable target AND we're open.
+    const canTransfer = isE164(fwd) && withinHours !== false;
 
     // ── No speech captured → reprompt once, then wrap up gracefully ──────────────
     if (!speech) {
@@ -709,7 +762,9 @@ export async function handleVoiceRespond(req, res, deps = {}) {
       kb = meta.kb;
     }
 
-    const system = buildReceptionistSystemPrompt({ client, agentCfg: cfg, knowledge: kb || "" });
+    const system = buildReceptionistSystemPrompt({
+      client, agentCfg: cfg, knowledge: kb || "", season, liveAgentAvailable: withinHours !== false,
+    });
     const history = meta.turns.map((t) => ({ role: t.role === "agent" ? "assistant" : "user", content: t.text }));
     const reply = await generateVoiceReply({ anthropic, system, turns: history });
     let decision = parseAgentDecision(reply);
@@ -783,24 +838,86 @@ export async function handleVoiceStatus(req, res, deps = {}) {
     if (recordingUrl) patch.recording_url = `${recordingUrl}.mp3`;
     await updateCallBySid(supabase, callSid, patch);
 
-    // ── Phase 2: post-call summary + outcome from the AI transcript ──────────────
-    // Only on the FINAL parent-call completion (not the mid-call Dial action), and
-    // only once (skip if a summary already exists). Fire-and-forget; never blocks.
+    // ── Post-call: summary + outcome + lead score, then Phase 3 missed-call
+    // recovery. Only on the FINAL parent-call completion (not the mid-call Dial
+    // action). Idempotent via row state + a metadata flag. Never blocks the 200.
     const terminal = ["completed", "failed", "no_answer"].includes(normalizeCallStatus(req.body?.CallStatus));
-    if (anthropic && !isDialAction && terminal) {
+    if (!isDialAction && terminal) {
       const row = await getCallBySid(supabase, callSid);
-      if (row?.transcript && !row.summary) {
-        const { summary, outcome } = await summarizeVoiceCall({ anthropic, transcript: row.transcript });
-        const sp = {};
-        if (summary) sp.summary = summary;
-        if (outcome && !row.outcome) sp.outcome = outcome;
-        if (Object.keys(sp).length) await updateCallBySid(supabase, callSid, sp);
+      if (row) {
+        // (1) AI transcript → summary + outcome + lead_score (once).
+        if (anthropic && row.transcript && !row.summary) {
+          const { summary, outcome, lead_score } = await summarizeVoiceCall({ anthropic, transcript: row.transcript });
+          const sp = {};
+          if (summary) sp.summary = summary;
+          if (outcome && !row.outcome) { sp.outcome = outcome; row.outcome = outcome; }
+          if (lead_score != null) sp.lead_score = lead_score;
+          if (Object.keys(sp).length) await updateCallBySid(supabase, callSid, sp);
+        }
+        // (2) Phase 3 missed-call recovery: text the caller back + log a lead.
+        await runMissedCallRecovery(deps, row);
       }
     }
   }
 
   // Status callbacks expect a 200; an empty TwiML keeps any in-progress call valid.
   return sendTwiml(res, twiml(""));
+}
+
+// ── Phase 3: missed-call recovery ──────────────────────────────────────────────
+// On a completed call, log a lead (any real, non-spam caller) and — for genuinely
+// missed calls (after hours / no answer / voicemail) — text the caller back so the
+// missed call becomes a conversation. Idempotent via metadata.recovery_done.
+async function runMissedCallRecovery(deps, row) {
+  const { supabase, twilioClient, saveLead, resolveClientById, resolveClient } = deps;
+  if (!supabase || !row) return;
+  const meta = (row.metadata && typeof row.metadata === "object") ? row.metadata : {};
+  if (meta.recovery_done) return;
+  const caller  = row.caller_number;
+  const outcome = row.outcome;
+  if (!caller || outcome === "spam") return; // never recover spam or unknown callers
+
+  let client = null;
+  if (row.client_id && typeof resolveClientById === "function") client = resolveClientById(row.client_id);
+  if (!client && typeof resolveClient === "function")           client = resolveClient(row.to_number);
+  client = client || {};
+
+  const afterHours = meta.within_hours === false;
+  const missed = afterHours
+    || ["voicemail", "no_answer"].includes(outcome)
+    || ["no_answer", "failed"].includes(row.status);
+
+  // (a) Log a lead for any real call so it surfaces in the Leads tab.
+  if (typeof saveLead === "function") {
+    await saveLead(supabase, {
+      clientId:     row.client_id,
+      fromNumber:   caller,
+      contactPhone: caller,
+      service:      row.summary || "Inbound phone call",
+      leadType:     "voice",
+      source:       "voice",
+    });
+  }
+
+  // (b) Recovery SMS only for genuinely missed calls (and never if a human took it).
+  let smsSent = false;
+  if (missed && outcome !== "transferred" && twilioClient && row.to_number && process.env.TEST_MODE !== "true") {
+    try {
+      await twilioClient.messages.create({
+        body: buildMissedCallSms(client, { afterHours }),
+        from: row.to_number,
+        to:   caller,
+      });
+      smsSent = true;
+      console.log(`[VOICE] missed-call recovery SMS → ${caller}`);
+    } catch (err) {
+      console.error("[VOICE] recovery SMS failed:", err?.message);
+    }
+  }
+
+  meta.recovery_done = true;
+  meta.recovery_sms  = smsSent;
+  await updateCallBySid(supabase, row.call_sid, { metadata: meta });
 }
 
 // POST /voice/recording — Twilio recording-status callback (voicemail or dual).
@@ -865,7 +982,33 @@ export function validateVoiceConfigInput(body = {}) {
     values.welcome_prompt = String(body.welcome_prompt || "").trim().slice(0, 600) || null;
   }
   if (body.name !== undefined) values.name = String(body.name || "").trim().slice(0, 80) || "Receptionist";
+  if (body.business_hours !== undefined) {
+    const bh = normalizeBusinessHoursInput(body.business_hours);
+    if (bh.error) errors.push(bh.error);
+    else values.business_hours = bh.value;
+  }
   return { errors, values };
+}
+
+// Validate + normalize a business-hours payload from the portal editor.
+// Accepts { timezone, hours: { "0".."6": { open:"HH:MM", close:"HH:MM" } } }.
+// Empty/omitted days = closed; an empty object = always open.
+export function normalizeBusinessHoursInput(input) {
+  if (input == null || input === "") return { value: {} };
+  if (typeof input !== "object") return { error: "Business hours must be an object" };
+  const tzOk = (tz) => { try { Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; } catch { return false; } };
+  const timezone = input.timezone && tzOk(input.timezone) ? input.timezone : "America/Denver";
+  const hh = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const hours = {};
+  const src = input.hours && typeof input.hours === "object" ? input.hours : {};
+  for (const d of ["0", "1", "2", "3", "4", "5", "6"]) {
+    const w = src[d];
+    if (!w || !w.open || !w.close) continue; // closed that day
+    if (!hh.test(w.open) || !hh.test(w.close)) return { error: `Invalid time for day ${d} — use HH:MM (24h)` };
+    if (w.open >= w.close) return { error: `Open time must be before close time for day ${d}` };
+    hours[d] = { open: w.open, close: w.close };
+  }
+  return { value: Object.keys(hours).length ? { timezone, hours } : {} };
 }
 
 // GET /portal/api/voice/config — the client's voice number(s) + agent settings.
