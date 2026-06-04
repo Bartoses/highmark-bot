@@ -186,6 +186,38 @@ Done when:
 
 ## COMPLETED SPRINTS
 
+### Voice AI — Phase 2: Conversational AI Receptionist (2026-06-04)
+The AI now TALKS to callers instead of just forwarding. When a client's
+voice_agents.ai_enabled=true, the call becomes a two-way conversation: caller
+speaks → Twilio transcribes → Claude answers from the client's knowledge base →
+speaks the reply → listens again, transferring to a human or ending only when it
+decides to. Built on Twilio's built-in speech <Gather> (no Media-Streams
+websockets, no external STT/TTS vendors) so it reuses Claude + the existing KB and
+stays inside the signed-webhook model.
+
+- voice.js — new route POST /voice/respond (handleVoiceRespond) drives one
+  conversational turn; /voice/incoming branches into AI mode when ai_enabled +
+  anthropic present (greeting + <Gather input="speech">). Conversation state
+  (turns + cached KB + no-input count) persists on voice_calls.metadata across
+  turns; transcript column accumulates the readable dialog.
+- Pure, unit-tested helpers: cleanForSpeech (strip tokens/URLs/markdown/emoji for
+  TTS), parseAgentDecision ([TRANSFER]/[END] control tokens), detectCallerEndIntent,
+  buildReceptionistSystemPrompt (spoken-reply rules + KB), buildGatherTwiml,
+  buildTranscript. Claude callers: generateVoiceReply (model claude-haiku-4-5 for
+  low latency, 200 tok) + summarizeVoiceCall (post-call one-line summary + outcome
+  classification, JSON out).
+- handleVoiceStatus: on FINAL call completion (gated off the mid-call Dial action),
+  generates summary + outcome once (idempotent).
+- db1_voice.sql: + voice_agents.ai_enabled boolean default false (applied; demo
+  agent flipped true with an AI greeting). Phase 1 forward/voicemail stays the
+  default for any agent with ai_enabled=false.
+- Tests: testVoiceAI() extended (+~15 assertions) — cleanForSpeech, decision
+  parsing, end-intent, system prompt, Gather TwiML, transcript, /voice/respond
+  graceful reprompt. Verified end-to-end by booting the server.
+- Next: Phase 3 (lead qualification + missed-call SMS recovery), Phase 4 (shared
+  spam network), Phase 5 (industry agents). Optional: Media Streams speech-to-speech
+  latency upgrade behind the same routes.
+
 ### Voice AI — Phase 1: Infrastructure + Call Logging (2026-06-03)
 First-class, multi-tenant Voice AI module added alongside the SMS concierge. Phase
 1 answers inbound Twilio Voice calls per client, speaks a per-client greeting, then

@@ -16973,6 +16973,14 @@ async function testVoiceAI() {
     normalizeCallStatus,
     summarizeVoiceCallStats,
     handlePortalVoiceCalls,
+    // Phase 2 — conversational AI receptionist
+    VOICE_AI_MODEL,
+    cleanForSpeech,
+    parseAgentDecision,
+    detectCallerEndIntent,
+    buildReceptionistSystemPrompt,
+    buildGatherTwiml,
+    buildTranscript,
   } = await import("./voice.js");
 
   // ── Constants ───────────────────────────────────────────────────────────────
@@ -17093,6 +17101,32 @@ async function testVoiceAI() {
     chk("voice: portal calls → 400 when client_id missing", res.statusCode === 400, JSON.stringify(res.body));
   }
 
+  // ── Phase 2: conversational AI receptionist (pure) ──────────────────────────────
+  chk("voice2: VOICE_AI_MODEL is a haiku id", typeof VOICE_AI_MODEL === "string" && VOICE_AI_MODEL.includes("haiku"));
+  chk("voice2: cleanForSpeech strips tokens, urls, markdown",
+    cleanForSpeech("Visit https://x.com **now** [TRANSFER]") === "Visit our website now", cleanForSpeech("Visit https://x.com **now** [TRANSFER]"));
+  chk("voice2: parseAgentDecision transfer", parseAgentDecision("Connecting you. [TRANSFER]").action === "transfer");
+  chk("voice2: parseAgentDecision end", parseAgentDecision("Bye! [END]").action === "end");
+  chk("voice2: parseAgentDecision continue", parseAgentDecision("We open at nine.").action === "continue");
+  chk("voice2: parseAgentDecision strips token from spoken text", !parseAgentDecision("Bye! [END]").speech.includes("[END]"));
+  chk("voice2: detectCallerEndIntent positive", detectCallerEndIntent("ok that's all thanks") === true);
+  chk("voice2: detectCallerEndIntent negative", detectCallerEndIntent("what are your hours") === false);
+  {
+    const sp = buildReceptionistSystemPrompt({ client: { name: "Acme" }, agentCfg: { forwardingNumber: "+15551112222" }, knowledge: "Hours: 9-5" });
+    chk("voice2: system prompt includes business + KB + transfer rule",
+      sp.includes("Acme") && sp.includes("Hours: 9-5") && sp.includes("[TRANSFER]"));
+    const sp2 = buildReceptionistSystemPrompt({ client: { name: "Acme" }, agentCfg: { forwardingNumber: null }, knowledge: "" });
+    chk("voice2: system prompt with no agent notes take-a-message", sp2.includes("take a message"));
+  }
+  {
+    const g = buildGatherTwiml({ say: "Hi there", action: "/voice/respond", speechHints: "tour, booking" });
+    chk("voice2: Gather TwiML valid + speech input + action + actionOnEmptyResult",
+      g.startsWith("<?xml") && g.includes("<Gather") && g.includes('input="speech"') && g.includes("/voice/respond") &&
+      g.includes("Hi there") && g.includes('actionOnEmptyResult="true"'), g.slice(0, 120));
+  }
+  chk("voice2: buildTranscript renders caller/agent turns",
+    buildTranscript([{ role: "caller", text: "hi" }, { role: "agent", text: "hello" }]) === "Caller: hi\nReceptionist: hello");
+
   // ── HTTP routes (TEST_MODE bypasses the Twilio signature guard) ──────────────────
   {
     const res = await httpPost("/voice/incoming", { To: TO_PHONE, From: TEST_PHONE, CallSid: "CAtest123" });
@@ -17100,6 +17134,13 @@ async function testVoiceAI() {
     chk("voice: POST /voice/incoming → 200 TwiML",
       res.status === 200 && /xml/i.test(res.headers.get("content-type") || "") && body.includes("<Response>") && body.includes("<Say"),
       `status=${res.status} body=${body.slice(0, 120)}`);
+  }
+  {
+    // No speech + no DB row → graceful reprompt Gather (never errors the call).
+    const res = await httpPost("/voice/respond", { To: TO_PHONE, From: TEST_PHONE, CallSid: "CArespond1", SpeechResult: "" });
+    const body = await res.text();
+    chk("voice2: POST /voice/respond → 200 TwiML (graceful reprompt)",
+      res.status === 200 && body.includes("<Response>"), `status=${res.status} body=${body.slice(0, 120)}`);
   }
   {
     const res = await httpPost("/voice/status", { CallSid: "CAtest123", CallStatus: "completed", CallDuration: "42" });

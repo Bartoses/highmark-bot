@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS voice_agents (
   forwarding_number  text        DEFAULT NULL,       -- E.164 fallback transfer target
   business_hours     jsonb       NOT NULL DEFAULT '{}'::jsonb, -- { timezone, hours: { "1": {open,close} } }
   spam_aggressiveness text       NOT NULL DEFAULT 'medium',    -- low | medium | high
+  ai_enabled         boolean     NOT NULL DEFAULT false,       -- Phase 2: engage the conversational AI receptionist (false = Phase 1 forward/voicemail)
   enabled            boolean     NOT NULL DEFAULT true,
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now()

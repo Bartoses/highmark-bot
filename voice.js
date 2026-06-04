@@ -41,8 +41,16 @@ export const DEFAULT_VOICE_AGENT = {
   forwardingNumber:   null,
   businessHours:      null, // null = always open (always offer transfer if number set)
   spamAggressiveness: "medium",
+  aiEnabled:          false, // Phase 2: conversational AI receptionist (false = Phase 1 forward/voicemail)
   enabled:            true,
 };
+
+// Fast model for low-latency voice turns — the caller hears silence while Claude
+// thinks, so responsiveness beats raw capability for a phone receptionist.
+export const VOICE_AI_MODEL = "claude-haiku-4-5-20251001";
+
+// Twilio TTS voice (Amazon Polly neural). Centralized so every <Say> matches.
+export const VOICE_TTS = "Polly.Joanna";
 
 // ── escapeXml ─────────────────────────────────────────────────────────────────
 // TwiML is XML; any business name / greeting that contains & < > " ' must be
@@ -85,6 +93,7 @@ export function buildVoiceAgentConfig(client = {}, agentRow = null, numberRow = 
     if (agentRow.business_hours && Object.keys(agentRow.business_hours).length)
       cfg.businessHours = agentRow.business_hours;
     if (agentRow.spam_aggressiveness) cfg.spamAggressiveness = agentRow.spam_aggressiveness;
+    if (typeof agentRow.ai_enabled === "boolean") cfg.aiEnabled = agentRow.ai_enabled;
     if (typeof agentRow.enabled === "boolean") cfg.enabled = agentRow.enabled;
   }
 
@@ -238,6 +247,145 @@ export function summarizeVoiceCallStats(calls = []) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PHASE 2 — CONVERSATIONAL AI RECEPTIONIST (turn-based via Twilio <Gather speech>)
+//
+// Flow: greeting → <Gather input="speech"> → /voice/respond gets the transcribed
+// SpeechResult → Claude answers (using the client's knowledge base) → <Say> the
+// answer → <Gather> again. Claude emits a control token when it decides to hand
+// off ([TRANSFER]) or end the call ([END]); we strip it and act on it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── cleanForSpeech ──────────────────────────────────────────────────────────────
+// TTS reads text literally, so strip markdown / emoji / raw URLs and collapse
+// whitespace. URLs are replaced with "our website" rather than spelled out.
+export function cleanForSpeech(text) {
+  return String(text ?? "")
+    .replace(/\[(TRANSFER|END)\]/gi, " ")
+    .replace(/https?:\/\/\S+/gi, "our website")
+    .replace(/[*_`#>]/g, "")
+    .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}←-⇿⌀-⏿]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// ── parseAgentDecision ──────────────────────────────────────────────────────────
+// Detect Claude's control token, strip it, return the spoken text + next action.
+export function parseAgentDecision(rawText) {
+  const text = String(rawText ?? "");
+  let action = "continue";
+  if (/\[TRANSFER\]/i.test(text)) action = "transfer";
+  else if (/\[END\]/i.test(text)) action = "end";
+  return { action, speech: cleanForSpeech(text) };
+}
+
+// ── detectCallerEndIntent ───────────────────────────────────────────────────────
+// Belt-and-suspenders: catch obvious caller sign-offs even if Claude omits [END].
+export function detectCallerEndIntent(speech) {
+  const s = String(speech ?? "").toLowerCase().trim();
+  if (!s) return false;
+  return /\b(goodbye|good bye|bye now|that'?s all|that is all|nothing else|no that'?s it|hang up|i'?m good|all set|have a good)\b/.test(s) ||
+         s === "bye" || s === "no thanks" || s === "no thank you";
+}
+
+// ── buildReceptionistSystemPrompt ───────────────────────────────────────────────
+// Persona + rules + the client's knowledge base. Tuned for SPOKEN replies.
+export function buildReceptionistSystemPrompt({ client = {}, agentCfg = {}, knowledge = "" } = {}) {
+  const biz = client.name || client.botName || "the business";
+  const canTransfer = isE164(agentCfg.forwardingNumber);
+  return [
+    `You are a friendly, efficient phone receptionist for ${biz}. You are speaking out loud on a live phone call, so:`,
+    `- Keep replies SHORT — 1 to 2 spoken sentences. No lists, no markdown, no emojis, never read out URLs.`,
+    `- Sound warm and natural, like a helpful local on the phone. Use the caller's words back to them.`,
+    `- Answer using the KNOWLEDGE below. If you don't know or it needs a human (booking changes, complex pricing, complaints, or the caller asks for a person), say you'll connect them and end your message with the token [TRANSFER]${canTransfer ? "" : " (note: no live agent is available right now, so instead offer to take a message)"}.`,
+    `- When the caller is finished or says goodbye, give a brief friendly sign-off and end your message with the token [END].`,
+    `- Never invent prices, dates, availability, or policies that aren't in the KNOWLEDGE. If unsure, offer to transfer.`,
+    `- Control tokens [TRANSFER] and [END] must be the LAST thing in your message and are never spoken.`,
+    ``,
+    `KNOWLEDGE:`,
+    (knowledge && knowledge.trim()) ? knowledge.trim() : `(No extra knowledge available — keep answers general and transfer for specifics.)`,
+  ].join("\n");
+}
+
+// ── buildGatherTwiml ────────────────────────────────────────────────────────────
+// Speak `say`, then listen for the caller's speech and POST it to `action`.
+// actionOnEmptyResult=true so a silent caller still hits the handler (reprompt).
+export function buildGatherTwiml({
+  say,
+  action,
+  voiceName = VOICE_TTS,
+  speechHints = "",
+  speechTimeout = "auto",
+} = {}) {
+  const gAttrs = [
+    `input="speech"`,
+    `action="${escapeXml(action)}"`,
+    `method="POST"`,
+    `speechTimeout="${escapeXml(speechTimeout)}"`,
+    `speechModel="phone_call"`,
+    `enhanced="true"`,
+    `actionOnEmptyResult="true"`,
+    speechHints ? `hints="${escapeXml(speechHints)}"` : "",
+  ].filter(Boolean).join(" ");
+  const sayTag = say ? `<Say voice="${escapeXml(voiceName)}">${escapeXml(say)}</Say>` : "";
+  return twiml(`<Gather ${gAttrs}>${sayTag}</Gather>`);
+}
+
+// ── buildTranscript ─────────────────────────────────────────────────────────────
+// Render turn objects [{role:'caller'|'agent', text}] to a readable transcript.
+export function buildTranscript(turns = []) {
+  return turns
+    .map((t) => `${t.role === "agent" ? "Receptionist" : "Caller"}: ${t.text}`)
+    .join("\n");
+}
+
+// ── generateVoiceReply (Claude call) ─────────────────────────────────────────────
+// turns: [{role:'user'|'assistant', content}] conversation history.
+export async function generateVoiceReply({ anthropic, system, turns, model = VOICE_AI_MODEL }) {
+  if (!anthropic) return "I'm sorry, I'm having trouble right now. Let me connect you with someone. [TRANSFER]";
+  try {
+    const res = await anthropic.messages.create({
+      model,
+      max_tokens: 200,
+      system,
+      messages: turns,
+    });
+    const text = (res?.content ?? []).map((b) => b.text || "").join(" ").trim();
+    return text || "Sorry, could you say that again?";
+  } catch (err) {
+    console.error("[VOICE] Claude reply error:", err?.message);
+    return "I'm having a little trouble — let me get someone to help you. [TRANSFER]";
+  }
+}
+
+// ── summarizeVoiceCall (Claude call) ─────────────────────────────────────────────
+// Post-call: condense the transcript into a one-line summary + an outcome bucket.
+export async function summarizeVoiceCall({ anthropic, transcript, model = VOICE_AI_MODEL }) {
+  const fallback = { summary: null, outcome: null };
+  if (!anthropic || !transcript || !transcript.trim()) return fallback;
+  try {
+    const res = await anthropic.messages.create({
+      model,
+      max_tokens: 200,
+      system:
+        `Summarize this phone call transcript in ONE short sentence, then classify the outcome. ` +
+        `Respond ONLY as compact JSON: {"summary": string, "outcome": one of ${VOICE_OUTCOMES.join("|")}}. ` +
+        `Use "lead" if the caller is a potential customer asking about services, "booking" if they booked or tried to book, ` +
+        `"customer" for an existing customer, "support" for a question/issue, "spam" for solicitation, "transferred" if handed to a human.`,
+      messages: [{ role: "user", content: transcript.slice(0, 6000) }],
+    });
+    const text = (res?.content ?? []).map((b) => b.text || "").join(" ").trim();
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return { summary: text.slice(0, 240) || null, outcome: null };
+    const parsed = JSON.parse(match[0]);
+    const outcome = VOICE_OUTCOMES.includes(parsed.outcome) ? parsed.outcome : null;
+    return { summary: parsed.summary ? String(parsed.summary).slice(0, 280) : null, outcome };
+  } catch (err) {
+    console.error("[VOICE] summary error:", err?.message);
+    return fallback;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DB ACCESS (graceful — missing table / no supabase never throws to the caller)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -272,7 +420,7 @@ export async function getVoiceAgent(supabase, clientId) {
 
 // Idempotent claim: insert the call row once per CallSid. Twilio retries + the
 // status/recording callbacks all reference the same SID, so we upsert-on-conflict.
-export async function claimCall(supabase, { callSid, clientId, from, to, direction = "inbound" }) {
+export async function claimCall(supabase, { callSid, clientId, from, to, direction = "inbound", metadata = null }) {
   if (!supabase || !callSid) return null;
   const row = {
     call_sid:      callSid,
@@ -282,11 +430,26 @@ export async function claimCall(supabase, { callSid, clientId, from, to, directi
     direction,
     status:        "in_progress",
   };
+  if (metadata) row.metadata = metadata;
   try {
     const { data, error } = await supabase
       .from("voice_calls")
       .upsert(row, { onConflict: "call_sid", ignoreDuplicates: true })
       .select()
+      .maybeSingle();
+    if (error) return null;
+    return data ?? null;
+  } catch { return null; }
+}
+
+// Read a single call row by SID (used per AI turn to load conversation state).
+export async function getCallBySid(supabase, callSid) {
+  if (!supabase || !callSid) return null;
+  try {
+    const { data, error } = await supabase
+      .from("voice_calls")
+      .select("*")
+      .eq("call_sid", callSid)
       .maybeSingle();
     if (error) return null;
     return data ?? null;
@@ -324,9 +487,18 @@ export async function listVoiceCalls(supabase, clientId, { limit = 100 } = {}) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPRESS HANDLERS
-// deps: { resolveClient, resolveClientById, supabase, baseUrl }
+// deps: { resolveClient, resolveClientById, supabase, baseUrl, anthropic, getKnowledgeContext }
 //   baseUrl — absolute origin for Twilio callbacks (PUBLIC_BASE_URL or reconstructed)
+//   anthropic + getKnowledgeContext — Phase 2 AI receptionist (optional; absent = Phase 1)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Build Twilio speech `hints` from the client's services + common call phrases to
+// improve recognition accuracy on a phone line.
+function buildSpeechHints(client = {}) {
+  const base = ["booking", "reservation", "tour", "rental", "hours", "price", "cancel", "availability", "directions"];
+  const svc = Array.isArray(client.services) ? client.services : [];
+  return [...svc, ...base].slice(0, 50).join(", ");
+}
 
 function absUrl(baseUrl, path) {
   if (!baseUrl) return path; // relative fallback (Twilio resolves against the webhook host)
@@ -359,6 +531,24 @@ export async function handleVoiceIncoming(req, res, deps = {}) {
     const agentRow = supabase ? await getVoiceAgent(supabase, client.id) : null;
     const cfg = buildVoiceAgentConfig(client, agentRow, numberRow);
 
+    // ── Phase 2: conversational AI receptionist ─────────────────────────────────
+    // When the agent has AI enabled and we have a model wired, greet + listen for
+    // speech, then hand each turn to /voice/respond. Falls back to Phase 1 below.
+    if (cfg.aiEnabled && cfg.enabled && deps.anthropic) {
+      if (callSid && supabase) {
+        claimCall(supabase, {
+          callSid, clientId: client.id, from, to, direction: "inbound",
+          metadata: { ai: true, turns: [], no_input: 0 },
+        }).catch(() => {});
+      }
+      return sendTwiml(res, buildGatherTwiml({
+        say:         buildGreeting(cfg, client),
+        action:      absUrl(baseUrl, "/voice/respond"),
+        speechHints: buildSpeechHints(client),
+      }));
+    }
+
+    // ── Phase 1: forward (in hours + E.164 target) or voicemail ─────────────────
     // Fire-and-forget call log (never block the answer on the DB).
     if (callSid && supabase) {
       claimCall(supabase, { callSid, clientId: client.id, from, to, direction: "inbound" }).catch(() => {});
@@ -387,10 +577,114 @@ export async function handleVoiceIncoming(req, res, deps = {}) {
   }
 }
 
+// POST /voice/respond — Phase 2: one conversational turn of the AI receptionist.
+// Twilio posts the caller's transcribed SpeechResult here; we answer with Claude
+// and either keep listening, transfer to a human, or end the call.
+export async function handleVoiceRespond(req, res, deps = {}) {
+  const { resolveClient, resolveClientById, supabase, baseUrl, anthropic, getKnowledgeContext } = deps;
+  const callSid = req.body?.CallSid;
+  const to      = req.body?.To;
+  const speech  = (req.body?.SpeechResult || "").trim();
+  const hints   = (c) => buildSpeechHints(c);
+
+  try {
+    // Load call state (conversation turns + cached KB live in metadata).
+    const row = supabase ? await getCallBySid(supabase, callSid) : null;
+    const meta = (row?.metadata && typeof row.metadata === "object") ? row.metadata : { turns: [], no_input: 0 };
+    meta.turns = Array.isArray(meta.turns) ? meta.turns : [];
+
+    // Resolve client + agent config (forwarding target, greeting, KB).
+    let client = null;
+    if (row?.client_id && typeof resolveClientById === "function") client = resolveClientById(row.client_id);
+    if (!client && typeof resolveClient === "function") client = resolveClient(to);
+    client = client || {};
+    const agentRow = supabase ? await getVoiceAgent(supabase, client.id) : null;
+    const cfg = buildVoiceAgentConfig(client, agentRow, supabase ? await getVoiceNumber(supabase, to) : null);
+    const canTransfer = isE164(cfg.forwardingNumber);
+
+    // ── No speech captured → reprompt once, then wrap up gracefully ──────────────
+    if (!speech) {
+      meta.no_input = (meta.no_input || 0) + 1;
+      if (meta.no_input >= 2) {
+        if (supabase) await updateCallBySid(supabase, callSid, { metadata: meta });
+        if (canTransfer) {
+          return sendTwiml(res, twiml(
+            `<Say voice="${VOICE_TTS}">No problem — let me connect you with our team. One moment.</Say>` +
+            `<Dial action="${escapeXml(absUrl(baseUrl, "/voice/status"))}" timeout="25">${escapeXml(cfg.forwardingNumber)}</Dial>`
+          ));
+        }
+        return sendTwiml(res, buildVoicemailTwiml({ message: "I didn't catch that. Please call back anytime — goodbye!" }));
+      }
+      if (supabase) await updateCallBySid(supabase, callSid, { metadata: meta });
+      return sendTwiml(res, buildGatherTwiml({
+        say: "Sorry, I didn't catch that. What can I help you with?",
+        action: absUrl(baseUrl, "/voice/respond"),
+        speechHints: hints(client),
+      }));
+    }
+
+    // ── Caller spoke → answer with Claude ────────────────────────────────────────
+    meta.no_input = 0;
+    meta.turns.push({ role: "caller", text: speech });
+
+    // Cache the knowledge base on the row after the first fetch (saves latency).
+    let kb = meta.kb;
+    if (kb == null && typeof getKnowledgeContext === "function" && supabase) {
+      try { kb = await getKnowledgeContext(supabase, client); } catch { kb = ""; }
+      meta.kb = kb || "";
+    }
+
+    const system = buildReceptionistSystemPrompt({ client, agentCfg: cfg, knowledge: kb || "" });
+    const history = meta.turns.map((t) => ({ role: t.role === "agent" ? "assistant" : "user", content: t.text }));
+    const reply = await generateVoiceReply({ anthropic, system, turns: history });
+    let decision = parseAgentDecision(reply);
+    // Belt-and-suspenders: honor an obvious caller sign-off even if Claude missed [END].
+    if (decision.action === "continue" && detectCallerEndIntent(speech)) decision.action = "end";
+
+    meta.turns.push({ role: "agent", text: decision.speech });
+    const transcript = buildTranscript(meta.turns);
+    if (supabase) await updateCallBySid(supabase, callSid, { transcript, metadata: meta });
+
+    // ── Transfer to a human ──────────────────────────────────────────────────────
+    if (decision.action === "transfer") {
+      if (canTransfer) {
+        if (supabase) await updateCallBySid(supabase, callSid, { outcome: "transferred" });
+        return sendTwiml(res, twiml(
+          `<Say voice="${VOICE_TTS}">${escapeXml(decision.speech || "Let me connect you with our team. One moment.")}</Say>` +
+          `<Dial action="${escapeXml(absUrl(baseUrl, "/voice/status"))}" timeout="25">${escapeXml(cfg.forwardingNumber)}</Dial>` +
+          `<Say voice="${VOICE_TTS}">Sorry, no one is available right now. Please leave a message after the tone.</Say>` +
+          `<Record maxLength="120" playBeep="true" trim="trim-silence" action="${escapeXml(absUrl(baseUrl, "/voice/status"))}" recordingStatusCallback="${escapeXml(absUrl(baseUrl, "/voice/recording"))}"/><Hangup/>`
+        ));
+      }
+      // No live agent → take a voicemail instead.
+      return sendTwiml(res, twiml(
+        `<Say voice="${VOICE_TTS}">${escapeXml(decision.speech || "I'll have our team follow up.")} Please leave your name, number, and message after the tone.</Say>` +
+        `<Record maxLength="120" playBeep="true" trim="trim-silence" action="${escapeXml(absUrl(baseUrl, "/voice/status"))}" recordingStatusCallback="${escapeXml(absUrl(baseUrl, "/voice/recording"))}"/><Hangup/>`
+      ));
+    }
+
+    // ── Caller is done ───────────────────────────────────────────────────────────
+    if (decision.action === "end") {
+      return sendTwiml(res, buildHangupTwiml({ message: decision.speech || "Thanks for calling. Goodbye!" }));
+    }
+
+    // ── Keep the conversation going ──────────────────────────────────────────────
+    return sendTwiml(res, buildGatherTwiml({
+      say: decision.speech,
+      action: absUrl(baseUrl, "/voice/respond"),
+      speechHints: hints(client),
+    }));
+  } catch (err) {
+    console.error("[VOICE] respond error:", err?.message);
+    return sendTwiml(res, buildHangupTwiml({ message: "Sorry, I'm having trouble. Please call back in a moment. Goodbye." }));
+  }
+}
+
 // POST /voice/status — Twilio status / Dial-action / voicemail-action callback.
 export async function handleVoiceStatus(req, res, deps = {}) {
-  const { supabase } = deps;
+  const { supabase, anthropic } = deps;
   const callSid = req.body?.CallSid;
+  const isDialAction = !!req.body?.DialCallStatus; // mid-call Dial-action vs. final call status
   const rawStatus = req.body?.DialCallStatus || req.body?.CallStatus;
   const durationStr = req.body?.DialCallDuration || req.body?.CallDuration || req.body?.RecordingDuration;
   const recordingUrl = req.body?.RecordingUrl;
@@ -407,6 +701,21 @@ export async function handleVoiceStatus(req, res, deps = {}) {
     if (Number.isFinite(dur)) patch.duration = dur;
     if (recordingUrl) patch.recording_url = `${recordingUrl}.mp3`;
     await updateCallBySid(supabase, callSid, patch);
+
+    // ── Phase 2: post-call summary + outcome from the AI transcript ──────────────
+    // Only on the FINAL parent-call completion (not the mid-call Dial action), and
+    // only once (skip if a summary already exists). Fire-and-forget; never blocks.
+    const terminal = ["completed", "failed", "no_answer"].includes(normalizeCallStatus(req.body?.CallStatus));
+    if (anthropic && !isDialAction && terminal) {
+      const row = await getCallBySid(supabase, callSid);
+      if (row?.transcript && !row.summary) {
+        const { summary, outcome } = await summarizeVoiceCall({ anthropic, transcript: row.transcript });
+        const sp = {};
+        if (summary) sp.summary = summary;
+        if (outcome && !row.outcome) sp.outcome = outcome;
+        if (Object.keys(sp).length) await updateCallBySid(supabase, callSid, sp);
+      }
+    }
   }
 
   // Status callbacks expect a 200; an empty TwiML keeps any in-progress call valid.

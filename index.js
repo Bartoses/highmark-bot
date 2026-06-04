@@ -79,7 +79,7 @@ import { sendOperatorBriefing, buildOperatorApiData } from "./operatorBriefing.j
 import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
-import { handleVoiceIncoming, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls } from "./voice.js";
+import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls } from "./voice.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1427,18 +1427,24 @@ export async function getClaudeReply(convo, client, season, knowledgeContext, ex
 app.post("/sms", validateTwilioSignature, ipLimiter, phoneRateLimit, (req, res) => handleSmsRequest(req, res));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VOICE AI WEBHOOKS (Phase 1) — Twilio Voice
-// Same P0-1 signature guard as /sms (Twilio signs voice callbacks too). The
-// handlers always respond with valid TwiML so a call is never dropped, even if
-// the voice_* tables haven't been migrated yet.
+// VOICE AI WEBHOOKS — Twilio Voice
+// Phase 1: answer → forward (in hours + E.164 target) or voicemail.
+// Phase 2: conversational AI receptionist (/voice/respond) when a client's
+//   voice_agents.ai_enabled is true — speech in, Claude answers from the KB,
+//   transfers only when needed.
+// Same P0-1 signature guard as /sms (Twilio signs voice callbacks too). Handlers
+// always respond with valid TwiML so a call is never dropped.
 // ─────────────────────────────────────────────────────────────────────────────
 const voiceDeps = {
   resolveClient,
   resolveClientById,
   supabase,
+  anthropic,
+  getKnowledgeContext,
   baseUrl: process.env.PUBLIC_BASE_URL || null,
 };
 app.post("/voice/incoming",  validateTwilioSignature, ipLimiter, (req, res) => handleVoiceIncoming(req, res, voiceDeps));
+app.post("/voice/respond",   validateTwilioSignature, (req, res) => handleVoiceRespond(req, res, voiceDeps));
 app.post("/voice/status",    validateTwilioSignature, (req, res) => handleVoiceStatus(req, res, voiceDeps));
 app.post("/voice/recording", validateTwilioSignature, (req, res) => handleVoiceRecording(req, res, voiceDeps));
 
