@@ -3243,6 +3243,7 @@ async function main() {
     await testDateExtract();      // Deterministic date parser (replaces per-message Claude call)
     await testSelfSignup();       // Sprint 7: self-serve signup + onboarding polling page
     await testOperationsDashboard(); // Phase 1 ops dashboard: read-only routes + auth guards
+    await testVoiceAI();          // Voice AI Phase 1: TwiML builders, config merge, hours, call-log routes
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -16946,6 +16947,169 @@ async function testOperationsDashboard() {
       applySeasonFilter(sample, "shoulder").map(r => r.fareharbor_pk).join() === "C");
   chk("ops4d: applySeasonFilter null = pass-through",
       applySeasonFilter(sample, null).length === 4);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// testVoiceAI — Voice AI Phase 1: pure TwiML builders, config merge, hours check,
+//   stat rollups + webhook/portal route guards
+// ─────────────────────────────────────────────────────────────────────────────
+async function testVoiceAI() {
+  console.log("\nTEST: Voice AI — Phase 1 (infrastructure + call logging)\n");
+
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const {
+    VOICE_OUTCOMES,
+    DEFAULT_VOICE_AGENT,
+    escapeXml,
+    isE164,
+    buildVoiceAgentConfig,
+    buildGreeting,
+    isWithinBusinessHours,
+    buildIncomingTwiml,
+    buildVoicemailTwiml,
+    buildHangupTwiml,
+    normalizeCallStatus,
+    summarizeVoiceCallStats,
+    handlePortalVoiceCalls,
+  } = await import("./voice.js");
+
+  // ── Constants ───────────────────────────────────────────────────────────────
+  chk("voice: VOICE_OUTCOMES has spam/lead/booking/voicemail/transferred",
+    ["spam", "lead", "booking", "voicemail", "transferred"].every((o) => VOICE_OUTCOMES.includes(o)));
+  chk("voice: DEFAULT_VOICE_AGENT enabled + threshold 0.70",
+    DEFAULT_VOICE_AGENT.enabled === true && DEFAULT_VOICE_AGENT.transferThreshold === 0.70);
+
+  // ── escapeXml ─────────────────────────────────────────────────────────────────
+  chk("voice: escapeXml escapes & < > \" '",
+    escapeXml(`a&b<c>d"e'f`) === "a&amp;b&lt;c&gt;d&quot;e&apos;f", escapeXml(`a&b<c>d"e'f`));
+
+  // ── isE164 ─────────────────────────────────────────────────────────────────────
+  chk("voice: isE164 accepts +15551234567", isE164("+15551234567") === true);
+  chk("voice: isE164 rejects display number", isE164("(970) 439-1707") === false);
+  chk("voice: isE164 rejects empty/undefined", isE164("") === false && isE164(undefined) === false);
+
+  // ── buildVoiceAgentConfig ──────────────────────────────────────────────────────
+  const cfgBase = buildVoiceAgentConfig({ botName: "Summit", industry: "outdoor" });
+  chk("voice: config falls back to client botName + industry",
+    cfgBase.name === "Summit" && cfgBase.industry === "outdoor");
+
+  const cfgDb = buildVoiceAgentConfig(
+    { botName: "Summit" },
+    { name: "Front Desk", welcome_prompt: "Hi there!", transfer_threshold: 0.5, forwarding_number: "+15551112222", enabled: true },
+  );
+  chk("voice: DB agent row overrides name + greeting + threshold + forwarding",
+    cfgDb.name === "Front Desk" && cfgDb.welcomePrompt === "Hi there!" &&
+    cfgDb.transferThreshold === 0.5 && cfgDb.forwardingNumber === "+15551112222");
+
+  const cfgNum = buildVoiceAgentConfig(
+    {},
+    { forwarding_number: "+15550000001" },
+    { forwarding_number: "+15559990000" },
+  );
+  chk("voice: voice_numbers forwarding wins over agent row",
+    cfgNum.forwardingNumber === "+15559990000");
+
+  const cfgHandoff = buildVoiceAgentConfig({ handoffPhone: "+19705551234" });
+  chk("voice: E.164 handoffPhone used as last-resort forwarding",
+    cfgHandoff.forwardingNumber === "+19705551234");
+  const cfgHandoffDisplay = buildVoiceAgentConfig({ handoffPhone: "(970) 439-1707" });
+  chk("voice: non-E.164 handoffPhone NOT used for forwarding",
+    cfgHandoffDisplay.forwardingNumber === null);
+
+  // ── buildGreeting ──────────────────────────────────────────────────────────────
+  chk("voice: greeting uses welcomePrompt when set",
+    buildGreeting({ welcomePrompt: "Welcome!" }, {}) === "Welcome!");
+  chk("voice: greeting falls back to business name",
+    buildGreeting({}, { name: "Acme Co" }).includes("Acme Co"));
+
+  // ── isWithinBusinessHours ───────────────────────────────────────────────────────
+  chk("voice: hours null = always open", isWithinBusinessHours(null) === true);
+  const allOpen = { timezone: "UTC", hours: Object.fromEntries([0,1,2,3,4,5,6].map((d) => [String(d), { open: "00:00", close: "23:59" }])) };
+  chk("voice: all-day-open window = within hours", isWithinBusinessHours(allOpen, new Date("2026-06-03T12:00:00Z")) === true);
+  const allClosed = { timezone: "UTC", hours: Object.fromEntries([0,1,2,3,4,5,6].map((d) => [String(d), { open: "00:00", close: "00:00" }])) };
+  chk("voice: zero-width window = closed", isWithinBusinessHours(allClosed, new Date("2026-06-03T12:00:00Z")) === false);
+
+  // ── buildIncomingTwiml ──────────────────────────────────────────────────────────
+  const xmlDial = buildIncomingTwiml({ greeting: "Hi", forwardingNumber: "+15551234567", withinHours: true });
+  chk("voice: incoming TwiML is valid XML doc", xmlDial.startsWith("<?xml") && xmlDial.includes("<Response>"));
+  chk("voice: within-hours + E.164 forwarding → <Dial> with recording + voicemail fallback",
+    xmlDial.includes("<Dial") && xmlDial.includes("+15551234567") && xmlDial.includes("record-from-answer-dual") && xmlDial.includes("<Record"));
+
+  const xmlNoFwd = buildIncomingTwiml({ greeting: "Hi", forwardingNumber: null, withinHours: true });
+  chk("voice: no forwarding number → voicemail only, no <Dial>",
+    !xmlNoFwd.includes("<Dial") && xmlNoFwd.includes("<Record"));
+
+  const xmlAfterHours = buildIncomingTwiml({ greeting: "Hi", forwardingNumber: "+15551234567", withinHours: false });
+  chk("voice: after-hours → voicemail even with forwarding number",
+    !xmlAfterHours.includes("<Dial") && xmlAfterHours.includes("<Record"));
+
+  const xmlEsc = buildIncomingTwiml({ greeting: "Tom & Jerry's <Shop>", forwardingNumber: null });
+  chk("voice: greeting is XML-escaped inside <Say>",
+    xmlEsc.includes("Tom &amp; Jerry&apos;s &lt;Shop&gt;") && !xmlEsc.includes("<Shop>"));
+
+  // ── buildVoicemailTwiml / buildHangupTwiml ──────────────────────────────────────
+  chk("voice: voicemail TwiML has Say + Hangup",
+    buildVoicemailTwiml({ message: "bye" }).includes("<Hangup/>"));
+  chk("voice: hangup TwiML carries the message",
+    buildHangupTwiml({ message: "Not interested, goodbye." }).includes("Not interested, goodbye."));
+
+  // ── normalizeCallStatus ─────────────────────────────────────────────────────────
+  chk("voice: normalizeCallStatus completed", normalizeCallStatus("completed") === "completed");
+  chk("voice: normalizeCallStatus no-answer → no_answer", normalizeCallStatus("no-answer") === "no_answer");
+  chk("voice: normalizeCallStatus busy → no_answer", normalizeCallStatus("busy") === "no_answer");
+  chk("voice: normalizeCallStatus failed/canceled → failed",
+    normalizeCallStatus("failed") === "failed" && normalizeCallStatus("canceled") === "failed");
+
+  // ── summarizeVoiceCallStats ──────────────────────────────────────────────────────
+  const stats = summarizeVoiceCallStats([
+    { outcome: "spam", duration: 17, status: "completed" },
+    { outcome: "lead", duration: 60, status: "completed" },
+    { outcome: "booking", duration: 90, status: "completed" },
+    { outcome: "voicemail", duration: 20, status: "completed" },
+    { outcome: null, duration: 0, status: "no_answer" },
+  ]);
+  chk("voice: stats total counts all calls", stats.total === 5);
+  chk("voice: stats buckets spam/lead/booking/voicemail", stats.spam === 1 && stats.lead === 1 && stats.booking === 1 && stats.voicemail === 1);
+  chk("voice: stats missed counts no_answer/failed", stats.missed === 1);
+  chk("voice: stats sums duration", stats.totalDurationSec === 187);
+
+  // ── handlePortalVoiceCalls — guards (no HTTP / DB needed) ────────────────────────
+  function mockRes() {
+    const r = { statusCode: 200, body: null };
+    r.status = (c) => { r.statusCode = c; return r; };
+    r.json   = (b) => { r.body = b;        return r; };
+    return r;
+  }
+  {
+    const res = mockRes();
+    await handlePortalVoiceCalls({ query: {} }, res, null, () => "csr_rea");
+    chk("voice: portal calls → 503 when supabase missing", res.statusCode === 503, JSON.stringify(res.body));
+  }
+  {
+    const res = mockRes();
+    await handlePortalVoiceCalls({ query: {} }, res, {}, () => null);
+    chk("voice: portal calls → 400 when client_id missing", res.statusCode === 400, JSON.stringify(res.body));
+  }
+
+  // ── HTTP routes (TEST_MODE bypasses the Twilio signature guard) ──────────────────
+  {
+    const res = await httpPost("/voice/incoming", { To: TO_PHONE, From: TEST_PHONE, CallSid: "CAtest123" });
+    const body = await res.text();
+    chk("voice: POST /voice/incoming → 200 TwiML",
+      res.status === 200 && /xml/i.test(res.headers.get("content-type") || "") && body.includes("<Response>") && body.includes("<Say"),
+      `status=${res.status} body=${body.slice(0, 120)}`);
+  }
+  {
+    const res = await httpPost("/voice/status", { CallSid: "CAtest123", CallStatus: "completed", CallDuration: "42" });
+    const body = await res.text();
+    chk("voice: POST /voice/status → 200 TwiML", res.status === 200 && body.includes("<Response>"), `status=${res.status}`);
+  }
+  {
+    const res = await httpGet("/portal/api/voice/calls");
+    chk("voice: GET /portal/api/voice/calls → 401 without token", res.status === 401, `status=${res.status}`);
+  }
 }
 
 main().catch((e) => {

@@ -186,6 +186,31 @@ Done when:
 
 ## COMPLETED SPRINTS
 
+### Voice AI — Phase 1: Infrastructure + Call Logging (2026-06-03)
+First-class, multi-tenant Voice AI module added alongside the SMS concierge. Phase
+1 answers inbound Twilio Voice calls per client, speaks a per-client greeting, then
+forwards to a human (in business hours + E.164 transfer target) or takes a
+voicemail — never drops a call. Every call is logged for the future dashboard.
+
+- voice.js — pure, unit-tested core: escapeXml, isE164, buildVoiceAgentConfig
+  (DEFAULT ← client ← voice_agents row ← voice_numbers forwarding), buildGreeting,
+  isWithinBusinessHours (timezone-aware via Intl; null = always open),
+  buildIncomingTwiml / buildVoicemailTwiml / buildHangupTwiml, normalizeCallStatus,
+  summarizeVoiceCallStats. Graceful DB writers: claimCall (idempotent on CallSid),
+  updateCallBySid, getVoiceAgent, getVoiceNumber, listVoiceCalls.
+- index.js — routes: POST /voice/incoming|status|recording (same P0-1
+  validateTwilioSignature guard as /sms; Twilio signs voice callbacks too) +
+  GET /portal/api/voice/calls (client-scoped log + dashboard counters).
+- db1_voice.sql — voice_numbers, voice_agents, voice_calls. Additive + non-breaking;
+  SMS stack untouched. Run once in DB1 to go live.
+- Outcomes vocabulary: spam/lead/customer/booking/support/voicemail/transferred/
+  completed/no_answer. transcript/summary/spam_score/lead_score columns exist now,
+  populated by Phase 2 (realtime AI receptionist), Phase 3 (lead qualification +
+  missed-call SMS recovery), Phase 4 (shared spam network), Phase 5 (industry agents).
+- Tests: testVoiceAI() — 30 pure assertions (builders/config/hours/stats) + route
+  guards (POST /voice/incoming TwiML, /voice/status, 401 on portal log). Verified
+  end-to-end by booting the server and placing simulated calls.
+
 ### Sprint 1 — Multi-Client Portal MVP
 - Multi-client architecture, client portal (Supabase Auth + JWT), Conversations viewer,
   Dashboard, Leads, Campaigns, Analytics, Settings, Users & Access, Invites

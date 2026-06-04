@@ -79,6 +79,7 @@ import { sendOperatorBriefing, buildOperatorApiData } from "./operatorBriefing.j
 import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
+import { handleVoiceIncoming, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls } from "./voice.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1426,6 +1427,22 @@ export async function getClaudeReply(convo, client, season, knowledgeContext, ex
 app.post("/sms", validateTwilioSignature, ipLimiter, phoneRateLimit, (req, res) => handleSmsRequest(req, res));
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VOICE AI WEBHOOKS (Phase 1) — Twilio Voice
+// Same P0-1 signature guard as /sms (Twilio signs voice callbacks too). The
+// handlers always respond with valid TwiML so a call is never dropped, even if
+// the voice_* tables haven't been migrated yet.
+// ─────────────────────────────────────────────────────────────────────────────
+const voiceDeps = {
+  resolveClient,
+  resolveClientById,
+  supabase,
+  baseUrl: process.env.PUBLIC_BASE_URL || null,
+};
+app.post("/voice/incoming",  validateTwilioSignature, ipLimiter, (req, res) => handleVoiceIncoming(req, res, voiceDeps));
+app.post("/voice/status",    validateTwilioSignature, (req, res) => handleVoiceStatus(req, res, voiceDeps));
+app.post("/voice/recording", validateTwilioSignature, (req, res) => handleVoiceRecording(req, res, voiceDeps));
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RESET — TEST_MODE only
 // ─────────────────────────────────────────────────────────────────────────────
 app.post("/reset", async (req, res) => {
@@ -1831,6 +1848,9 @@ app.get(   "/portal/api/partners",               requirePortalAuth, (req, res) =
 app.post(  "/portal/api/partners",               requirePortalAuth, (req, res) => handlePortalCreatePartner(req, res, supabase));
 app.patch( "/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalUpdatePartner(req, res, supabase));
 app.delete("/portal/api/partners/:id",           requirePortalAuth, (req, res) => handlePortalDeletePartner(req, res, supabase));
+
+// ── Voice AI (Phase 1) — client-scoped call log + dashboard counters ────────
+app.get(   "/portal/api/voice/calls",              requirePortalAuth, (req, res) => handlePortalVoiceCalls(req, res, supabase, resolvePortalClientId));
 
 // ── Operator phones (Sprint C) ─────────────────────────────────────────────
 app.get(   "/portal/api/operator-phones",          requirePortalAuth, (req, res) => handlePortalOperatorPhones(req, res, supabase));
