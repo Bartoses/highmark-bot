@@ -16981,6 +16981,11 @@ async function testVoiceAI() {
     buildReceptionistSystemPrompt,
     buildGatherTwiml,
     buildTranscript,
+    detectSpamSignals,
+    SPAM_PHRASES,
+    validateVoiceConfigInput,
+    handlePortalVoiceConfig,
+    handlePortalUpdateVoiceConfig,
   } = await import("./voice.js");
 
   // ── Constants ───────────────────────────────────────────────────────────────
@@ -17127,6 +17132,49 @@ async function testVoiceAI() {
   chk("voice2: buildTranscript renders caller/agent turns",
     buildTranscript([{ role: "caller", text: "hi" }, { role: "agent", text: "hello" }]) === "Caller: hi\nReceptionist: hello");
 
+  // ── Spam detection ───────────────────────────────────────────────────────────────
+  chk("voice2: SPAM_PHRASES is a non-empty list", Array.isArray(SPAM_PHRASES) && SPAM_PHRASES.length > 5);
+  chk("voice2: detectSpamSignals catches Google listing pitch",
+    detectSpamSignals("Hi, I'm calling about your Google business listing") === true);
+  chk("voice2: detectSpamSignals catches extended warranty",
+    detectSpamSignals("this is about your vehicle warranty") === true);
+  chk("voice2: detectSpamSignals leaves a real customer alone",
+    detectSpamSignals("do you have snowmobile tours this weekend") === false);
+  chk("voice2: parseAgentDecision spam token", parseAgentDecision("Not interested, thanks. [SPAM]").action === "spam");
+  chk("voice2: cleanForSpeech strips [SPAM]", !parseAgentDecision("Bye [SPAM]").speech.includes("[SPAM]"));
+
+  // ── validateVoiceConfigInput ───────────────────────────────────────────────────────
+  chk("voice2: validate rejects non-E.164 forwarding",
+    validateVoiceConfigInput({ forwarding_number: "(970) 439-1707" }).errors.length === 1);
+  chk("voice2: validate accepts E.164 forwarding + coerces ai_enabled",
+    (() => { const v = validateVoiceConfigInput({ forwarding_number: "+17202892483", ai_enabled: 1 });
+      return v.errors.length === 0 && v.values.forwarding_number === "+17202892483" && v.values.ai_enabled === true; })());
+  chk("voice2: validate empty forwarding clears to null",
+    validateVoiceConfigInput({ forwarding_number: "" }).values.forwarding_number === null);
+
+  // ── handlePortalVoiceConfig / Update — guards (no HTTP / DB) ────────────────────────
+  function mockResV() {
+    const r = { statusCode: 200, body: null };
+    r.status = (c) => { r.statusCode = c; return r; };
+    r.json   = (b) => { r.body = b;        return r; };
+    return r;
+  }
+  {
+    const res = mockResV();
+    await handlePortalVoiceConfig({ query: {} }, res, null, () => "csr_rea");
+    chk("voice2: GET config → 503 when supabase missing", res.statusCode === 503);
+  }
+  {
+    const res = mockResV();
+    await handlePortalUpdateVoiceConfig({ query: {}, body: {}, portalUser: { role: "client_user" } }, res, {}, () => "csr_rea");
+    chk("voice2: PATCH config → 403 for client_user", res.statusCode === 403);
+  }
+  {
+    const res = mockResV();
+    await handlePortalUpdateVoiceConfig({ query: {}, body: { forwarding_number: "555" }, portalUser: { role: "client_admin" } }, res, {}, () => "csr_rea");
+    chk("voice2: PATCH config → 400 on bad forwarding number", res.statusCode === 400, JSON.stringify(res.body));
+  }
+
   // ── HTTP routes (TEST_MODE bypasses the Twilio signature guard) ──────────────────
   {
     const res = await httpPost("/voice/incoming", { To: TO_PHONE, From: TEST_PHONE, CallSid: "CAtest123" });
@@ -17150,6 +17198,10 @@ async function testVoiceAI() {
   {
     const res = await httpGet("/portal/api/voice/calls");
     chk("voice: GET /portal/api/voice/calls → 401 without token", res.status === 401, `status=${res.status}`);
+  }
+  {
+    const res = await httpGet("/portal/api/voice/config");
+    chk("voice2: GET /portal/api/voice/config → 401 without token", res.status === 401, `status=${res.status}`);
   }
 }
 

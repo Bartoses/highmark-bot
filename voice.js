@@ -260,7 +260,7 @@ export function summarizeVoiceCallStats(calls = []) {
 // whitespace. URLs are replaced with "our website" rather than spelled out.
 export function cleanForSpeech(text) {
   return String(text ?? "")
-    .replace(/\[(TRANSFER|END)\]/gi, " ")
+    .replace(/\[(TRANSFER|END|SPAM)\]/gi, " ")
     .replace(/https?:\/\/\S+/gi, "our website")
     .replace(/[*_`#>]/g, "")
     .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}←-⇿⌀-⏿]/gu, "")
@@ -273,7 +273,8 @@ export function cleanForSpeech(text) {
 export function parseAgentDecision(rawText) {
   const text = String(rawText ?? "");
   let action = "continue";
-  if (/\[TRANSFER\]/i.test(text)) action = "transfer";
+  if (/\[SPAM\]/i.test(text)) action = "spam";
+  else if (/\[TRANSFER\]/i.test(text)) action = "transfer";
   else if (/\[END\]/i.test(text)) action = "end";
   return { action, speech: cleanForSpeech(text) };
 }
@@ -287,6 +288,28 @@ export function detectCallerEndIntent(speech) {
          s === "bye" || s === "no thanks" || s === "no thank you";
 }
 
+// ── Spam / solicitation detection ───────────────────────────────────────────────
+// Robocallers and B2B solicitors must never reach the human transfer line. We
+// catch them two ways: a deterministic phrase match (instant, no Claude call) and
+// a [SPAM] control token Claude can emit for subtler sales pitches.
+export const SPAM_PHRASES = [
+  "google listing", "google business", "business listing", "yelp listing",
+  "search engine optimization", "seo services", "first page of google", "rank your", "rank higher",
+  "merchant services", "lower your rate", "credit card processing",
+  "extended warranty", "vehicle warranty", "car's warranty", "auto warranty",
+  "final notice", "social security", "medicare", "irs",
+  "solar quote", "health insurance", "auto insurance quote",
+  "marketing services", "digital marketing", "web design services",
+  "business loan", "working capital", "grant for your business",
+  "calling about your business listing", "calling regarding your listing",
+];
+
+export function detectSpamSignals(text) {
+  const s = String(text ?? "").toLowerCase();
+  if (!s.trim()) return false;
+  return SPAM_PHRASES.some((p) => s.includes(p));
+}
+
 // ── buildReceptionistSystemPrompt ───────────────────────────────────────────────
 // Persona + rules + the client's knowledge base. Tuned for SPOKEN replies.
 export function buildReceptionistSystemPrompt({ client = {}, agentCfg = {}, knowledge = "" } = {}) {
@@ -298,8 +321,9 @@ export function buildReceptionistSystemPrompt({ client = {}, agentCfg = {}, know
     `- Sound warm and natural, like a helpful local on the phone. Use the caller's words back to them.`,
     `- Answer using the KNOWLEDGE below. If you don't know or it needs a human (booking changes, complex pricing, complaints, or the caller asks for a person), say you'll connect them and end your message with the token [TRANSFER]${canTransfer ? "" : " (note: no live agent is available right now, so instead offer to take a message)"}.`,
     `- When the caller is finished or says goodbye, give a brief friendly sign-off and end your message with the token [END].`,
+    `- If the caller is a salesperson or solicitor (SEO, Google/Yelp listing, website or marketing services, merchant services, insurance, extended warranty, business loans, etc.), do NOT help them and do NOT transfer. Politely say we're not interested and end your message with the token [SPAM].`,
     `- Never invent prices, dates, availability, or policies that aren't in the KNOWLEDGE. If unsure, offer to transfer.`,
-    `- Control tokens [TRANSFER] and [END] must be the LAST thing in your message and are never spoken.`,
+    `- Control tokens [TRANSFER], [END], and [SPAM] must be the LAST thing in your message and are never spoken.`,
     ``,
     `KNOWLEDGE:`,
     (knowledge && knowledge.trim()) ? knowledge.trim() : `(No extra knowledge available — keep answers general and transfer for specifics.)`,
@@ -340,15 +364,44 @@ export function buildTranscript(turns = []) {
 
 // ── generateVoiceReply (Claude call) ─────────────────────────────────────────────
 // turns: [{role:'user'|'assistant', content}] conversation history.
+// The system block (persona + KB) is identical across every turn of a call, so we
+// mark it cache_control: ephemeral via a raw API call — a cache hit on turns 2+ cuts
+// input-token cost ~90% and shaves latency. Falls back to the SDK on any failure.
 export async function generateVoiceReply({ anthropic, system, turns, model = VOICE_AI_MODEL }) {
+  const maxTokens = 160;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+
+  // Preferred path: raw fetch with prompt caching on the system block.
+  if (apiKey) {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+          messages: turns,
+        }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const text = (json?.content ?? []).map((b) => b.text || "").join(" ").trim();
+        if (text) return text;
+      }
+    } catch (err) {
+      console.error("[VOICE] cached reply error:", err?.message);
+    }
+  }
+
+  // Fallback: SDK path (no caching) to preserve availability.
   if (!anthropic) return "I'm sorry, I'm having trouble right now. Let me connect you with someone. [TRANSFER]";
   try {
-    const res = await anthropic.messages.create({
-      model,
-      max_tokens: 200,
-      system,
-      messages: turns,
-    });
+    const res = await anthropic.messages.create({ model, max_tokens: maxTokens, system, messages: turns });
     const text = (res?.content ?? []).map((b) => b.text || "").join(" ").trim();
     return text || "Sorry, could you say that again?";
   } catch (err) {
@@ -536,9 +589,11 @@ export async function handleVoiceIncoming(req, res, deps = {}) {
     // speech, then hand each turn to /voice/respond. Falls back to Phase 1 below.
     if (cfg.aiEnabled && cfg.enabled && deps.anthropic) {
       if (callSid && supabase) {
+        // Cache routing facts (client + transfer target) so each turn skips the
+        // voice_agents / voice_numbers lookups → lower per-turn latency.
         claimCall(supabase, {
           callSid, clientId: client.id, from, to, direction: "inbound",
-          metadata: { ai: true, turns: [], no_input: 0 },
+          metadata: { ai: true, turns: [], no_input: 0, client_id: client.id, fwd: cfg.forwardingNumber || null },
         }).catch(() => {});
       }
       return sendTwiml(res, buildGatherTwiml({
@@ -593,14 +648,22 @@ export async function handleVoiceRespond(req, res, deps = {}) {
     const meta = (row?.metadata && typeof row.metadata === "object") ? row.metadata : { turns: [], no_input: 0 };
     meta.turns = Array.isArray(meta.turns) ? meta.turns : [];
 
-    // Resolve client + agent config (forwarding target, greeting, KB).
+    // Resolve client + transfer target from CACHED metadata (in-memory, no DB
+    // round-trips per turn). Only fall back to a lookup if the cache is cold.
+    const clientId = meta.client_id || row?.client_id;
     let client = null;
-    if (row?.client_id && typeof resolveClientById === "function") client = resolveClientById(row.client_id);
+    if (clientId && typeof resolveClientById === "function") client = resolveClientById(clientId);
     if (!client && typeof resolveClient === "function") client = resolveClient(to);
     client = client || {};
-    const agentRow = supabase ? await getVoiceAgent(supabase, client.id) : null;
-    const cfg = buildVoiceAgentConfig(client, agentRow, supabase ? await getVoiceNumber(supabase, to) : null);
-    const canTransfer = isE164(cfg.forwardingNumber);
+
+    let fwd = meta.fwd;
+    if (fwd === undefined) {
+      const agentRow = supabase ? await getVoiceAgent(supabase, client.id) : null;
+      fwd = buildVoiceAgentConfig(client, agentRow, supabase ? await getVoiceNumber(supabase, to) : null).forwardingNumber;
+      meta.fwd = fwd || null;
+    }
+    const cfg = { forwardingNumber: fwd };
+    const canTransfer = isE164(fwd);
 
     // ── No speech captured → reprompt once, then wrap up gracefully ──────────────
     if (!speech) {
@@ -627,11 +690,22 @@ export async function handleVoiceRespond(req, res, deps = {}) {
     meta.no_input = 0;
     meta.turns.push({ role: "caller", text: speech });
 
+    // ── Spam guard (deterministic, instant) — solicitors never reach the human ───
+    if (detectSpamSignals(speech)) {
+      meta.turns.push({ role: "agent", text: "We're not interested, thank you. Goodbye." });
+      if (supabase) await updateCallBySid(supabase, callSid, {
+        transcript: buildTranscript(meta.turns), metadata: meta, outcome: "spam", spam_score: 0.95,
+      });
+      return sendTwiml(res, buildHangupTwiml({ message: "Thanks, we're not interested. Goodbye." }));
+    }
+
     // Cache the knowledge base on the row after the first fetch (saves latency).
+    // Cap length so the spoken-reply model stays fast and focused.
     let kb = meta.kb;
     if (kb == null && typeof getKnowledgeContext === "function" && supabase) {
       try { kb = await getKnowledgeContext(supabase, client); } catch { kb = ""; }
-      meta.kb = kb || "";
+      meta.kb = (kb || "").slice(0, 2800);
+      kb = meta.kb;
     }
 
     const system = buildReceptionistSystemPrompt({ client, agentCfg: cfg, knowledge: kb || "" });
@@ -644,6 +718,12 @@ export async function handleVoiceRespond(req, res, deps = {}) {
     meta.turns.push({ role: "agent", text: decision.speech });
     const transcript = buildTranscript(meta.turns);
     if (supabase) await updateCallBySid(supabase, callSid, { transcript, metadata: meta });
+
+    // ── Spam (Claude-classified) → decline + hang up, NEVER transfer ─────────────
+    if (decision.action === "spam") {
+      if (supabase) await updateCallBySid(supabase, callSid, { outcome: "spam", spam_score: 0.9 });
+      return sendTwiml(res, buildHangupTwiml({ message: decision.speech || "Thanks, we're not interested. Goodbye." }));
+    }
 
     // ── Transfer to a human ──────────────────────────────────────────────────────
     if (decision.action === "transfer") {
@@ -763,5 +843,90 @@ export async function handlePortalVoiceCalls(req, res, supabase, resolvePortalCl
     return res.json({ calls, stats: summarizeVoiceCallStats(calls) });
   } catch (err) {
     return res.status(500).json({ error: err?.message || "voice calls fetch failed" });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL — Voice AI configuration (read + edit forwarding number, greeting, on/off)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Shared validator for the editable voice config fields.
+export function validateVoiceConfigInput(body = {}) {
+  const errors = [];
+  const values = {};
+  if (body.forwarding_number !== undefined) {
+    const n = String(body.forwarding_number || "").trim();
+    if (n && !isE164(n)) errors.push("Forwarding number must be in E.164 format, e.g. +17202892483");
+    values.forwarding_number = n || null;
+  }
+  if (body.ai_enabled !== undefined) values.ai_enabled = !!body.ai_enabled;
+  if (body.welcome_prompt !== undefined) {
+    values.welcome_prompt = String(body.welcome_prompt || "").trim().slice(0, 600) || null;
+  }
+  if (body.name !== undefined) values.name = String(body.name || "").trim().slice(0, 80) || "Receptionist";
+  return { errors, values };
+}
+
+// GET /portal/api/voice/config — the client's voice number(s) + agent settings.
+export async function handlePortalVoiceConfig(req, res, supabase, resolvePortalClientId) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+  try {
+    const [numbers, agent] = await Promise.all([
+      supabase.from("voice_numbers").select("*").eq("client_id", clientId).order("created_at", { ascending: true }),
+      getVoiceAgent(supabase, clientId),
+    ]);
+    if (numbers.error && numbers.error.message?.includes("does not exist")) {
+      return res.json({ numbers: [], agent: null, configured: false });
+    }
+    return res.json({ numbers: numbers.data ?? [], agent: agent ?? null, configured: !!(numbers.data?.length) });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || "voice config fetch failed" });
+  }
+}
+
+// PATCH /portal/api/voice/config — update forwarding number / greeting / on-off.
+// Writes to the client's voice_agents row (creates it if missing) and mirrors the
+// forwarding number onto every voice_numbers row for the client.
+export async function handlePortalUpdateVoiceConfig(req, res, supabase, resolvePortalClientId) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (req.portalUser?.role === "client_user") return res.status(403).json({ error: "Read-only access" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const { errors, values } = validateVoiceConfigInput(req.body ?? {});
+  if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+  if (!Object.keys(values).length) return res.status(400).json({ error: "No changes provided" });
+
+  try {
+    // Upsert the agent row (one per client).
+    const existing = await getVoiceAgent(supabase, clientId);
+    let agent;
+    if (existing) {
+      const { data, error } = await supabase
+        .from("voice_agents").update({ ...values, updated_at: new Date().toISOString() })
+        .eq("id", existing.id).select().maybeSingle();
+      if (error) return res.status(500).json({ error: error.message });
+      agent = data;
+    } else {
+      const { data, error } = await supabase
+        .from("voice_agents").insert({ client_id: clientId, ...values }).select().maybeSingle();
+      if (error) {
+        if (error.message?.includes("does not exist")) return res.status(503).json({ error: "Run db1_voice.sql migration first" });
+        return res.status(500).json({ error: error.message });
+      }
+      agent = data;
+    }
+
+    // Mirror the forwarding number onto the client's voice number(s) too.
+    if (values.forwarding_number !== undefined) {
+      await supabase.from("voice_numbers")
+        .update({ forwarding_number: values.forwarding_number, updated_at: new Date().toISOString() })
+        .eq("client_id", clientId);
+    }
+    return res.json({ agent });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || "voice config update failed" });
   }
 }

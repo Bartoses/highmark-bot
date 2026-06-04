@@ -4351,6 +4351,17 @@ async function loadSettings() {
       <pre id="briefingPreviewBox" hidden style="margin-top:14px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:480px;overflow:auto;"></pre>
     </div>
 
+    <!-- Voice AI — call forwarding number + AI receptionist on/off + greeting -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">📞 Voice AI</div>
+      <div class="form-hint" style="margin-bottom:14px;">
+        When someone calls your voice number, the AI receptionist answers, helps from your knowledge base, screens out spam/solicitors, and transfers to the number below when a caller asks for a person.
+      </div>
+      <div id="voiceConfigBox">
+        <div style="font-size:12px;color:var(--text2);padding:12px 0;">Loading voice settings…</div>
+      </div>
+    </div>
+
     <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);">
       <div style="display:flex;align-items:center;justify-content:space-between;">
         <div>
@@ -4657,6 +4668,7 @@ async function loadSettings() {
   onBookingModeChange(); // init conditional visibility
   loadPlanUsage();       // async — loads into #planUsageContent
   loadOperatorIntelligence(); // Sprint C: per-phone digest preferences
+  loadVoiceConfig();     // Voice AI: forwarding number + AI receptionist toggle
 }
 
 function onBookingModeChange() {
@@ -5789,6 +5801,60 @@ function addOperatorPhoneRow(value = '') {
   row.style.cssText = 'display:flex;gap:8px;margin-bottom:6px;';
   row.innerHTML = `<input type="text" class="form-input op-phone-input" value="${escHtml(value)}" placeholder="+12223334444" style="max-width:220px;"><button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.op-phone-row').remove()" title="Remove">✕</button>`;
   list.appendChild(row);
+}
+
+// ─── Voice AI config (forwarding number + AI receptionist toggle + greeting) ──
+async function loadVoiceConfig() {
+  const box = document.getElementById('voiceConfigBox');
+  if (!box) return;
+  const r = await apiFetch('/voice/config');
+  if (!r) {
+    box.innerHTML = `<div class="form-hint" style="color:var(--danger);">Couldn't load voice settings: ${_lastApiError ?? 'unknown'}</div>`;
+    return;
+  }
+  const agent   = r.agent ?? {};
+  const numbers = r.numbers ?? [];
+  const numLine = numbers.length
+    ? numbers.map(n => escHtml(formatPhone(n.twilio_number))).join(', ')
+    : 'No voice number assigned yet — contact Highmark to provision one.';
+  const fwd = agent.forwarding_number ?? (numbers[0]?.forwarding_number ?? '');
+  box.innerHTML = `
+    <div style="margin-bottom:14px;font-size:12px;color:var(--text2);">Voice number: <strong style="color:var(--text);">${numLine}</strong></div>
+    <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:16px;">
+      <input type="checkbox" id="voiceAiEnabled" ${agent.ai_enabled ? 'checked' : ''}>
+      <span>AI receptionist answers &amp; talks to callers <span style="color:var(--text2);">(off = forward or voicemail only)</span></span>
+    </label>
+    <div class="form-group">
+      <label>Call forwarding number</label>
+      <input type="text" class="form-input" id="voiceForwarding" value="${escHtml(fwd)}" placeholder="+17202892483">
+      <div class="form-hint">Where calls transfer when a caller asks for a person. Use E.164 format, e.g. +17202892483.</div>
+    </div>
+    <div class="form-group">
+      <label>Greeting <span style="color:var(--text2);font-weight:400;">(optional)</span></label>
+      <textarea class="form-input" id="voiceGreeting" rows="2" placeholder="Thanks for calling! How can I help you today?">${escHtml(agent.welcome_prompt ?? '')}</textarea>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="saveVoiceConfig()">Save voice settings</button>
+    <span id="voiceSaveMsg" style="margin-left:10px;font-size:12px;"></span>
+  `;
+}
+
+async function saveVoiceConfig() {
+  const msg = document.getElementById('voiceSaveMsg');
+  const setMsg = (t, c) => { if (msg) { msg.textContent = t; msg.style.color = c; } };
+  const fwd = (document.getElementById('voiceForwarding')?.value ?? '').trim();
+  if (fwd && !/^\+[1-9]\d{6,14}$/.test(fwd)) {
+    setMsg('Forwarding number must be E.164 (e.g. +17202892483)', 'var(--danger)');
+    return;
+  }
+  setMsg('Saving…', 'var(--text2)');
+  const body = {
+    ai_enabled: document.getElementById('voiceAiEnabled')?.checked ?? false,
+    forwarding_number: fwd,
+    welcome_prompt: document.getElementById('voiceGreeting')?.value ?? '',
+  };
+  const r = await apiFetch('/voice/config', { method: 'PATCH', body: JSON.stringify(body) });
+  if (!r) { setMsg(_lastApiError ?? 'Save failed', 'var(--danger)'); return; }
+  setMsg('Saved ✓', '#22c55e');
 }
 
 // ─── Operator Intelligence (Sprint C) ────────────────────────────────────────
