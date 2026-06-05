@@ -42,7 +42,7 @@ export const DEFAULT_VOICE_AGENT = {
   businessHours:      null, // null = always open (always offer transfer if number set)
   spamAggressiveness: "medium",
   aiEnabled:          false, // Phase 2: conversational AI receptionist (false = Phase 1 forward/voicemail)
-  voiceName:          "Polly.Joanna-Neural", // Twilio TTS voice
+  voiceName:          "Polly.Danielle-Neural", // Twilio TTS voice
   enabled:            true,
 };
 
@@ -52,7 +52,7 @@ export const VOICE_AI_MODEL = "claude-haiku-4-5-20251001";
 
 // Twilio TTS voice. Amazon Polly NEURAL voices sound far more human than the
 // standard ones. Per-agent override lives in voice_agents.voice.
-export const VOICE_TTS = "Polly.Joanna-Neural";
+export const VOICE_TTS = "Polly.Danielle-Neural";
 
 // Natural-sounding neural voices offered in the portal picker.
 export const VOICE_OPTIONS = [
@@ -321,6 +321,26 @@ export function detectSpamSignals(text) {
   const s = String(text ?? "").toLowerCase();
   if (!s.trim()) return false;
   return SPAM_PHRASES.some((p) => s.includes(p));
+}
+
+// ── Shared spam network (Phase 4) ───────────────────────────────────────────────
+// A caller is hard-blocked (pre-answer <Reject/>) once the network is confident.
+export const SPAM_BLOCK_SCORE   = 0.9; // a single strong deterministic flag reaches this
+export const SPAM_BLOCK_REPORTS = 2;   // …or two independent flags from any client(s)
+
+// Pure decision: should this caller be blocked before we even answer?
+export function isBlockedCaller(row) {
+  if (!row) return false;
+  if (row.blocked === true) return true;
+  const score = Number(row.score);
+  const reports = Number(row.reports);
+  return (Number.isFinite(score) && score >= SPAM_BLOCK_SCORE) ||
+         (Number.isFinite(reports) && reports >= SPAM_BLOCK_REPORTS);
+}
+
+// TwiML to reject a call before answering (robocaller never hears a thing).
+export function buildRejectTwiml(reason = "rejected") {
+  return twiml(`<Reject reason="${escapeXml(reason)}"/>`);
 }
 
 // ── resolveVoiceSeason ──────────────────────────────────────────────────────────
@@ -596,6 +616,52 @@ export async function listVoiceCalls(supabase, clientId, { limit = 100 } = {}) {
   } catch { return []; }
 }
 
+// ── Shared spam network (Phase 4) DB access ─────────────────────────────────────
+export async function getSpamNumber(supabase, phone) {
+  if (!supabase || !isE164(phone)) return null;
+  try {
+    const { data, error } = await supabase
+      .from("spam_numbers").select("*").eq("phone_number", phone).maybeSingle();
+    if (error) return null;
+    return data ?? null;
+  } catch { return null; }
+}
+
+// Record/raise a number's spam standing. Read-modify-write (best-effort; spam
+// learning tolerates the rare race). Auto-sets `blocked` once confident.
+export async function recordSpamNumber(supabase, phone, { reason = null, clientId = null, callSid = null, score = 0.95 } = {}) {
+  if (!supabase || !isE164(phone)) return null;
+  const now = new Date().toISOString();
+  const src = { client_id: clientId, call_sid: callSid, at: now };
+  try {
+    const existing = await getSpamNumber(supabase, phone);
+    if (existing) {
+      const reports  = (existing.reports || 1) + 1;
+      const newScore = Math.max(Number(existing.score) || 0, score);
+      const sources  = (Array.isArray(existing.sources) ? existing.sources : []).slice(-19).concat(src);
+      const blocked  = existing.blocked || newScore >= SPAM_BLOCK_SCORE || reports >= SPAM_BLOCK_REPORTS;
+      const { data } = await supabase.from("spam_numbers")
+        .update({ reports, score: newScore, reason: reason ?? existing.reason, blocked, sources, last_seen: now })
+        .eq("phone_number", phone).select().maybeSingle();
+      return data ?? null;
+    }
+    const { data } = await supabase.from("spam_numbers")
+      .insert({ phone_number: phone, score, reports: 1, reason, blocked: score >= SPAM_BLOCK_SCORE, sources: [src] })
+      .select().maybeSingle();
+    return data ?? null;
+  } catch { return null; }
+}
+
+export async function listSpamNumbers(supabase, { limit = 50 } = {}) {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("spam_numbers").select("*").order("last_seen", { ascending: false }).limit(limit);
+    if (error) return [];
+    return data ?? [];
+  } catch { return []; }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPRESS HANDLERS
 // deps: { resolveClient, resolveClientById, supabase, baseUrl, anthropic, getKnowledgeContext }
@@ -629,6 +695,23 @@ export async function handleVoiceIncoming(req, res, deps = {}) {
   const callSid = req.body?.CallSid;
 
   try {
+    // ── Phase 4: pre-answer robocall block ──────────────────────────────────────
+    // If this caller is on the shared spam network, reject BEFORE answering — the
+    // robocaller never hears a greeting and never reaches a human. Free + instant.
+    if (supabase && isE164(from)) {
+      const spamRow = await getSpamNumber(supabase, from);
+      if (isBlockedCaller(spamRow)) {
+        const c = (typeof resolveClient === "function" ? resolveClient(to) : null) || {};
+        claimCall(supabase, { callSid, clientId: c.id, from, to, direction: "inbound", metadata: { blocked: true } })
+          .then(() => updateCallBySid(supabase, callSid, {
+            status: "no_answer", outcome: "spam",
+            spam_score: Number(spamRow.score) || 0.95, ended_at: new Date().toISOString(),
+          })).catch(() => {});
+        console.log(`[VOICE] pre-answer block — known spam caller ${from}`);
+        return sendTwiml(res, buildRejectTwiml());
+      }
+    }
+
     // Route the called number → client (DB voice_numbers first, then SMS routing).
     let numberRow = null;
     let client = null;
@@ -704,6 +787,7 @@ export async function handleVoiceRespond(req, res, deps = {}) {
   const { resolveClient, resolveClientById, supabase, baseUrl, anthropic, getKnowledgeContext } = deps;
   const callSid = req.body?.CallSid;
   const to      = req.body?.To;
+  const from    = req.body?.From;
   const speech  = (req.body?.SpeechResult || "").trim();
   const hints   = (c) => buildSpeechHints(c);
 
@@ -767,6 +851,8 @@ export async function handleVoiceRespond(req, res, deps = {}) {
       if (supabase) await updateCallBySid(supabase, callSid, {
         transcript: buildTranscript(meta.turns), metadata: meta, outcome: "spam", spam_score: 0.95,
       });
+      // Phase 4: teach the shared network so this caller is pre-answer-blocked next time.
+      recordSpamNumber(supabase, from, { reason: "solicitation phrase", clientId: client.id, callSid, score: 0.95 }).catch(() => {});
       return sendTwiml(res, buildHangupTwiml({ message: "Thanks, we're not interested. Goodbye.", voiceName }));
     }
 
@@ -795,6 +881,7 @@ export async function handleVoiceRespond(req, res, deps = {}) {
     // ── Spam (Claude-classified) → decline + hang up, NEVER transfer ─────────────
     if (decision.action === "spam") {
       if (supabase) await updateCallBySid(supabase, callSid, { outcome: "spam", spam_score: 0.9 });
+      recordSpamNumber(supabase, from, { reason: "AI-classified solicitation", clientId: client.id, callSid, score: 0.9 }).catch(() => {});
       return sendTwiml(res, buildHangupTwiml({ message: decision.speech || "Thanks, we're not interested. Goodbye.", voiceName }));
     }
 
@@ -1095,5 +1182,28 @@ export async function handlePortalUpdateVoiceConfig(req, res, supabase, resolveP
     return res.json({ agent });
   } catch (err) {
     return res.status(500).json({ error: err?.message || "voice config update failed" });
+  }
+}
+
+// GET /portal/api/voice/spam — shared spam-network summary + this client's blocked
+// call count. The blocklist itself is cross-client (everyone benefits).
+export async function handlePortalVoiceSpam(req, res, supabase, resolvePortalClientId) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+  try {
+    const recent = await listSpamNumbers(supabase, { limit: 20 });
+    let networkTotal = recent.length, networkBlocked = recent.filter(isBlockedCaller).length, clientBlocked = 0;
+    try {
+      const t = await supabase.from("spam_numbers").select("*", { count: "exact", head: true });
+      if (!t.error && typeof t.count === "number") networkTotal = t.count;
+      const b = await supabase.from("spam_numbers").select("*", { count: "exact", head: true }).eq("blocked", true);
+      if (!b.error && typeof b.count === "number") networkBlocked = b.count;
+      const c = await supabase.from("voice_calls").select("*", { count: "exact", head: true }).eq("client_id", clientId).eq("outcome", "spam");
+      if (!c.error && typeof c.count === "number") clientBlocked = c.count;
+    } catch { /* counts are best-effort */ }
+    return res.json({ networkTotal, networkBlocked, clientBlocked, recent });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || "spam summary failed" });
   }
 }

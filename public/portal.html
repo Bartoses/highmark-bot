@@ -1136,6 +1136,14 @@ tr:hover td { background: var(--panel2); }
           <div id="voiceHoursBox"><div class="loading">Loading…</div></div>
         </div>
 
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title">Spam screening</div>
+          <div class="form-hint" style="margin-bottom:12px;">
+            Solicitors and robocallers are screened out of the conversation and never reach your transfer line. Known offenders are blocked before the phone even answers — a shared network that gets smarter across every Highmark business.
+          </div>
+          <div id="voiceSpamBox"><div class="loading">Loading…</div></div>
+        </div>
+
         <div class="card">
           <div class="card-title">Recent calls</div>
           <div id="voiceCallsBox"><div class="loading">Loading…</div></div>
@@ -5841,7 +5849,27 @@ const VOICE_VOICES = [
 
 function loadVoiceSection() {
   loadVoiceConfig();
+  loadVoiceSpam();
   loadVoiceCalls();
+}
+
+async function loadVoiceSpam() {
+  const box = document.getElementById('voiceSpamBox');
+  if (!box) return;
+  const r = await apiFetch('/voice/spam');
+  if (!r) { box.innerHTML = `<div class="form-hint">Spam network not available yet.</div>`; return; }
+  const chip = (label, val) => `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;min-width:90px;">
+    <div style="font-size:18px;font-weight:700;">${val ?? 0}</div><div style="font-size:11px;color:var(--text2);">${label}</div></div>`;
+  const stats = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+    ${chip('Spam calls (you)', r.clientBlocked)}${chip('Blocked numbers', r.networkBlocked)}${chip('Network flagged', r.networkTotal)}</div>`;
+  const recent = (r.recent ?? []).filter(n => n.blocked).slice(0, 8);
+  const list = recent.length
+    ? `<div style="font-size:12px;color:var(--text2);margin-bottom:4px;">Recently blocked:</div>` +
+      recent.map(n => `<div style="font-size:13px;display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:5px 0;">
+        <span>${escHtml(formatPhone(n.phone_number))}</span>
+        <span style="color:var(--text2);">${escHtml(n.reason || 'spam')} · ${n.reports}×</span></div>`).join('')
+    : `<div class="form-hint">No blocked numbers yet.</div>`;
+  box.innerHTML = stats + list;
 }
 
 async function loadVoiceConfig() {
