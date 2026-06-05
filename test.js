@@ -16998,6 +16998,14 @@ async function testVoiceAI() {
   chk("voice: DEFAULT_VOICE_AGENT enabled + threshold 0.70",
     DEFAULT_VOICE_AGENT.enabled === true && DEFAULT_VOICE_AGENT.transferThreshold === 0.70);
 
+  // ── TTS voice (neural, configurable) ──────────────────────────────────────────────
+  const { VOICE_TTS, VOICE_OPTIONS } = await import("./voice.js");
+  chk("voice: default TTS is a neural voice", typeof VOICE_TTS === "string" && /-Neural$/.test(VOICE_TTS));
+  chk("voice: agent voice overrides default", buildVoiceAgentConfig({}, { voice: "Polly.Matthew-Neural" }).voiceName === "Polly.Matthew-Neural");
+  chk("voice: VOICE_OPTIONS lists neural voices", Array.isArray(VOICE_OPTIONS) && VOICE_OPTIONS.length >= 3 && VOICE_OPTIONS.every((v) => /-Neural$/.test(v.id)));
+  chk("voice: validate accepts known voice", validateVoiceConfigInput({ voice: "Polly.Ruth-Neural" }).values.voice === "Polly.Ruth-Neural");
+  chk("voice: validate rejects unknown voice", validateVoiceConfigInput({ voice: "Robot9000" }).errors.length === 1);
+
   // ── escapeXml ─────────────────────────────────────────────────────────────────
   chk("voice: escapeXml escapes & < > \" '",
     escapeXml(`a&b<c>d"e'f`) === "a&amp;b&lt;c&gt;d&quot;e&apos;f", escapeXml(`a&b<c>d"e'f`));
