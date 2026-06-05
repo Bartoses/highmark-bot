@@ -5831,6 +5831,13 @@ function addOperatorPhoneRow(value = '') {
 
 // ─── Voice AI tab (config + business hours + call log) ────────────────────────
 const VOICE_DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const VOICE_VOICES = [
+  { id: 'Polly.Joanna-Neural',   label: 'Joanna — warm female (US)' },
+  { id: 'Polly.Danielle-Neural', label: 'Danielle — natural female (US)' },
+  { id: 'Polly.Ruth-Neural',     label: 'Ruth — friendly female (US)' },
+  { id: 'Polly.Matthew-Neural',  label: 'Matthew — warm male (US)' },
+  { id: 'Polly.Stephen-Neural',  label: 'Stephen — natural male (US)' },
+];
 
 function loadVoiceSection() {
   loadVoiceConfig();
@@ -5861,6 +5868,13 @@ async function loadVoiceConfig() {
       <label>Call forwarding number</label>
       <input type="text" class="form-input" id="voiceForwarding" value="${escHtml(fwd)}" placeholder="+17202892483">
       <div class="form-hint">Where calls transfer when a caller asks for a person (during business hours). Use E.164 format, e.g. +17202892483.</div>
+    </div>
+    <div class="form-group">
+      <label>Voice</label>
+      <select class="form-input" id="voiceVoice">
+        ${VOICE_VOICES.map(v => `<option value="${v.id}" ${(agent.voice || 'Polly.Joanna-Neural') === v.id ? 'selected' : ''}>${v.label}</option>`).join('')}
+      </select>
+      <div class="form-hint">Natural-sounding neural voices.</div>
     </div>
     <div class="form-group">
       <label>Greeting <span style="color:var(--text2);font-weight:400;">(optional)</span></label>
@@ -5917,6 +5931,7 @@ async function saveVoiceConfig() {
   const body = {
     ai_enabled: document.getElementById('voiceAiEnabled')?.checked ?? false,
     forwarding_number: fwd,
+    voice: document.getElementById('voiceVoice')?.value ?? '',
     welcome_prompt: document.getElementById('voiceGreeting')?.value ?? '',
     business_hours: collectVoiceHours(),
   };

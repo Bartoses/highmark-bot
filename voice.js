@@ -42,6 +42,7 @@ export const DEFAULT_VOICE_AGENT = {
   businessHours:      null, // null = always open (always offer transfer if number set)
   spamAggressiveness: "medium",
   aiEnabled:          false, // Phase 2: conversational AI receptionist (false = Phase 1 forward/voicemail)
+  voiceName:          "Polly.Joanna-Neural", // Twilio TTS voice
   enabled:            true,
 };
 
@@ -49,8 +50,19 @@ export const DEFAULT_VOICE_AGENT = {
 // thinks, so responsiveness beats raw capability for a phone receptionist.
 export const VOICE_AI_MODEL = "claude-haiku-4-5-20251001";
 
-// Twilio TTS voice (Amazon Polly neural). Centralized so every <Say> matches.
-export const VOICE_TTS = "Polly.Joanna";
+// Twilio TTS voice. Amazon Polly NEURAL voices sound far more human than the
+// standard ones. Per-agent override lives in voice_agents.voice.
+export const VOICE_TTS = "Polly.Joanna-Neural";
+
+// Natural-sounding neural voices offered in the portal picker.
+export const VOICE_OPTIONS = [
+  { id: "Polly.Joanna-Neural",   label: "Joanna — warm female (US)" },
+  { id: "Polly.Danielle-Neural", label: "Danielle — natural female (US)" },
+  { id: "Polly.Ruth-Neural",     label: "Ruth — friendly female (US)" },
+  { id: "Polly.Matthew-Neural",  label: "Matthew — warm male (US)" },
+  { id: "Polly.Stephen-Neural",  label: "Stephen — natural male (US)" },
+];
+const VOICE_OPTION_IDS = VOICE_OPTIONS.map((v) => v.id);
 
 // ── escapeXml ─────────────────────────────────────────────────────────────────
 // TwiML is XML; any business name / greeting that contains & < > " ' must be
@@ -93,6 +105,7 @@ export function buildVoiceAgentConfig(client = {}, agentRow = null, numberRow = 
     if (agentRow.business_hours && Object.keys(agentRow.business_hours).length)
       cfg.businessHours = agentRow.business_hours;
     if (agentRow.spam_aggressiveness) cfg.spamAggressiveness = agentRow.spam_aggressiveness;
+    if (agentRow.voice) cfg.voiceName = agentRow.voice;
     if (typeof agentRow.ai_enabled === "boolean") cfg.aiEnabled = agentRow.ai_enabled;
     if (typeof agentRow.enabled === "boolean") cfg.enabled = agentRow.enabled;
   }
@@ -163,7 +176,7 @@ export function buildIncomingTwiml({
   greeting,
   forwardingNumber = null,
   withinHours = true,
-  voiceName = "Polly.Joanna",
+  voiceName = VOICE_TTS,
   recordingCallback = "",
   statusCallback = "",
   voicemailAction = "",
@@ -191,7 +204,7 @@ export function buildIncomingTwiml({
   return twiml(say + buildVoicemailInner({ recordingCallback, voicemailAction, prompt: voicemailPrompt, voiceName }));
 }
 
-function buildVoicemailInner({ recordingCallback = "", voicemailAction = "", prompt = "", voiceName = "Polly.Joanna" }) {
+function buildVoicemailInner({ recordingCallback = "", voicemailAction = "", prompt = "", voiceName = VOICE_TTS }) {
   const recAttrs = [
     `maxLength="120"`,
     `playBeep="true"`,
@@ -203,12 +216,12 @@ function buildVoicemailInner({ recordingCallback = "", voicemailAction = "", pro
 }
 
 // Standalone voicemail document (used by the voicemail action route if needed).
-export function buildVoicemailTwiml({ message = "Thanks — goodbye.", voiceName = "Polly.Joanna" } = {}) {
+export function buildVoicemailTwiml({ message = "Thanks — goodbye.", voiceName = VOICE_TTS } = {}) {
   return twiml(`<Say voice="${escapeXml(voiceName)}">${escapeXml(message)}</Say><Hangup/>`);
 }
 
 // Polite hangup (e.g. high-confidence spam in Phase 4).
-export function buildHangupTwiml({ message = "Thanks for calling. Goodbye.", voiceName = "Polly.Joanna" } = {}) {
+export function buildHangupTwiml({ message = "Thanks for calling. Goodbye.", voiceName = VOICE_TTS } = {}) {
   return twiml(`<Say voice="${escapeXml(voiceName)}">${escapeXml(message)}</Say><Hangup/>`);
 }
 
@@ -410,7 +423,7 @@ export function buildTranscript(turns = []) {
 // mark it cache_control: ephemeral via a raw API call — a cache hit on turns 2+ cuts
 // input-token cost ~90% and shaves latency. Falls back to the SDK on any failure.
 export async function generateVoiceReply({ anthropic, system, turns, model = VOICE_AI_MODEL }) {
-  const maxTokens = 160;
+  const maxTokens = 120; // spoken replies are short; fewer tokens = faster generation
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
   // Preferred path: raw fetch with prompt caching on the system block.
@@ -643,11 +656,13 @@ export async function handleVoiceIncoming(req, res, deps = {}) {
         claimCall(supabase, {
           callSid, clientId: client.id, from, to, direction: "inbound",
           metadata: { ai: true, turns: [], no_input: 0, client_id: client.id,
-                      fwd: cfg.forwardingNumber || null, within_hours: withinHours, season },
+                      fwd: cfg.forwardingNumber || null, within_hours: withinHours, season,
+                      voice: cfg.voiceName || null },
         }).catch(() => {});
       }
       return sendTwiml(res, buildGatherTwiml({
         say:         buildGreeting(cfg, client),
+        voiceName:   cfg.voiceName,
         action:      absUrl(baseUrl, "/voice/respond"),
         speechHints: buildSpeechHints(client),
       }));
@@ -715,6 +730,7 @@ export async function handleVoiceRespond(req, res, deps = {}) {
       if (withinHours === undefined) { withinHours = isWithinBusinessHours(c2.businessHours); meta.within_hours = withinHours; }
     }
     const season = meta.season ?? resolveVoiceSeason(client);
+    const voiceName = meta.voice || VOICE_TTS;
     const cfg = { forwardingNumber: fwd };
     // Only transfer to a human when we have a dialable target AND we're open.
     const canTransfer = isE164(fwd) && withinHours !== false;
@@ -726,15 +742,16 @@ export async function handleVoiceRespond(req, res, deps = {}) {
         if (supabase) await updateCallBySid(supabase, callSid, { metadata: meta });
         if (canTransfer) {
           return sendTwiml(res, twiml(
-            `<Say voice="${VOICE_TTS}">No problem — let me connect you with our team. One moment.</Say>` +
+            `<Say voice="${voiceName}">No problem — let me connect you with our team. One moment.</Say>` +
             `<Dial action="${escapeXml(absUrl(baseUrl, "/voice/status"))}" timeout="25">${escapeXml(cfg.forwardingNumber)}</Dial>`
           ));
         }
-        return sendTwiml(res, buildVoicemailTwiml({ message: "I didn't catch that. Please call back anytime — goodbye!" }));
+        return sendTwiml(res, buildVoicemailTwiml({ message: "I didn't catch that. Please call back anytime — goodbye!", voiceName }));
       }
       if (supabase) await updateCallBySid(supabase, callSid, { metadata: meta });
       return sendTwiml(res, buildGatherTwiml({
         say: "Sorry, I didn't catch that. What can I help you with?",
+        voiceName,
         action: absUrl(baseUrl, "/voice/respond"),
         speechHints: hints(client),
       }));
@@ -750,7 +767,7 @@ export async function handleVoiceRespond(req, res, deps = {}) {
       if (supabase) await updateCallBySid(supabase, callSid, {
         transcript: buildTranscript(meta.turns), metadata: meta, outcome: "spam", spam_score: 0.95,
       });
-      return sendTwiml(res, buildHangupTwiml({ message: "Thanks, we're not interested. Goodbye." }));
+      return sendTwiml(res, buildHangupTwiml({ message: "Thanks, we're not interested. Goodbye.", voiceName }));
     }
 
     // Cache the knowledge base on the row after the first fetch (saves latency).
@@ -778,7 +795,7 @@ export async function handleVoiceRespond(req, res, deps = {}) {
     // ── Spam (Claude-classified) → decline + hang up, NEVER transfer ─────────────
     if (decision.action === "spam") {
       if (supabase) await updateCallBySid(supabase, callSid, { outcome: "spam", spam_score: 0.9 });
-      return sendTwiml(res, buildHangupTwiml({ message: decision.speech || "Thanks, we're not interested. Goodbye." }));
+      return sendTwiml(res, buildHangupTwiml({ message: decision.speech || "Thanks, we're not interested. Goodbye.", voiceName }));
     }
 
     // ── Transfer to a human ──────────────────────────────────────────────────────
@@ -786,27 +803,28 @@ export async function handleVoiceRespond(req, res, deps = {}) {
       if (canTransfer) {
         if (supabase) await updateCallBySid(supabase, callSid, { outcome: "transferred" });
         return sendTwiml(res, twiml(
-          `<Say voice="${VOICE_TTS}">${escapeXml(decision.speech || "Let me connect you with our team. One moment.")}</Say>` +
+          `<Say voice="${voiceName}">${escapeXml(decision.speech || "Let me connect you with our team. One moment.")}</Say>` +
           `<Dial action="${escapeXml(absUrl(baseUrl, "/voice/status"))}" timeout="25">${escapeXml(cfg.forwardingNumber)}</Dial>` +
-          `<Say voice="${VOICE_TTS}">Sorry, no one is available right now. Please leave a message after the tone.</Say>` +
+          `<Say voice="${voiceName}">Sorry, no one is available right now. Please leave a message after the tone.</Say>` +
           `<Record maxLength="120" playBeep="true" trim="trim-silence" action="${escapeXml(absUrl(baseUrl, "/voice/status"))}" recordingStatusCallback="${escapeXml(absUrl(baseUrl, "/voice/recording"))}"/><Hangup/>`
         ));
       }
       // No live agent → take a voicemail instead.
       return sendTwiml(res, twiml(
-        `<Say voice="${VOICE_TTS}">${escapeXml(decision.speech || "I'll have our team follow up.")} Please leave your name, number, and message after the tone.</Say>` +
+        `<Say voice="${voiceName}">${escapeXml(decision.speech || "I'll have our team follow up.")} Please leave your name, number, and message after the tone.</Say>` +
         `<Record maxLength="120" playBeep="true" trim="trim-silence" action="${escapeXml(absUrl(baseUrl, "/voice/status"))}" recordingStatusCallback="${escapeXml(absUrl(baseUrl, "/voice/recording"))}"/><Hangup/>`
       ));
     }
 
     // ── Caller is done ───────────────────────────────────────────────────────────
     if (decision.action === "end") {
-      return sendTwiml(res, buildHangupTwiml({ message: decision.speech || "Thanks for calling. Goodbye!" }));
+      return sendTwiml(res, buildHangupTwiml({ message: decision.speech || "Thanks for calling. Goodbye!", voiceName }));
     }
 
     // ── Keep the conversation going ──────────────────────────────────────────────
     return sendTwiml(res, buildGatherTwiml({
       say: decision.speech,
+      voiceName,
       action: absUrl(baseUrl, "/voice/respond"),
       speechHints: hints(client),
     }));
@@ -982,6 +1000,11 @@ export function validateVoiceConfigInput(body = {}) {
     values.welcome_prompt = String(body.welcome_prompt || "").trim().slice(0, 600) || null;
   }
   if (body.name !== undefined) values.name = String(body.name || "").trim().slice(0, 80) || "Receptionist";
+  if (body.voice !== undefined) {
+    const v = String(body.voice || "").trim();
+    if (v && !VOICE_OPTION_IDS.includes(v)) errors.push("Unknown voice");
+    else if (v) values.voice = v;
+  }
   if (body.business_hours !== undefined) {
     const bh = normalizeBusinessHoursInput(body.business_hours);
     if (bh.error) errors.push(bh.error);
