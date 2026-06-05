@@ -186,6 +186,25 @@ Done when:
 
 ## COMPLETED SPRINTS
 
+### Voice AI — Phase 4: Shared Spam Network + Pre-Answer Block (2026-06-05)
+- spam_numbers (DB1, cross-client): a solicitor flagged on any client's call is
+  remembered network-wide. recordSpamNumber upserts/raises score+reports and sets
+  blocked once score>=0.9 or reports>=2. Fed by both spam paths (deterministic
+  detectSpamSignals + Claude [SPAM]).
+- Pre-answer robocall block: handleVoiceIncoming checks the caller FIRST;
+  isBlockedCaller -> buildRejectTwiml (<Reject/>) rejects before answering — no
+  greeting, no AI, no human, ~no cost. One indexed DB read per call.
+- Portal: GET /portal/api/voice/spam + "Spam screening" card in the Voice AI tab
+  (network totals, this client's blocked-call count, recently blocked numbers).
+- Default TTS voice switched to Polly.Danielle-Neural (warmer/newer); per-agent
+  picker unchanged.
+- Migration db1_voice_spam.sql applied. Tests: isBlockedCaller, buildRejectTwiml,
+  thresholds, spam route guards.
+- COME BACK TO: Twilio Media Streams real-time speech-to-speech upgrade — the true
+  fix for per-turn latency (current ~1-2s gap is mostly Twilio speech endpointing),
+  behind the same /voice/* routes. Pre-answer Twilio Lookup (line-type/CNAM) for
+  UNKNOWN numbers is a future paid add-on; the shared blocklist covers repeat offenders.
+
 ### Voice AI — Phase 3: Hours, Seasons, Missed-Call Recovery + Voice AI tab (2026-06-04)
 - Business hours honored: withinHours computed at answer time + cached on the call;
   the receptionist only transfers to a human during open hours — outside them it

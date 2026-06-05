@@ -79,7 +79,7 @@ import { sendOperatorBriefing, buildOperatorApiData } from "./operatorBriefing.j
 import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
-import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls, handlePortalVoiceConfig, handlePortalUpdateVoiceConfig } from "./voice.js";
+import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls, handlePortalVoiceConfig, handlePortalUpdateVoiceConfig, handlePortalVoiceSpam } from "./voice.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1861,6 +1861,7 @@ app.delete("/portal/api/partners/:id",           requirePortalAuth, (req, res) =
 app.get(   "/portal/api/voice/calls",              requirePortalAuth, (req, res) => handlePortalVoiceCalls(req, res, supabase, resolvePortalClientId));
 app.get(   "/portal/api/voice/config",             requirePortalAuth, (req, res) => handlePortalVoiceConfig(req, res, supabase, resolvePortalClientId));
 app.patch( "/portal/api/voice/config",             requirePortalAuth, (req, res) => handlePortalUpdateVoiceConfig(req, res, supabase, resolvePortalClientId));
+app.get(   "/portal/api/voice/spam",               requirePortalAuth, (req, res) => handlePortalVoiceSpam(req, res, supabase, resolvePortalClientId));
 
 // ── Operator phones (Sprint C) ─────────────────────────────────────────────
 app.get(   "/portal/api/operator-phones",          requirePortalAuth, (req, res) => handlePortalOperatorPhones(req, res, supabase));

@@ -16990,6 +16990,12 @@ async function testVoiceAI() {
     resolveVoiceSeason,
     buildMissedCallSms,
     normalizeBusinessHoursInput,
+    // Phase 4 — shared spam network + pre-answer block
+    isBlockedCaller,
+    buildRejectTwiml,
+    SPAM_BLOCK_SCORE,
+    SPAM_BLOCK_REPORTS,
+    handlePortalVoiceSpam,
   } = await import("./voice.js");
 
   // ── Constants ───────────────────────────────────────────────────────────────
@@ -17191,6 +17197,25 @@ async function testVoiceAI() {
   chk("voice3: validate accepts business_hours",
     validateVoiceConfigInput({ business_hours: { hours: { "1": { open: "09:00", close: "17:00" } } } }).errors.length === 0);
 
+  // ── Phase 4: shared spam network + pre-answer block ────────────────────────────────
+  chk("voice4: thresholds", SPAM_BLOCK_SCORE === 0.9 && SPAM_BLOCK_REPORTS === 2);
+  chk("voice4: isBlockedCaller honors blocked flag", isBlockedCaller({ blocked: true }) === true);
+  chk("voice4: isBlockedCaller blocks by score", isBlockedCaller({ score: 0.95, reports: 1 }) === true);
+  chk("voice4: isBlockedCaller blocks by reports", isBlockedCaller({ score: 0.5, reports: 2 }) === true);
+  chk("voice4: isBlockedCaller passes a clean caller", isBlockedCaller({ score: 0.5, reports: 1 }) === false);
+  chk("voice4: isBlockedCaller(null) is false", isBlockedCaller(null) === false);
+  chk("voice4: buildRejectTwiml is a Reject doc", buildRejectTwiml().startsWith("<?xml") && buildRejectTwiml().includes("<Reject"));
+  {
+    const res = mockResV();
+    await handlePortalVoiceSpam({ query: {} }, res, null, () => "csr_rea");
+    chk("voice4: GET spam → 503 when supabase missing", res.statusCode === 503);
+  }
+  {
+    const res = mockResV();
+    await handlePortalVoiceSpam({ query: {} }, res, {}, () => null);
+    chk("voice4: GET spam → 400 when client_id missing", res.statusCode === 400);
+  }
+
   // ── handlePortalVoiceConfig / Update — guards (no HTTP / DB) ────────────────────────
   function mockResV() {
     const r = { statusCode: 200, body: null };
@@ -17241,6 +17266,10 @@ async function testVoiceAI() {
   {
     const res = await httpGet("/portal/api/voice/config");
     chk("voice2: GET /portal/api/voice/config → 401 without token", res.status === 401, `status=${res.status}`);
+  }
+  {
+    const res = await httpGet("/portal/api/voice/spam");
+    chk("voice4: GET /portal/api/voice/spam → 401 without token", res.status === 401, `status=${res.status}`);
   }
 }
 
