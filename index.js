@@ -80,7 +80,7 @@ import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
 import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls, handlePortalVoiceConfig, handlePortalUpdateVoiceConfig, handlePortalVoiceSpam } from "./voice.js";
-import { incrWithTtl, storeMode } from "./sharedStore.js";
+import { incrWithTtl, storeMode, storeHealth } from "./sharedStore.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -2149,10 +2149,12 @@ function escHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[c]);
 }
 
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
   if (req.headers.accept?.includes("text/html")) return res.sendFile(path.join(__uiDir, "home.html"));
   const toPhone    = process.env.TWILIO_PHONE_NUMBER || "+18668906657";
   const hcClient   = resolveClient(toPhone);
+  // Default `store` is the cheap cached mode (routine Railway healthchecks hit this
+  // path). `?deep=1` performs a real Upstash round-trip → "redis" | "redis-unreachable".
   res.json({
     status:             "Highmark running ✅",
     version:            "1.0.0",
@@ -2163,7 +2165,7 @@ app.get("/", (req, res) => {
     booking_mode:       hcClient.bookingMode,
     phone:              toPhone,
     uptime_seconds:     Math.floor(process.uptime()),
-    store:              storeMode(),
+    store:              req.query.deep ? await storeHealth() : storeMode(),
   });
 });
 

@@ -106,5 +106,20 @@ export async function cacheSet(key, value, ttlSec) {
 // "redis" once Upstash is initialized, else "memory". For health/observability.
 export function storeMode() { return resolvedMode; }
 
+// Live backend health with a real round-trip. The Upstash REST client constructor
+// does NOT validate credentials (REST is per-request), so storeMode() alone can
+// report "redis" while the connection is actually broken. This performs an actual
+// GET so the answer is honest: "memory" | "redis" | "redis-unreachable".
+export async function storeHealth() {
+  const r = await getRedis();
+  if (!r) return "memory";
+  try {
+    await r.get("__healthcheck__");
+    return "redis";
+  } catch {
+    return "redis-unreachable";
+  }
+}
+
 // Test-only: reset the in-memory fallback between cases.
 export function __resetMemoryStore() { mem.clear(); }
