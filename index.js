@@ -2166,6 +2166,11 @@ app.get("/", async (req, res) => {
     phone:              toPhone,
     uptime_seconds:     Math.floor(process.uptime()),
     store:              req.query.deep ? await storeHealth() : storeMode(),
+    // ?deep=1 only: booleans (never values) to diagnose Upstash wiring.
+    ...(req.query.deep ? {
+      upstash_url_set:   !!process.env.UPSTASH_REDIS_REST_URL,
+      upstash_token_set: !!process.env.UPSTASH_REDIS_REST_TOKEN,
+    } : {}),
   });
 });
 
