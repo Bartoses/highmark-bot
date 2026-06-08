@@ -225,9 +225,21 @@ segment (most robust), `?token=`, or `x-webhook-secret` header; forged requests 
 - `secretsMatch` (constant-time) + `evaluateFareharborWebhook` (pure) are unit-tested.
 
 ### Rate Limiting
-- **IP limiter** — 30 req/min per IP (express-rate-limit)
-- **Phone limiter** — 10 msg/min per phone number (in-memory Map; per-instance — see audit P0-5)
+- **IP limiter** — 30 req/min per IP (express-rate-limit, in-memory; coarse bot filter,
+  acceptable per-instance)
+- **Phone limiter** — 10 msg/min per phone number, backed by the **shared store** (P0-5):
+  Upstash Redis when configured, in-memory otherwise. Holds correctly across multiple web
+  instances; fail-open on store error.
 Both return `<Response></Response>` TwiML on 429.
+
+### Shared Store (sharedStore.js — P0-5)
+KV abstraction so rate-limit counters + the daily-summary cache work across web instances.
+Backends: **Upstash Redis (REST)** when `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`
+are set; **in-memory** (TTL Map) otherwise — identical to prior behavior, so deploying before
+provisioning Upstash is zero-risk. `@upstash/redis` is lazy-imported only when configured.
+API: `incrWithTtl(key, ttlSec)` (atomic fixed-window counter), `cacheGet/cacheSet(key,val,ttlSec)`,
+`storeMode()` (surfaced in `GET /` health as `store`). Set the two env vars on BOTH the web
+and cron services for full cross-process sharing. AI-insights cache is already DB-backed (shared).
 
 ### Conversation Store
 Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_number):

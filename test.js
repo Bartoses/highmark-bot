@@ -12927,6 +12927,27 @@ async function testP0Hardening() {
   chk("p0-4: 'unique' message → duplicate", classifyClaimResult({ message: "unique constraint" }) === "duplicate");
   chk("p0-4: other DB error → error (fail-open / process)",
       classifyClaimResult({ code: "08006", message: "connection refused" }) === "error");
+
+  // ── P0-5: shared store (memory-mode fallback, no Upstash env) ───────────
+  const { incrWithTtl, cacheGet, cacheSet, storeMode, __resetMemoryStore } = await import("./sharedStore.js");
+  __resetMemoryStore();
+  chk("p0-5: storeMode is 'memory' without Upstash env", storeMode() === "memory");
+  chk("p0-5: incrWithTtl first hit → 1", (await incrWithTtl("rl:test:a", 60)) === 1);
+  chk("p0-5: incrWithTtl increments → 2", (await incrWithTtl("rl:test:a", 60)) === 2);
+  chk("p0-5: separate key independent → 1", (await incrWithTtl("rl:test:b", 60)) === 1);
+  chk("p0-5: rate-limit threshold reached at 11th hit", await (async () => {
+    __resetMemoryStore();
+    let last = 0;
+    for (let i = 0; i < 11; i++) last = await incrWithTtl("rl:test:c", 60);
+    return last === 11 && last > 10; // 11th message exceeds the 10/min limit
+  })());
+  await cacheSet("c:obj", { headline: "hi", n: 3 }, 60);
+  chk("p0-5: cacheGet returns stored object", await (async () => {
+    const v = await cacheGet("c:obj"); return v && v.headline === "hi" && v.n === 3;
+  })());
+  chk("p0-5: cacheGet missing key → null", (await cacheGet("c:nope")) === null);
+  __resetMemoryStore();
+  chk("p0-5: reset clears the store", (await cacheGet("c:obj")) === null);
 }
 await testP0Hardening();
 

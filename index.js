@@ -80,6 +80,7 @@ import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
 import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls, handlePortalVoiceConfig, handlePortalUpdateVoiceConfig, handlePortalVoiceSpam } from "./voice.js";
+import { incrWithTtl, storeMode } from "./sharedStore.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -105,34 +106,28 @@ const ipLimiter = rateLimit({
   },
 });
 
-// Per-phone limiter: 10 messages / minute per phone number
-const phoneWindows = new Map(); // phone -> { count, resetAt }
-function phoneRateLimit(req, res, next) {
+// Per-phone limiter: 10 messages / minute per phone number.
+// P0-5: backed by the shared store (Upstash when configured, in-memory otherwise)
+// so the limit holds across multiple web instances instead of being N× looser.
+// Fail-open: a store error must never block a legitimate guest.
+const PHONE_RATE_MAX = 10;
+const PHONE_RATE_WINDOW_SEC = 60;
+async function phoneRateLimit(req, res, next) {
   if (isUiReq(req)) return next(); // UI requests skip phone rate limit
   const phone = req.body?.From;
   if (!phone) return next();
-  const now = Date.now();
-  const window = phoneWindows.get(phone);
-  if (!window || now > window.resetAt) {
-    phoneWindows.set(phone, { count: 1, resetAt: now + 60 * 1000 });
-    return next();
+  try {
+    const count = await incrWithTtl(`rl:phone:${phone}`, PHONE_RATE_WINDOW_SEC);
+    if (count > PHONE_RATE_MAX) {
+      console.warn(`[RATE] Phone throttled: ${phone}`);
+      res.set("Content-Type", "text/xml");
+      return res.status(429).send("<Response></Response>");
+    }
+  } catch (err) {
+    console.error("[RATE] phone limiter store error (allowing):", err.message);
   }
-  if (window.count >= 10) {
-    console.warn(`[RATE] Phone throttled: ${phone}`);
-    res.set("Content-Type", "text/xml");
-    return res.status(429).send("<Response></Response>");
-  }
-  window.count++;
   next();
 }
-
-// Prune stale phone windows every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [phone, w] of phoneWindows) {
-    if (now > w.resetAt) phoneWindows.delete(phone);
-  }
-}, 5 * 60 * 1000);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL UI AUTH
@@ -2168,6 +2163,7 @@ app.get("/", (req, res) => {
     booking_mode:       hcClient.bookingMode,
     phone:              toPhone,
     uptime_seconds:     Math.floor(process.uptime()),
+    store:              storeMode(),
   });
 });
 
