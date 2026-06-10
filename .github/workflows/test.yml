@@ -65,5 +65,13 @@ jobs:
 
       - run: npm ci
 
+      - name: Debug secret shapes (safe — lengths + edges only)
+        run: |
+          echo "TWILIO_ACCOUNT_SID len=${#TWILIO_ACCOUNT_SID} edges=${TWILIO_ACCOUNT_SID:0:2}..${TWILIO_ACCOUNT_SID: -2}"
+          echo "TWILIO_AUTH_TOKEN   len=${#TWILIO_AUTH_TOKEN}"
+          echo "ANTHROPIC_API_KEY   len=${#ANTHROPIC_API_KEY} edges=${ANTHROPIC_API_KEY:0:3}"
+          echo "SUPABASE_URL        len=${#SUPABASE_URL} edges=${SUPABASE_URL:0:8}"
+          echo "SUPABASE_KEY        len=${#SUPABASE_KEY} edges=${SUPABASE_KEY:0:3}"
+
       - name: Run test suite
         run: npm test
