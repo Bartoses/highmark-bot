@@ -20,6 +20,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Serialize runs — tests share live DB rows + fixed test phone numbers, so two
 # concurrent suites would race each other.
