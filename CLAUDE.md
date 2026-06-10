@@ -20,9 +20,22 @@ Before starting any new feature or task, read the `Roadmap` file in this directo
 1. **Read the Roadmap** — check `Roadmap` to confirm the task aligns with current priorities
 2. **Write tests** — add or update test cases covering the change
 3. **Test locally** — run the full test suite and verify all scenarios pass
-4. **Deploy** — commit and push to GitHub; Railway auto-deploys from `main`
+4. **Deploy** — commit and push to GitHub; Railway auto-deploys from `main`. CI
+   (`.github/workflows/test.yml`) runs the full suite on every push/PR — keep it green.
 5. **End-to-end verify** — run the Railway health check and confirm the deploy is live
 6. **Update docs** — update CLAUDE.md, README.md, Roadmap, and memory files to reflect the change
+
+### CI (GitHub Actions — added 2026-06-10)
+`.github/workflows/test.yml` runs `npm test` (full 2,615-case suite) on every push + PR.
+It's a real integration run (spawns the server in TEST_MODE, hits live Supabase DB1/DB2 +
+Anthropic), serialized via a concurrency group since tests share live rows + fixed test
+phone numbers. Required repo secrets + non-secret env (FAREHARBOR_ENABLED=true,
+CONFIRMATIONS_ENABLED=false, CLIENT_ID/NAME/PHONE, PERF_BUDGET_MULTIPLIER=3, TZ=America/Denver)
+are in the workflow header. Set secrets with `gh secret set NAME` reading **stdin** — NOT
+`--body -` (that stores the literal string "-"). Local gh uses
+`GH_CONFIG_DIR=/Users/sbartosewcz/.gh-config` (~/.config is root-owned).
+**TODO:** enable Railway "Wait for CI" to block deploys on red (pending a GitHub API incident
+when first attempted; revisit). Until then CI is advisory.
 
 ---
 
