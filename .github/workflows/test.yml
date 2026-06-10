@@ -52,6 +52,10 @@ jobs:
       FAREHARBOR_ENABLED:    "true"
       CONFIRMATIONS_ENABLED: "false"
       CLIENT_ID:             "csr_rea"
+      # Non-sensitive display values (test1 asserts presence). Mirror .env.
+      CLIENT_NAME:  "Colorado Sled Rentals & Rabbit Ears Adventures"
+      CLIENT_PHONE: "(970) 439-1707"
+      HANDOFF_PHONE: "(970) 439-1707"
       # Relax wall-clock perf assertions 3× on shared runners (still catches real
       # regressions; prevents network-latency flakes from blocking deploys).
       PERF_BUDGET_MULTIPLIER: "3"
