@@ -59,6 +59,9 @@ jobs:
       # Relax wall-clock perf assertions 3× on shared runners (still catches real
       # regressions; prevents network-latency flakes from blocking deploys).
       PERF_BUDGET_MULTIPLIER: "3"
+      # The app formats all operator times in America/Denver; GitHub runners default
+      # to UTC. Pin the runner TZ to Denver so date/hour assertions match local + prod.
+      TZ: "America/Denver"
     steps:
       - uses: actions/checkout@v4
 
