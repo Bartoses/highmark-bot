@@ -1,0 +1,68 @@
+# CI gate — runs the full automated suite on every push + PR.
+#
+# The suite (test.js) is a true integration run: it spawns the server in TEST_MODE
+# on port 3099 and talks to the REAL Supabase DB1/DB2 + Anthropic — same as a local
+# `npm test`. Test data is tagged session_type='test' and cleaned up by the suite.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER,
+#   ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_KEY, SUPABASE_ANON_KEY,
+#   CRM_SUPABASE_URL, CRM_SUPABASE_KEY, OPENWEATHER_API_KEY,
+#   FAREHARBOR_APP_KEY, FAREHARBOR_USER_KEY_CSR, FAREHARBOR_USER_KEY_REA
+#
+# Deploy gating: in Railway → service → Settings → enable "Wait for CI" so deploys
+# from main only start after this workflow is green. Do that AFTER the first green
+# run, or deploys will block on missing secrets.
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Serialize runs — tests share live DB rows + fixed test phone numbers, so two
+# concurrent suites would race each other.
+concurrency:
+  group: test-suite
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TWILIO_ACCOUNT_SID:  ${{ secrets.TWILIO_ACCOUNT_SID }}
+      TWILIO_AUTH_TOKEN:   ${{ secrets.TWILIO_AUTH_TOKEN }}
+      TWILIO_PHONE_NUMBER: ${{ secrets.TWILIO_PHONE_NUMBER }}
+      ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+      SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY:        ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_ANON_KEY:   ${{ secrets.SUPABASE_ANON_KEY }}
+      CRM_SUPABASE_URL:    ${{ secrets.CRM_SUPABASE_URL }}
+      CRM_SUPABASE_KEY:    ${{ secrets.CRM_SUPABASE_KEY }}
+      OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+      FAREHARBOR_APP_KEY:      ${{ secrets.FAREHARBOR_APP_KEY }}
+      FAREHARBOR_USER_KEY_CSR: ${{ secrets.FAREHARBOR_USER_KEY_CSR }}
+      FAREHARBOR_USER_KEY_REA: ${{ secrets.FAREHARBOR_USER_KEY_REA }}
+      # Non-secret toggles — mirror the green local run. FAREHARBOR_ENABLED must be
+      # true (test53/test54 assert the FH config endpoint). Twilio sends are skipped
+      # in TEST_MODE; CONFIRMATIONS_ENABLED stays off so no guest texts can fire.
+      FAREHARBOR_ENABLED:    "true"
+      CONFIRMATIONS_ENABLED: "false"
+      CLIENT_ID:             "csr_rea"
+      # Relax wall-clock perf assertions 3× on shared runners (still catches real
+      # regressions; prevents network-latency flakes from blocking deploys).
+      PERF_BUDGET_MULTIPLIER: "3"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run test suite
+        run: npm test
