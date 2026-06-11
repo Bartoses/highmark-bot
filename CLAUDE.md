@@ -94,7 +94,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied)
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied)
 
 ---
 
@@ -264,9 +264,28 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
   handoff:                false,
   consecutive_frustrated: 0,
   session_type:           "live" | "test",
-  client_id:              "csr_rea"
+  client_id:              "csr_rea",
+  lock_version:           0   // P1-1 optimistic-concurrency counter (see below)
 }
 ```
+
+**P1-1 — optimistic concurrency (saveConversation, index.js).** `getConversation`
+(select *) → mutate → `saveConversation` is a read-modify-write; two concurrent inbound
+messages from the same phone (or a Twilio retry that slips past the MessageSid claim) both
+load the same base row and a full-row upsert would last-write-wins, clobbering a turn.
+`saveConversation` now does a **compare-and-swap on `lock_version`**: `UPDATE … WHERE
+from_number AND to_number AND lock_version = <read value>` SET … `lock_version+1`. On a lost
+race (0 rows updated) it reloads the winner's row, **merges this turn's new messages** onto
+the winner's latest history (`diffNewMessages` by object identity — survives the `slice(-10)`
+truncation; `mergeConversationMessages` bounded to 20), and retries (up to 6×, one per
+serial writer ahead of it). `getConversation` stamps transient `_lockVersion` +
+`_loadedMessages` (a snapshot copy, NOT the live array) on the convo; neither is persisted.
+**Degrades gracefully:** if the `lock_version` column is absent (`isMissingColumnError`) or on
+any unexpected error / retry exhaustion, it falls back to the prior last-write-wins upsert —
+so deploying before running `db1_conversation_lock.sql` is zero-risk. Pure helpers
+(`buildConversationRow`, `diffNewMessages`, `mergeConversationMessages`, `isMissingColumnError`)
+are unit-tested. Migration `db1_conversation_lock.sql` (additive `ADD COLUMN IF NOT EXISTS`)
+applied to DB1.
 
 ### Booking State Machine
 - `null` — not started

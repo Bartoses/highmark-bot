@@ -12956,6 +12956,79 @@ async function testP0Hardening() {
 }
 await testP0Hardening();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// testConversationLocking — P1-1: optimistic concurrency on the conversations row.
+// Pure helpers only (no DB): the CAS/merge logic that prevents a concurrent inbound
+// (or a retry that slips past MessageSid dedup) from clobbering a turn.
+// ─────────────────────────────────────────────────────────────────────────────
+async function testConversationLocking() {
+  const { diffNewMessages, mergeConversationMessages, isMissingColumnError, buildConversationRow } = await import("./index.js");
+  const chk = (label, cond) => cond ? pass(label) : fail(label, `expected truthy, got ${cond}`);
+
+  // ── diffNewMessages: identity diff (survives truncation) ─────────────────
+  {
+    const a = { role: "user", content: "hi" };
+    const b = { role: "assistant", content: "hey" };
+    const loaded = [a];
+    const current = [a, b]; // appended b this turn
+    const delta = diffNewMessages(current, loaded);
+    chk("p1-1: diffNewMessages returns only the newly-added message", delta.length === 1 && delta[0] === b);
+  }
+  {
+    // Simulate the orchestrator's slice(-10): load 10, push user+assistant, truncate to 10.
+    const loaded = Array.from({ length: 10 }, (_, i) => ({ role: "user", content: `m${i}` }));
+    const u = { role: "user", content: "new-user" };
+    const asst = { role: "assistant", content: "new-asst" };
+    let current = [...loaded, u, asst];       // 12
+    current = current.slice(-10);             // drops 2 oldest loaded refs; keeps u + asst
+    const delta = diffNewMessages(current, loaded);
+    chk("p1-1: diffNewMessages survives slice(-10) truncation", delta.length === 2 && delta[0] === u && delta[1] === asst);
+  }
+  chk("p1-1: diffNewMessages handles null inputs", diffNewMessages(null, null).length === 0);
+
+  // ── mergeConversationMessages: winner's history + my additions ───────────
+  {
+    const base = [{ content: "0" }, { content: "1" }];
+    const winnerAdded = [{ content: "A-user" }, { content: "A-asst" }];
+    const fresh = [...base, ...winnerAdded];          // what the winning turn persisted
+    const myNew = [{ content: "B-user" }, { content: "B-asst" }];
+    const merged = mergeConversationMessages(fresh, myNew);
+    chk("p1-1: merge keeps both turns' messages, in order",
+        merged.length === 6 &&
+        merged[2].content === "A-user" && merged[3].content === "A-asst" &&
+        merged[4].content === "B-user" && merged[5].content === "B-asst");
+  }
+  {
+    const fresh = Array.from({ length: 30 }, (_, i) => ({ content: `f${i}` }));
+    const merged = mergeConversationMessages(fresh, [{ content: "x" }], 20);
+    chk("p1-1: merge caps history to bound", merged.length === 20 && merged[merged.length - 1].content === "x");
+  }
+  chk("p1-1: merge handles null inputs", mergeConversationMessages(null, null).length === 0);
+
+  // ── isMissingColumnError: graceful degradation trigger ───────────────────
+  chk("p1-1: 42703 → missing column", isMissingColumnError({ code: "42703", message: "x" }, "lock_version") === true);
+  chk("p1-1: message naming column → missing column",
+      isMissingColumnError({ message: `column "lock_version" does not exist` }, "lock_version") === true);
+  chk("p1-1: unrelated error → not missing column",
+      isMissingColumnError({ code: "23505", message: "duplicate key" }, "lock_version") === false);
+  chk("p1-1: null error → not missing column", isMissingColumnError(null, "lock_version") === false);
+
+  // ── buildConversationRow: shape + no lock_version leak ───────────────────
+  {
+    const convo = {
+      messages: [{ role: "user", content: "hi" }], bookingStep: 2, bookingData: { activity: "x" },
+      handoff: false, consecutiveFrustrated: 0, sessionType: "live", stage: "engaged",
+      _lockVersion: 5, _loadedMessages: [],
+    };
+    const row = buildConversationRow("+15550001111", "+15559990000", convo, "csr_rea");
+    chk("p1-1: row carries no lock_version (caller sets it)", !("lock_version" in row));
+    chk("p1-1: row does not leak _loadedMessages/_lockVersion", !("_loadedMessages" in row) && !("_lockVersion" in row));
+    chk("p1-1: row persists stage inside booking_data", row.booking_data._stage === "engaged");
+    chk("p1-1: row maps client_id + channel", row.client_id === "csr_rea" && row.channel === "sms");
+  }
+}
+await testConversationLocking();
+
 // HTTP tests for /portal/api/performance — must run after server starts (called from main)
 async function testAnalyticsHttp() {
   // ── /portal/api/performance requires auth ───────────────────────────────
