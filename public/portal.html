@@ -5840,11 +5840,13 @@ function addOperatorPhoneRow(value = '') {
 // ─── Voice AI tab (config + business hours + call log) ────────────────────────
 const VOICE_DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const VOICE_VOICES = [
-  { id: 'Polly.Joanna-Neural',   label: 'Joanna — warm female (US)' },
-  { id: 'Polly.Danielle-Neural', label: 'Danielle — natural female (US)' },
-  { id: 'Polly.Ruth-Neural',     label: 'Ruth — friendly female (US)' },
-  { id: 'Polly.Matthew-Neural',  label: 'Matthew — warm male (US)' },
-  { id: 'Polly.Stephen-Neural',  label: 'Stephen — natural male (US)' },
+  { id: 'Polly.Ruth-Generative',    label: 'Ruth — most natural, female (US)' },
+  { id: 'Polly.Matthew-Generative', label: 'Matthew — most natural, male (US)' },
+  { id: 'Polly.Joanna-Neural',      label: 'Joanna — warm female (US)' },
+  { id: 'Polly.Danielle-Neural',    label: 'Danielle — natural female (US)' },
+  { id: 'Polly.Ruth-Neural',        label: 'Ruth — friendly female (US)' },
+  { id: 'Polly.Matthew-Neural',     label: 'Matthew — warm male (US)' },
+  { id: 'Polly.Stephen-Neural',     label: 'Stephen — natural male (US)' },
 ];
 
 function loadVoiceSection() {

@@ -54,13 +54,16 @@ export const VOICE_AI_MODEL = "claude-haiku-4-5-20251001";
 // standard ones. Per-agent override lives in voice_agents.voice.
 export const VOICE_TTS = "Polly.Danielle-Neural";
 
-// Natural-sounding neural voices offered in the portal picker.
+// Voices offered in the portal picker. Generative = Amazon's most natural engine
+// (least robotic); Neural = very good and broadly available.
 export const VOICE_OPTIONS = [
-  { id: "Polly.Joanna-Neural",   label: "Joanna — warm female (US)" },
-  { id: "Polly.Danielle-Neural", label: "Danielle — natural female (US)" },
-  { id: "Polly.Ruth-Neural",     label: "Ruth — friendly female (US)" },
-  { id: "Polly.Matthew-Neural",  label: "Matthew — warm male (US)" },
-  { id: "Polly.Stephen-Neural",  label: "Stephen — natural male (US)" },
+  { id: "Polly.Ruth-Generative",    label: "Ruth — most natural, female (US)" },
+  { id: "Polly.Matthew-Generative", label: "Matthew — most natural, male (US)" },
+  { id: "Polly.Joanna-Neural",      label: "Joanna — warm female (US)" },
+  { id: "Polly.Danielle-Neural",    label: "Danielle — natural female (US)" },
+  { id: "Polly.Ruth-Neural",        label: "Ruth — friendly female (US)" },
+  { id: "Polly.Matthew-Neural",     label: "Matthew — warm male (US)" },
+  { id: "Polly.Stephen-Neural",     label: "Stephen — natural male (US)" },
 ];
 const VOICE_OPTION_IDS = VOICE_OPTIONS.map((v) => v.id);
 

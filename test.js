@@ -17008,7 +17008,9 @@ async function testVoiceAI() {
   const { VOICE_TTS, VOICE_OPTIONS } = await import("./voice.js");
   chk("voice: default TTS is a neural voice", typeof VOICE_TTS === "string" && /-Neural$/.test(VOICE_TTS));
   chk("voice: agent voice overrides default", buildVoiceAgentConfig({}, { voice: "Polly.Matthew-Neural" }).voiceName === "Polly.Matthew-Neural");
-  chk("voice: VOICE_OPTIONS lists neural voices", Array.isArray(VOICE_OPTIONS) && VOICE_OPTIONS.length >= 3 && VOICE_OPTIONS.every((v) => /-Neural$/.test(v.id)));
+  chk("voice: VOICE_OPTIONS lists natural Polly voices", Array.isArray(VOICE_OPTIONS) && VOICE_OPTIONS.length >= 3 && VOICE_OPTIONS.every((v) => /^Polly\..+-(Neural|Generative)$/.test(v.id)));
+  chk("voice: VOICE_OPTIONS includes a generative voice", VOICE_OPTIONS.some((v) => /-Generative$/.test(v.id)));
+  chk("voice: validate accepts a generative voice", validateVoiceConfigInput({ voice: "Polly.Ruth-Generative" }).values.voice === "Polly.Ruth-Generative");
   chk("voice: validate accepts known voice", validateVoiceConfigInput({ voice: "Polly.Ruth-Neural" }).values.voice === "Polly.Ruth-Neural");
   chk("voice: validate rejects unknown voice", validateVoiceConfigInput({ voice: "Robot9000" }).errors.length === 1);
 
