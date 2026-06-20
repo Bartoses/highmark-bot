@@ -20,9 +20,22 @@ Before starting any new feature or task, read the `Roadmap` file in this directo
 1. **Read the Roadmap** — check `Roadmap` to confirm the task aligns with current priorities
 2. **Write tests** — add or update test cases covering the change
 3. **Test locally** — run the full test suite and verify all scenarios pass
-4. **Deploy** — commit and push to GitHub; Railway auto-deploys from `main`
+4. **Deploy** — commit and push to GitHub; Railway auto-deploys from `main`. CI
+   (`.github/workflows/test.yml`) runs the full suite on every push/PR — keep it green.
 5. **End-to-end verify** — run the Railway health check and confirm the deploy is live
 6. **Update docs** — update CLAUDE.md, README.md, Roadmap, and memory files to reflect the change
+
+### CI (GitHub Actions — added 2026-06-10)
+`.github/workflows/test.yml` runs `npm test` (full 2,615-case suite) on every push + PR.
+It's a real integration run (spawns the server in TEST_MODE, hits live Supabase DB1/DB2 +
+Anthropic), serialized via a concurrency group since tests share live rows + fixed test
+phone numbers. Required repo secrets + non-secret env (FAREHARBOR_ENABLED=true,
+CONFIRMATIONS_ENABLED=false, CLIENT_ID/NAME/PHONE, PERF_BUDGET_MULTIPLIER=3, TZ=America/Denver)
+are in the workflow header. Set secrets with `gh secret set NAME` reading **stdin** — NOT
+`--body -` (that stores the literal string "-"). Local gh uses
+`GH_CONFIG_DIR=/Users/sbartosewcz/.gh-config` (~/.config is root-owned).
+**TODO:** enable Railway "Wait for CI" to block deploys on red (pending a GitHub API incident
+when first attempted; revisit). Until then CI is advisory.
 
 ---
 
@@ -81,7 +94,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied)
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied)
 
 ---
 
@@ -225,9 +238,21 @@ segment (most robust), `?token=`, or `x-webhook-secret` header; forged requests 
 - `secretsMatch` (constant-time) + `evaluateFareharborWebhook` (pure) are unit-tested.
 
 ### Rate Limiting
-- **IP limiter** — 30 req/min per IP (express-rate-limit)
-- **Phone limiter** — 10 msg/min per phone number (in-memory Map; per-instance — see audit P0-5)
+- **IP limiter** — 30 req/min per IP (express-rate-limit, in-memory; coarse bot filter,
+  acceptable per-instance)
+- **Phone limiter** — 10 msg/min per phone number, backed by the **shared store** (P0-5):
+  Upstash Redis when configured, in-memory otherwise. Holds correctly across multiple web
+  instances; fail-open on store error.
 Both return `<Response></Response>` TwiML on 429.
+
+### Shared Store (sharedStore.js — P0-5)
+KV abstraction so rate-limit counters + the daily-summary cache work across web instances.
+Backends: **Upstash Redis (REST)** when `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`
+are set; **in-memory** (TTL Map) otherwise — identical to prior behavior, so deploying before
+provisioning Upstash is zero-risk. `@upstash/redis` is lazy-imported only when configured.
+API: `incrWithTtl(key, ttlSec)` (atomic fixed-window counter), `cacheGet/cacheSet(key,val,ttlSec)`,
+`storeMode()` (surfaced in `GET /` health as `store`). Set the two env vars on BOTH the web
+and cron services for full cross-process sharing. AI-insights cache is already DB-backed (shared).
 
 ### Conversation Store
 Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_number):
@@ -239,9 +264,28 @@ Persisted in Supabase DB1 `conversations` table, keyed by (from_number, to_numbe
   handoff:                false,
   consecutive_frustrated: 0,
   session_type:           "live" | "test",
-  client_id:              "csr_rea"
+  client_id:              "csr_rea",
+  lock_version:           0   // P1-1 optimistic-concurrency counter (see below)
 }
 ```
+
+**P1-1 — optimistic concurrency (saveConversation, index.js).** `getConversation`
+(select *) → mutate → `saveConversation` is a read-modify-write; two concurrent inbound
+messages from the same phone (or a Twilio retry that slips past the MessageSid claim) both
+load the same base row and a full-row upsert would last-write-wins, clobbering a turn.
+`saveConversation` now does a **compare-and-swap on `lock_version`**: `UPDATE … WHERE
+from_number AND to_number AND lock_version = <read value>` SET … `lock_version+1`. On a lost
+race (0 rows updated) it reloads the winner's row, **merges this turn's new messages** onto
+the winner's latest history (`diffNewMessages` by object identity — survives the `slice(-10)`
+truncation; `mergeConversationMessages` bounded to 20), and retries (up to 6×, one per
+serial writer ahead of it). `getConversation` stamps transient `_lockVersion` +
+`_loadedMessages` (a snapshot copy, NOT the live array) on the convo; neither is persisted.
+**Degrades gracefully:** if the `lock_version` column is absent (`isMissingColumnError`) or on
+any unexpected error / retry exhaustion, it falls back to the prior last-write-wins upsert —
+so deploying before running `db1_conversation_lock.sql` is zero-risk. Pure helpers
+(`buildConversationRow`, `diffNewMessages`, `mergeConversationMessages`, `isMissingColumnError`)
+are unit-tested. Migration `db1_conversation_lock.sql` (additive `ADD COLUMN IF NOT EXISTS`)
+applied to DB1.
 
 ### Booking State Machine
 - `null` — not started

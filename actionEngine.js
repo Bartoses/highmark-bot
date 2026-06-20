@@ -1249,8 +1249,9 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
 // ── daily_summary ─────────────────────────────────────────────────────────────
 // Bookings today + tomorrow + new leads (24h) + open-lead pipeline status.
 // Cached for 60s per client to stay snappy on repeated hits.
-const DAILY_SUMMARY_CACHE = new Map();
-const DAILY_SUMMARY_TTL_MS = 60 * 1000;
+// P0-5: cache lives in the shared store (Upstash when configured, in-memory
+// otherwise) so repeated hits share a result across web instances.
+const DAILY_SUMMARY_TTL_SEC = 60;
 
 async function handleDailySummary(data, context, client, integrations) {
   try {
@@ -1258,10 +1259,11 @@ async function handleDailySummary(data, context, client, integrations) {
     const src  = resolveBookingSource(integrations);
     if (!dbSb && !src) return fail("Database unavailable for daily summary.");
 
+    const { cacheGet, cacheSet } = await import("./sharedStore.js");
     const clientId = client?.id ?? null;
     const cacheKey = `summary:${clientId}:${src?.source ?? "none"}`;
-    const cached   = DAILY_SUMMARY_CACHE.get(cacheKey);
-    if (cached && Date.now() - cached.at < DAILY_SUMMARY_TTL_MS) {
+    const cached   = await cacheGet(cacheKey);
+    if (cached?.data && cached?.reply) {
       return ownerOk(cached.data, cached.reply);
     }
 
@@ -1344,7 +1346,7 @@ async function handleDailySummary(data, context, client, integrations) {
       source:            src?.source ?? "none",
     };
 
-    DAILY_SUMMARY_CACHE.set(cacheKey, { at: Date.now(), data: result, reply });
+    await cacheSet(cacheKey, { data: result, reply }, DAILY_SUMMARY_TTL_SEC);
     return ownerOk(result, reply);
   } catch (e) {
     console.error("[actionEngine] daily_summary error:", e.message);

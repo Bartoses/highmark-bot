@@ -142,6 +142,11 @@ const TEST_PHONE  = "+15550009999";
 const TEST_PHONE2 = "+15550002222";
 const TO_PHONE    = "+15559999999";
 
+// Wall-clock perf budgets multiply by this — set PERF_BUDGET_MULTIPLIER=3 on CI
+// (shared runners, cross-region network) so latency assertions signal regressions
+// locally without flaking the deploy gate.
+const PERF_BUDGET_MULTIPLIER = Number(process.env.PERF_BUDGET_MULTIPLIER) || 1;
+
 let serverProcess = null;
 const results     = [];
 
@@ -330,7 +335,7 @@ async function test4() {
     text.includes("HIGHMARK_TEST_OK")
       ? pass(`Claude API OK (${elapsed}ms)`)
       : fail("Claude response unexpected", text);
-    elapsed < 10000
+    elapsed < 10000 * PERF_BUDGET_MULTIPLIER
       ? pass("Claude under 10s")
       : fail("Claude too slow", `${elapsed}ms`);
   } catch (e) { fail("Claude API failed", e.message); }
@@ -623,7 +628,7 @@ async function test13() {
     typeof ctx === "string"
       ? pass(`getKnowledgeContext(csr_rea): string (${ctx.length} chars)`)
       : fail("getKnowledgeContext non-string");
-    elapsed < 5000
+    elapsed < 5000 * PERF_BUDGET_MULTIPLIER
       ? pass(`getKnowledgeContext(csr_rea): ${elapsed}ms`)
       : fail("getKnowledgeContext too slow", `${elapsed}ms`);
 
@@ -12927,8 +12932,102 @@ async function testP0Hardening() {
   chk("p0-4: 'unique' message → duplicate", classifyClaimResult({ message: "unique constraint" }) === "duplicate");
   chk("p0-4: other DB error → error (fail-open / process)",
       classifyClaimResult({ code: "08006", message: "connection refused" }) === "error");
+
+  // ── P0-5: shared store (memory-mode fallback, no Upstash env) ───────────
+  const { incrWithTtl, cacheGet, cacheSet, storeMode, __resetMemoryStore } = await import("./sharedStore.js");
+  __resetMemoryStore();
+  chk("p0-5: storeMode is 'memory' without Upstash env", storeMode() === "memory");
+  chk("p0-5: incrWithTtl first hit → 1", (await incrWithTtl("rl:test:a", 60)) === 1);
+  chk("p0-5: incrWithTtl increments → 2", (await incrWithTtl("rl:test:a", 60)) === 2);
+  chk("p0-5: separate key independent → 1", (await incrWithTtl("rl:test:b", 60)) === 1);
+  chk("p0-5: rate-limit threshold reached at 11th hit", await (async () => {
+    __resetMemoryStore();
+    let last = 0;
+    for (let i = 0; i < 11; i++) last = await incrWithTtl("rl:test:c", 60);
+    return last === 11 && last > 10; // 11th message exceeds the 10/min limit
+  })());
+  await cacheSet("c:obj", { headline: "hi", n: 3 }, 60);
+  chk("p0-5: cacheGet returns stored object", await (async () => {
+    const v = await cacheGet("c:obj"); return v && v.headline === "hi" && v.n === 3;
+  })());
+  chk("p0-5: cacheGet missing key → null", (await cacheGet("c:nope")) === null);
+  __resetMemoryStore();
+  chk("p0-5: reset clears the store", (await cacheGet("c:obj")) === null);
 }
 await testP0Hardening();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// testConversationLocking — P1-1: optimistic concurrency on the conversations row.
+// Pure helpers only (no DB): the CAS/merge logic that prevents a concurrent inbound
+// (or a retry that slips past MessageSid dedup) from clobbering a turn.
+// ─────────────────────────────────────────────────────────────────────────────
+async function testConversationLocking() {
+  const { diffNewMessages, mergeConversationMessages, isMissingColumnError, buildConversationRow } = await import("./index.js");
+  const chk = (label, cond) => cond ? pass(label) : fail(label, `expected truthy, got ${cond}`);
+
+  // ── diffNewMessages: identity diff (survives truncation) ─────────────────
+  {
+    const a = { role: "user", content: "hi" };
+    const b = { role: "assistant", content: "hey" };
+    const loaded = [a];
+    const current = [a, b]; // appended b this turn
+    const delta = diffNewMessages(current, loaded);
+    chk("p1-1: diffNewMessages returns only the newly-added message", delta.length === 1 && delta[0] === b);
+  }
+  {
+    // Simulate the orchestrator's slice(-10): load 10, push user+assistant, truncate to 10.
+    const loaded = Array.from({ length: 10 }, (_, i) => ({ role: "user", content: `m${i}` }));
+    const u = { role: "user", content: "new-user" };
+    const asst = { role: "assistant", content: "new-asst" };
+    let current = [...loaded, u, asst];       // 12
+    current = current.slice(-10);             // drops 2 oldest loaded refs; keeps u + asst
+    const delta = diffNewMessages(current, loaded);
+    chk("p1-1: diffNewMessages survives slice(-10) truncation", delta.length === 2 && delta[0] === u && delta[1] === asst);
+  }
+  chk("p1-1: diffNewMessages handles null inputs", diffNewMessages(null, null).length === 0);
+
+  // ── mergeConversationMessages: winner's history + my additions ───────────
+  {
+    const base = [{ content: "0" }, { content: "1" }];
+    const winnerAdded = [{ content: "A-user" }, { content: "A-asst" }];
+    const fresh = [...base, ...winnerAdded];          // what the winning turn persisted
+    const myNew = [{ content: "B-user" }, { content: "B-asst" }];
+    const merged = mergeConversationMessages(fresh, myNew);
+    chk("p1-1: merge keeps both turns' messages, in order",
+        merged.length === 6 &&
+        merged[2].content === "A-user" && merged[3].content === "A-asst" &&
+        merged[4].content === "B-user" && merged[5].content === "B-asst");
+  }
+  {
+    const fresh = Array.from({ length: 30 }, (_, i) => ({ content: `f${i}` }));
+    const merged = mergeConversationMessages(fresh, [{ content: "x" }], 20);
+    chk("p1-1: merge caps history to bound", merged.length === 20 && merged[merged.length - 1].content === "x");
+  }
+  chk("p1-1: merge handles null inputs", mergeConversationMessages(null, null).length === 0);
+
+  // ── isMissingColumnError: graceful degradation trigger ───────────────────
+  chk("p1-1: 42703 → missing column", isMissingColumnError({ code: "42703", message: "x" }, "lock_version") === true);
+  chk("p1-1: message naming column → missing column",
+      isMissingColumnError({ message: `column "lock_version" does not exist` }, "lock_version") === true);
+  chk("p1-1: unrelated error → not missing column",
+      isMissingColumnError({ code: "23505", message: "duplicate key" }, "lock_version") === false);
+  chk("p1-1: null error → not missing column", isMissingColumnError(null, "lock_version") === false);
+
+  // ── buildConversationRow: shape + no lock_version leak ───────────────────
+  {
+    const convo = {
+      messages: [{ role: "user", content: "hi" }], bookingStep: 2, bookingData: { activity: "x" },
+      handoff: false, consecutiveFrustrated: 0, sessionType: "live", stage: "engaged",
+      _lockVersion: 5, _loadedMessages: [],
+    };
+    const row = buildConversationRow("+15550001111", "+15559990000", convo, "csr_rea");
+    chk("p1-1: row carries no lock_version (caller sets it)", !("lock_version" in row));
+    chk("p1-1: row does not leak _loadedMessages/_lockVersion", !("_loadedMessages" in row) && !("_lockVersion" in row));
+    chk("p1-1: row persists stage inside booking_data", row.booking_data._stage === "engaged");
+    chk("p1-1: row maps client_id + channel", row.client_id === "csr_rea" && row.channel === "sms");
+  }
+}
+await testConversationLocking();
 
 // HTTP tests for /portal/api/performance — must run after server starts (called from main)
 async function testAnalyticsHttp() {

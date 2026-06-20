@@ -80,6 +80,7 @@ import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
 import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls, handlePortalVoiceConfig, handlePortalUpdateVoiceConfig, handlePortalVoiceSpam } from "./voice.js";
+import { incrWithTtl, storeMode, storeHealth } from "./sharedStore.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -105,34 +106,28 @@ const ipLimiter = rateLimit({
   },
 });
 
-// Per-phone limiter: 10 messages / minute per phone number
-const phoneWindows = new Map(); // phone -> { count, resetAt }
-function phoneRateLimit(req, res, next) {
+// Per-phone limiter: 10 messages / minute per phone number.
+// P0-5: backed by the shared store (Upstash when configured, in-memory otherwise)
+// so the limit holds across multiple web instances instead of being N× looser.
+// Fail-open: a store error must never block a legitimate guest.
+const PHONE_RATE_MAX = 10;
+const PHONE_RATE_WINDOW_SEC = 60;
+async function phoneRateLimit(req, res, next) {
   if (isUiReq(req)) return next(); // UI requests skip phone rate limit
   const phone = req.body?.From;
   if (!phone) return next();
-  const now = Date.now();
-  const window = phoneWindows.get(phone);
-  if (!window || now > window.resetAt) {
-    phoneWindows.set(phone, { count: 1, resetAt: now + 60 * 1000 });
-    return next();
+  try {
+    const count = await incrWithTtl(`rl:phone:${phone}`, PHONE_RATE_WINDOW_SEC);
+    if (count > PHONE_RATE_MAX) {
+      console.warn(`[RATE] Phone throttled: ${phone}`);
+      res.set("Content-Type", "text/xml");
+      return res.status(429).send("<Response></Response>");
+    }
+  } catch (err) {
+    console.error("[RATE] phone limiter store error (allowing):", err.message);
   }
-  if (window.count >= 10) {
-    console.warn(`[RATE] Phone throttled: ${phone}`);
-    res.set("Content-Type", "text/xml");
-    return res.status(429).send("<Response></Response>");
-  }
-  window.count++;
   next();
 }
-
-// Prune stale phone windows every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [phone, w] of phoneWindows) {
-    if (now > w.resetAt) phoneWindows.delete(phone);
-  }
-}, 5 * 60 * 1000);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL UI AUTH
@@ -1300,10 +1295,11 @@ export async function getConversation(fromNumber, toNumber) {
 
   if (data) {
     const bd = data.booking_data ?? {};
+    const messages = data.messages ?? [];
     return {
       isNew: false,
       convo: {
-        messages:              data.messages               ?? [],
+        messages,
         bookingStep:           data.booking_step           ?? null,
         bookingData:           bd,
         handoff:               data.handoff                ?? false,
@@ -1319,6 +1315,14 @@ export async function getConversation(fromNumber, toNumber) {
         leadCapturePendingName: bd._leadCapturePendingName  ?? false,
         commercialState:        bd._commercialState          ?? { recommendationGiven: false, leadCaptureAttempts: 0 },
         conversationType:       data.conversation_type      ?? null,
+        // P1-1 optimistic-lock metadata (not persisted; consumed by saveConversation).
+        // _lockVersion is the row version we read; _loadedMessages is the exact array we
+        // loaded, so a save that loses a CAS race can identity-diff the messages it added
+        // this turn (survives the slice(-10) truncation the orchestrator applies).
+        _lockVersion:           Number.isInteger(data.lock_version) ? data.lock_version : 0,
+        // Shallow copy: a distinct array (so push() on convo.messages doesn't mutate it),
+        // but the SAME element refs — diffNewMessages relies on object identity.
+        _loadedMessages:        [...messages],
       },
     };
   }
@@ -1340,11 +1344,16 @@ export async function getConversation(fromNumber, toNumber) {
       leadCaptureAttempted:  false,
       leadCapturePendingName: false,
       commercialState:       { recommendationGiven: false, leadCaptureAttempts: 0 },
+      // P1-1: null version signals "no row yet" → saveConversation takes the INSERT path.
+      _lockVersion:          null,
+      _loadedMessages:       [],
     },
   };
 }
 
-export async function saveConversation(fromNumber, toNumber, convo, clientId) {
+// Build the DB row from a convo object (without lock_version — callers set that).
+// Pure (modulo env default); exported for tests.
+export function buildConversationRow(fromNumber, toNumber, convo, clientId) {
   // Persist stage + leadCaptureAttempted inside booking_data to avoid schema changes
   const bookingData = {
     ...(convo.bookingData ?? {}),
@@ -1374,12 +1383,134 @@ export async function saveConversation(fromNumber, toNumber, convo, clientId) {
   if (convo.conversationType === "internal_operator") {
     row.conversation_type = "internal_operator";
   }
-  const { error } = await supabase.from("conversations").upsert(row, { onConflict: "from_number,to_number" });
-  // Graceful fallback if the conversation_type column doesn't exist yet
-  if (error && /conversation_type/i.test(error.message ?? "")) {
-    delete row.conversation_type;
-    await supabase.from("conversations").upsert(row, { onConflict: "from_number,to_number" });
+  return row;
+}
+
+// True if a Supabase error means `col` doesn't exist (migration not yet applied).
+export function isMissingColumnError(error, col) {
+  if (!error) return false;
+  const msg = (error.message ?? "") + " " + (error.details ?? "");
+  // Postgres "undefined_column" is 42703; message also names the column.
+  return error.code === "42703" || new RegExp(`\\b${col}\\b`, "i").test(msg);
+}
+
+// Messages this turn ADDED — by object identity, not index. Survives the slice(-10)
+// truncation the orchestrator applies (which drops old loaded refs from the front but
+// keeps the freshly-pushed message objects at the tail). Pure; exported for tests.
+export function diffNewMessages(currentMessages, loadedMessages) {
+  const loadedSet = new Set(Array.isArray(loadedMessages) ? loadedMessages : []);
+  return (Array.isArray(currentMessages) ? currentMessages : []).filter((m) => !loadedSet.has(m));
+}
+
+// Merge the winning turn's persisted messages with this turn's additions, bounded so
+// repeated conflicts can't grow history without limit (the next normal turn re-truncates
+// to 10 anyway). Pure; exported for tests.
+export function mergeConversationMessages(freshMessages, myNewMessages, cap = 20) {
+  const fresh = Array.isArray(freshMessages) ? freshMessages : [];
+  const mine  = Array.isArray(myNewMessages) ? myNewMessages : [];
+  const merged = [...fresh, ...mine];
+  return merged.length > cap ? merged.slice(-cap) : merged;
+}
+
+// P1-1: optimistic-concurrency save. Compare-and-swap on lock_version; on a lost race,
+// reload the winner's row, merge this turn's new messages onto it, and retry. Degrades to
+// the prior last-write-wins upsert if the lock_version column is absent or on any
+// unexpected error (never lose a turn silently). Transparent to callers.
+// One CAS attempt per concurrent writer ahead of us (they commit serially, each taking a
+// version). 6 covers realistic SMS contention with headroom; beyond it we fall back to a
+// last-write-wins upsert of the already-merged messages.
+const SAVE_MAX_ATTEMPTS = 6;
+
+export async function saveConversation(fromNumber, toNumber, convo, clientId) {
+  // Legacy full-row upsert — the safety net (no CAS). Used when the column is missing,
+  // on unexpected errors, or after exhausting CAS attempts.
+  const legacyUpsert = async () => {
+    const row = buildConversationRow(fromNumber, toNumber, convo, clientId);
+    const { error } = await supabase.from("conversations").upsert(row, { onConflict: "from_number,to_number" });
+    if (error && /conversation_type/i.test(error.message ?? "")) {
+      delete row.conversation_type;
+      await supabase.from("conversations").upsert(row, { onConflict: "from_number,to_number" });
+    }
+  };
+
+  let expectedVersion = Number.isInteger(convo._lockVersion) ? convo._lockVersion : null;
+  // Messages THIS turn added — fixed for the life of the save (computed once, by identity,
+  // before any merge mutates convo.messages). Reused on every retry so N-way contention
+  // can't drop them. After a lost race we re-merge them onto the winner's latest history.
+  const myNewMessages = diffNewMessages(convo.messages, convo._loadedMessages);
+
+  for (let attempt = 1; attempt <= SAVE_MAX_ATTEMPTS; attempt++) {
+    const row = buildConversationRow(fromNumber, toNumber, convo, clientId);
+
+    if (expectedVersion == null) {
+      // No row loaded → INSERT a fresh one at version 0.
+      row.lock_version = 0;
+      const { error } = await supabase.from("conversations").insert(row);
+      if (!error) { convo._lockVersion = 0; return; }
+      if (isMissingColumnError(error, "lock_version")) return legacyUpsert();
+      if (/conversation_type/i.test(error.message ?? "")) { delete row.conversation_type; const r2 = await supabase.from("conversations").insert(row); if (!r2.error) { convo._lockVersion = 0; return; } }
+      // Lost the insert race (row already exists) → switch to the CAS/merge path.
+      if (classifyClaimResult(error) === "duplicate") {
+        const fresh = await reloadConversationVersion(fromNumber, toNumber);
+        if (fresh) {
+          convo.messages = mergeConversationMessages(fresh.messages, myNewMessages);
+          expectedVersion = fresh.lock_version ?? 0;
+          continue;
+        }
+      }
+      console.error("[CONVO] insert failed, falling back to upsert:", error.message);
+      return legacyUpsert();
+    }
+
+    // CAS UPDATE: only succeeds if no one bumped the version since we read it.
+    row.lock_version = expectedVersion + 1;
+    const { data, error } = await supabase
+      .from("conversations")
+      .update(row)
+      .eq("from_number", fromNumber)
+      .eq("to_number", toNumber)
+      .eq("lock_version", expectedVersion)
+      .select("lock_version");
+
+    if (error) {
+      if (isMissingColumnError(error, "lock_version")) return legacyUpsert();
+      if (/conversation_type/i.test(error.message ?? "")) {
+        delete row.conversation_type;
+        const r2 = await supabase.from("conversations").update(row)
+          .eq("from_number", fromNumber).eq("to_number", toNumber).eq("lock_version", expectedVersion).select("lock_version");
+        if (!r2.error && r2.data?.length === 1) { convo._lockVersion = row.lock_version; return; }
+      }
+      console.error("[CONVO] CAS update error, falling back to upsert:", error.message);
+      return legacyUpsert();
+    }
+
+    if (data && data.length === 1) {
+      // Won the CAS — our version is now persisted.
+      convo._lockVersion = row.lock_version;
+      return;
+    }
+
+    // 0 rows updated → someone else bumped the version (or the row vanished).
+    const fresh = await reloadConversationVersion(fromNumber, toNumber);
+    if (!fresh) { expectedVersion = null; continue; } // row gone → re-insert next loop
+    convo.messages = mergeConversationMessages(fresh.messages, myNewMessages);
+    expectedVersion = fresh.lock_version ?? 0;
   }
+
+  // Exhausted CAS retries (sustained contention) → last-ditch upsert so the turn persists.
+  console.warn(`[CONVO] CAS exhausted for ${fromNumber}/${toNumber}, last-write-wins upsert`);
+  return legacyUpsert();
+}
+
+// Re-read just the version + messages for a merge/retry. Returns null if the row is gone.
+async function reloadConversationVersion(fromNumber, toNumber) {
+  const { data } = await supabase
+    .from("conversations")
+    .select("lock_version, messages")
+    .eq("from_number", fromNumber)
+    .eq("to_number", toNumber)
+    .single();
+  return data ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2154,10 +2285,12 @@ function escHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[c]);
 }
 
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
   if (req.headers.accept?.includes("text/html")) return res.sendFile(path.join(__uiDir, "home.html"));
   const toPhone    = process.env.TWILIO_PHONE_NUMBER || "+18668906657";
   const hcClient   = resolveClient(toPhone);
+  // Default `store` is the cheap cached mode (routine Railway healthchecks hit this
+  // path). `?deep=1` performs a real Upstash round-trip → "redis" | "redis-unreachable".
   res.json({
     status:             "Highmark running ✅",
     version:            "1.0.0",
@@ -2168,6 +2301,12 @@ app.get("/", (req, res) => {
     booking_mode:       hcClient.bookingMode,
     phone:              toPhone,
     uptime_seconds:     Math.floor(process.uptime()),
+    store:              req.query.deep ? await storeHealth() : storeMode(),
+    // ?deep=1 only: booleans (never values) to diagnose Upstash wiring.
+    ...(req.query.deep ? {
+      upstash_url_set:   !!process.env.UPSTASH_REDIS_REST_URL,
+      upstash_token_set: !!process.env.UPSTASH_REDIS_REST_TOKEN,
+    } : {}),
   });
 });
 
