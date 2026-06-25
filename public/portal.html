@@ -6032,6 +6032,7 @@ function opPhoneCardHtml(p) {
   const times    = (p.digest_times ?? ['06:30']).join(', ');
   const types    = p.digest_types ?? ['all'];
   const locs     = Array.isArray(p.locations) ? p.locations : [];
+  const detail   = p.briefing_detail ?? 'auto';
   const lastSent = p.last_digest_sent_at ? new Date(p.last_digest_sent_at).toLocaleString() : '—';
   return `
     <div class="op-int-card" data-op-id="${p.id}" style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;background:var(--surface2);">
@@ -6095,6 +6096,14 @@ function opPhoneCardHtml(p) {
         </div>
         <div style="font-size:10px;color:var(--text3);margin-top:4px;">Assigned staff get a briefing filtered to their location(s) — bookings, actions, and fleet work orders (Kremmling fleet vs Steamboat fleet).</div>
       </div>
+      <div style="margin-bottom:10px;max-width:320px;">
+        <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">Detail level</label>
+        <select class="form-input op-int-detail">
+          <option value="auto"     ${detail === 'auto'     ? 'selected' : ''}>Auto (detailed for a single post, summary for owner)</option>
+          <option value="detailed" ${detail === 'detailed' ? 'selected' : ''}>Detailed — per-booking + full work orders (staff)</option>
+          <option value="summary"  ${detail === 'summary'  ? 'selected' : ''}>Summary — high-level rollups (owner)</option>
+        </select>
+      </div>
       <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:10px;">
         <div style="font-size:11px;color:var(--text3);">Last sent: ${escHtml(lastSent)}</div>
         <div style="display:flex;gap:6px;">
@@ -6122,6 +6131,7 @@ async function saveOperatorPhone(id, btn) {
     digest_times:           card.querySelector('.op-int-times').value.split(',').map(s => s.trim()).filter(Boolean),
     digest_types:           [...card.querySelectorAll('.op-int-type:checked')].map(c => c.value),
     locations:              [...card.querySelectorAll('.op-int-loc:checked')].map(c => c.value),
+    briefing_detail:        card.querySelector('.op-int-detail')?.value || 'auto',
     timezone:               card.querySelector('.op-int-tz').value.trim() || 'America/Denver',
   };
   btn.disabled = true; btn.textContent = 'Saving…';
