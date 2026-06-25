@@ -6001,8 +6001,14 @@ async function loadVoiceCalls() {
 }
 
 // ─── Operator Intelligence (Sprint C) ────────────────────────────────────────
-const OPERATOR_DIGEST_TYPES = ['all','bookings','revenue','leads','staffing','issues','weather'];
+const OPERATOR_DIGEST_TYPES = ['all','bookings','revenue','leads','staffing','issues','weather','fleet'];
 const OPERATOR_ROLES        = ['owner','manager','sales','staff'];
+const OPERATOR_LOCATIONS    = [
+  { value:'steamboat',   label:'Steamboat'   },
+  { value:'north_routt', label:'North Routt' },
+  { value:'kremmling',   label:'Kremmling'   },
+  { value:'rabbit_ears', label:'Rabbit Ears' },
+];
 
 async function loadOperatorIntelligence() {
   const list = document.getElementById('operatorIntelligenceList');
@@ -6023,6 +6029,7 @@ async function loadOperatorIntelligence() {
 function opPhoneCardHtml(p) {
   const times    = (p.digest_times ?? ['06:30']).join(', ');
   const types    = p.digest_types ?? ['all'];
+  const locs     = Array.isArray(p.locations) ? p.locations : [];
   const lastSent = p.last_digest_sent_at ? new Date(p.last_digest_sent_at).toLocaleString() : '—';
   return `
     <div class="op-int-card" data-op-id="${p.id}" style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;background:var(--surface2);">
@@ -6074,6 +6081,18 @@ function opPhoneCardHtml(p) {
           `).join('')}
         </div>
       </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">Locations <span style="color:var(--text3);font-weight:400;">(none = all locations / owner view)</span></label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          ${OPERATOR_LOCATIONS.map(l => `
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="op-int-loc" value="${l.value}" ${locs.includes(l.value) ? 'checked' : ''}>
+              ${l.label}
+            </label>
+          `).join('')}
+        </div>
+        <div style="font-size:10px;color:var(--text3);margin-top:4px;">Assigned staff get a briefing filtered to their location(s) — bookings, actions, and fleet work orders (Kremmling fleet vs Steamboat fleet).</div>
+      </div>
       <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:10px;">
         <div style="font-size:11px;color:var(--text3);">Last sent: ${escHtml(lastSent)}</div>
         <div style="display:flex;gap:6px;">
@@ -6100,6 +6119,7 @@ async function saveOperatorPhone(id, btn) {
     daily_digest_enabled:   card.querySelector('.op-int-digest').checked,
     digest_times:           card.querySelector('.op-int-times').value.split(',').map(s => s.trim()).filter(Boolean),
     digest_types:           [...card.querySelectorAll('.op-int-type:checked')].map(c => c.value),
+    locations:              [...card.querySelectorAll('.op-int-loc:checked')].map(c => c.value),
     timezone:               card.querySelector('.op-int-tz').value.trim() || 'America/Denver',
   };
   btn.disabled = true; btn.textContent = 'Saving…';

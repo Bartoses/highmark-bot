@@ -463,6 +463,38 @@ voicemail — never drops a call. Every call is logged for the future dashboard.
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Per-Employee Location Scoping + MPWR Fleet Work Orders (2026-06-25)
+Owner asked: (1) assign employees to locations so each gets a location-specific
+briefing, and (2) pull open fleet work orders per location from MPWR (like the
+live booking sync) so on-site staff get actionable maintenance items + a link.
+
+- Location scoping: `operator_phones.locations TEXT[]` (db1_operator_locations.sql).
+  Empty = owner view (all). Scoped phones get a STRICT-FILTERED briefing —
+  filterManifestByLocations on every location-bearing array, upcoming-revenue
+  recomputed from filtered rows, company aggregates suppressed so no
+  cross-location leakage. Header shows a scope tag (· Kremmling). Decision:
+  strict filter; owners/unassigned see all.
+- digest_types section gating finally wired (was a latent no-op) via
+  wantsSection — bookings/staffing/revenue/leads/weather/issues/fleet. ['all']
+  default = unchanged behavior.
+- MPWR work orders: mpwrWorkOrders.js (runWorkOrderSync) pulls /work-orders.data
+  per outfitter (Kremmling 541 / Steamboat 58), enriches each OPEN WO from
+  /work-orders/{id}.data (model + rentability), upserts DB2 work_orders
+  (db2_work_orders.sql + RLS). Runs in cron worker's :00/:30 MPWR window.
+  Reuses mpwrSync getToken + new shared decodeMpwrStream. WO mapping = by fleet
+  (Kremmling fleet; Steamboat/North Routt/Rabbit Ears = Steamboat fleet).
+- Key data-quality fix: "out of service" is derived from the VEHICLE
+  (rentabilityStatus "Not Rentable" on an active unit), NOT the WO. Dispositioned/
+  inactive vehicles are flagged `retired` and excluded — they're never-closed
+  cruft (drops Kremmling open WOs 21→11 actionable). 🔧 FLEET section: OOS first
+  (⚠️), then safety, then est. completion; MPWR deep link always included.
+- Portal Settings → Operator Intelligence: per-phone Locations checkboxes + a
+  `fleet` section toggle. Validation in adminPortal (VALID_OPERATOR_LOCATIONS).
+- Token automation: ran mpwrTokenRefresh.js (Playwright Auth0 login) — fresh
+  JWT pushed to both Railway services, no manual cookie lookup.
+- Tests: +50 assertions in testLocationFleetBriefing. 2675/2676 passing (the one
+  failure is an unrelated live-model guest-SMS directions assertion).
+
 ### Operational Dispatch Briefing (2026-05-21)
 Owner asked for a morning dispatch sheet, not an analytics dashboard. The
 briefing should answer "what does today LOOK like operationally?" in 15

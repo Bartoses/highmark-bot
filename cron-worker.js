@@ -18,6 +18,7 @@ import { processScheduledMessages } from "./scheduler.js";
 import { dispatchOperatorDigests } from "./operatorBriefing.js";
 import { evaluateEventCampaigns } from "./campaignTriggers.js";
 import { runMpwrSync } from "./mpwrSync.js";
+import { runWorkOrderSync } from "./mpwrWorkOrders.js";
 import { runScheduledKnowledgeJobs } from "./knowledgeBase.js";
 import { pollNewBookings, isFareHarborPollDue } from "./bookingConfirmations.js";
 import { loadDbClients } from "./clients.js";
@@ -84,6 +85,8 @@ try {
   // (gated by messaging_config.enable_confirmation_texts for csr_rea).
   if (crmSupabase && isMpwrSyncWindow()) {
     await runMpwrSync(crmSupabase, { db1: supabase, twilioClient });
+    // MPWR fleet work-order sync — same :00/:30 window (open WOs change slowly).
+    await runWorkOrderSync(crmSupabase);
   }
 
   // Operator digests — every cron tick, per-phone digest_times decides who's due

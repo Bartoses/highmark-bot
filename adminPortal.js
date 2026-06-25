@@ -2950,7 +2950,8 @@ export async function handlePortalPartnerAnalytics(req, res, supabase) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const VALID_OPERATOR_ROLES        = ["owner", "manager", "sales", "staff"];
-const VALID_DIGEST_TYPES          = ["all", "bookings", "revenue", "leads", "staffing", "issues", "weather"];
+const VALID_DIGEST_TYPES          = ["all", "bookings", "revenue", "leads", "staffing", "issues", "weather", "fleet"];
+const VALID_OPERATOR_LOCATIONS    = ["steamboat", "north_routt", "kremmling", "rabbit_ears"];
 const DIGEST_TIME_RE              = /^([01]\d|2[0-3]):([0-5]\d)$/; // HH:MM 24-hour
 
 function validateOperatorPhoneInput(body, { partial = false } = {}) {
@@ -3017,6 +3018,21 @@ function validateOperatorPhoneInput(body, { partial = false } = {}) {
     if (cleaned.length) out.digest_types = cleaned;
   }
 
+  if (body.locations !== undefined) {
+    const arr = Array.isArray(body.locations) ? body.locations : [];
+    const cleaned = [];
+    for (const l of arr) {
+      const v = String(l ?? "").toLowerCase().trim();
+      if (v === "all") continue; // 'all' is represented as empty (unscoped)
+      if (!VALID_OPERATOR_LOCATIONS.includes(v)) {
+        errors.push(`locations: "${l}" must be one of ${VALID_OPERATOR_LOCATIONS.join(", ")}`);
+        break;
+      }
+      if (!cleaned.includes(v)) cleaned.push(v);
+    }
+    if (!errors.length) out.locations = cleaned; // empty array = unscoped (all)
+  }
+
   if (body.timezone !== undefined) {
     const tz = String(body.timezone ?? "").trim();
     if (!tz) errors.push("timezone cannot be empty");
@@ -3038,7 +3054,7 @@ export async function handlePortalOperatorPhones(req, res, supabase) {
 
   const { data, error } = await supabase
     .from("operator_phones")
-    .select("id, client_id, phone, label, role, internal_mode_enabled, daily_digest_enabled, digest_times, digest_types, timezone, last_digest_sent_at, created_at, updated_at")
+    .select("id, client_id, phone, label, role, internal_mode_enabled, daily_digest_enabled, digest_times, digest_types, locations, timezone, last_digest_sent_at, created_at, updated_at")
     .eq("client_id", clientId)
     .order("role", { ascending: true })
     .order("created_at", { ascending: true });
@@ -3067,6 +3083,7 @@ export async function handlePortalCreateOperatorPhone(req, res, supabase) {
     daily_digest_enabled:   true,
     digest_times:           ["06:30"],
     digest_types:           ["all"],
+    locations:              [],
     timezone:               "America/Denver",
     ...values,
   };
@@ -3140,7 +3157,7 @@ export async function handlePortalTestOperatorPhone(req, res, supabase, twilioCl
   const { id } = req.params;
   const { data: row, error: fetchErr } = await supabase
     .from("operator_phones")
-    .select("id, client_id, phone, digest_types")
+    .select("id, client_id, phone, digest_types, locations")
     .eq("id", id)
     .single();
   if (fetchErr || !row)             return res.status(404).json({ error: "Operator phone not found" });
@@ -3157,6 +3174,7 @@ export async function handlePortalTestOperatorPhone(req, res, supabase, twilioCl
       dedupKey:    `${clientId}:${row.id}:test:${Date.now()}`,
       opRowId:     row.id,
       digestTypes: row.digest_types ?? ["all"],
+      locations:   row.locations ?? null,
     });
     return res.json({
       ok:      !!result.success,

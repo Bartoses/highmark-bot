@@ -19,6 +19,7 @@ import {
   extractOperatorContext,
 } from "./operatorIntentParser.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
+import { humanizeWorkType } from "./mpwrWorkOrders.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL HELPERS — KB data accessors
@@ -1102,6 +1103,113 @@ export function buildTodayLoadSnapshot(manifest) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LOCATION SCOPING + SECTION GATING (per-operator briefings)
+// An operator phone can be assigned to one or more of the 4 logical locations.
+// Assigned operators get a STRICT-FILTERED briefing (only their location[s]);
+// owners / unassigned phones see everything. MPWR work orders live under 2
+// fleets, so location → fleet maps Kremmling to its own fleet and Steamboat /
+// North Routt / Rabbit Ears all to the Steamboat fleet.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const OPERATOR_LOCATIONS = ["steamboat", "north_routt", "kremmling", "rabbit_ears"];
+
+export function fleetForLocation(loc) {
+  return String(loc ?? "").toLowerCase().trim() === "kremmling" ? "kremmling" : "steamboat";
+}
+
+// Normalize an operator's assigned-locations array. Empty / null / ['all'] ⇒
+// unscoped (owner view) ⇒ returns null. Otherwise a cleaned lowercase list.
+export function normalizeLocations(locations) {
+  if (!Array.isArray(locations)) return null;
+  const cleaned = locations.map((l) => String(l ?? "").toLowerCase().trim()).filter(Boolean);
+  if (!cleaned.length || cleaned.includes("all")) return null;
+  return cleaned;
+}
+
+// Fleets covered by a set of locations (for work-order scoping). null = all.
+export function locationsToFleets(locations) {
+  const locs = normalizeLocations(locations);
+  if (!locs) return null;
+  return [...new Set(locs.map(fleetForLocation))];
+}
+
+// Filter manifest-style rows (anything with `.location`) to the scoped
+// locations. Unscoped (null) returns rows unchanged. Pure, null-safe.
+export function filterManifestByLocations(rows, locations) {
+  const locs = normalizeLocations(locations);
+  if (!Array.isArray(rows)) return [];
+  if (!locs) return rows;
+  return rows.filter((r) => locs.includes(String(r?.location ?? "").toLowerCase()));
+}
+
+// digest_types section gate. ['all'] (default) shows everything; otherwise the
+// section's category must be present. Backward-compatible: legacy rows default
+// to ['all'] so nothing is hidden. Pure.
+export function wantsSection(digestTypes, category) {
+  if (!Array.isArray(digestTypes) || !digestTypes.length) return true;
+  if (digestTypes.includes("all")) return true;
+  return digestTypes.includes(category);
+}
+
+// Urgency sort for open work orders: out-of-service first, then safety issues,
+// then soonest estimated completion, then oldest created. Pure.
+export function workOrderUrgencyCmp(a, b) {
+  const oos = (b?.out_of_service ? 1 : 0) - (a?.out_of_service ? 1 : 0);
+  if (oos) return oos;
+  const safe = (b?.is_safety_issue ? 1 : 0) - (a?.is_safety_issue ? 1 : 0);
+  if (safe) return safe;
+  const ad = a?.estimated_completion_date ?? "9999-99-99";
+  const bd = b?.estimated_completion_date ?? "9999-99-99";
+  if (ad !== bd) return ad < bd ? -1 : 1;
+  return String(a?.created_date ?? "").localeCompare(String(b?.created_date ?? ""));
+}
+
+// Open fleet work orders from DB2 `work_orders`, scoped to the given fleets
+// (null = all). Returns the top `limit` by urgency. Degrades to [] if the table
+// is absent or on any error.
+export async function getOpenWorkOrders(crmSupabase, fleets = null, limit = 12) {
+  if (!crmSupabase) return [];
+  try {
+    let q = crmSupabase
+      .from("work_orders")
+      .select("id, fleet, work_type, is_safety_issue, out_of_service, asset_family, unit_name, work_to_be_done, notes, created_date, estimated_completion_date, url")
+      .eq("is_closed", false)
+      .not("retired", "is", true); // exclude retired/dispositioned-vehicle cruft (keeps null = unknown)
+    if (Array.isArray(fleets) && fleets.length) q = q.in("fleet", fleets);
+    const { data } = await q;
+    return (data ?? []).slice().sort(workOrderUrgencyCmp).slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+// 🔧 FLEET — open work orders the on-site team can act on. Pure renderer;
+// returns an array of lines (empty when there are none). The MPWR deep link is
+// always included per the operator decision (anyone receiving WO info can log
+// in to MPWR).
+export function buildWorkOrdersLines(workOrders, { max = 6 } = {}) {
+  const rows = Array.isArray(workOrders) ? workOrders : [];
+  if (!rows.length) return [];
+  const lines = ["", "🔧 FLEET / WORK ORDERS"];
+  const oosCount = rows.filter((w) => w.out_of_service).length;
+  if (oosCount > 0) lines.push(`• ${oosCount} unit${oosCount !== 1 ? "s" : ""} out of service`);
+  for (const w of rows.slice(0, max)) {
+    const flag = w.out_of_service ? "⚠️ " : (w.is_safety_issue ? "⚠ " : "");
+    const veh  = [w.asset_family, w.unit_name ? `(${w.unit_name})` : null].filter(Boolean).join(" ") || "Unit";
+    const type = humanizeWorkType(w.work_type);
+    const desc = String(w.work_to_be_done || w.notes || "").replace(/\s+/g, " ").trim().slice(0, 60);
+    const eta  = w.estimated_completion_date
+      ? `est. ${formatMTDateFromNaive(w.estimated_completion_date, { month: "short", day: "numeric" })}`
+      : null;
+    const bits = [type, eta, desc ? `"${desc}"` : null].filter(Boolean).join(" · ");
+    lines.push(`• ${flag}${veh} — ${bits}`);
+    if (w.url) lines.push(`  ${w.url}`);
+  }
+  if (rows.length > max) lines.push(`• +${rows.length - max} more open`);
+  return lines;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // BRIEFING TEXT BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1125,14 +1233,22 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
   const season           = extras.seasonRevenue    ?? null;
   const newBookings      = extras.newBookings      ?? null;
   const issues           = extras.issues           ?? [];
+  const workOrders       = extras.workOrders       ?? [];
+  const digestTypes      = extras.digestTypes      ?? ["all"];
+  const scopeLocations   = normalizeLocations(extras.locations);
 
   const lines = [];
-  lines.push(`🏔 OPERATOR BRIEFING — ${dateStr}`);
+  // Scope tag — when the recipient is assigned to specific location(s), label
+  // the briefing so they know it's filtered to their post.
+  const scopeTag = scopeLocations
+    ? ` · ${scopeLocations.map(capLocation).join(" + ")}`
+    : "";
+  lines.push(`🏔 OPERATOR BRIEFING — ${dateStr}${scopeTag}`);
   lines.push(`${biz}`);
 
   // ── 🏁 TODAY'S LOAD — operational dispatch summary (LEAD section) ────────
   const snap = buildTodayLoadSnapshot(manifest);
-  if (snap.totals.bookings > 0) {
+  if (wantsSection(digestTypes, "bookings") && snap.totals.bookings > 0) {
     lines.push("");
     lines.push("🏁 TODAY'S LOAD");
 
@@ -1187,7 +1303,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
       const more  = todayPartners.partners.length > 2 ? " +more" : "";
       lines.push(`• Partners: ${names}${more}`);
     }
-  } else {
+  } else if (wantsSection(digestTypes, "bookings")) {
     lines.push("");
     lines.push("🏁 TODAY — quiet, nothing on the manifest.");
   }
@@ -1195,7 +1311,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
   // ── 📅 NEXT 7 DAYS — summary view (totals + breakdown, not per-booking) ─
   const upcomingManifest = Array.isArray(extras.upcomingManifest) ? extras.upcomingManifest : [];
   const upcomingRev      = extras.upcomingRevenue ?? null;
-  if (upcomingManifest.length > 0 || (upcomingRev && upcomingRev.bookings > 0)) {
+  if (wantsSection(digestTypes, "bookings") && (upcomingManifest.length > 0 || (upcomingRev && upcomingRev.bookings > 0))) {
     lines.push("");
     lines.push("📅 NEXT 7 DAYS");
     if (upcomingRev && upcomingRev.bookings > 0) {
@@ -1285,10 +1401,15 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     actions.push(`${missingPhones.length} booking${missingPhones.length !== 1 ? "s" : ""} missing phone — e.g. ${name}`);
   }
 
-  if (actions.length) {
+  if (actions.length && wantsSection(digestTypes, "staffing")) {
     lines.push("");
     lines.push("⚠ ACTIONS");
     for (const a of actions.slice(0, 5)) lines.push(`• ${a}`);
+  }
+
+  // ── 🔧 FLEET / WORK ORDERS — open MPWR maintenance for this fleet ─────────
+  if (wantsSection(digestTypes, "fleet")) {
+    for (const l of buildWorkOrdersLines(workOrders)) lines.push(l);
   }
 
   // ── 💰 REVENUE — collected + upcoming + season ──────────────────────────
@@ -1312,7 +1433,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     const unpaidNote = (top.balance_due_cents ?? 0) > 0 ? " — UNPAID" : "";
     revLines.push(`Largest upcoming: ${name} ${dol} (${date}, ${compactActivity(top.activity)})${unpaidNote}`);
   }
-  if (revLines.length) {
+  if (revLines.length && wantsSection(digestTypes, "revenue")) {
     lines.push("");
     lines.push("💰 REVENUE");
     for (const l of revLines) lines.push(`• ${l}`);
@@ -1340,7 +1461,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
   if (newBookings && newBookings.last_24h > 0) {
     insights.push(`${newBookings.last_24h} new in last 24h · ${newBookings.last_7d} this week`);
   }
-  if (insights.length) {
+  if (insights.length && wantsSection(digestTypes, "revenue")) {
     lines.push("");
     lines.push("📈 INSIGHTS");
     for (const i of insights.slice(0, 3)) lines.push(`• ${i}`);
@@ -1372,7 +1493,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
       followups.push(`Unresolved handoff: ${phone} — "${body}…"`);
     }
   }
-  if (followups.length) {
+  if (followups.length && wantsSection(digestTypes, "leads")) {
     lines.push("");
     lines.push("🔥 FOLLOW UP");
     for (const f of followups.slice(0, 4)) lines.push(`• ${f}`);
@@ -1380,13 +1501,13 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
 
   // ── 🌤 CONDITIONS — only if weather data exists ──────────────────────────
   const condLine = buildConditionsLine(weatherSnap);
-  if (condLine !== "No weather data available." && condLine !== "Conditions unavailable.") {
+  if (wantsSection(digestTypes, "weather") && condLine !== "No weather data available." && condLine !== "Conditions unavailable.") {
     lines.push("");
     lines.push(`🌤 CONDITIONS — ${condLine}`);
   }
 
   // ── System alerts (still important but lower priority than ACTIONS) ──────
-  if (issues.length) {
+  if (issues.length && wantsSection(digestTypes, "issues")) {
     lines.push("");
     lines.push("⚠️ SYSTEM");
     for (const i of issues.slice(0, 2)) lines.push(`• ${i}`);
@@ -1648,10 +1769,15 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     }
   } catch { /* proceed if dedup check fails */ }
 
+  // Location scoping (P: per-employee briefings). Assigned operators get a
+  // strict-filtered digest; owners / unassigned (scoped === null) see all.
+  const scoped = normalizeLocations(options.locations);
+  const fleets = locationsToFleets(options.locations);
+
   // Gather all data in parallel — operational signals + summary metrics.
   const [
     todaySlots, manifest, upcomingManifest, hotLeads, weatherSnap, revenue, upcomingRevenue, seasonRevenue, newBookings, issues,
-    unpaid, missingWaivers, overlaps, highValue, duplicates, missingPhones, pacing, locationMix, unresolvedHandoffs,
+    unpaid, missingWaivers, overlaps, highValue, duplicates, missingPhones, pacing, locationMix, unresolvedHandoffs, workOrders,
   ] = await Promise.all([
     getTodaysAvailability(client.id, supabase),
     getTodaysManifest(client.id, crmSupabase),
@@ -1672,26 +1798,55 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     detectPacingSignal(crmSupabase, supabase),
     detectLocationConcentration(crmSupabase),
     detectUnresolvedHandoffs(supabase, client.id),
+    getOpenWorkOrders(crmSupabase, fleets),
   ]);
 
+  // When scoped, filter every location-bearing array to the assigned
+  // location(s). Company-wide aggregates we can't cleanly split by location
+  // (collected revenue, season total, pacing, new-booking counts) are
+  // suppressed for scoped operators so the digest never leaks other posts.
+  let fManifest = manifest, fUpcoming = upcomingManifest, fUnpaid = unpaid,
+      fWaivers = missingWaivers, fHighValue = highValue, fMissingPhones = missingPhones,
+      fLocationMix = locationMix, fUpcomingRev = upcomingRevenue,
+      fRevenue = revenue, fSeason = seasonRevenue, fNewBookings = newBookings, fPacing = pacing;
+  if (scoped) {
+    fManifest      = filterManifestByLocations(manifest, options.locations);
+    fUpcoming      = filterManifestByLocations(upcomingManifest, options.locations);
+    fUnpaid        = filterManifestByLocations(unpaid, options.locations);
+    fWaivers       = filterManifestByLocations(missingWaivers, options.locations);
+    fHighValue     = filterManifestByLocations(highValue, options.locations);
+    fMissingPhones = filterManifestByLocations(missingPhones, options.locations);
+    fLocationMix   = filterManifestByLocations(locationMix, options.locations);
+    // Recompute upcoming revenue from the filtered manifest.
+    let cents = 0, bookings = 0;
+    for (const r of fUpcoming) {
+      if (!/^BOT-/i.test(r.fareharbor_pk ?? "")) bookings += 1;
+      cents += Number(r.receipt_total_cents ?? r.total_cents) || 0;
+    }
+    fUpcomingRev = { bookings, revenue_cents: cents, days: 7, source: "manifest" };
+    fRevenue = null; fSeason = null; fNewBookings = null; fPacing = null;
+  }
+
   const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
-    manifest,
-    upcomingManifest,
-    upcomingRevenue,
-    revenue,
-    seasonRevenue,
-    newBookings,
+    manifest:         fManifest,
+    upcomingManifest: fUpcoming,
+    upcomingRevenue:  fUpcomingRev,
+    revenue:          fRevenue,
+    seasonRevenue:    fSeason,
+    newBookings:      fNewBookings,
     issues,
-    unpaid,
-    missingWaivers,
+    unpaid:           fUnpaid,
+    missingWaivers:   fWaivers,
     overlaps,
-    highValue,
+    highValue:        fHighValue,
     duplicates,
-    missingPhones,
-    pacing,
-    locationMix,
+    missingPhones:    fMissingPhones,
+    pacing:           fPacing,
+    locationMix:      fLocationMix,
     unresolvedHandoffs,
+    workOrders,
     digestTypes: options.digestTypes ?? ["all"],
+    locations:   options.locations ?? null,
   });
 
   const status = process.env.TEST_MODE === "true" ? "test" : "sent";
@@ -1775,7 +1930,7 @@ export async function dispatchOperatorDigests(supabase, twilioClient, crmSupabas
   try {
     const { data, error } = await supabase
       .from("operator_phones")
-      .select("id, client_id, phone, role, label, digest_times, digest_types, timezone, daily_digest_enabled")
+      .select("id, client_id, phone, role, label, digest_times, digest_types, locations, timezone, daily_digest_enabled")
       .eq("daily_digest_enabled", true);
     if (error) {
       if (error.message?.includes("does not exist") || error.code === "42P01") {
@@ -1818,6 +1973,7 @@ export async function dispatchOperatorDigests(supabase, twilioClient, crmSupabas
           dedupKey:    `${clientId}:${row.id}:${row.digest_times?.find((t) => isDigestTimeNow([t], row.timezone ?? "America/Denver", now)) ?? "default"}`,
           opRowId:     row.id,
           digestTypes: row.digest_types ?? ["all"],
+          locations:   row.locations ?? null,
         });
         if (result.success) sent++;
         else skipped++;
