@@ -390,6 +390,14 @@ async function fetchPastGuests(crmSupabase, filterConfig = {}, seasonConfig = nu
 export async function enqueueCampaign(supabase, campaign, fromPhone, crmSupabase, seasonConfig = null) {
   const now = Date.now();
 
+  // Outbound guard — never fan out real campaign sends from the test server
+  // (TEST_MODE=true). Prevents test runs from writing real scheduled_messages
+  // to the shared prod DB that the live cron worker would then deliver.
+  if (process.env.TEST_MODE === "true") {
+    console.log(`[CAMPAIGNS] ${campaign.id} — TEST_MODE: skipping real enqueue`);
+    return { recipientCount: 0, enqueued: 0, skipped: 0, test_mode: true };
+  }
+
   // 1. Select audience (filterConfig from metadata supports past_guests filters)
   const leads = await selectAudience(supabase, {
     clientId:     campaign.client_id,

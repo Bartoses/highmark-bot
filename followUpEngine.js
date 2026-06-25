@@ -75,6 +75,12 @@ const SEQUENCES = {
 export async function scheduleFollowUps(supabase, lead, fromPhone) {
   if (!supabase || !lead?.id || !lead?.contact_phone) return;
 
+  // Outbound guard — the test server runs in TEST_MODE; never write real
+  // follow-up rows to the shared prod DB that the live cron would then deliver.
+  // (Unit tests call this directly in the runner process, which has no
+  // TEST_MODE, so their mock-DB assertions are unaffected.)
+  if (process.env.TEST_MODE === "true") return;
+
   const leadType = lead.lead_type ?? "booking";
   const sequence = SEQUENCES[leadType] ?? SEQUENCES.booking;
   const now      = Date.now();

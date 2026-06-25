@@ -206,7 +206,7 @@ export function personalizeEventMessage(template, lead, client) {
 
 // ── Fire campaign ─────────────────────────────────────────────────────────────
 
-export async function fireCampaign(supabase, campaign, client, crmSupabase) {
+export async function fireCampaign(supabase, campaign, client, crmSupabase, { dryRun = false } = {}) {
   const audienceFilter = campaign.audience_filter || campaign.audience_type || "all_leads";
   const cooldownDays   = Number(campaign.cooldown_days ?? 7);
 
@@ -214,6 +214,15 @@ export async function fireCampaign(supabase, campaign, client, crmSupabase) {
   const eligible    = await filterEligibleContacts(supabase, allContacts, campaign.id, cooldownDays, crmSupabase);
 
   const fromPhone = client.outboundPhone ?? client.outbound_phone ?? process.env.TWILIO_PHONE_NUMBER ?? null;
+
+  // Outbound guard — NEVER enqueue real sends from the test server (TEST_MODE)
+  // or an explicit dry-run/preview. The test suite runs the web server with
+  // TEST_MODE=true; without this, a simulate-event test would write real
+  // scheduled_messages to the shared prod DB that the live cron then delivers.
+  const noSend = dryRun || process.env.TEST_MODE === "true";
+  if (noSend) {
+    return { fired: true, eligible_count: eligible.length, scheduled: 0, dry_run: true };
+  }
 
   let scheduled = 0;
   for (let i = 0; i < eligible.length; i++) {

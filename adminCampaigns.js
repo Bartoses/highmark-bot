@@ -203,9 +203,11 @@ export async function handleSendCampaign(req, res, supabase, crmSupabase) {
 export async function handleSimulateEvent(req, res, supabase, crmSupabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
 
-  const { client_id, trigger_type, override_data, bypass_cooldown } = req.body;
+  const { client_id, trigger_type, override_data, bypass_cooldown, dry_run } = req.body;
   if (!client_id)    return res.status(400).json({ error: "client_id is required" });
   if (!trigger_type) return res.status(400).json({ error: "trigger_type is required" });
+  // dry_run previews reach + eligibility without enqueuing any sends.
+  const dryRun = dry_run === true;
 
   try {
     // Find matching active event campaigns for this client + trigger
@@ -262,7 +264,7 @@ export async function handleSimulateEvent(req, res, supabase, crmSupabase) {
         continue;
       }
 
-      const result = await fireCampaign(supabase, campaign, clientRow, crmSupabase);
+      const result = await fireCampaign(supabase, campaign, clientRow, crmSupabase, { dryRun });
       results.push({ campaign_id: campaign.id, campaign_name: campaign.name, ...result });
     }
 
