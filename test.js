@@ -3242,6 +3242,7 @@ async function main() {
     await testPolarisConfirmations();  // Polaris (MPWR) confirmation text builder
     await testActionOrientedBriefing();// Action-oriented briefing: detectors + ACTIONS/REVENUE/INSIGHTS/FOLLOW UP format + 1-10 menu
     await testOperationalBriefing();   // Operational briefing: classifiers + TODAY'S LOAD section + dispatch-sheet manifest
+    await testLocationFleetBriefing(); // Location-scoped briefings + MPWR work orders (fleet section, per-employee filtering)
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -14204,6 +14205,135 @@ async function testOperationalBriefing() {
     const out = formatManifestResponse([], "today");
     chk("op: empty manifest uses friendly copy",
         out.includes("Nothing on the manifest yet"), out);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Location-scoped briefings + MPWR work orders (per-employee + fleet section)
+// ─────────────────────────────────────────────────────────────────────────────
+async function testLocationFleetBriefing() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const {
+    fleetForLocation, normalizeLocations, locationsToFleets,
+    filterManifestByLocations, wantsSection, workOrderUrgencyCmp,
+    buildWorkOrdersLines, buildBriefingText,
+  } = await import("./operatorBriefing.js");
+  const {
+    humanizeWorkType, deriveOutOfService, isVehicleRetired,
+    buildWorkOrderUrl, normalizeWorkOrderRow,
+  } = await import("./mpwrWorkOrders.js");
+
+  // ── fleetForLocation — Kremmling is its own fleet; the rest are Steamboat ──
+  chk("wo: fleet kremmling", fleetForLocation("kremmling") === "kremmling");
+  chk("wo: fleet steamboat", fleetForLocation("steamboat") === "steamboat");
+  chk("wo: fleet north_routt → steamboat", fleetForLocation("north_routt") === "steamboat");
+  chk("wo: fleet rabbit_ears → steamboat", fleetForLocation("rabbit_ears") === "steamboat");
+
+  // ── normalizeLocations — empty / all ⇒ unscoped (null) ────────────────────
+  chk("wo: normalize empty = null", normalizeLocations([]) === null);
+  chk("wo: normalize all = null", normalizeLocations(["all"]) === null);
+  chk("wo: normalize null = null", normalizeLocations(null) === null);
+  chk("wo: normalize cleans case", JSON.stringify(normalizeLocations(["Kremmling"])) === JSON.stringify(["kremmling"]));
+
+  // ── locationsToFleets — dedupes the Steamboat fleet ───────────────────────
+  chk("wo: locationsToFleets unscoped = null", locationsToFleets([]) === null);
+  {
+    const f = locationsToFleets(["north_routt", "rabbit_ears", "kremmling"]);
+    chk("wo: locationsToFleets has both", f.includes("steamboat") && f.includes("kremmling") && f.length === 2, JSON.stringify(f));
+  }
+
+  // ── filterManifestByLocations — strict filter; unscoped passes through ─────
+  {
+    const rows = [{ location: "kremmling" }, { location: "steamboat" }, { location: "rabbit_ears" }, { location: null }];
+    chk("wo: filter kremmling only", filterManifestByLocations(rows, ["kremmling"]).length === 1);
+    chk("wo: filter steamboat fleet locs", filterManifestByLocations(rows, ["steamboat", "rabbit_ears"]).length === 2);
+    chk("wo: filter unscoped passes all", filterManifestByLocations(rows, []).length === 4);
+    chk("wo: filter null-safe", filterManifestByLocations(null, ["kremmling"]).length === 0);
+  }
+
+  // ── wantsSection — ['all'] shows everything; subset gates ─────────────────
+  chk("wo: wantsSection all", wantsSection(["all"], "fleet") && wantsSection(["all"], "revenue"));
+  chk("wo: wantsSection subset hit", wantsSection(["bookings", "fleet"], "fleet"));
+  chk("wo: wantsSection subset miss", wantsSection(["bookings"], "fleet") === false);
+  chk("wo: wantsSection empty defaults open", wantsSection([], "fleet"));
+
+  // ── humanizeWorkType — PascalCase → spaced ────────────────────────────────
+  chk("wo: humanize DamageRepair", humanizeWorkType("DamageRepair") === "Damage Repair");
+  chk("wo: humanize CheckEngineLight", humanizeWorkType("CheckEngineLight") === "Check Engine Light");
+  chk("wo: humanize null", humanizeWorkType(null) === "Work order");
+
+  // ── deriveOutOfService / isVehicleRetired — the real MPWR vehicle states ──
+  chk("wo: OOS not rentable (active)", deriveOutOfService({ rentabilityStatus: "Not Rentable", isActive: true }) === true);
+  chk("wo: not OOS when Available", deriveOutOfService({ rentabilityStatus: "Available", isActive: true }) === false);
+  chk("wo: not OOS when Rentable", deriveOutOfService({ rentabilityStatus: "Rentable" }) === false);
+  chk("wo: dispositioned ≠ OOS", deriveOutOfService({ rentabilityStatus: "Not Rentable", dispositionStatus: "Dispositioned", isActive: false }) === false);
+  chk("wo: retired by isActive false", isVehicleRetired({ isActive: false }) === true);
+  chk("wo: retired by disposition", isVehicleRetired({ dispositionStatus: "Dispositioned" }) === true);
+  chk("wo: not retired when active", isVehicleRetired({ isActive: true, dispositionStatus: null }) === false);
+
+  // ── buildWorkOrderUrl + normalizeWorkOrderRow ─────────────────────────────
+  chk("wo: url", buildWorkOrderUrl("WO-DVQ-QQB") === "https://mpwr-hq.poladv.com/work-orders/WO-DVQ-QQB");
+  {
+    const rec = normalizeWorkOrderRow(
+      { shortId: "WO-X", id: "uuid-1", workType: "DamageRepair", isClosed: false, isSafetyIssue: true, vehicleUnitNumber: "Pamela ", mileage: 2253, workToBeDone: "Power steering loss", createdDate: "2026-06-11", estimatedCompletionDate: "2026-06-25" },
+      { fleet: "kremmling", outfitterId: 541, detail: { vehicle: { assetFamilyName: "RZR PRO S4 PREMIUM", rentabilityStatus: "Not Rentable", isActive: true } } },
+    );
+    chk("wo: normalize id", rec.id === "WO-X");
+    chk("wo: normalize fleet", rec.fleet === "kremmling");
+    chk("wo: normalize OOS true", rec.out_of_service === true);
+    chk("wo: normalize asset_family", rec.asset_family === "RZR PRO S4 PREMIUM");
+    chk("wo: normalize trims unit", rec.unit_name === "Pamela");
+    chk("wo: normalize url", rec.url.endsWith("/work-orders/WO-X"));
+  }
+
+  // ── workOrderUrgencyCmp — OOS first, then safety, then est date ────────────
+  {
+    const wos = [
+      { id: "a", out_of_service: false, is_safety_issue: false, estimated_completion_date: "2026-06-01" },
+      { id: "b", out_of_service: true,  is_safety_issue: false, estimated_completion_date: "2026-09-01" },
+      { id: "c", out_of_service: false, is_safety_issue: true,  estimated_completion_date: "2026-07-01" },
+    ];
+    const sorted = [...wos].sort(workOrderUrgencyCmp).map((w) => w.id);
+    chk("wo: urgency OOS first then safety", JSON.stringify(sorted) === JSON.stringify(["b", "c", "a"]), JSON.stringify(sorted));
+  }
+
+  // ── buildWorkOrdersLines — render shape + always includes link ────────────
+  {
+    const lines = buildWorkOrdersLines([
+      { out_of_service: true, asset_family: "RZR PRO S4", unit_name: "Pamela", work_type: "DamageRepair", work_to_be_done: "Power steering loss", estimated_completion_date: "2026-06-25", url: "https://mpwr-hq.poladv.com/work-orders/WO-DVQ-QQB" },
+    ]);
+    const text = lines.join("\n");
+    chk("wo: section header", text.includes("🔧 FLEET / WORK ORDERS"));
+    chk("wo: section OOS count", text.includes("1 unit out of service"));
+    chk("wo: section OOS flag", text.includes("⚠️"));
+    chk("wo: section vehicle + unit", text.includes("RZR PRO S4 (Pamela)"));
+    chk("wo: section humanized type", text.includes("Damage Repair"));
+    chk("wo: section always links", text.includes("https://mpwr-hq.poladv.com/work-orders/WO-DVQ-QQB"));
+    chk("wo: empty → no lines", buildWorkOrdersLines([]).length === 0);
+  }
+
+  // ── End-to-end: scoped briefing label + FLEET section gating ──────────────
+  {
+    const client = { name: "CSR + REA" };
+    const workOrders = [{ out_of_service: true, asset_family: "RZR PRO S4", unit_name: "Pamela", work_type: "DamageRepair", work_to_be_done: "Power steering loss", estimated_completion_date: "2026-06-25", url: "https://x/WO-1" }];
+
+    const scoped = buildBriefingText(client, [], [], null, {
+      manifest: [], workOrders, locations: ["kremmling"], digestTypes: ["all"],
+    });
+    chk("wo: scoped header tag", scoped.includes("· Kremmling"), scoped.split("\n")[0]);
+    chk("wo: scoped shows FLEET", scoped.includes("🔧 FLEET / WORK ORDERS"));
+
+    const ownerView = buildBriefingText(client, [], [], null, {
+      manifest: [], workOrders, locations: null, digestTypes: ["all"],
+    });
+    chk("wo: owner no scope tag", !ownerView.split("\n")[0].includes("·") || !ownerView.split("\n")[0].includes("Kremmling"));
+
+    const noFleet = buildBriefingText(client, [], [], null, {
+      manifest: [], workOrders, locations: ["kremmling"], digestTypes: ["bookings"],
+    });
+    chk("wo: fleet gated off by digest_types", !noFleet.includes("🔧 FLEET / WORK ORDERS"));
   }
 }
 

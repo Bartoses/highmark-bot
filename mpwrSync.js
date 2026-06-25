@@ -59,7 +59,7 @@ export function deriveLocationFromTitle(productTitle) {
 // Token is stored in MPWR_TOKEN env var (just the JWT, no "Bearer " prefix).
 // To refresh: log into mpwr-hq.poladv.com, open DevTools → Application → Cookies,
 // copy the __xauth value (strip the leading "Bearer "), update Railway env var.
-function getToken() {
+export function getToken() {
   const token = process.env.MPWR_TOKEN;
   if (!token) throw new Error('MPWR_TOKEN not set — paste JWT from __xauth cookie into Railway env vars');
 
@@ -117,6 +117,42 @@ function decodeTurboStream(raw) {
   }
 
   return decode(arr[0]);
+}
+
+// ── Memoizing turbo-stream decoder (for self-referential detail responses) ───
+// The per-record detail routes (/orders/{id}.data, /work-orders/{id}.data)
+// contain self-referential objects (e.g. a vehicle that points back at its
+// work order). A non-memoizing decode infinite-loops on those, so detail
+// callers use this variant. Also strips the trailing `Pn:[[…]]` deferred-data
+// chunks before parsing. Returns the decoded root (deref(0)); callers pick
+// their own route key off it.
+export function decodeMpwrStream(raw) {
+  const main = String(raw ?? '').split(/\nP\d+:/)[0];
+  const arr  = JSON.parse(main);
+  const memo = new Map();
+  function deref(i) {
+    if (i == null || (typeof i === 'number' && i < 0)) return null;
+    if (typeof i !== 'number') return null;
+    if (memo.has(i)) return memo.get(i);
+    const placeholder = {};
+    memo.set(i, placeholder);
+    const v = decode(arr[i]);
+    memo.set(i, v);
+    return v;
+  }
+  function decode(elem) {
+    if (elem === -5 || elem == null) return null;
+    if (typeof elem !== 'object') return elem;
+    if (Array.isArray(elem)) return elem.map(deref);
+    const out = {};
+    for (const [k, v] of Object.entries(elem)) {
+      if (!k.startsWith('_')) continue;
+      const keyName = arr[parseInt(k.slice(1), 10)];
+      if (typeof keyName === 'string') out[keyName] = deref(v);
+    }
+    return out;
+  }
+  return deref(0);
 }
 
 // ── Date / time helpers ───────────────────────────────────────────────────────
@@ -177,34 +213,8 @@ async function fetchOrderDetail(shortId, outfitterId, token) {
   });
   if (!res.ok) throw new Error(`MPWR detail ${shortId} returned ${res.status}`);
   const raw = await res.text();
-  const main = raw.split(/\nP\d+:/)[0];
-
-  // The detail response has self-referential objects; use a memoizing decoder.
-  const arr  = JSON.parse(main);
-  const memo = new Map();
-  function deref(i) {
-    if (i == null || (typeof i === 'number' && i < 0)) return null;
-    if (typeof i !== 'number') return null;
-    if (memo.has(i)) return memo.get(i);
-    const placeholder = {};
-    memo.set(i, placeholder);
-    const v = decode(arr[i]);
-    memo.set(i, v);
-    return v;
-  }
-  function decode(elem) {
-    if (elem === -5 || elem == null) return null;
-    if (typeof elem !== 'object') return elem;
-    if (Array.isArray(elem)) return elem.map(deref);
-    const out = {};
-    for (const [k, v] of Object.entries(elem)) {
-      if (!k.startsWith('_')) continue;
-      const keyName = arr[parseInt(k.slice(1), 10)];
-      if (typeof keyName === 'string') out[keyName] = deref(v);
-    }
-    return out;
-  }
-  return deref(0)?.['routes/_authenticated/_customer-orders/orders.$orderShortId/_layout']?.data ?? null;
+  const root = decodeMpwrStream(raw);
+  return root?.['routes/_authenticated/_customer-orders/orders.$orderShortId/_layout']?.data ?? null;
 }
 
 // Resolve the booked vehicle asset-family name from order detail.
