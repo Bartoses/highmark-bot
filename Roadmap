@@ -463,6 +463,33 @@ voicemail — never drops a call. Every call is logged for the future dashboard.
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Operator Intelligence 2.0 — SMS Operations Center, Phase 1 (2026-06-25)
+Reframed the briefing from an information report into an action center: each
+employee gets THEIR next actions, role-aware, highest-impact first.
+
+- priorityEngine.js (NEW): deterministic scoring (safety 100 … maintenance 40)
+  re-weighted per role; buildTodaysPriorities → "TODAY'S PRIORITIES" header.
+  OOS-unit-needed-for-a-today-departure join.
+- operatorRoles.js (NEW): 8 canonical roles (+ legacy normalize), 4 detail
+  tiers (executive/standard/operational/diagnostic), ROLE_PROFILES
+  (focusAreas/cardOrder/priorityWeights). resolveFocusAreas.
+- operatorBriefing.js: buildActionCardBriefing — greeting + priorities +
+  role-ordered action cards (headline · status · Reply N) + 2.0 reply menu.
+  resolveTimeOfDay (morning=today plan, evening=tomorrow prep). Diagnostic tier
+  → legacy buildBriefingText (untouched). OPERATOR_MENU remapped to 8 (+ new
+  late-returns/work-orders/ask-ai handlers). dispatch passes role/name/timeOfDay.
+- db1_operator_intelligence_2.sql: widen role + briefing_detail CHECKs, add
+  display_name. Additive; legacy values normalized in code.
+- Portal Settings → Operator Intelligence rebuilt as a per-person config
+  (Person/Role/Locations/Detail/Focus/Delivery/Channels). Email+Push stubbed.
+- Decisions: SMS brain + config screen now; DEFERRED drag-drop widget
+  dashboard, midday briefing, email/push. Roles = CSR/REA's real set first.
+  Time-of-day = morning + evening now.
+- Tests: testOperatorIntelligence2 (36 assertions). 2739/2739 passing.
+- NEXT (Phase 2): drag-drop dashboard widgets, midday "what changed" briefing,
+  email/push channels, AI-module plug-in framework (priorityEngine + card
+  registry are the extension points).
+
 ### Per-Employee Location Scoping + MPWR Fleet Work Orders (2026-06-25)
 Owner asked: (1) assign employees to locations so each gets a location-specific
 briefing, and (2) pull open fleet work orders per location from MPWR (like the

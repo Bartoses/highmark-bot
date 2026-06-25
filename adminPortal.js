@@ -2949,10 +2949,13 @@ export async function handlePortalPartnerAnalytics(req, res, supabase) {
 //   • last_digest_sent_at stamp (read-only; updated by the dispatcher)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VALID_OPERATOR_ROLES        = ["owner", "manager", "sales", "staff"];
-const VALID_DIGEST_TYPES          = ["all", "bookings", "revenue", "leads", "staffing", "issues", "weather", "fleet"];
+const VALID_OPERATOR_ROLES        = [
+  "owner", "manager", "sales", "staff", // legacy (back-compat)
+  "general_manager", "operations_manager", "reservations", "fleet", "mechanic", "guide", "marketing", // 2.0
+];
+const VALID_DIGEST_TYPES          = ["all", "bookings", "revenue", "leads", "staffing", "issues", "weather", "fleet", "maintenance", "safety"];
 const VALID_OPERATOR_LOCATIONS    = ["steamboat", "north_routt", "kremmling", "rabbit_ears"];
-const VALID_BRIEFING_DETAIL       = ["auto", "summary", "detailed"];
+const VALID_BRIEFING_DETAIL       = ["auto", "summary", "detailed", "executive", "standard", "operational", "diagnostic"];
 const DIGEST_TIME_RE              = /^([01]\d|2[0-3]):([0-5]\d)$/; // HH:MM 24-hour
 
 function validateOperatorPhoneInput(body, { partial = false } = {}) {
@@ -2969,6 +2972,10 @@ function validateOperatorPhoneInput(body, { partial = false } = {}) {
 
   if (body.label !== undefined) {
     out.label = body.label ? String(body.label).trim().slice(0, 60) : null;
+  }
+
+  if (body.display_name !== undefined) {
+    out.display_name = body.display_name ? String(body.display_name).trim().slice(0, 40) : null;
   }
 
   if (body.role !== undefined) {
@@ -3062,7 +3069,7 @@ export async function handlePortalOperatorPhones(req, res, supabase) {
 
   const { data, error } = await supabase
     .from("operator_phones")
-    .select("id, client_id, phone, label, role, internal_mode_enabled, daily_digest_enabled, digest_times, digest_types, locations, briefing_detail, timezone, last_digest_sent_at, created_at, updated_at")
+    .select("id, client_id, phone, label, display_name, role, internal_mode_enabled, daily_digest_enabled, digest_times, digest_types, locations, briefing_detail, timezone, last_digest_sent_at, created_at, updated_at")
     .eq("client_id", clientId)
     .order("role", { ascending: true })
     .order("created_at", { ascending: true });
@@ -3093,6 +3100,7 @@ export async function handlePortalCreateOperatorPhone(req, res, supabase) {
     digest_types:           ["all"],
     locations:              [],
     briefing_detail:        "auto",
+    display_name:           null,
     timezone:               "America/Denver",
     ...values,
   };
@@ -3166,7 +3174,7 @@ export async function handlePortalTestOperatorPhone(req, res, supabase, twilioCl
   const { id } = req.params;
   const { data: row, error: fetchErr } = await supabase
     .from("operator_phones")
-    .select("id, client_id, phone, digest_types, locations, briefing_detail")
+    .select("id, client_id, phone, role, label, display_name, digest_types, locations, briefing_detail")
     .eq("id", id)
     .single();
   if (fetchErr || !row)             return res.status(404).json({ error: "Operator phone not found" });
@@ -3182,6 +3190,9 @@ export async function handlePortalTestOperatorPhone(req, res, supabase, twilioCl
       toPhone:     row.phone,
       dedupKey:    `${clientId}:${row.id}:test:${Date.now()}`,
       opRowId:        row.id,
+      role:           row.role ?? "owner",
+      displayName:    row.display_name ?? null,
+      label:          row.label ?? null,
       digestTypes:    row.digest_types ?? ["all"],
       locations:      row.locations ?? null,
       briefingDetail: row.briefing_detail ?? "auto",

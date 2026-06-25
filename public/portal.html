@@ -6002,15 +6002,45 @@ async function loadVoiceCalls() {
     <tbody>${rows}</tbody></table></div>`;
 }
 
-// ─── Operator Intelligence (Sprint C) ────────────────────────────────────────
-const OPERATOR_DIGEST_TYPES = ['all','bookings','revenue','leads','staffing','issues','weather','fleet'];
-const OPERATOR_ROLES        = ['owner','manager','sales','staff'];
+// ─── Operator Intelligence 2.0 — Mission Control config ───────────────────────
+const OPERATOR_FOCUS_AREAS = [
+  { value:'bookings',    label:"Today's Bookings" },
+  { value:'fleet',       label:'Fleet' },
+  { value:'maintenance', label:'Maintenance' },
+  { value:'safety',      label:'Safety' },
+  { value:'staffing',    label:'Staffing' },
+  { value:'revenue',     label:'Revenue' },
+  { value:'leads',       label:'Leads' },
+  { value:'weather',     label:'Weather' },
+];
+const OPERATOR_ROLES = [
+  { value:'owner',              label:'Owner' },
+  { value:'general_manager',    label:'General Manager' },
+  { value:'operations_manager', label:'Operations Manager' },
+  { value:'reservations',       label:'Reservations' },
+  { value:'fleet',              label:'Fleet Manager' },
+  { value:'mechanic',           label:'Mechanic' },
+  { value:'guide',              label:'Guide' },
+  { value:'marketing',          label:'Marketing' },
+];
+const OPERATOR_DETAIL_TIERS = [
+  { value:'auto',        label:'Auto — match the role' },
+  { value:'executive',   label:'Executive — 30-sec business health (owner)' },
+  { value:'standard',    label:'Standard — actionable tasks (manager)' },
+  { value:'operational', label:'Operational — full execution detail (staff)' },
+  { value:'diagnostic',  label:'Diagnostic — everything (troubleshooting)' },
+];
 const OPERATOR_LOCATIONS    = [
   { value:'steamboat',   label:'Steamboat'   },
   { value:'north_routt', label:'North Routt' },
   { value:'kremmling',   label:'Kremmling'   },
   { value:'rabbit_ears', label:'Rabbit Ears' },
 ];
+// Legacy stored role/detail → canonical (for selecting the right option on load).
+const LEGACY_ROLE_MAP   = { manager:'operations_manager', sales:'reservations', staff:'guide' };
+const LEGACY_DETAIL_MAP = { summary:'executive', detailed:'operational' };
+const opRoleValue   = (r) => LEGACY_ROLE_MAP[r] ?? r ?? 'owner';
+const opDetailValue = (d) => LEGACY_DETAIL_MAP[d] ?? d ?? 'auto';
 
 async function loadOperatorIntelligence() {
   const list = document.getElementById('operatorIntelligenceList');
@@ -6031,87 +6061,105 @@ async function loadOperatorIntelligence() {
 function opPhoneCardHtml(p) {
   const times    = (p.digest_times ?? ['06:30']).join(', ');
   const types    = p.digest_types ?? ['all'];
+  const allFocus = types.includes('all');
   const locs     = Array.isArray(p.locations) ? p.locations : [];
-  const detail   = p.briefing_detail ?? 'auto';
+  const role     = opRoleValue(p.role);
+  const detail   = opDetailValue(p.briefing_detail);
+  const name     = p.display_name ?? '';
   const lastSent = p.last_digest_sent_at ? new Date(p.last_digest_sent_at).toLocaleString() : '—';
+  const sectionLabel = (t) => `<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin:14px 0 6px;">${t}</div>`;
   return `
-    <div class="op-int-card" data-op-id="${p.id}" style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;background:var(--surface2);">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-        <div style="font-weight:600;font-size:13px;">${escHtml(formatPhone(p.phone))}</div>
+    <div class="op-int-card" data-op-id="${p.id}" style="border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:14px;background:var(--surface2);">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div style="font-weight:700;font-size:14px;">${escHtml(name || formatPhone(p.phone))}</div>
         <button class="btn btn-ghost btn-sm" onclick="deleteOperatorPhone('${p.id}')" title="Remove">✕ Remove</button>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div style="font-size:11px;color:var(--text3);">${escHtml(formatPhone(p.phone))}</div>
+
+      ${sectionLabel('Person')}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div>
-          <label style="font-size:11px;color:var(--text2);">Label</label>
-          <input type="text" class="form-input op-int-label" value="${escHtml(p.label ?? '')}" placeholder="e.g. Owner, Kremmling Mgr">
+          <label style="font-size:11px;color:var(--text2);">Name <span style="color:var(--text3);">(greeting)</span></label>
+          <input type="text" class="form-input op-int-name" value="${escHtml(name)}" placeholder="John">
         </div>
         <div>
-          <label style="font-size:11px;color:var(--text2);">Role</label>
-          <select class="form-input op-int-role">
-            ${OPERATOR_ROLES.map(r => `<option value="${r}" ${p.role === r ? 'selected' : ''}>${r}</option>`).join('')}
-          </select>
+          <label style="font-size:11px;color:var(--text2);">Title <span style="color:var(--text3);">(optional)</span></label>
+          <input type="text" class="form-input op-int-label" value="${escHtml(p.label ?? '')}" placeholder="e.g. Kremmling Lead">
         </div>
       </div>
-      <div style="display:flex;gap:18px;margin-bottom:10px;">
-        <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
-          <input type="checkbox" class="op-int-internal" ${p.internal_mode_enabled !== false ? 'checked' : ''}>
-          Internal-mode access
-        </label>
-        <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
-          <input type="checkbox" class="op-int-digest" ${p.daily_digest_enabled !== false ? 'checked' : ''}>
-          Daily digest
-        </label>
+
+      ${sectionLabel('Role')}
+      <select class="form-input op-int-role" style="max-width:340px;">
+        ${OPERATOR_ROLES.map(r => `<option value="${r.value}" ${role === r.value ? 'selected' : ''}>${r.label}</option>`).join('')}
+      </select>
+
+      ${sectionLabel('Locations')} <span style="font-size:10px;color:var(--text3);">none = all locations / owner view</span>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;">
+        ${OPERATOR_LOCATIONS.map(l => `
+          <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer;">
+            <input type="checkbox" class="op-int-loc" value="${l.value}" ${locs.includes(l.value) ? 'checked' : ''}> ${l.label}
+          </label>`).join('')}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+
+      ${sectionLabel('Detail level')}
+      <select class="form-input op-int-detail" style="max-width:420px;">
+        ${OPERATOR_DETAIL_TIERS.map(t => `<option value="${t.value}" ${detail === t.value ? 'selected' : ''}>${t.label}</option>`).join('')}
+      </select>
+
+      ${sectionLabel('Focus areas')}
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;">
+        <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer;font-weight:600;">
+          <input type="checkbox" class="op-int-focus-all" ${allFocus ? 'checked' : ''} onchange="opToggleAllFocus(this)"> All
+        </label>
+        ${OPERATOR_FOCUS_AREAS.map(f => `
+          <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer;">
+            <input type="checkbox" class="op-int-type" value="${f.value}" ${(allFocus || types.includes(f.value)) ? 'checked' : ''}> ${f.label}
+          </label>`).join('')}
+      </div>
+
+      ${sectionLabel('Delivery')}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div>
-          <label style="font-size:11px;color:var(--text2);">Digest times (HH:MM, comma-separated)</label>
-          <input type="text" class="form-input op-int-times" value="${escHtml(times)}" placeholder="06:30, 13:00, 19:00">
-          <div style="font-size:10px;color:var(--text3);">In the phone's timezone. Multiple times = morning + afternoon + evening.</div>
+          <label style="font-size:11px;color:var(--text2);">Times <span style="color:var(--text3);">(HH:MM, comma-sep)</span></label>
+          <input type="text" class="form-input op-int-times" value="${escHtml(times)}" placeholder="07:00, 18:00">
+          <div style="font-size:10px;color:var(--text3);">Morning (&lt;11am) = today's plan · Evening (≥4pm) = tomorrow prep.</div>
         </div>
         <div>
           <label style="font-size:11px;color:var(--text2);">Timezone</label>
           <input type="text" class="form-input op-int-tz" value="${escHtml(p.timezone ?? 'America/Denver')}" placeholder="America/Denver">
         </div>
       </div>
-      <div style="margin-bottom:10px;">
-        <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">Sections to include</label>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          ${OPERATOR_DIGEST_TYPES.map(t => `
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" class="op-int-type" value="${t}" ${types.includes(t) ? 'checked' : ''}>
-              ${t}
-            </label>
-          `).join('')}
-        </div>
+      <div style="display:flex;gap:18px;margin-top:8px;flex-wrap:wrap;">
+        <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" class="op-int-digest" ${p.daily_digest_enabled !== false ? 'checked' : ''}> Daily briefing
+        </label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" class="op-int-internal" ${p.internal_mode_enabled !== false ? 'checked' : ''}> Ask-AI / internal access
+        </label>
       </div>
-      <div style="margin-bottom:10px;">
-        <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">Locations <span style="color:var(--text3);font-weight:400;">(none = all locations / owner view)</span></label>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          ${OPERATOR_LOCATIONS.map(l => `
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" class="op-int-loc" value="${l.value}" ${locs.includes(l.value) ? 'checked' : ''}>
-              ${l.label}
-            </label>
-          `).join('')}
-        </div>
-        <div style="font-size:10px;color:var(--text3);margin-top:4px;">Assigned staff get a briefing filtered to their location(s) — bookings, actions, and fleet work orders (Kremmling fleet vs Steamboat fleet).</div>
+
+      ${sectionLabel('Notification channels')}
+      <div style="display:flex;gap:18px;flex-wrap:wrap;">
+        <label style="font-size:12px;display:flex;align-items:center;gap:5px;"><input type="checkbox" checked disabled> SMS</label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:5px;color:var(--text3);"><input type="checkbox" disabled> Email <span style="font-size:10px;">(soon)</span></label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:5px;color:var(--text3);"><input type="checkbox" disabled> Push <span style="font-size:10px;">(soon)</span></label>
       </div>
-      <div style="margin-bottom:10px;max-width:320px;">
-        <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">Detail level</label>
-        <select class="form-input op-int-detail">
-          <option value="auto"     ${detail === 'auto'     ? 'selected' : ''}>Auto (detailed for a single post, summary for owner)</option>
-          <option value="detailed" ${detail === 'detailed' ? 'selected' : ''}>Detailed — per-booking + full work orders (staff)</option>
-          <option value="summary"  ${detail === 'summary'  ? 'selected' : ''}>Summary — high-level rollups (owner)</option>
-        </select>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:10px;">
+
+      <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:12px;margin-top:14px;">
         <div style="font-size:11px;color:var(--text3);">Last sent: ${escHtml(lastSent)}</div>
         <div style="display:flex;gap:6px;">
-          <button class="btn btn-ghost btn-sm" onclick="testOperatorPhone('${p.id}', this)">Send test now</button>
+          <button class="btn btn-ghost btn-sm" onclick="testOperatorPhone('${p.id}', this)">Preview / Send test</button>
           <button class="btn btn-primary btn-sm" onclick="saveOperatorPhone('${p.id}', this)">Save</button>
         </div>
       </div>
     </div>`;
+}
+
+// "All" focus toggle — checks/unchecks every focus area.
+function opToggleAllFocus(el) {
+  const card = el.closest('.op-int-card');
+  if (!card) return;
+  card.querySelectorAll('.op-int-type').forEach(c => { c.checked = el.checked; });
 }
 
 function formatPhone(e164) {
@@ -6123,13 +6171,18 @@ function formatPhone(e164) {
 async function saveOperatorPhone(id, btn) {
   const card = btn.closest('.op-int-card');
   if (!card) return;
+  // Focus areas: "All" checked (or every box checked) → ['all']; else the picked set.
+  const allChecked = card.querySelector('.op-int-focus-all')?.checked;
+  const pickedFocus = [...card.querySelectorAll('.op-int-type:checked')].map(c => c.value);
+  const focusAll = allChecked || pickedFocus.length === card.querySelectorAll('.op-int-type').length;
   const body = {
+    display_name:           card.querySelector('.op-int-name')?.value.trim() || null,
     label:                  card.querySelector('.op-int-label').value.trim() || null,
     role:                   card.querySelector('.op-int-role').value,
     internal_mode_enabled:  card.querySelector('.op-int-internal').checked,
     daily_digest_enabled:   card.querySelector('.op-int-digest').checked,
     digest_times:           card.querySelector('.op-int-times').value.split(',').map(s => s.trim()).filter(Boolean),
-    digest_types:           [...card.querySelectorAll('.op-int-type:checked')].map(c => c.value),
+    digest_types:           focusAll ? ['all'] : pickedFocus,
     locations:              [...card.querySelectorAll('.op-int-loc:checked')].map(c => c.value),
     briefing_detail:        card.querySelector('.op-int-detail')?.value || 'auto',
     timezone:               card.querySelector('.op-int-tz').value.trim() || 'America/Denver',
@@ -6148,7 +6201,7 @@ async function saveOperatorPhone(id, btn) {
 async function testOperatorPhone(id, btn) {
   btn.disabled = true; btn.textContent = 'Sending…';
   const r = await apiFetch(`/operator-phones/${id}/test`, { method: 'POST', body: '{}' });
-  btn.disabled = false; btn.textContent = 'Send test now';
+  btn.disabled = false; btn.textContent = 'Preview / Send test';
   if (!r || r.error) {
     showToast(`Test send failed: ${r?.error ?? _lastApiError ?? 'unknown'}`);
     return;

@@ -20,6 +20,10 @@ import {
 } from "./operatorIntentParser.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
 import { humanizeWorkType } from "./mpwrWorkOrders.js";
+import {
+  normalizeRole, getRoleProfile, resolveFocusAreas, CARD_FOCUS, normalizeDetail,
+} from "./operatorRoles.js";
+import { scorePriorities, buildTodaysPriorities } from "./priorityEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL HELPERS — KB data accessors
@@ -1631,22 +1635,41 @@ function isToday(naive) {
 // stable across briefings so an operator can scroll back and reply with a
 // number at any time of day.
 // ─────────────────────────────────────────────────────────────────────────────
+// Operator Intelligence 2.0 reply menu — action-first, matches the briefing
+// footer "1 Schedule · 2 Revenue · 3 Waivers · 4 Late returns · 5 Work orders ·
+// 6 Hot leads · 7 Staff · 8 Ask AI". Each maps to a command string handled below.
 export const OPERATOR_MENU = {
-  "1":  "bookings today",
-  "2":  "revenue this week",
-  "3":  "follow-ups",
-  "4":  "risks",
-  "5":  "leads",
-  "6":  "underbooked",
-  "7":  "unpaid",
-  "8":  "missing waivers",
-  "9":  "ops load",
-  "10": "weather",
+  "1": "bookings today",
+  "2": "revenue this week",
+  "3": "missing waivers",
+  "4": "late returns",
+  "5": "work orders",
+  "6": "leads",
+  "7": "ops load",
+  "8": "ask ai",
 };
 
 export function resolveMenuShortcut(message) {
   const trimmed = String(message ?? "").trim();
   return OPERATOR_MENU[trimmed] ?? null;
+}
+
+// Reply-handler formatters (Operator Intelligence 2.0).
+function formatLateReturnsResponse(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return "🌙 No late returns today — all units back by 5pm.";
+  const lines = [`🌙 LATE RETURNS — ${list.length} after 5pm`];
+  for (const r of list.slice(0, 6)) {
+    const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+    lines.push(`• ${name} · ${compactActivity(r.activity)} · ${capLocation(r.location)}`);
+  }
+  return lines.join("\n");
+}
+
+function formatWorkOrdersResponse(rows) {
+  const lines = buildWorkOrdersLines(rows, { detail: "detailed", max: 8 });
+  if (!lines.length) return "🔧 No open work orders — fleet is clear.";
+  return lines.filter(Boolean).join("\n").trim();
 }
 
 function buildConditionsLine(snap) {
@@ -1679,6 +1702,225 @@ function smartTruncate(text, max) {
   if (text.length <= max) return text;
   const cutAt = text.lastIndexOf("\n", max - 3);
   return (cutAt > 0 ? text.slice(0, cutAt) : text.slice(0, max - 3)) + "...";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OPERATOR INTELLIGENCE 2.0 — ACTION-CARD BRIEFING
+// Role-aware, action-first. The operator gets their NEXT ACTIONS, not a report.
+// Executive (owner pulse) · Standard (manager actions) · Operational (staff
+// play-by-play) · Diagnostic (raw → falls back to buildBriefingText).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Hour-of-day → briefing kind. Morning = today's plan; evening = tomorrow prep.
+export function resolveTimeOfDay(hour) {
+  const h = Number(hour);
+  if (!Number.isFinite(h)) return "day";
+  if (h < 11) return "morning";
+  if (h >= 16) return "evening";
+  return "day";
+}
+
+// Canonical altitude tier for a phone. Explicit tier wins; 'auto'/legacy →
+// role default. Pure.
+export function resolveBriefingTier(detail, locations, role) {
+  const explicit = normalizeDetail(detail);
+  if (explicit) return explicit;
+  return getRoleProfile(role).defaultDetail;
+}
+
+// Per-tier verbosity knobs.
+const TIER_CONFIG = {
+  executive:   { maxCards: 4, expand: false, priorities: 3 },
+  standard:    { maxCards: 6, expand: false, priorities: 3 },
+  operational: { maxCards: 8, expand: true,  priorities: 3 },
+};
+
+const greetingFor = (tod) => tod === "morning" ? "Good morning" : tod === "evening" ? "Good evening" : "Hi";
+const lowerFirst  = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
+const usdFromCents = (c) => `$${Math.round((Number(c) || 0) / 100).toLocaleString()}`;
+
+// Build a single action card from ctx. Returns { line, detail:[...] } or null
+// when there's nothing to surface for that category.
+function buildCard(category, ctx, snap, { expand, timeOfDay }) {
+  const today = ctx.today ?? todayMT();
+  const arr = (x) => (Array.isArray(x) ? x : []);
+  const evening = timeOfDay === "evening";
+
+  switch (category) {
+    case "bookings": {
+      const rows = evening ? arr(ctx.tomorrowManifest) : arr(ctx.manifest);
+      if (!rows.length) return evening
+        ? { line: "📅 Tomorrow · nothing booked yet", detail: [] }
+        : { line: "🏁 Today · quiet, nothing on the manifest", detail: [] };
+      const pax = rows.reduce((s, r) => s + (Number(r.pax ?? r.customer_count) || 0), 0);
+      const cents = rows.reduce((s, r) => s + (Number(r.receipt_total_cents ?? r.total_cents) || 0), 0);
+      const head = evening
+        ? `📅 Tomorrow · ${rows.length} booking${rows.length !== 1 ? "s" : ""} · ${pax} guests`
+        : `🏁 Today · ${rows.length} booking${rows.length !== 1 ? "s" : ""} · ${pax} guests · ${usdFromCents(cents)}`;
+      const detail = [];
+      if (expand && rows.length <= 8) {
+        for (const r of rows) {
+          const time = formatMTTimeFromNaive(r.start_at);
+          const name = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+          const wv   = r.waiver_signed === false ? " ⚠ no waiver" : "";
+          detail.push(`  ${time} — ${name} · ${compactActivity(r.activity)} · ${capLocation(r.location)} · ${r.pax ?? r.customer_count ?? "?"}p · ${shortPhone(r.phone)}${wv}`);
+        }
+      }
+      return { line: head, detail };
+    }
+    case "revenue": {
+      const last7 = ctx.revenue?.estimated ? `last 7d $${Number(ctx.revenue.estimated).toLocaleString()}` : null;
+      const up    = ctx.upcomingRevenue?.revenue_cents ? `next 7d ${usdFromCents(ctx.upcomingRevenue.revenue_cents)}` : null;
+      const bits  = [last7, up].filter(Boolean).join(" · ");
+      return bits ? { line: `💰 Revenue · ${bits}`, detail: [] } : null;
+    }
+    case "fleet": {
+      const wos = arr(ctx.workOrders);
+      if (!wos.length) return null;
+      const lines = buildWorkOrdersLines(wos, { detail: expand ? "detailed" : "summary" });
+      // lines[0] is "", lines[1] is the header — reshape to a card.
+      const oos = wos.filter((w) => w.out_of_service).length;
+      const overdue = wos.filter((w) => isWorkOrderOverdue(w, today)).length;
+      const status = [oos ? `${oos} down` : null, overdue ? `${overdue} overdue` : null].filter(Boolean).join(" · ") || `${wos.length} open`;
+      const detail = expand ? lines.filter((l) => l && !l.startsWith("🔧")).slice(1) : [];
+      return { line: `🔧 Fleet · ${status} · Reply 5`, detail };
+    }
+    case "maintenance": {
+      const dueSoon = arr(ctx.workOrders).filter((w) => {
+        const d = w.estimated_completion_date && String(w.estimated_completion_date).slice(0, 10);
+        if (!d || w.is_closed) return false;
+        const days = (new Date(d) - new Date(today)) / 86400000;
+        return days >= 0 && days <= 7;
+      });
+      return dueSoon.length ? { line: `🛠 Maintenance · ${dueSoon.length} due this week · Reply 5`, detail: [] } : null;
+    }
+    case "safety": {
+      const s = arr(ctx.workOrders).filter((w) => w.is_safety_issue && !w.is_closed);
+      if (!s.length) return null;
+      const unit = s[0].unit_name || s[0].asset_family || "a unit";
+      return { line: `⛑ Safety · ${s.length} flagged (${unit}) · Reply 5`, detail: [] };
+    }
+    case "waivers": {
+      const w = arr(ctx.missingWaivers);
+      if (!w.length) return null;
+      const todayN = w.filter((r) => String(r.start_at ?? "").slice(0, 10) === today).length;
+      const names  = w.slice(0, 2).map((r) => (r.customer_name ?? "?").split(" ")[0]).join(", ");
+      const clause = todayN ? `${todayN} today` : `${w.length} soon`;
+      return { line: `📝 Waivers · ${clause} (${names}) · Reply 3`, detail: [] };
+    }
+    case "late_returns": {
+      const n = (snap.late_returns ?? []).length;
+      return n ? { line: `🌙 Late returns · ${n} after 5pm · Reply 4`, detail: [] } : null;
+    }
+    case "unpaid": {
+      const u = arr(ctx.unpaid);
+      if (!u.length) return null;
+      const total = u.reduce((s, r) => s + (Number(r.balance_due_cents) || 0), 0);
+      return { line: `💵 Unpaid · ${usdFromCents(total)} across ${u.length} · Reply 1`, detail: [] };
+    }
+    case "missing_phone": {
+      const m = arr(ctx.missingPhones);
+      return m.length ? { line: `☎️ Missing phones · ${m.length} arrival${m.length !== 1 ? "s" : ""} · Reply 1`, detail: [] } : null;
+    }
+    case "vip": {
+      const big = arr(ctx.manifest).filter((r) => (Number(r.pax ?? r.customer_count) || 0) >= 6)
+        .sort((a, b) => (Number(b.pax) || 0) - (Number(a.pax) || 0))[0];
+      return big ? { line: `⭐ Large group · ${(big.customer_name ?? "?").split(" ")[0]} ${Number(big.pax ?? big.customer_count) || 0}p · Reply 1`, detail: [] } : null;
+    }
+    case "leads": {
+      const l = arr(ctx.hotLeads);
+      if (!l.length) return null;
+      const first = (l[0].name ?? "lead").split(" ")[0];
+      return { line: `🔥 Leads · ${l.length} hot (${first}) · Reply 6`, detail: [] };
+    }
+    case "underbooked": {
+      const upc = ctx.upcomingRevenue;
+      return upc && Number(upc.bookings) <= 2 ? { line: `📉 Demand · light week (${upc.bookings} booked) — promote open days · Reply 2`, detail: [] } : null;
+    }
+    case "pacing": {
+      const p = ctx.pacing;
+      if (!p || p.delta_pct == null || p.last_week <= 4) return null;
+      if (p.delta_pct <= -25) return { line: `📉 Pacing · down ${Math.abs(p.delta_pct)}% vs last week · Reply 2`, detail: [] };
+      if (p.delta_pct >= 50)  return { line: `📈 Pacing · up ${p.delta_pct}% vs last week`, detail: [] };
+      return null;
+    }
+    case "staffing": {
+      const tours = (ctx.manifest ?? []).length;
+      const overlap = (ctx.overlaps ?? [])[0];
+      const clause = overlap ? ` · crunch at ${overlap.hour_label} (${overlap.count})` : "";
+      return tours ? { line: `👥 Today · ${tours} tour${tours !== 1 ? "s" : ""}${clause} · Reply 7`, detail: [] } : null;
+    }
+    case "weather": {
+      const cond = buildConditionsLine(ctx.weather);
+      return (cond && cond !== "No weather data available." && cond !== "Conditions unavailable.")
+        ? { line: `🌤 ${cond}`, detail: [] } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+// Build the full action-card briefing string. Pure. `ctx` carries the (already
+// location-filtered) signal arrays; opts carries the per-phone config.
+export function buildActionCardBriefing(client, ctx = {}, opts = {}) {
+  const role        = normalizeRole(opts.role);
+  const profile     = getRoleProfile(role);
+  const tier        = resolveBriefingTier(opts.detail, opts.locations, role);
+  const timeOfDay   = opts.timeOfDay ?? "morning";
+  const cfg         = TIER_CONFIG[tier] ?? TIER_CONFIG.standard;
+  const focusAreas  = resolveFocusAreas(role, opts.digestTypes);
+  const wantsFocus  = (fa) => focusAreas.includes("all") || focusAreas.includes(fa);
+  const name        = (opts.displayName || "").trim() || (opts.label || "").trim() || "team";
+  const snap        = buildTodayLoadSnapshot(ctx.manifest ?? []);
+
+  const scored      = scorePriorities(ctx, { role });
+  const priorities  = buildTodaysPriorities(scored, cfg.priorities);
+
+  const lines = [];
+  const dateStr = new Date().toLocaleDateString("en-US", { timeZone: "America/Denver", weekday: "short", month: "short", day: "numeric" });
+
+  // Greeting + one-line lead.
+  lines.push(`🏔 ${greetingFor(timeOfDay)}, ${name}.`);
+  if (priorities.length) {
+    const lead = priorities[0];
+    lines.push(timeOfDay === "evening"
+      ? `Tonight's prep: ${lowerFirst(lead.headline)}.`
+      : `Your top priority: ${lowerFirst(lead.headline)}.`);
+  } else {
+    lines.push(timeOfDay === "evening" ? "Quiet evening — tomorrow looks clear." : "Clear plate — nothing flagged today.");
+  }
+
+  // TODAY'S PRIORITIES (or TOMORROW'S PREP in the evening).
+  if (priorities.length) {
+    lines.push("");
+    lines.push(timeOfDay === "evening" ? `📋 TOMORROW'S PREP` : `📋 TODAY'S PRIORITIES`);
+    priorities.forEach((p, i) => lines.push(`${i + 1}. ${p.headline}${p.action ? ` — ${p.action}` : ""}`));
+  }
+
+  // Role-ordered action cards (deduped, focus-gated, capped per tier).
+  const seen = new Set();
+  let shown = 0;
+  for (const cat of profile.cardOrder) {
+    if (shown >= cfg.maxCards) break;
+    if (seen.has(cat)) continue;
+    if (!wantsFocus(CARD_FOCUS[cat] ?? cat)) continue;
+    const card = buildCard(cat, ctx, snap, { expand: cfg.expand, timeOfDay });
+    if (!card) continue;
+    seen.add(cat);
+    lines.push("");
+    lines.push(card.line);
+    for (const d of card.detail) lines.push(d);
+    shown++;
+  }
+
+  // Reply menu — role-aware Ask-AI footer.
+  lines.push("");
+  lines.push("Reply: 1 Schedule · 2 Revenue · 3 Waivers · 4 Late returns");
+  lines.push("5 Work orders · 6 Hot leads · 7 Staff · 8 Ask AI");
+
+  let text = lines.join("\n");
+  if (text.length > 1480) text = smartTruncate(text, 1480);
+  return text;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1915,28 +2157,44 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     fRevenue = null; fSeason = null; fNewBookings = null; fPacing = null;
   }
 
-  const briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
-    manifest:         fManifest,
-    upcomingManifest: fUpcoming,
-    upcomingRevenue:  fUpcomingRev,
-    revenue:          fRevenue,
-    seasonRevenue:    fSeason,
-    newBookings:      fNewBookings,
-    issues,
-    unpaid:           fUnpaid,
-    missingWaivers:   fWaivers,
-    overlaps,
-    highValue:        fHighValue,
-    duplicates,
-    missingPhones:    fMissingPhones,
-    pacing:           fPacing,
-    locationMix:      fLocationMix,
-    unresolvedHandoffs,
-    workOrders,
-    digestTypes: options.digestTypes ?? ["all"],
-    locations:   options.locations ?? null,
-    detailLevel,
-  });
+  // Operator Intelligence 2.0 — route by altitude tier. executive/standard/
+  // operational → role-aware action-card briefing; diagnostic → the legacy
+  // full report (buildBriefingText) for raw troubleshooting. Role drives which
+  // cards surface and how priorities are ranked.
+  const role      = normalizeRole(options.role);
+  const timeOfDay = options.timeOfDay ?? "morning";
+  const tier      = resolveBriefingTier(options.briefingDetail ?? "auto", options.locations, role);
+
+  // Tomorrow's manifest (for evening prep) — derived from the upcoming window.
+  const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toLocaleDateString("en-CA", { timeZone: "America/Denver" }); })();
+  const tomorrowManifest = (fUpcoming ?? []).filter((r) => String(r.start_at ?? "").slice(0, 10) === tomorrowStr);
+
+  let briefing;
+  if (tier === "diagnostic") {
+    briefing = buildBriefingText(client, todaySlots, hotLeads, weatherSnap, {
+      manifest: fManifest, upcomingManifest: fUpcoming, upcomingRevenue: fUpcomingRev,
+      revenue: fRevenue, seasonRevenue: fSeason, newBookings: fNewBookings, issues,
+      unpaid: fUnpaid, missingWaivers: fWaivers, overlaps, highValue: fHighValue,
+      duplicates, missingPhones: fMissingPhones, pacing: fPacing, locationMix: fLocationMix,
+      unresolvedHandoffs, workOrders,
+      digestTypes: options.digestTypes ?? ["all"], locations: options.locations ?? null,
+      detailLevel: "detailed",
+    });
+  } else {
+    const ctx = {
+      today: todayMT(), timeOfDay,
+      manifest: fManifest, tomorrowManifest, upcomingManifest: fUpcoming,
+      upcomingRevenue: fUpcomingRev, revenue: fRevenue, workOrders,
+      unpaid: fUnpaid, missingWaivers: fWaivers, missingPhones: fMissingPhones,
+      highValue: fHighValue, overlaps, unresolvedHandoffs, hotLeads,
+      pacing: fPacing, weather: weatherSnap, hasUpcomingWindow: true,
+    };
+    briefing = buildActionCardBriefing(client, ctx, {
+      role, locations: options.locations ?? null, detail: options.briefingDetail ?? "auto",
+      timeOfDay, displayName: options.displayName, label: options.label,
+      digestTypes: options.digestTypes ?? ["all"],
+    });
+  }
 
   const status = process.env.TEST_MODE === "true" ? "test" : "sent";
   try {
@@ -2019,7 +2277,7 @@ export async function dispatchOperatorDigests(supabase, twilioClient, crmSupabas
   try {
     const { data, error } = await supabase
       .from("operator_phones")
-      .select("id, client_id, phone, role, label, digest_times, digest_types, locations, briefing_detail, timezone, daily_digest_enabled")
+      .select("id, client_id, phone, role, label, display_name, digest_times, digest_types, locations, briefing_detail, timezone, daily_digest_enabled")
       .eq("daily_digest_enabled", true);
     if (error) {
       if (error.message?.includes("does not exist") || error.code === "42P01") {
@@ -2057,13 +2315,20 @@ export async function dispatchOperatorDigests(supabase, twilioClient, crmSupabas
     }
     for (const row of recipientRows) {
       try {
+        // Which digest slot fired → time-of-day flavor (morning plan vs evening prep).
+        const firedSlot = row.digest_times?.find((t) => isDigestTimeNow([t], row.timezone ?? "America/Denver", now)) ?? "default";
+        const firedHour = Number(String(firedSlot).split(":")[0]);
         const result = await generateDailyBriefing(client, supabase, twilioClient, crmSupabase, {
           toPhone:     row.phone,
-          dedupKey:    `${clientId}:${row.id}:${row.digest_times?.find((t) => isDigestTimeNow([t], row.timezone ?? "America/Denver", now)) ?? "default"}`,
+          dedupKey:    `${clientId}:${row.id}:${firedSlot}`,
           opRowId:        row.id,
+          role:           row.role ?? "owner",
+          displayName:    row.display_name ?? null,
+          label:          row.label ?? null,
           digestTypes:    row.digest_types ?? ["all"],
           locations:      row.locations ?? null,
           briefingDetail: row.briefing_detail ?? "auto",
+          timeOfDay:      resolveTimeOfDay(firedHour),
         });
         if (result.success) sent++;
         else skipped++;
@@ -2098,6 +2363,25 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
     convo.bookingData = convo.bookingData ?? {};
     convo.bookingData._operator = extractOperatorContext(mergedIntent);
   };
+
+  // ── Operator Intelligence 2.0 reply handlers ─────────────────────────────
+  // LATE RETURNS — menu #4
+  if (msg === "late returns" || msg.match(/\blate\s+returns?\b|\breturns?\s+after\s+\d/)) {
+    const manifest = await getTodaysManifest(client.id, crmSupabase);
+    const snap = buildTodayLoadSnapshot(manifest);
+    return formatLateReturnsResponse(snap.late_returns);
+  }
+
+  // WORK ORDERS — menu #5 / "fleet", "repairs", "out of service"
+  if (msg === "work orders" || msg.match(/\bwork\s+orders?\b|\bout\s+of\s+service\b|\brepairs?\b/)) {
+    const wos = await getOpenWorkOrders(crmSupabase, null);
+    return formatWorkOrdersResponse(wos);
+  }
+
+  // ASK AI — menu #8: invite a free-form question (real Q's fall through to Claude)
+  if (msg === "ask ai" || msg === "ask" || msg === "8 ask ai") {
+    return "Ask me anything about today — e.g. \"who's missing waivers?\", \"how many Turbo RZRs are free tomorrow?\", or \"who should I call first?\"";
+  }
 
   // ── Sprint B: expanded freeform handlers ─────────────────────────────────
   // LARGEST BOOKINGS — DB2 daily_manifest sorted by total_cents
