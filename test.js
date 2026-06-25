@@ -3248,6 +3248,7 @@ async function main() {
     await testActionOrientedBriefing();// Action-oriented briefing: detectors + ACTIONS/REVENUE/INSIGHTS/FOLLOW UP format + 1-10 menu
     await testOperationalBriefing();   // Operational briefing: classifiers + TODAY'S LOAD section + dispatch-sheet manifest
     await testLocationFleetBriefing(); // Location-scoped briefings + MPWR work orders (fleet section, per-employee filtering)
+    await testOperatorIntelligence2(); // OI 2.0: priority engine + roles + action-card briefings + time-of-day
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -13798,19 +13799,21 @@ async function testSprintBOperatorUX() {
     buildBriefingText,
   } = await import("./operatorBriefing.js");
 
-  // ── resolveMenuShortcut — numeric reply routing (1-10 action-oriented) ──
+  // ── resolveMenuShortcut — Operator Intelligence 2.0 reply routing ─────────
   chk("sprintB: shortcut '1' → bookings today",  resolveMenuShortcut("1") === "bookings today");
   chk("sprintB: shortcut '2' → revenue this week", resolveMenuShortcut("2") === "revenue this week");
-  chk("sprintB: shortcut '3' → follow-ups", resolveMenuShortcut("3") === "follow-ups");
-  chk("sprintB: shortcut '4' → risks", resolveMenuShortcut("4") === "risks");
-  chk("sprintB: shortcut '5' → leads", resolveMenuShortcut("5") === "leads");
-  chk("sprintB: shortcut '7' → unpaid", resolveMenuShortcut("7") === "unpaid");
-  chk("sprintB: shortcut whitespace trimmed", resolveMenuShortcut("  3  ") === "follow-ups");
+  chk("sprintB: shortcut '3' → missing waivers", resolveMenuShortcut("3") === "missing waivers");
+  chk("sprintB: shortcut '4' → late returns", resolveMenuShortcut("4") === "late returns");
+  chk("sprintB: shortcut '5' → work orders", resolveMenuShortcut("5") === "work orders");
+  chk("sprintB: shortcut '6' → leads", resolveMenuShortcut("6") === "leads");
+  chk("sprintB: shortcut '7' → ops load", resolveMenuShortcut("7") === "ops load");
+  chk("sprintB: shortcut '8' → ask ai", resolveMenuShortcut("8") === "ask ai");
+  chk("sprintB: shortcut whitespace trimmed", resolveMenuShortcut("  3  ") === "missing waivers");
   chk("sprintB: shortcut '11' → null", resolveMenuShortcut("11") === null);
   chk("sprintB: shortcut 'hello' → null", resolveMenuShortcut("hello") === null);
   chk("sprintB: shortcut '' → null", resolveMenuShortcut("") === null);
   chk("sprintB: shortcut null → null", resolveMenuShortcut(null) === null);
-  chk("sprintB: OPERATOR_MENU exposes 10 slots", Object.keys(OPERATOR_MENU).length === 10);
+  chk("sprintB: OPERATOR_MENU exposes 8 slots", Object.keys(OPERATOR_MENU).length === 8);
 
   // ── buildBriefingText includes the numeric menu ──────────────────────────
   {
@@ -14420,6 +14423,104 @@ async function testLocationFleetBriefing() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Operator Intelligence 2.0 — priority engine + roles + action-card briefings
+// ─────────────────────────────────────────────────────────────────────────────
+async function testOperatorIntelligence2() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+
+  const { normalizeRole, getRoleProfile, resolveFocusAreas, normalizeDetail, DETAIL_TIERS } = await import("./operatorRoles.js");
+  const { scorePriorities, buildTodaysPriorities } = await import("./priorityEngine.js");
+  const { buildActionCardBriefing, resolveTimeOfDay, resolveBriefingTier } = await import("./operatorBriefing.js");
+
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+  const ctx = {
+    today,
+    manifest: [
+      { start_at: `${today} 09:00:00`, customer_name: "Clark Mclean", activity: "Turbo RZR XP 1000", location: "kremmling", pax: 1, phone: "+19079527082", waiver_signed: false },
+      { start_at: `${today} 13:00:00`, customer_name: "Bob Big", activity: "RZR Experience", location: "kremmling", pax: 8, phone: "+15551112222", waiver_signed: true },
+    ],
+    tomorrowManifest: [{ start_at: "x", customer_name: "Tom", activity: "RZR Experience", location: "kremmling", pax: 2 }],
+    workOrders: [
+      { fleet: "kremmling", out_of_service: true, is_safety_issue: true, asset_family: "RZR PRO S4", unit_name: "Pamela", work_type: "DamageRepair", work_to_be_done: "Power steering", estimated_completion_date: "2020-01-01", url: "https://x/1", is_closed: false },
+    ],
+    unpaid: [{ customer_name: "Jared Torres", balance_due_cents: 292000, start_at: `${today} 09:00:00` }],
+    missingWaivers: [{ customer_name: "Clark Mclean", start_at: `${today} 09:00:00` }],
+    missingPhones: [], highValue: [], overlaps: [], unresolvedHandoffs: [],
+    hotLeads: [{ name: "Sarah Lee" }], pacing: { this_week: 3, last_week: 10, delta_pct: -70 },
+    upcomingRevenue: { bookings: 4, revenue_cents: 172200 }, revenue: { estimated: 13377 }, weather: null, hasUpcomingWindow: true,
+  };
+
+  // ── normalizeRole — legacy → canonical ────────────────────────────────────
+  chk("oi2: role manager→operations_manager", normalizeRole("manager") === "operations_manager");
+  chk("oi2: role sales→reservations", normalizeRole("sales") === "reservations");
+  chk("oi2: role staff→guide", normalizeRole("staff") === "guide");
+  chk("oi2: role mechanic stays", normalizeRole("mechanic") === "mechanic");
+  chk("oi2: role unknown→owner", normalizeRole("zzz") === "owner");
+
+  // ── resolveFocusAreas — explicit overrides role default ───────────────────
+  chk("oi2: focus role default (guide)", resolveFocusAreas("guide").includes("bookings"));
+  chk("oi2: focus explicit override", JSON.stringify(resolveFocusAreas("guide", ["revenue"])) === JSON.stringify(["revenue"]));
+  chk("oi2: focus 'all' → role default", resolveFocusAreas("mechanic", ["all"]).includes("fleet"));
+
+  // ── normalizeDetail + resolveBriefingTier ─────────────────────────────────
+  chk("oi2: detail legacy summary→executive", normalizeDetail("summary") === "executive");
+  chk("oi2: detail legacy detailed→operational", normalizeDetail("detailed") === "operational");
+  chk("oi2: detail auto→null", normalizeDetail("auto") === null);
+  chk("oi2: tier explicit wins", resolveBriefingTier("diagnostic", [], "owner") === "diagnostic");
+  chk("oi2: tier auto→owner default executive", resolveBriefingTier("auto", [], "owner") === "executive");
+  chk("oi2: tier auto→mechanic default operational", resolveBriefingTier("auto", ["kremmling"], "mechanic") === "operational");
+
+  // ── resolveTimeOfDay ──────────────────────────────────────────────────────
+  chk("oi2: tod morning", resolveTimeOfDay(7) === "morning");
+  chk("oi2: tod evening", resolveTimeOfDay(18) === "evening");
+  chk("oi2: tod day", resolveTimeOfDay(13) === "day");
+
+  // ── scorePriorities — safety #1, role re-weighting ────────────────────────
+  const ownerScore = scorePriorities(ctx, { role: "owner" });
+  chk("oi2: safety scores highest base", ownerScore[0].id === "safety", JSON.stringify(ownerScore[0]));
+  chk("oi2: scored items carry replyKey", ownerScore.every((i) => "replyKey" in i));
+  const mechScore = scorePriorities(ctx, { role: "mechanic" });
+  chk("oi2: mechanic top is fleet/safety", ["safety", "oos_needed", "overdue_repair"].includes(mechScore[0].id), mechScore[0]?.id);
+  const resScore = scorePriorities(ctx, { role: "reservations" });
+  const resTopCats = resScore.slice(0, 3).map((i) => i.category);
+  chk("oi2: reservations surfaces waivers/unpaid high", resTopCats.includes("waivers") || resTopCats.includes("unpaid"), JSON.stringify(resTopCats));
+  // OOS-needed join: Pamela (RZR PRO S4) is down AND a Turbo RZR booked today → matched via shared "rzr" token.
+  chk("oi2: OOS-needed-today detected", ownerScore.some((i) => i.id === "oos_needed"));
+  // buildTodaysPriorities
+  const top3 = buildTodaysPriorities(ownerScore, 3);
+  chk("oi2: top priorities capped at 3", top3.length === 3 && top3[0].headline);
+
+  // ── buildActionCardBriefing — role differentiation + structure ────────────
+  const ownerB = buildActionCardBriefing({ name: "CSR" }, ctx, { role: "owner", detail: "auto", timeOfDay: "morning", displayName: "John" });
+  const guideB = buildActionCardBriefing({ name: "CSR" }, ctx, { role: "guide", detail: "auto", timeOfDay: "morning", displayName: "Mia" });
+  const mechB  = buildActionCardBriefing({ name: "CSR" }, ctx, { role: "mechanic", detail: "auto", timeOfDay: "morning", displayName: "Sam" });
+
+  chk("oi2: greeting personalized", ownerB.startsWith("🏔 Good morning, John."));
+  chk("oi2: has priorities header", ownerB.includes("📋 TODAY'S PRIORITIES"));
+  chk("oi2: reply menu footer", ownerB.includes("8 Ask AI"));
+  chk("oi2: owner shows revenue card", ownerB.includes("💰 Revenue"));
+  chk("oi2: guide hides revenue card", !guideB.includes("💰 Revenue"), guideB);
+  chk("oi2: mechanic leads with fleet", mechB.indexOf("🔧 Fleet") > 0 && !mechB.includes("💰 Revenue"));
+  chk("oi2: roles produce different briefings", ownerB !== guideB && guideB !== mechB);
+
+  // operational expands per-booking detail; executive does not.
+  const opB = buildActionCardBriefing({ name: "CSR" }, ctx, { role: "reservations", detail: "operational", timeOfDay: "morning", displayName: "Lee" });
+  chk("oi2: operational shows phone + no-waiver", opB.includes("907-952-7082") && opB.includes("no waiver"));
+  const exB = buildActionCardBriefing({ name: "CSR" }, ctx, { role: "owner", detail: "executive", timeOfDay: "morning", displayName: "John" });
+  chk("oi2: executive hides per-booking phone", !exB.includes("907-952-7082"), exB);
+
+  // evening flips to tomorrow prep.
+  const evB = buildActionCardBriefing({ name: "CSR" }, ctx, { role: "owner", detail: "auto", timeOfDay: "evening", displayName: "John" });
+  chk("oi2: evening greeting", evB.startsWith("🏔 Good evening, John."));
+  chk("oi2: evening tomorrow prep header", evB.includes("📋 TOMORROW'S PREP"));
+  chk("oi2: evening tomorrow card", evB.includes("📅 Tomorrow"));
+
+  // length guard
+  chk("oi2: stays within SMS cap", ownerB.length <= 1480 && opB.length <= 1480);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Action-oriented briefing — detectors + formatters + new menu
 // ─────────────────────────────────────────────────────────────────────────────
 async function testActionOrientedBriefing() {
@@ -14440,14 +14541,13 @@ async function testActionOrientedBriefing() {
     resolveMenuShortcut,
   } = await import("./operatorBriefing.js");
 
-  // ── Updated menu mapping (1-10) ──────────────────────────────────────────
+  // ── Operator Intelligence 2.0 menu mapping (1-8) ─────────────────────────
   chk("action: menu '1' → manifest", resolveMenuShortcut("1") === "bookings today");
-  chk("action: menu '3' → follow-ups", resolveMenuShortcut("3") === "follow-ups");
-  chk("action: menu '4' → risks", resolveMenuShortcut("4") === "risks");
-  chk("action: menu '7' → unpaid", resolveMenuShortcut("7") === "unpaid");
-  chk("action: menu '8' → missing waivers", resolveMenuShortcut("8") === "missing waivers");
-  chk("action: menu '10' → weather", resolveMenuShortcut("10") === "weather");
-  chk("action: OPERATOR_MENU has 10 entries", Object.keys(OPERATOR_MENU).length === 10);
+  chk("action: menu '3' → missing waivers", resolveMenuShortcut("3") === "missing waivers");
+  chk("action: menu '4' → late returns", resolveMenuShortcut("4") === "late returns");
+  chk("action: menu '5' → work orders", resolveMenuShortcut("5") === "work orders");
+  chk("action: menu '8' → ask ai", resolveMenuShortcut("8") === "ask ai");
+  chk("action: OPERATOR_MENU has 8 entries", Object.keys(OPERATOR_MENU).length === 8);
 
   // ── buildBriefingText leads with ACTIONS when signals present ────────────
   {
