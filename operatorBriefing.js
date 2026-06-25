@@ -1183,23 +1183,94 @@ export async function getOpenWorkOrders(crmSupabase, fleets = null, limit = 12) 
   }
 }
 
-// 🔧 FLEET — open work orders the on-site team can act on. Pure renderer;
-// returns an array of lines (empty when there are none). The MPWR deep link is
-// always included per the operator decision (anyone receiving WO info can log
-// in to MPWR).
-export function buildWorkOrdersLines(workOrders, { max = 6 } = {}) {
+// ── Briefing altitude ─────────────────────────────────────────────────────
+// resolveDetailLevel(detail, locations) — picks how much detail a phone gets.
+//   'summary'  — owner pulse: rollups, no per-booking phones, fleet status line.
+//   'detailed' — staff play-by-play: per-booking, full work orders + links.
+//   'auto'     — detailed when scoped to a specific post (1-3 of 4 locations),
+//                summary for owner / all-locations / unscoped. Pure.
+export function resolveDetailLevel(detail, locations) {
+  if (detail === "summary" || detail === "detailed") return detail;
+  const scoped = normalizeLocations(locations);
+  return scoped && scoped.length > 0 && scoped.length < OPERATOR_LOCATIONS.length
+    ? "detailed"
+    : "summary";
+}
+
+// A work order is overdue when its estimated completion date is in the past
+// (MT). Most never-closed WOs are overdue — flagging this is the point.
+export function isWorkOrderOverdue(w, today = todayMT()) {
+  const d = w?.estimated_completion_date;
+  if (!d) return false;
+  return String(d).slice(0, 10) < today;
+}
+
+// Trim a free-text description to a clean phrase: collapse whitespace, cut at a
+// word boundary near `max`, drop dangling punctuation, add … when truncated.
+function truncateDesc(text, max = 56) {
+  const s = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  if (s.length <= max) return s;
+  let cut = s.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace > max * 0.5) cut = cut.slice(0, lastSpace);
+  return cut.replace(/[\s,.;:"'-]+$/, "") + "…";
+}
+
+// Fleet rollup for the SUMMARY (owner) view — one status line + overdue line.
+// Pure. Returns [] when no work orders.
+export function buildWorkOrderRollup(workOrders) {
   const rows = Array.isArray(workOrders) ? workOrders : [];
   if (!rows.length) return [];
+  const oos = rows.filter((w) => w.out_of_service);
+  const byFleet = new Map();
+  for (const w of oos) {
+    const f = capLocation(w.fleet);
+    byFleet.set(f, (byFleet.get(f) ?? 0) + 1);
+  }
+  const fleetParts = [...byFleet.entries()].sort((a, b) => b[1] - a[1]).map(([f, n]) => `${n} ${f}`);
+  const overdue = rows.filter((w) => isWorkOrderOverdue(w))
+    .sort((a, b) => String(a.estimated_completion_date).localeCompare(String(b.estimated_completion_date)));
+
+  const lines = ["", "🔧 FLEET"];
+  if (oos.length) {
+    lines.push(`• ${oos.length} unit${oos.length !== 1 ? "s" : ""} out of service${fleetParts.length ? ` — ${fleetParts.join(", ")}` : ""}`);
+  } else {
+    lines.push(`• ${rows.length} open work order${rows.length !== 1 ? "s" : ""}`);
+  }
+  if (overdue.length) {
+    const oldest = overdue[0];
+    const unit = oldest.unit_name || oldest.asset_family || "unit";
+    const due  = formatMTDateFromNaive(oldest.estimated_completion_date, { month: "short", day: "numeric" });
+    lines.push(`• ${overdue.length} overdue (oldest: ${unit}, due ${due})`);
+  }
+  return lines;
+}
+
+// 🔧 FLEET — open work orders. `detail` selects altitude: 'summary' → rollup
+// only (owner); 'detailed' → full per-WO list with overdue flags + MPWR links
+// (staff who act). Pure renderer; returns [] when there are none.
+export function buildWorkOrdersLines(workOrders, { max = 6, detail = "detailed" } = {}) {
+  const rows = Array.isArray(workOrders) ? workOrders : [];
+  if (!rows.length) return [];
+  if (detail === "summary") return buildWorkOrderRollup(workOrders);
+
   const lines = ["", "🔧 FLEET / WORK ORDERS"];
-  const oosCount = rows.filter((w) => w.out_of_service).length;
-  if (oosCount > 0) lines.push(`• ${oosCount} unit${oosCount !== 1 ? "s" : ""} out of service`);
+  const oosCount     = rows.filter((w) => w.out_of_service).length;
+  const overdueCount = rows.filter((w) => isWorkOrderOverdue(w)).length;
+  const headBits = [];
+  if (oosCount > 0)     headBits.push(`${oosCount} out of service`);
+  if (overdueCount > 0) headBits.push(`${overdueCount} overdue`);
+  if (headBits.length)  lines.push(`• ${headBits.join(" · ")}`);
+
   for (const w of rows.slice(0, max)) {
-    const flag = w.out_of_service ? "⚠️ " : (w.is_safety_issue ? "⚠ " : "");
+    const overdue = isWorkOrderOverdue(w);
+    const flag = overdue ? "⚠️ OVERDUE " : (w.out_of_service ? "⚠️ " : (w.is_safety_issue ? "⚠ " : ""));
     const veh  = [w.asset_family, w.unit_name ? `(${w.unit_name})` : null].filter(Boolean).join(" ") || "Unit";
     const type = humanizeWorkType(w.work_type);
-    const desc = String(w.work_to_be_done || w.notes || "").replace(/\s+/g, " ").trim().slice(0, 60);
+    const desc = truncateDesc(w.work_to_be_done || w.notes);
     const eta  = w.estimated_completion_date
-      ? `est. ${formatMTDateFromNaive(w.estimated_completion_date, { month: "short", day: "numeric" })}`
+      ? `${overdue ? "due" : "est."} ${formatMTDateFromNaive(w.estimated_completion_date, { month: "short", day: "numeric" })}`
       : null;
     const bits = [type, eta, desc ? `"${desc}"` : null].filter(Boolean).join(" · ");
     lines.push(`• ${flag}${veh} — ${bits}`);
@@ -1236,6 +1307,9 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
   const workOrders       = extras.workOrders       ?? [];
   const digestTypes      = extras.digestTypes      ?? ["all"];
   const scopeLocations   = normalizeLocations(extras.locations);
+  // Altitude: 'detailed' (staff play-by-play) vs 'summary' (owner pulse).
+  // Defaults to detailed so direct callers / legacy paths keep full rendering.
+  const detailLevel      = extras.detailLevel === "summary" ? "summary" : "detailed";
 
   const lines = [];
   // Scope tag — when the recipient is assigned to specific location(s), label
@@ -1257,16 +1331,18 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     const headerBits = [`${snap.totals.bookings} booking${snap.totals.bookings !== 1 ? "s" : ""}`, `${snap.totals.pax} guest${snap.totals.pax !== 1 ? "s" : ""}`, `$${revUSD}`];
     lines.push(`• ${headerBits.join(" · ")}`);
 
-    // Per-booking detail — name · vehicle · location · pax · phone · time
-    // Shown inline for ≤8 bookings; otherwise we summarize + suggest "Reply 1".
-    if (manifest.length <= 8) {
+    // Per-booking detail — name · vehicle · location · pax · phone · time.
+    // DETAILED view only (and ≤8 bookings); summary/owner gets the compact
+    // breakdown below. A ⚠ no-waiver flag rides inline so staff can chase it.
+    if (detailLevel === "detailed" && manifest.length <= 8) {
       for (const r of manifest) {
         const time  = formatMTTimeFromNaive(r.start_at);
         const name  = (r.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
         const act   = compactActivity(r.activity);
         const loc   = capLocation(r.location);
         const phone = shortPhone(r.phone);
-        lines.push(`• ${time} — ${name} · ${act} · ${loc} · ${r.pax ?? r.customer_count ?? "?"}p · ${phone}`);
+        const wv    = r.waiver_signed === false ? " ⚠ no waiver" : "";
+        lines.push(`• ${time} — ${name} · ${act} · ${loc} · ${r.pax ?? r.customer_count ?? "?"}p · ${phone}${wv}`);
       }
     } else {
       // Compact summary for heavy days
@@ -1380,11 +1456,20 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
     actions.push(`$${Math.round(total / 100).toLocaleString()} unpaid across ${unpaid.length} booking${unpaid.length !== 1 ? "s" : ""} — biggest: ${topName} ${topAmt} (${topDate})`);
   }
 
-  // Missing waivers (next 48h)
+  // Missing waivers (next 48h). DETAILED names who to chase (staff action);
+  // SUMMARY keeps the count (owner pulse).
   if (missingWaivers.length) {
     const arrivingToday = missingWaivers.filter((r) => isToday(r.start_at)).length;
     const todayClause   = arrivingToday > 0 ? ` — ${arrivingToday} arrive today` : "";
-    actions.push(`${missingWaivers.length} guest${missingWaivers.length !== 1 ? "s" : ""} missing waivers${todayClause}`);
+    if (detailLevel === "detailed") {
+      const names = missingWaivers.slice(0, 4)
+        .map((r) => (r.customer_name ?? "?").split(" ").slice(0, 2).join(" "))
+        .join(", ");
+      const more = missingWaivers.length > 4 ? ` +${missingWaivers.length - 4}` : "";
+      actions.push(`Chase waivers (${missingWaivers.length})${todayClause}: ${names}${more}`);
+    } else {
+      actions.push(`${missingWaivers.length} guest${missingWaivers.length !== 1 ? "s" : ""} missing waivers${todayClause}`);
+    }
   }
 
   // Overlapping arrivals
@@ -1409,7 +1494,7 @@ export function buildBriefingText(client, todaySlotsOrIgnored, hotLeads, weather
 
   // ── 🔧 FLEET / WORK ORDERS — open MPWR maintenance for this fleet ─────────
   if (wantsSection(digestTypes, "fleet")) {
-    for (const l of buildWorkOrdersLines(workOrders)) lines.push(l);
+    for (const l of buildWorkOrdersLines(workOrders, { detail: detailLevel })) lines.push(l);
   }
 
   // ── 💰 REVENUE — collected + upcoming + season ──────────────────────────
@@ -1773,6 +1858,9 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
   // strict-filtered digest; owners / unassigned (scoped === null) see all.
   const scoped = normalizeLocations(options.locations);
   const fleets = locationsToFleets(options.locations);
+  // Briefing altitude — detailed (staff) vs summary (owner). Resolved from the
+  // per-phone setting + scope.
+  const detailLevel = resolveDetailLevel(options.briefingDetail ?? "auto", options.locations);
 
   // Gather all data in parallel — operational signals + summary metrics.
   const [
@@ -1847,6 +1935,7 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     workOrders,
     digestTypes: options.digestTypes ?? ["all"],
     locations:   options.locations ?? null,
+    detailLevel,
   });
 
   const status = process.env.TEST_MODE === "true" ? "test" : "sent";
@@ -1930,7 +2019,7 @@ export async function dispatchOperatorDigests(supabase, twilioClient, crmSupabas
   try {
     const { data, error } = await supabase
       .from("operator_phones")
-      .select("id, client_id, phone, role, label, digest_times, digest_types, locations, timezone, daily_digest_enabled")
+      .select("id, client_id, phone, role, label, digest_times, digest_types, locations, briefing_detail, timezone, daily_digest_enabled")
       .eq("daily_digest_enabled", true);
     if (error) {
       if (error.message?.includes("does not exist") || error.code === "42P01") {
@@ -1971,9 +2060,10 @@ export async function dispatchOperatorDigests(supabase, twilioClient, crmSupabas
         const result = await generateDailyBriefing(client, supabase, twilioClient, crmSupabase, {
           toPhone:     row.phone,
           dedupKey:    `${clientId}:${row.id}:${row.digest_times?.find((t) => isDigestTimeNow([t], row.timezone ?? "America/Denver", now)) ?? "default"}`,
-          opRowId:     row.id,
-          digestTypes: row.digest_types ?? ["all"],
-          locations:   row.locations ?? null,
+          opRowId:        row.id,
+          digestTypes:    row.digest_types ?? ["all"],
+          locations:      row.locations ?? null,
+          briefingDetail: row.briefing_detail ?? "auto",
         });
         if (result.success) sent++;
         else skipped++;

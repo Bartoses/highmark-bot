@@ -14333,12 +14333,67 @@ async function testLocationFleetBriefing() {
     ]);
     const text = lines.join("\n");
     chk("wo: section header", text.includes("🔧 FLEET / WORK ORDERS"));
-    chk("wo: section OOS count", text.includes("1 unit out of service"));
+    chk("wo: section OOS count", text.includes("1 out of service"));
     chk("wo: section OOS flag", text.includes("⚠️"));
     chk("wo: section vehicle + unit", text.includes("RZR PRO S4 (Pamela)"));
     chk("wo: section humanized type", text.includes("Damage Repair"));
     chk("wo: section always links", text.includes("https://mpwr-hq.poladv.com/work-orders/WO-DVQ-QQB"));
     chk("wo: empty → no lines", buildWorkOrdersLines([]).length === 0);
+  }
+
+  // ── Detail level: resolveDetailLevel + overdue + summary rollup ───────────
+  {
+    const { resolveDetailLevel, isWorkOrderOverdue, buildWorkOrderRollup } = await import("./operatorBriefing.js");
+
+    chk("detail: explicit summary", resolveDetailLevel("summary", ["kremmling"]) === "summary");
+    chk("detail: explicit detailed", resolveDetailLevel("detailed", []) === "detailed");
+    chk("detail: auto + single post → detailed", resolveDetailLevel("auto", ["kremmling"]) === "detailed");
+    chk("detail: auto + all 4 → summary", resolveDetailLevel("auto", ["steamboat","north_routt","kremmling","rabbit_ears"]) === "summary");
+    chk("detail: auto + unscoped → summary", resolveDetailLevel("auto", []) === "summary");
+
+    chk("detail: overdue past date", isWorkOrderOverdue({ estimated_completion_date: "2020-01-01" }, "2026-06-25") === true);
+    chk("detail: not overdue future", isWorkOrderOverdue({ estimated_completion_date: "2099-01-01" }, "2026-06-25") === false);
+    chk("detail: not overdue when no date", isWorkOrderOverdue({}, "2026-06-25") === false);
+
+    // Summary rollup — one status line + overdue line, NO per-WO links.
+    const rollupWos = [
+      { fleet: "kremmling", out_of_service: true, unit_name: "K42", estimated_completion_date: "2026-03-13", url: "https://x/1" },
+      { fleet: "kremmling", out_of_service: true, unit_name: "K32", estimated_completion_date: "2026-03-31", url: "https://x/2" },
+      { fleet: "steamboat", out_of_service: true, unit_name: "Stephanie", estimated_completion_date: "2026-06-19", url: "https://x/3" },
+    ];
+    const rollup = buildWorkOrderRollup(rollupWos).join("\n");
+    chk("detail: rollup counts by fleet", rollup.includes("3 units out of service") && rollup.includes("2 Kremmling") && rollup.includes("1 Steamboat"), rollup);
+    chk("detail: rollup overdue oldest", rollup.includes("overdue") && rollup.includes("K42"), rollup);
+    chk("detail: rollup has no links", !rollup.includes("https://"), rollup);
+
+    // buildWorkOrdersLines summary === rollup (no links); detailed has links + OVERDUE
+    const sumLines = buildWorkOrdersLines(rollupWos, { detail: "summary" }).join("\n");
+    chk("detail: WO summary no links", !sumLines.includes("https://"));
+    chk("detail: WO summary is rollup header", sumLines.includes("🔧 FLEET") && !sumLines.includes("WORK ORDERS"), sumLines);
+    const detLines = buildWorkOrdersLines(rollupWos, { detail: "detailed" }).join("\n");
+    chk("detail: WO detailed has links", detLines.includes("https://x/1"));
+    chk("detail: WO detailed flags OVERDUE", detLines.includes("⚠️ OVERDUE") && detLines.includes("due Mar 13"), detLines);
+  }
+
+  // ── End-to-end: summary vs detailed altitude in buildBriefingText ─────────
+  {
+    const client = { name: "CSR + REA" };
+    const manifest = [
+      { start_at: "2026-06-25 09:00:00", customer_name: "Clark Mclean", activity: "Turbo RZR XP 1000", location: "kremmling", pax: 1, phone: "+19079527082", waiver_signed: false },
+    ];
+    const workOrders = [{ fleet: "kremmling", out_of_service: true, asset_family: "RZR PRO S4", unit_name: "Pamela", work_type: "DamageRepair", work_to_be_done: "Power steering loss", estimated_completion_date: "2020-01-01", url: "https://x/WO-1" }];
+    const missingWaivers = [{ customer_name: "Clark Mclean", start_at: "2026-06-25 09:00:00", location: "kremmling" }];
+
+    const detailed = buildBriefingText(client, [], [], null, { manifest, workOrders, missingWaivers, locations: ["kremmling"], digestTypes: ["all"], detailLevel: "detailed" });
+    chk("detail: detailed shows per-booking phone", detailed.includes("907-952-7082"), detailed);
+    chk("detail: detailed inline no-waiver flag", detailed.includes("no waiver"), detailed);
+    chk("detail: detailed names waiver chase", detailed.includes("Chase waivers") && detailed.includes("Clark Mclean"), detailed);
+    chk("detail: detailed WO link present", detailed.includes("https://x/WO-1"));
+
+    const summary = buildBriefingText(client, [], [], null, { manifest, workOrders, missingWaivers, locations: [], digestTypes: ["all"], detailLevel: "summary" });
+    chk("detail: summary hides per-booking phone", !summary.includes("907-952-7082"), summary);
+    chk("detail: summary WO rollup no links", !summary.includes("https://x/WO-1"), summary);
+    chk("detail: summary waiver count not names", summary.includes("missing waivers") && !summary.includes("Chase waivers"), summary);
   }
 
   // ── End-to-end: scoped briefing label + FLEET section gating ──────────────
@@ -14429,8 +14484,8 @@ async function testActionOrientedBriefing() {
     chk("action: briefing leads with ACTIONS section", text.indexOf("⚠ ACTIONS") < text.indexOf("💰 REVENUE"), text);
     chk("action: ACTIONS surfaces Jared Torres by name + dollar",
         text.includes("Jared Torres") && text.includes("$2,920"), text);
-    chk("action: ACTIONS includes missing-waivers count",
-        text.includes("missing waivers"), text);
+    chk("action: ACTIONS surfaces missing waivers",
+        text.includes("waivers"), text); // "Chase waivers …" (detailed) or "N missing waivers" (summary)
     chk("action: ACTIONS surfaces overlap at 1 PM",
         text.includes("3 arrivals overlap at 1 PM"), text);
     chk("action: ACTIONS includes missing-phone hint",
