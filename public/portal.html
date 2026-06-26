@@ -1777,8 +1777,12 @@ tr:hover td { background: var(--panel2); }
         <div class="lp-value" id="lpEmail">—</div>
       </div>
       <div class="lp-field">
-        <div class="lp-label">Service requested</div>
+        <div class="lp-label">Wants</div>
         <div class="lp-value" id="lpService">—</div>
+      </div>
+      <div class="lp-field">
+        <div class="lp-label">Came in via</div>
+        <div class="lp-value" id="lpSource">—</div>
       </div>
       <div class="lp-field">
         <div class="lp-label">Timeframe</div>
@@ -1793,6 +1797,25 @@ tr:hover td { background: var(--panel2); }
         <div class="lp-value" id="lpLastContacted">—</div>
       </div>
     </div>
+
+    <!-- Reach out — one tap opens the phone's dialer / messages -->
+    <div class="lp-field" id="lpReachWrap">
+      <div class="lp-label">Reach out</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a id="lpCallBtn" class="btn btn-ghost btn-sm" href="#" style="text-decoration:none;">📞 Call</a>
+        <a id="lpTextBtn" class="btn btn-ghost btn-sm" href="#" style="text-decoration:none;">💬 Text</a>
+      </div>
+    </div>
+
+    <!-- AI suggested follow-up -->
+    <div class="lp-field" style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface2);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div class="lp-label" style="margin:0;">✨ Suggested follow-up</div>
+        <button class="btn btn-primary btn-sm" id="lpSuggestBtn" onclick="suggestLeadFollowup()">Suggest</button>
+      </div>
+      <div id="lpSuggestBox" style="font-size:13px;color:var(--text2);line-height:1.5;">Tap <strong>Suggest</strong> for an AI next step + a ready-to-send message.</div>
+    </div>
+
     <div class="lp-field">
       <div class="lp-label">Status</div>
       <select class="lp-status-select" id="lpStatusSelect" onchange="updateLeadStatusFromPanel()">
@@ -3359,21 +3382,17 @@ async function loadLeads() {
     return;
   }
 
-  const channelBadge = ch => ch === 'web'
-    ? '<span class="pill pill-web">Web</span>'
-    : '<span class="pill pill-sms">SMS</span>';
-
   document.getElementById('leadsTable').innerHTML = `
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Name</th><th>Phone</th><th>Channel</th><th>Type</th>
+        <th>Name</th><th>Wants</th><th>Came in via</th><th>Phone</th>
         <th>Status</th><th>Created</th><th></th>
       </tr></thead>
-      <tbody>${d.leads.map(l => `<tr>
-        <td>${l.contact_name ?? '—'}</td>
-        <td>${l.contact_phone ?? '—'}</td>
-        <td>${channelBadge(l.channel)}</td>
-        <td class="text-muted">${l.lead_type ?? '—'}</td>
+      <tbody>${d.leads.map(l => { const s = leadSource(l); return `<tr>
+        <td>${l.contact_name ? escHtml(l.contact_name) : '<span class="text-muted">No name</span>'}</td>
+        <td class="text-muted">${l.requested_service ? escHtml(l.requested_service) : '—'}</td>
+        <td><span class="pill pill-gray">${s.icon} ${s.label}</span></td>
+        <td class="text-muted text-xs">${l.contact_phone ?? '—'}</td>
         <td>
           <select class="inline-status" data-lead-id="${l.id}" onchange="inlineStatusChange(this)">
             ${['new','contacted','engaged','scheduled','converted','closed','ignored']
@@ -3382,7 +3401,7 @@ async function loadLeads() {
         </td>
         <td class="text-muted text-xs">${fmt(l.created_at)}</td>
         <td><span class="row-action" data-lead-open="${l.id}">Open →</span></td>
-      </tr>`).join('')}</tbody>
+      </tr>`; }).join('')}</tbody>
     </table></div>`;
 
   // Bind open-panel actions — store lead data on element
@@ -3417,6 +3436,20 @@ async function inlineStatusChange(select) {
 }
 
 // ── Lead slide-in panel ────────────────────────────────────────────────────
+// Where a lead came from — plain-English, with an icon. Caveman-clear.
+function leadSource(l) {
+  const s = (l.source || '').toLowerCase();
+  const t = (l.lead_type || '').toLowerCase();
+  const ch = (l.channel || '').toLowerCase();
+  if (s === 'voice' || t === 'voice')             return { icon:'📞', label:'Phone call' };
+  if (ch === 'web' || s === 'web' || t === 'sms_opt_in') return { icon:'🌐', label:'Website chat' };
+  if (s === 'demo' || t === 'demo')               return { icon:'🎬', label:'Demo' };
+  if (s === 'partner' || t === 'partner')         return { icon:'🤝', label:'Partner' };
+  if (s === 'ui')                                 return { icon:'✍️', label:'Added by hand' };
+  if (t === 'waitlist')                           return { icon:'⏳', label:'Waitlist signup' };
+  return { icon:'📱', label:'Text (SMS)' };
+}
+
 function openLeadPanel(lead) {
   activeLead = lead;
   document.getElementById('lpName').textContent = lead.contact_name || 'Unknown';
@@ -3430,16 +3463,56 @@ function openLeadPanel(lead) {
   document.getElementById('lpNotes').value = lead.notes ?? '';
   document.getElementById('lpSaveIndicator').textContent = '';
 
-  // Meta badges
-  const ch = lead.channel === 'web' ? '<span class="pill pill-web">Web</span>' : '<span class="pill pill-sms">SMS</span>';
-  document.getElementById('lpMeta').innerHTML = ch
-    + (lead.lead_type ? ` <span class="pill pill-gray">${lead.lead_type}</span>` : '');
+  // Source — where it came from (plain English).
+  const src = leadSource(lead);
+  document.getElementById('lpSource').textContent = `${src.icon} ${src.label}`;
+  document.getElementById('lpMeta').innerHTML = `<span class="pill pill-gray">${src.icon} ${src.label}</span>`
+    + (lead.lead_type && lead.lead_type !== 'operator' ? ` <span class="pill pill-gray">${lead.lead_type}</span>` : '');
+
+  // One-tap reach-out — phone dialer + messages app, prefilled.
+  const phone = (lead.contact_phone || '').replace(/[^+\d]/g, '');
+  const reachWrap = document.getElementById('lpReachWrap');
+  if (phone) {
+    reachWrap.style.display = '';
+    document.getElementById('lpCallBtn').href = `tel:${phone}`;
+    document.getElementById('lpTextBtn').href = `sms:${phone}`;
+  } else {
+    reachWrap.style.display = 'none';
+  }
+
+  // Reset AI suggestion box.
+  document.getElementById('lpSuggestBox').innerHTML = 'Tap <strong>Suggest</strong> for an AI next step + a ready-to-send message.';
+  document.getElementById('lpSuggestBtn').disabled = false;
+  document.getElementById('lpSuggestBtn').textContent = 'Suggest';
 
   // View conversation button — only visible if we have a phone
   document.getElementById('lpViewConvBtn').style.display = lead.contact_phone ? '' : 'none';
 
   document.getElementById('leadPanel').classList.add('open');
   document.getElementById('leadPanelBackdrop').classList.add('open');
+}
+
+// AI-suggested follow-up: next step + a ready-to-send draft (Copy + Text it).
+async function suggestLeadFollowup() {
+  if (!activeLead) return;
+  const box = document.getElementById('lpSuggestBox');
+  const btn = document.getElementById('lpSuggestBtn');
+  btn.disabled = true; btn.textContent = 'Thinking…';
+  box.innerHTML = '<div class="loading">Drafting a follow-up…</div>';
+  const r = await apiFetch(`/leads/${activeLead.id}/suggest`, { method: 'POST', body: '{}' });
+  btn.disabled = false; btn.textContent = 'Suggest';
+  if (!r || r.error) { box.innerHTML = '<span style="color:var(--danger);">Couldn’t get a suggestion. Try again.</span>'; return; }
+  const phone = (activeLead.contact_phone || '').replace(/[^+\d]/g, '');
+  const smsHref = phone ? `sms:${phone}?body=${encodeURIComponent(r.message)}` : null;
+  window._lastSuggestMsg = r.message;
+  box.innerHTML =
+    '<div style="margin-bottom:8px;"><span style="font-weight:600;">Next step:</span> ' + escHtml(r.next_step) + '</div>' +
+    '<div style="border:1px solid var(--border);border-radius:6px;padding:10px;background:var(--surface);margin-bottom:8px;white-space:pre-wrap;">' + escHtml(r.message) + '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+      '<button class="btn btn-ghost btn-sm" onclick="copyToClipboard(window._lastSuggestMsg)">📋 Copy message</button>' +
+      (smsHref ? '<a class="btn btn-primary btn-sm" href="' + smsHref.replace(/"/g,'&quot;') + '" style="text-decoration:none;">💬 Text it</a>' : '') +
+    '</div>' +
+    (r.source === 'fallback' ? '<div style="font-size:10px;color:var(--text3);margin-top:6px;">Standard suggestion (AI unavailable)</div>' : '');
 }
 
 function closeLeadPanel() {

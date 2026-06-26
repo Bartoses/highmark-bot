@@ -304,6 +304,10 @@ applied to DB1.
 - Groups 6+ always handoff
 - `informational` clients: booking intent → 3-step lead capture (if `leadCaptureEnabled`) or phone CTA
 
+### Leads — operator exclusion + AI follow-up (2026-06-26)
+**Operators are never leads.** `getOperatorPhoneSet(clientId, supabase)` (operatorBriefing.js) returns the client's registered operator phones; lead reporting excludes them everywhere — `getHotLeads`/`getRecentLeads` (briefing + Mission Control leads widget), `handlePortalLeads` (portal list, via `.not("contact_phone","in",…)`), and both funnels (dashboard ROI + widgets). `saveLead` (leads.js) refuses to create a lead for a registered operator phone (defense-in-depth; catches voice missed-call recovery etc.). One-time DB cleanup tagged existing operator-phone leads `lead_type='operator', status='ignored'`.
+**AI follow-up.** `POST /portal/api/leads/:id/suggest` (`handleSuggestLeadFollowup`, Claude Haiku) returns `{ next_step, message }` from the lead + its recent conversation — a one-line next action + a ready-to-send SMS draft; degrades to a deterministic suggestion when Claude is off. The portal **Leads** UI: list columns are Name · **Wants** · **Came in via** (plain-English source badge — 📱 Text / 🌐 Website chat / 📞 Phone call / 🎬 Demo / 🤝 Partner / ✍️ Added by hand) · Phone · Status; the lead panel adds one-tap **📞 Call** (`tel:`) + **💬 Text** (`sms:`) and a **✨ Suggested follow-up** card with Copy + **Text it** (`sms:` prefilled with the draft).
+
 ### Lead Capture Flow (leads.js + informational mode)
 Step 1: what service needed → Step 2: callback number → Step 3: preferred timeframe → `saveLead()` + `notifyBusinessOfLead()`. Abort on "call/phone/never mind/cancel/skip" → handoffReply.
 

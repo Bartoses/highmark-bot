@@ -14608,6 +14608,14 @@ async function testOperatorIntelligence2() {
     chk("oi2: work-orders → 503 when supabase missing", r.code === 503);
     r = mkRes(); await handlePortalWorkOrders({ query: {}, portalUser: {} }, r, { from: () => ({}) }, null);
     chk("oi2: work-orders → 400 when no client_id", r.code === 400);
+
+    const { handleSuggestLeadFollowup, handlePortalLeads } = await import("./adminPortal.js");
+    r = mkRes(); await handleSuggestLeadFollowup({ params: { id: "x" }, query: {}, portalUser: {} }, r, null, null, null);
+    chk("oi2: lead suggest → 503 when supabase missing", r.code === 503);
+    r = mkRes(); await handleSuggestLeadFollowup({ params: { id: "x" }, query: {}, portalUser: {} }, r, { from: () => ({}) }, null, null);
+    chk("oi2: lead suggest → 400 when no client_id", r.code === 400);
+    chk("oi2: getOperatorPhoneSet exported", typeof (await import("./operatorBriefing.js")).getOperatorPhoneSet === "function");
+    chk("oi2: handlePortalLeads exported", typeof handlePortalLeads === "function");
   }
 }
 

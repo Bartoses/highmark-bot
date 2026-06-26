@@ -416,16 +416,29 @@ export async function getWeatherSnapshot(supabase, clientId = null) {
   };
 }
 
+// Set of E.164 phones registered as operators for a client. Used to keep
+// operators (staff) OUT of lead reporting — they're not customers to follow up
+// with. Degrades to an empty set on any error.
+export async function getOperatorPhoneSet(clientId, supabase) {
+  try {
+    const { data } = await supabase.from("operator_phones").select("phone").eq("client_id", clientId);
+    return new Set((data ?? []).map((r) => r.phone).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 export async function getHotLeads(clientId, supabase, limit = 5) {
   try {
+    const opSet = await getOperatorPhoneSet(clientId, supabase);
     const { data } = await supabase
       .from("leads")
-      .select("id, name, service, status, created_at, last_contacted_at")
+      .select("id, name, service, status, created_at, last_contacted_at, contact_phone")
       .eq("client_id", clientId)
       .in("status", ["new", "contacted", "engaged"])
       .order("created_at", { ascending: false })
-      .limit(limit);
-    return data ?? [];
+      .limit(limit + 15); // overfetch so the operator filter still yields `limit`
+    return (data ?? []).filter((l) => !opSet.has(l.contact_phone)).slice(0, limit);
   } catch {
     return [];
   }
@@ -433,15 +446,16 @@ export async function getHotLeads(clientId, supabase, limit = 5) {
 
 export async function getRecentLeads(clientId, supabase, hours = 24) {
   try {
+    const opSet = await getOperatorPhoneSet(clientId, supabase);
     const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
     const { data } = await supabase
       .from("leads")
-      .select("id, name, service, status, created_at")
+      .select("id, name, service, status, created_at, contact_phone")
       .eq("client_id", clientId)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
-      .limit(10);
-    return data ?? [];
+      .limit(25);
+    return (data ?? []).filter((l) => !opSet.has(l.contact_phone)).slice(0, 10);
   } catch {
     return [];
   }
