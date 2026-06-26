@@ -401,6 +401,9 @@ export async function handlePortalDashboardWidgets(req, res, supabase, crmSupaba
     } catch { /* none yet */ }
 
     const role = roles.normalizeRole(req.query.role || saved?.role_preset || "owner");
+    // Revenue widget look-ahead window (days). Separate from the fixed 7-day
+    // "Upcoming Week" card so owners can widen revenue to see all locations.
+    const revDays = [7, 14, 30, 90].includes(Number(req.query.rev_days)) ? Number(req.query.rev_days) : 7;
 
     // Gather signals in parallel (same sources as the SMS briefing).
     const [
@@ -436,6 +439,10 @@ export async function handlePortalDashboardWidgets(req, res, supabase, crmSupaba
       unresolvedHandoffs: handoffs, hotLeads, pacing, weather, hasUpcomingWindow: true,
     };
     const scored = scorePriorities(ctx, { role });
+
+    // Revenue window data — reuse the 7d fetch when revDays===7, else fetch wider.
+    const revManifest = revDays === 7 ? upcomingManifest : await ob.getUpcomingManifest(crmSupabase, revDays);
+    const revUpcoming = revDays === 7 ? upcomingRevenue  : await ob.getUpcomingRevenue(clientId, crmSupabase, revDays);
 
     // ── Widget data ──────────────────────────────────────────────────────────
     const sum = (rows, f) => (rows ?? []).reduce((s, r) => s + (Number(f(r)) || 0), 0);
@@ -485,13 +492,15 @@ export async function handlePortalDashboardWidgets(req, res, supabase, crmSupaba
       },
       revenue: {
         last_7d:    weekRevenue?.estimated ?? 0,
-        upcoming_7d: cents(upcomingRevenue?.revenue_cents),
+        rev_days:   revDays,
+        upcoming:   cents(revUpcoming?.revenue_cents),
+        upcoming_bookings: revUpcoming?.bookings ?? (revManifest ?? []).length,
         season:     { label: seasonRevenue?.period_label ?? null, amount: cents(seasonRevenue?.revenue_cents) },
         pacing_delta: pacing?.delta_pct ?? null,
-        // Upcoming revenue split by location (next 7 days) — all 4 posts.
+        // Upcoming revenue split by location over the chosen window — all 4 posts.
         by_location: (() => {
           const m = new Map();
-          for (const r of (upcomingManifest ?? [])) {
+          for (const r of (revManifest ?? [])) {
             const k = ob.capLocation(r.location);
             const v = m.get(k) ?? { name: k, revenue: 0, bookings: 0 };
             v.revenue += Number(r.receipt_total_cents ?? r.total_cents) || 0;

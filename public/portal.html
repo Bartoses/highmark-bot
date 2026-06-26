@@ -3179,15 +3179,19 @@ async function loadDashboard(period) {
 }
 
 // ─── Mission Control (Phase 2) ───────────────────────────────────────────────
-let _mcState = { role: null, widgets: [], available: {}, data: {}, customize: false };
+let _mcState = { role: null, widgets: [], available: {}, data: {}, customize: false, revDays: 7 };
 
 async function loadMissionControl(role) {
   const grid = document.getElementById('mcGrid');
   if (!grid) return;
-  const qs = (role ? '?role=' + role : '') + (me?.isAdmin && me?.clientId ? (role ? '&' : '?') + 'client_id=' + me.clientId : '');
+  const params = [];
+  if (role) params.push('role=' + role);
+  if (_mcState.revDays && _mcState.revDays !== 7) params.push('rev_days=' + _mcState.revDays);
+  if (me?.isAdmin && me?.clientId) params.push('client_id=' + me.clientId);
+  const qs = params.length ? '?' + params.join('&') : '';
   const r = await apiFetch('/dashboard/widgets' + qs);
   if (!r || r.error) { grid.innerHTML = '<div class="error-msg" style="grid-column:1/-1;">Couldn’t load widgets: ' + (r?.error ?? _lastApiError ?? 'unknown') + '</div>'; return; }
-  _mcState = { role: r.role, widgets: r.layout?.widgets ?? [], available: r.available ?? {}, data: r.data ?? {}, customize: _mcState.customize };
+  _mcState = { role: r.role, widgets: r.layout?.widgets ?? [], available: r.available ?? {}, data: r.data ?? {}, customize: _mcState.customize, revDays: _mcState.revDays };
 
   // Role dropdown
   const sel = document.getElementById('mcRole');
@@ -3260,15 +3264,22 @@ function mcWidgetBody(id, d) {
           (w.url ? ' <a href="' + escHtml(w.url) + '" target="_blank" style="color:var(--accent,#3b82f6);">open</a>' : '') + '</div>').join('') ||
         empty('Fleet clear — no open work orders.');
     case 'revenue': {
+      const win = d.rev_days ?? 7;
       const locs = (d.by_location ?? []).filter(l => l.revenue > 0);
       const locMax = Math.max(1, ...locs.map(l => l.revenue));
-      return '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Last 7d</span><strong>' + money(d.last_7d) + '</strong></div>' +
-        '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Next 7d</span><strong>' + money(d.upcoming_7d) + '</strong></div>' +
+      // Window picker (touch-friendly segmented control).
+      const seg = '<div style="display:flex;gap:4px;margin-bottom:10px;">' +
+        [7,14,30,90].map(n => '<button onclick="mcSetRevDays(' + n + ')" style="flex:1;padding:7px 0;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;border:1px solid var(--border);' +
+          (n === win ? 'background:var(--accent,#3b82f6);color:#fff;border-color:transparent;' : 'background:transparent;color:var(--text2);') + '">' + n + 'd</button>').join('') + '</div>';
+      return seg +
+        '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Last 7d</span><strong>' + money(d.last_7d) + '</strong></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Next ' + win + 'd</span><strong>' + money(d.upcoming) + ' <span style="color:var(--text3);font-size:11px;font-weight:400;">· ' + (d.upcoming_bookings ?? 0) + ' bk</span></strong></div>' +
         (d.season?.label ? '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>' + escHtml(d.season.label) + '</span><strong>' + money(d.season.amount) + '</strong></div>' : '') +
         (d.pacing_delta != null ? '<div style="font-size:12px;color:' + (d.pacing_delta < 0 ? 'var(--danger,#ef4444)' : 'var(--success,#10b981)') + ';margin-top:4px;">Pacing ' + (d.pacing_delta>0?'+':'') + d.pacing_delta + '% vs last week</div>' : '') +
-        (locs.length ? '<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;margin-bottom:5px;">Next 7d by location</div>' +
-          locs.map(l => '<div style="margin-bottom:5px;"><div style="display:flex;justify-content:space-between;font-size:12px;"><span>' + escHtml(l.name) + '</span><span style="color:var(--text2);">' + money(l.revenue) + '</span></div>' +
-            '<div style="height:5px;background:var(--panel2,var(--border));border-radius:3px;overflow:hidden;"><div style="width:' + Math.round((l.revenue/locMax)*100) + '%;height:100%;background:var(--accent,#3b82f6);"></div></div></div>').join('') + '</div>' : '');
+        (locs.length ? '<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;margin-bottom:6px;">Next ' + win + 'd by location</div>' +
+          locs.map(l => '<div style="margin-bottom:7px;"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px;"><span>' + escHtml(l.name) + '</span><span style="color:var(--text2);"><strong>' + money(l.revenue) + '</strong> <span style="color:var(--text3);">· ' + l.bookings + ' bk</span></span></div>' +
+            '<div style="height:6px;background:var(--panel2,var(--border));border-radius:3px;overflow:hidden;"><div style="width:' + Math.round((l.revenue/locMax)*100) + '%;height:100%;background:var(--accent,#3b82f6);border-radius:3px;"></div></div></div>').join('') + '</div>'
+          : '<div style="margin-top:8px;font-size:12px;color:var(--text3);">No upcoming revenue in the next ' + win + ' days.</div>');
     }
     case 'leads': {
       const f = d.funnel ?? {};
@@ -3312,6 +3323,13 @@ function mcRemoveWidget(id) {
   mcRenderGrid(); mcRenderPicker(); mcSaveLayout();
 }
 function mcChangeRole(role) { loadMissionControl(role); }
+function mcSetRevDays(n) {
+  if (_mcState.revDays === n) return;
+  _mcState.revDays = n;
+  // Optimistic: re-render now (shows active segment), then refresh data.
+  mcRenderGrid();
+  loadMissionControl(_mcState.role);
+}
 
 async function mcSaveLayout() {
   await apiFetch('/dashboard/layout', { method: 'PUT', body: JSON.stringify({ role_preset: _mcState.role, widgets: _mcState.widgets }) });
