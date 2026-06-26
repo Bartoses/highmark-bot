@@ -185,6 +185,43 @@ tr:hover td { background: var(--panel2); }
 .fpill:hover { border-color: var(--accent); color: var(--accent); }
 .fpill.active { background: var(--accent); border-color: var(--accent); color: #000; }
 
+/* ── Lead cards (mobile-first list; replaces the dense table) ─────────────── */
+.lead-list { display: flex; flex-direction: column; gap: 10px; max-width: 860px; }
+.lead-card {
+  position: relative; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px 14px 12px; cursor: pointer;
+  transition: border-color .12s, transform .06s;
+}
+.lead-card:hover { border-color: var(--border2); }
+.lead-card:active { transform: scale(.995); }
+/* Subtle left rail flags newest/unworked leads so "what needs attention" pops */
+.lead-card.lead-new       { border-left: 3px solid #3b82f6; }
+.lead-card.lead-contacted { border-left: 3px solid var(--warn); }
+.lead-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.lead-card-name { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.25; }
+.lead-card-wants { font-size: 13px; color: var(--text2); margin-top: 3px; line-height: 1.35; }
+.lead-card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; font-size: 11.5px; color: var(--text3); }
+.lead-card-actions { display: flex; gap: 8px; margin-top: 11px; }
+.lead-card-actions .lc-btn {
+  flex: 0 0 auto; min-width: 116px; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 40px; padding: 0 14px; border-radius: 9px; font-size: 13px; font-weight: 600;
+  text-decoration: none; cursor: pointer; border: 1px solid var(--border2);
+  background: var(--surface); color: var(--text); transition: all .12s; user-select: none;
+}
+.lead-card-actions .lc-btn:hover { border-color: var(--accent); color: var(--accent); }
+.lead-card-actions .lc-btn.lc-call { background: rgba(16,185,129,.12); border-color: rgba(16,185,129,.25); color: #6ee7b7; }
+.lead-card-actions .lc-btn.lc-text { background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.25); color: #93c5fd; }
+.lead-card-actions .lc-btn.lc-open { min-width: 0; margin-left: auto; padding: 0 14px; color: var(--text3); }
+.lead-card .lead-card-status {
+  flex-shrink: 0; appearance: none; -webkit-appearance: none;
+  background: var(--bg); border: 1px solid var(--border2); color: var(--text);
+  border-radius: 100px; padding: 4px 10px; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em; cursor: pointer; outline: none;
+}
+.lead-card .lead-card-status:focus { border-color: var(--accent); }
+.leads-summary { font-size: 12.5px; color: var(--text3); margin: 0 0 12px; }
+.leads-summary strong { color: var(--text2); }
+
 /* ── Lead slide-in panel ─────────────────────────────────────────────────── */
 #leadPanel {
   position: fixed; top: 0; right: -440px; width: 420px; max-width: 95vw;
@@ -369,6 +406,10 @@ tr:hover td { background: var(--panel2); }
   }
   #leadPanel.open { bottom: 0 !important; right: auto !important; }
   .lp-actions { padding-bottom: calc(20px + 56px); }
+  /* Lead cards: Call/Text become full-width thumb targets; Open stays compact */
+  .lead-list { max-width: 100%; }
+  .lead-card-actions .lc-btn { flex: 1 1 0; min-width: 0; min-height: 44px; }
+  .lead-card-actions .lc-btn.lc-open { flex: 0 0 auto; min-width: 0; }
   /* Prevent horizontal scroll on settings tables */
   #settingsContent .tbl-wrap { max-width: calc(100vw - 64px); }
   /* Settings/onboarding grid: single column on mobile */
@@ -490,6 +531,27 @@ tr:hover td { background: var(--panel2); }
 .data-table th { text-align:left; padding:10px 8px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text3); border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--panel); }
 .data-table td { padding:10px 8px; font-size:12.5px; color:var(--text2); border-bottom:1px solid var(--border); }
 .data-table tbody tr:hover { background:var(--panel2); }
+/* Ops bookings as cards — shown on mobile only (desktop keeps the sortable table) */
+.ops-card-list { display:none; flex-direction:column; gap:10px; }
+.ops-bcard { position:relative; background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:13px 14px 12px; cursor:pointer; transition:border-color .12s, transform .06s; }
+.ops-bcard:active { transform:scale(.995); }
+.ops-bcard.ops-row-crit    { border-left:3px solid #f57e7e; }
+.ops-bcard.ops-row-warn    { border-left:3px solid #f5c14a; }
+.ops-bcard.ops-row-highval { border-left:3px solid var(--accent); }
+.ops-bcard-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.ops-bcard-time { font-size:13px; font-weight:700; color:var(--text); white-space:nowrap; }
+.ops-bcard-name { font-size:15px; font-weight:700; color:var(--text); margin-top:6px; line-height:1.25; }
+.ops-bcard-sub { font-size:12.5px; color:var(--text2); margin-top:2px; line-height:1.35; }
+.ops-bcard-risks { display:flex; gap:4px; flex-wrap:wrap; margin-top:8px; }
+.ops-bcard-actions { display:flex; gap:8px; margin-top:11px; }
+.ops-bcard-actions .lc-btn {
+  flex:1 1 0; min-height:44px; display:inline-flex; align-items:center; justify-content:center; gap:5px;
+  border-radius:9px; font-size:13px; font-weight:600; text-decoration:none; cursor:pointer;
+  border:1px solid var(--border2); background:var(--surface); color:var(--text); user-select:none;
+}
+.ops-bcard-actions .lc-btn.lc-call { background:rgba(16,185,129,.12); border-color:rgba(16,185,129,.25); color:#6ee7b7; }
+.ops-bcard-actions .lc-btn.lc-text { background:rgba(59,130,246,.12); border-color:rgba(59,130,246,.25); color:#93c5fd; }
+.ops-bcard-actions .lc-btn.lc-open { flex:0 0 auto; min-width:0; padding:0 16px; color:var(--text3); }
 /* Mobile: tighter KPIs, hide low-value table cols, full-width drawer fields */
 @media (max-width: 720px) {
   #sec-operations .ops-kpi-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 8px !important; }
@@ -500,9 +562,9 @@ tr:hover td { background: var(--panel2); }
   #opsSearch { width: 100% !important; }
   #opsFilterCard > div:first-child { padding: 9px 12px; }
   #opsFilterBody { padding: 8px 12px; gap: 8px; }
-  /* New 8-col table: hide Location(5) and Status(7) on mobile */
-  .ops-table th:nth-child(5), .ops-table td:nth-child(5) { display:none; }
-  .ops-table th:nth-child(7), .ops-table td:nth-child(7) { display:none; }
+  /* Bookings: swap the dense table for tappable cards on mobile */
+  #opsTableWrap { display:none; }
+  .ops-card-list { display:flex; }
   .ops-detail-grid { grid-template-columns: 100px 1fr !important; }
   #opsBookingModalActions > div[style*="flex-wrap"] { flex-direction: column; }
   #opsBookingModalActions > div[style*="flex-wrap"] > .btn { width: 100%; }
@@ -1584,6 +1646,8 @@ tr:hover td { background: var(--panel2); }
             <button class="btn btn-ghost btn-sm" id="opsFiltersBtn" onclick="openOpsFilters()">⚙ Filters <span id="opsFilterBadge" style="display:none;background:var(--accent);color:#fff;border-radius:8px;padding:0 5px;font-size:10px;margin-left:4px;">0</span></button>
             <button class="btn btn-ghost btn-sm" onclick="opsExportCsv()">⬇ CSV</button>
           </div>
+          <!-- Mobile: tappable cards (no horizontal scroll, glove-sized targets). Desktop: the table below. -->
+          <div id="opsCardList" class="ops-card-list"></div>
           <div id="opsTableWrap" style="overflow-x:auto;">
             <table class="data-table ops-table" style="width:100%;font-size:12.5px;">
               <thead>
@@ -3406,29 +3470,47 @@ async function loadLeads() {
     return;
   }
 
-  document.getElementById('leadsTable').innerHTML = `
-    <div class="tbl-wrap"><table>
-      <thead><tr>
-        <th>Name</th><th>Wants</th><th>Came in via</th><th>Phone</th>
-        <th>Status</th><th>Created</th><th></th>
-      </tr></thead>
-      <tbody>${d.leads.map(l => { const s = leadSource(l); return `<tr>
-        <td>${l.contact_name ? escHtml(l.contact_name) : '<span class="text-muted">No name</span>'}</td>
-        <td class="text-muted">${l.requested_service ? escHtml(l.requested_service) : '—'}</td>
-        <td><span class="pill pill-gray">${s.icon} ${s.label}</span></td>
-        <td class="text-muted text-xs">${l.contact_phone ?? '—'}</td>
-        <td>
-          <select class="inline-status" data-lead-id="${l.id}" onchange="inlineStatusChange(this)">
-            ${['new','contacted','engaged','scheduled','converted','closed','ignored']
-              .map(s => `<option value="${s}"${l.status===s?' selected':''}>${s}</option>`).join('')}
-          </select>
-        </td>
-        <td class="text-muted text-xs">${fmt(l.created_at)}</td>
-        <td><span class="row-action" data-lead-open="${l.id}">Open →</span></td>
-      </tr>`; }).join('')}</tbody>
-    </table></div>`;
+  // "What needs attention" — count the unworked leads in this view.
+  const needAttn = d.leads.filter(l => l.status === 'new').length;
+  const summary = needAttn
+    ? `<div class="leads-summary"><strong>${needAttn}</strong> new ${needAttn === 1 ? 'lead needs' : 'leads need'} a first touch.</div>`
+    : `<div class="leads-summary">All caught up — no untouched leads in this view.</div>`;
 
-  // Bind open-panel actions — store lead data on element
+  // Card list — mobile-first, big touch targets, inline Call/Text. The whole
+  // card opens the detail panel; action controls stop propagation.
+  document.getElementById('leadsTable').innerHTML = summary + `<div class="lead-list">${d.leads.map(l => {
+    const s = leadSource(l);
+    const phone = (l.contact_phone || '').replace(/[^+\d]/g, '');
+    const name  = l.contact_name ? escHtml(l.contact_name) : '<span class="text-muted">No name</span>';
+    const wants = l.requested_service ? escHtml(l.requested_service) : 'No request captured yet';
+    const flag  = l.status === 'new' ? ' lead-new' : (l.status === 'contacted' ? ' lead-contacted' : '');
+    const statusSel = `<select class="lead-card-status pill-${l.status || 'new'}" data-lead-id="${l.id}" onchange="inlineStatusChange(this)" onclick="event.stopPropagation()">`
+      + ['new','contacted','engaged','scheduled','converted','closed','ignored']
+          .map(o => `<option value="${o}"${l.status===o?' selected':''}>${o}</option>`).join('')
+      + `</select>`;
+    const actions = phone
+      ? `<a class="lc-btn lc-call" href="tel:${phone}" onclick="event.stopPropagation()">📞 Call</a>`
+        + `<a class="lc-btn lc-text" href="sms:${phone}" onclick="event.stopPropagation()">💬 Text</a>`
+        + `<span class="lc-btn lc-open">Open →</span>`
+      : `<span class="lc-btn lc-open" style="flex:1;">Open →</span>`;
+    return `<div class="lead-card${flag}" data-lead-open="${l.id}">
+      <div class="lead-card-top">
+        <div style="min-width:0;">
+          <div class="lead-card-name">${name}</div>
+          <div class="lead-card-wants">${wants}</div>
+        </div>
+        ${statusSel}
+      </div>
+      <div class="lead-card-meta">
+        <span>${s.icon} ${s.label}</span>
+        ${phone ? `<span>· ${escHtml(l.contact_phone)}</span>` : ''}
+        <span>· ${fmt(l.created_at)}</span>
+      </div>
+      <div class="lead-card-actions">${actions}</div>
+    </div>`;
+  }).join('')}</div>`;
+
+  // Bind open-panel — whole card opens the detail (action controls stopPropagation).
   document.querySelectorAll('[data-lead-open]').forEach(el => {
     el.addEventListener('click', () => {
       const lead = d.leads.find(l => l.id === el.dataset.leadOpen);
@@ -3452,6 +3534,14 @@ async function inlineStatusChange(select) {
   const r = await apiPatch(`/leads/${id}`, { status });
   select.disabled = false;
   if (!r) { select.style.borderColor = 'var(--danger)'; setTimeout(() => select.style.borderColor = '', 2000); }
+  // Recolor the card's status pill to match the new status.
+  if (select.classList.contains('lead-card-status')) {
+    select.className = 'lead-card-status pill-' + status;
+    const card = select.closest('.lead-card');
+    if (card) { card.classList.remove('lead-new', 'lead-contacted');
+      if (status === 'new') card.classList.add('lead-new');
+      else if (status === 'contacted') card.classList.add('lead-contacted'); }
+  }
   // If the open panel matches, sync it
   if (activeLead?.id === id) {
     activeLead.status = status;
@@ -7629,6 +7719,37 @@ function setupOpsSortHandlers() {
   });
 }
 
+// Mobile booking card — same data + actions as a table row, glove-sized.
+function renderOpsBookingCard(b) {
+  const highVal = (b.receipt_total_cents ?? 0) >= 100000;
+  const hasCrit = !b.waiver_signed || (b.balance_due_cents ?? 0) > 0;
+  const isLate  = b.operational_status === 'late';
+  const cardCls = highVal ? 'ops-row-highval' : isLate ? 'ops-row-crit' : hasCrit ? 'ops-row-warn' : '';
+  const pkSafe  = (b.fareharbor_pk ?? '').replace(/'/g, '\\\'');
+  const phone   = b.phone ?? '';
+  const risks = [];
+  if (!b.waiver_signed)               risks.push(`<span class="ops-risk r-crit">Waiver</span>`);
+  if ((b.balance_due_cents ?? 0) > 0) risks.push(`<span class="ops-risk r-warn">${fmtCents(b.balance_due_cents)} due</span>`);
+  if (!b.guide_name)                  risks.push(`<span class="ops-risk r-info">No guide</span>`);
+  if (highVal)                        risks.push(`<span class="ops-risk r-vip">VIP</span>`);
+  if (b.is_repeat_guest)              risks.push(`<span class="ops-risk r-ok">Repeat</span>`);
+  const sub = [escapeHtml(b.activity ?? '—'), b.location ? escapeHtml(b.location) : null].filter(Boolean).join(' · ');
+  const actions = (phone
+    ? `<a class="lc-btn lc-text" href="sms:${escapeHtml(phone)}" onclick="event.stopPropagation()">💬 Text</a>`
+      + `<a class="lc-btn lc-call" href="tel:${escapeHtml(phone)}" onclick="event.stopPropagation()">📞 Call</a>`
+    : '') + `<span class="lc-btn lc-open">Open →</span>`;
+  return `<div class="ops-bcard ${cardCls}" onclick="openOpsBooking('${pkSafe}')">
+    <div class="ops-bcard-top">
+      <span class="ops-bcard-time">${fmtDateTime(b.start_at)}</span>
+      ${statusPill(b.operational_status)}
+    </div>
+    <div class="ops-bcard-name">${escapeHtml(b.customer_name ?? '—')} <span style="font-weight:500;color:var(--text3);font-size:13px;">· ${b.pax ?? 1} pax</span></div>
+    <div class="ops-bcard-sub">${sub}</div>
+    ${risks.length ? `<div class="ops-bcard-risks">${risks.join('')}</div>` : ''}
+    <div class="ops-bcard-actions">${actions}</div>
+  </div>`;
+}
+
 function renderOpsTableRows() {
   const tbody = document.getElementById('opsTableBody');
   const meta  = document.getElementById('opsTableMeta');
@@ -7639,12 +7760,15 @@ function renderOpsTableRows() {
       th.classList.add(_opsSort.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
     }
   });
+  const cardList = document.getElementById('opsCardList');
   const sorted = applyOpsClientSort(_opsLastRows);
   if (!sorted.length) {
     tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3);">No bookings match the current filters.</td></tr>';
+    if (cardList) cardList.innerHTML = '<div class="empty-state"><div class="esc-icon">📋</div>No bookings match the current filters.</div>';
     meta.textContent = '';
     return;
   }
+  if (cardList) cardList.innerHTML = sorted.map(renderOpsBookingCard).join('');
   tbody.innerHTML = sorted.map(b => {
     const highVal = (b.receipt_total_cents ?? 0) >= 100000;
     const hasCrit = !b.waiver_signed || (b.balance_due_cents ?? 0) > 0;

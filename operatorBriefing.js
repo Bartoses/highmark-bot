@@ -2023,6 +2023,40 @@ function buildCard(category, ctx, snap, { expand, timeOfDay }) {
   }
 }
 
+// Reply-menu commands. The canonical numbers NEVER change (every inline
+// "Reply N" on a card + the OPERATOR_MENU handler depend on them) — we only
+// choose which to SHOW per role so the footer isn't 8 options for someone who
+// uses two. 1 Schedule + 8 Ask AI are universal.
+const REPLY_MENU_ITEMS = [
+  { n: 1, label: "Schedule" },
+  { n: 2, label: "Revenue" },
+  { n: 3, label: "Waivers" },
+  { n: 4, label: "Late returns" },
+  { n: 5, label: "Work orders" },
+  { n: 6, label: "Hot leads" },
+  { n: 7, label: "Staff" },
+  { n: 8, label: "Ask AI" },
+];
+const ROLE_REPLY_MENU = {
+  owner:              [1, 2, 3, 4, 5, 6, 7, 8],
+  general_manager:    [1, 2, 3, 4, 5, 6, 7, 8],
+  operations_manager: [1, 3, 4, 5, 7, 8],
+  reservations:       [1, 2, 3, 6, 8],
+  fleet:              [1, 4, 5, 8],
+  mechanic:           [1, 5, 8],
+  guide:              [1, 3, 4, 8],
+  marketing:          [1, 2, 6, 8],
+};
+// Role-aware SMS reply footer: "Reply: 1 Schedule · 3 Waivers · …" packed ≤4
+// commands per line. Pure + exported for unit tests.
+export function buildReplyMenu(role) {
+  const nums  = ROLE_REPLY_MENU[normalizeRole(role)] ?? ROLE_REPLY_MENU.owner;
+  const items = REPLY_MENU_ITEMS.filter((i) => nums.includes(i.n)).map((i) => `${i.n} ${i.label}`);
+  const lines = [];
+  for (let i = 0; i < items.length; i += 4) lines.push(items.slice(i, i + 4).join(" · "));
+  return "Reply: " + lines.join("\n");
+}
+
 // Build the full action-card briefing string. Pure. `ctx` carries the (already
 // location-filtered) signal arrays; opts carries the per-phone config.
 export function buildActionCardBriefing(client, ctx = {}, opts = {}) {
@@ -2093,10 +2127,9 @@ export function buildActionCardBriefing(client, ctx = {}, opts = {}) {
     shown++;
   }
 
-  // Reply menu — role-aware Ask-AI footer.
+  // Reply menu — role-aware (only the commands this role actually uses).
   lines.push("");
-  lines.push("Reply: 1 Schedule · 2 Revenue · 3 Waivers · 4 Late returns");
-  lines.push("5 Work orders · 6 Hot leads · 7 Staff · 8 Ask AI");
+  lines.push(buildReplyMenu(role));
 
   let text = lines.join("\n");
   if (text.length > 1480) text = smartTruncate(text, 1480);
