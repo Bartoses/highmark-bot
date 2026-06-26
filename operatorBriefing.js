@@ -1928,7 +1928,7 @@ function buildCard(category, ctx, snap, { expand, timeOfDay }) {
       const s = arr(ctx.workOrders).filter((w) => w.is_safety_issue && !w.is_closed);
       if (!s.length) return null;
       const unit = s[0].unit_name || s[0].asset_family || "a unit";
-      return { line: `⛑ Safety · ${s.length} flagged (${unit}) · Reply 5`, detail: [] };
+      return { line: `⚠️ Flagged · ${s.length} work order${s.length !== 1 ? "s" : ""} flagged (${unit}) · Reply 5`, detail: [] };
     }
     case "waivers": {
       const w = arr(ctx.missingWaivers);
@@ -2009,19 +2009,28 @@ export function buildActionCardBriefing(client, ctx = {}, opts = {}) {
   const lines = [];
   const dateStr = new Date().toLocaleDateString("en-US", { timeZone: "America/Denver", weekday: "short", month: "short", day: "numeric" });
 
-  // Greeting + one-line lead.
+  // Greeting + one-line lead. The lead frames the DAY (load + how many items
+  // need attention) and points down — it never repeats priority #1 verbatim
+  // (which already appears in the list below).
   lines.push(`🏔 ${greetingFor(timeOfDay)}, ${name}.`);
+  const todayCount = snap.totals.bookings;
+  const guests     = snap.totals.pax;
+  const n          = scored.length;
+  const nItems     = `${n} thing${n !== 1 ? "s" : ""}`;
   if (priorities.length) {
-    const lead = priorities[0];
+    const loadBit = todayCount
+      ? `${todayCount} booking${todayCount !== 1 ? "s" : ""}${guests ? ` · ${guests} guest${guests !== 1 ? "s" : ""}` : ""} today`
+      : "Light on bookings today";
     lines.push(
-      timeOfDay === "evening" ? `Tonight's prep: ${lowerFirst(lead.headline)}.`
-      : timeOfDay === "day"   ? `Midday check — top open item: ${lowerFirst(lead.headline)}.`
-      : `Your top priority: ${lowerFirst(lead.headline)}.`);
+      timeOfDay === "evening" ? `Wrapping up — ${nItems} to set up for tomorrow 👇`
+      : timeOfDay === "day"   ? `Midday check — ${nItems} still open 👇`
+      : `${loadBit} · ${nItems} need${n === 1 ? "s" : ""} you 👇`);
   } else {
     lines.push(
-      timeOfDay === "evening" ? "Quiet evening — tomorrow looks clear."
-      : timeOfDay === "day"   ? "Midday check — nothing outstanding."
-      : "Clear plate — nothing flagged today.");
+      timeOfDay === "evening" ? "Wrapping up — tomorrow looks clear. Nice work. 🙌"
+      : timeOfDay === "day"   ? "Midday check — all clear, nothing outstanding. 👍"
+      : todayCount ? `${todayCount} booking${todayCount !== 1 ? "s" : ""} today and nothing flagged — smooth sailing. ⛵`
+      : "Clear plate — nothing on the books, nothing flagged. 🌤");
   }
 
   // Header label adapts to the time of day: morning plan / midday open items /

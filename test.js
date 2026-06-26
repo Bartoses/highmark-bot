@@ -14592,7 +14592,7 @@ async function testOperatorIntelligence2() {
   chk("oi2: every widget has title", DASHBOARD_WIDGET_IDS.every((id) => DASHBOARD_WIDGETS[id]?.title));
 
   // ── Dashboard widget endpoint guards (Phase 2) ────────────────────────────
-  const { handlePortalDashboardWidgets, handlePortalSaveDashboardLayout } = await import("./adminPortal.js");
+  const { handlePortalDashboardWidgets, handlePortalSaveDashboardLayout, handlePortalWorkOrders } = await import("./adminPortal.js");
   const mkRes = () => { const r = { code: 200, body: null, status(c){ this.code = c; return this; }, json(b){ this.body = b; return this; } }; return r; };
   {
     let r = mkRes(); await handlePortalDashboardWidgets({ query: {}, portalUser: {} }, r, null, null);
@@ -14601,6 +14601,10 @@ async function testOperatorIntelligence2() {
     chk("oi2: widgets → 400 when no client_id", r.code === 400);
     r = mkRes(); await handlePortalSaveDashboardLayout({ body: {}, portalUser: {} }, r, { from: () => ({}) });
     chk("oi2: save layout → 401 when unauthenticated", r.code === 401);
+    r = mkRes(); await handlePortalWorkOrders({ query: {}, portalUser: {} }, r, null, null);
+    chk("oi2: work-orders → 503 when supabase missing", r.code === 503);
+    r = mkRes(); await handlePortalWorkOrders({ query: {}, portalUser: {} }, r, { from: () => ({}) }, null);
+    chk("oi2: work-orders → 400 when no client_id", r.code === 400);
   }
 }
 
