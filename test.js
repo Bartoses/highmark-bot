@@ -14547,6 +14547,15 @@ async function testOperatorIntelligence2() {
 
     const mgrRich = buildActionCardBriefing({ name: "CSR" }, richCtx, { role: "operations_manager", detail: "standard", timeOfDay: "morning", displayName: "M" });
     chk("oi2: manager also gets projection + revenue", mgrRich.includes("📅 Next 7 days") && mgrRich.includes("💰 Revenue"), mgrRich);
+
+    // Revenue card splits next-7d revenue across all locations.
+    const multiLoc = { ...richCtx, upcomingManifest: [
+      { start_at: "2099-01-02 09:00:00", activity: "RZR Experience", location: "kremmling", pax: 1, receipt_total_cents: 80000 },
+      { start_at: "2099-01-03 09:00:00", activity: "Rabbit Ears Tour", location: "rabbit_ears", pax: 1, receipt_total_cents: 50000 },
+      { start_at: "2099-01-04 09:00:00", activity: "North Routt Ride", location: "north_routt", pax: 1, receipt_total_cents: 42200 },
+    ] };
+    const revSplit = buildActionCardBriefing({ name: "CSR" }, multiLoc, { role: "owner", detail: "executive", timeOfDay: "morning", displayName: "O" });
+    chk("oi2: revenue card splits by location", revSplit.includes("By location (7d):") && revSplit.includes("Kremmling") && revSplit.includes("Rabbit Ears") && revSplit.includes("North Routt"), revSplit);
   }
 
   // length guard

@@ -20,6 +20,7 @@ import {
 } from "./operatorIntentParser.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
 import { humanizeWorkType } from "./mpwrWorkOrders.js";
+import { deriveLocationFromTitle } from "./mpwrSync.js";
 import { isTestPhone } from "./phoneUtils.js";
 import {
   normalizeRole, getRoleProfile, resolveFocusAreas, CARD_FOCUS, normalizeDetail,
@@ -256,13 +257,12 @@ async function enrichManifestRows(rows, crmSupabase) {
     const byPk = new Map(extras.map(e => [e.fareharbor_pk, e]));
     return rows.map(r => {
       const e = byPk.get(r?.fareharbor_pk);
-      if (!e) return r;
-      return {
-        ...r,
-        location:      e.location      ?? r.location,
-        product_title: e.product_title ?? null,
-        vehicle:       e.vehicle       ?? null,
-      };
+      // Finest location: MPWR bookings.location → derive from activity title
+      // (catches FareHarbor Rabbit Ears / North Routt) → coarse manifest location.
+      const location = (e?.location) || deriveLocationFromTitle(r?.activity) || r?.location;
+      return e
+        ? { ...r, location, product_title: e.product_title ?? null, vehicle: e.vehicle ?? null }
+        : { ...r, location };
     });
   } catch {
     return rows;
@@ -1904,8 +1904,16 @@ function buildCard(category, ctx, snap, { expand, timeOfDay }) {
       const up    = ctx.upcomingRevenue?.revenue_cents ? `next 7d ${usdFromCents(ctx.upcomingRevenue.revenue_cents)}` : null;
       const bits  = [last7, up].filter(Boolean).join(" · ");
       if (!bits) return null;
-      // Largest upcoming booking — the high-value projection owners track.
       const detail = [];
+      // Next-7-day revenue split by location (all 4 posts).
+      const byLoc = new Map();
+      for (const r of arr(ctx.upcomingManifest)) {
+        const k = capLocation(r.location);
+        byLoc.set(k, (byLoc.get(k) ?? 0) + (Number(r.receipt_total_cents ?? r.total_cents) || 0));
+      }
+      const locParts = [...byLoc.entries()].filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, c]) => `${k} ${usdFromCents(c)}`);
+      if (locParts.length > 1) detail.push(`  By location (7d): ${locParts.join(" · ")}`);
+      // Largest upcoming booking — the high-value projection owners track.
       const hv = arr(ctx.highValue)[0];
       if (hv) {
         const name = (hv.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
