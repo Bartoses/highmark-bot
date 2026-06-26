@@ -28,7 +28,7 @@ import { getAllClients, loadDbClients } from "./clients.js";
 import { getIntegrationStatus, syncFhForClient } from "./knowledgeBase.js";
 import { createCampaign, enqueueCampaign, getCampaignStats, selectAudience } from "./campaigns.js";
 import { VALID_BOOKING_MODES, serializeClient, handleCreateClient, handleUpdateClient } from "./adminClients.js";
-import { normalizePhone, isValidPhone } from "./phoneUtils.js";
+import { normalizePhone, isValidPhone, isTestPhone } from "./phoneUtils.js";
 import { startAutoConfig, getDraft, updateDraft, commitDraftToDb, createClientFromWebsite, buildNextSteps } from "./onboardingConfig.js";
 import {
   createIntegration, updateIntegration, deleteIntegration,
@@ -195,7 +195,13 @@ export async function handlePortalDashboard(req, res, supabase) {
     const opSet = await getOperatorPhoneSet(clientId, supabase);
     if (opSet.size) opInList = "(" + [...opSet].map((p) => `"${String(p).replace(/"/g, "")}"`).join(",") + ")";
   } catch { /* non-fatal */ }
-  const exOps = (q) => opInList ? q.not("contact_phone", "in", opInList) : q;
+  const dropTestLeads = process.env.TEST_MODE !== "true";
+  // Exclude operators + (in prod) synthetic 555/999 test numbers from lead stats.
+  const exOps = (q) => {
+    if (opInList) q = q.not("contact_phone", "in", opInList);
+    if (dropTestLeads) q = q.not("contact_phone", "ilike", "+1555%").not("contact_phone", "ilike", "+1999%");
+    return q;
+  };
 
   // ── Run all queries in parallel ──────────────────────────────────────────
   const [
@@ -441,7 +447,13 @@ export async function handlePortalDashboardWidgets(req, res, supabase, crmSupaba
       upByLoc[k] = (upByLoc[k] ?? 0) + 1;
     }
     const funnel = { new: 0, contacted: 0, engaged: 0, converted: 0, closed: 0 };
-    for (const l of (leadStatus?.data ?? [])) if (l.status in funnel && !opLeadSet.has(l.contact_phone)) funnel[l.status] += 1;
+    const dropTestLeads = process.env.TEST_MODE !== "true";
+    for (const l of (leadStatus?.data ?? [])) {
+      if (!(l.status in funnel)) continue;
+      if (opLeadSet.has(l.contact_phone)) continue;
+      if (dropTestLeads && isTestPhone(l.contact_phone)) continue;
+      funnel[l.status] += 1;
+    }
 
     const oos = (workOrders ?? []).filter((w) => w.out_of_service).length;
     const overdue = (workOrders ?? []).filter((w) => w.estimated_completion_date && String(w.estimated_completion_date).slice(0, 10) < today).length;
@@ -607,6 +619,11 @@ export async function handlePortalLeads(req, res, supabase) {
       query = query.not("contact_phone", "in", inList);
     }
   } catch { /* non-fatal — fall back to unfiltered */ }
+  // Synthetic test numbers (555 / 999 area codes from the test suite/portal) are
+  // never real leads — hide them in production (kept in the test env).
+  if (process.env.TEST_MODE !== "true") {
+    query = query.not("contact_phone", "ilike", "+1555%").not("contact_phone", "ilike", "+1999%");
+  }
 
   if (status)    query = query.eq("status", status);
   if (lead_type) query = query.eq("lead_type", lead_type);

@@ -14616,6 +14616,16 @@ async function testOperatorIntelligence2() {
     chk("oi2: lead suggest → 400 when no client_id", r.code === 400);
     chk("oi2: getOperatorPhoneSet exported", typeof (await import("./operatorBriefing.js")).getOperatorPhoneSet === "function");
     chk("oi2: handlePortalLeads exported", typeof handlePortalLeads === "function");
+
+    // isTestPhone — synthetic 555/999 numbers from the test suite/portal.
+    const { isTestPhone } = await import("./phoneUtils.js");
+    chk("oi2: isTestPhone +15550009999", isTestPhone("+15550009999") === true);
+    chk("oi2: isTestPhone +15559999999", isTestPhone("+15559999999") === true);
+    chk("oi2: isTestPhone 555 local", isTestPhone("5550009999") === true);
+    chk("oi2: isTestPhone 999 area", isTestPhone("+19998887777") === true);
+    chk("oi2: isTestPhone real owner false", isTestPhone("+17202892483") === false);
+    chk("oi2: isTestPhone real 970 false", isTestPhone("+19704391707") === false);
+    chk("oi2: isTestPhone empty false", isTestPhone("") === false && isTestPhone(null) === false);
   }
 }
 
