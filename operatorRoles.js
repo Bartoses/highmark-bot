@@ -56,6 +56,7 @@ export function detailRank(tier) {
 // focus-area toggles gate which cards appear.
 export const CARD_FOCUS = {
   bookings:     "bookings",
+  upcoming:     "bookings",
   late_returns: "bookings",
   missing_phone:"bookings",
   vip:          "bookings",
@@ -83,21 +84,21 @@ export const ROLE_PROFILES = {
     label: "Owner",
     defaultDetail: "executive",
     focusAreas: ["bookings", "revenue", "fleet", "leads", "weather", "safety"],
-    cardOrder: ["revenue", "bookings", "fleet", "leads", "weather"],
+    cardOrder: ["revenue", "bookings", "upcoming", "fleet", "leads", "weather"],
     priorityWeights: { revenue: 1.2, pacing: 1.2, underbooked: 1.1, safety: 1.0, fleet: 0.8, waivers: 0.7, missing_phone: 0.5 },
   },
   general_manager: {
     label: "General Manager",
     defaultDetail: "standard",
     focusAreas: ["bookings", "fleet", "staffing", "revenue", "leads", "safety"],
-    cardOrder: ["bookings", "fleet", "staffing", "revenue", "waivers", "leads"],
+    cardOrder: ["bookings", "upcoming", "fleet", "revenue", "staffing", "waivers", "leads"],
     priorityWeights: { safety: 1.1, fleet: 1.0, waivers: 1.0, revenue: 0.9, bookings: 1.0 },
   },
   operations_manager: {
     label: "Operations Manager",
     defaultDetail: "standard",
-    focusAreas: ["bookings", "staffing", "fleet", "weather", "safety", "maintenance"],
-    cardOrder: ["bookings", "waivers", "fleet", "staffing", "late_returns", "unpaid"],
+    focusAreas: ["bookings", "revenue", "staffing", "fleet", "weather", "safety", "maintenance"],
+    cardOrder: ["bookings", "fleet", "upcoming", "revenue", "waivers", "staffing", "late_returns"],
     priorityWeights: { waivers: 1.2, safety: 1.2, fleet: 1.1, late_returns: 1.1, staffing: 1.1, missing_phone: 1.0, revenue: 0.6 },
   },
   reservations: {
