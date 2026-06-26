@@ -488,6 +488,18 @@ export async function handlePortalDashboardWidgets(req, res, supabase, crmSupaba
         upcoming_7d: cents(upcomingRevenue?.revenue_cents),
         season:     { label: seasonRevenue?.period_label ?? null, amount: cents(seasonRevenue?.revenue_cents) },
         pacing_delta: pacing?.delta_pct ?? null,
+        // Upcoming revenue split by location (next 7 days) — all 4 posts.
+        by_location: (() => {
+          const m = new Map();
+          for (const r of (upcomingManifest ?? [])) {
+            const k = ob.capLocation(r.location);
+            const v = m.get(k) ?? { name: k, revenue: 0, bookings: 0 };
+            v.revenue += Number(r.receipt_total_cents ?? r.total_cents) || 0;
+            v.bookings += 1;
+            m.set(k, v);
+          }
+          return [...m.values()].map((v) => ({ ...v, revenue: cents(v.revenue) })).sort((a, b) => b.revenue - a.revenue);
+        })(),
       },
       leads: {
         funnel,

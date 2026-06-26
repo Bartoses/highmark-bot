@@ -17,6 +17,20 @@
 import crypto from "node:crypto";
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients } from "./clients.js";
+import { deriveLocationFromTitle } from "./mpwrSync.js";
+
+// Resolve a booking's finest-grained location: the MPWR-synced bookings.location
+// (Kremmling / Steamboat / North Routt / Rabbit Ears) wins; else derive it from
+// the activity title; else fall back to the coarse daily_manifest location.
+function resolveBookingLocation(bookingLocation, activity, manifestLocation) {
+  return bookingLocation || deriveLocationFromTitle(activity) || manifestLocation || "unassigned";
+}
+
+// "north_routt" → "North Routt". Pure.
+function capLoc(loc) {
+  if (!loc) return "Unassigned";
+  return String(loc).split(/[\s_-]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED ROLE GUARD
@@ -273,7 +287,7 @@ export async function fetchBookingsInWindow(crmSupabase, companies, start, end, 
   if (dim === "booked") {
     let bq = crmSupabase
       .from("bookings")
-      .select("fareharbor_pk,guide_name,internal_notes,prep_completed,booked_at,created_at,company,status", { count: "exact" })
+      .select("fareharbor_pk,guide_name,internal_notes,prep_completed,booked_at,created_at,company,status,location", { count: "exact" })
       .in("company", companies)
       // booked_at can be null on rows imported manually; treat created_at as the
       // fallback "when the booking entered our system".
@@ -299,6 +313,7 @@ export async function fetchBookingsInWindow(crmSupabase, companies, start, end, 
         if (!m) return null; // search may have filtered it out
         const enriched = {
           ...m,
+          location:       resolveBookingLocation(o.location, m.activity, m.location),
           booked_at:      o.booked_at  ?? o.created_at ?? null,
           guide_name:     o.guide_name ?? null,
           internal_notes: o.internal_notes ?? null,
@@ -338,7 +353,7 @@ export async function fetchBookingsInWindow(crmSupabase, companies, start, end, 
   if (pks.length) {
     const { data: ops } = await crmSupabase
       .from("bookings")
-      .select("fareharbor_pk,guide_name,internal_notes,prep_completed,booked_at,created_at")
+      .select("fareharbor_pk,guide_name,internal_notes,prep_completed,booked_at,created_at,location")
       .in("fareharbor_pk", pks);
     opsRows = ops ?? [];
   }
@@ -348,6 +363,7 @@ export async function fetchBookingsInWindow(crmSupabase, companies, start, end, 
     const ops = opsByPk.get(b.fareharbor_pk) ?? {};
     const enriched = {
       ...b,
+      location:       resolveBookingLocation(ops.location, b.activity, b.location),
       booked_at:      ops.booked_at  ?? ops.created_at ?? null,
       guide_name:     ops.guide_name ?? null,
       internal_notes: ops.internal_notes ?? null,
@@ -776,7 +792,7 @@ export async function handleOperationsTomorrowPrep(req, res, _supabase, crmSupab
 
     for (const b of rows) {
       const act = b.activity ?? "Unknown";
-      const loc = b.location ?? "—";
+      const loc = capLoc(b.location);
       byActivity.set(act, (byActivity.get(act) ?? { bookings: 0, pax: 0 }));
       byActivity.get(act).bookings += 1;
       byActivity.get(act).pax      += Number(b.pax ?? 1);
@@ -1060,12 +1076,12 @@ export async function computeAndSendRevenue(req, res, crmSupabase, clientId) {
       deltas,
       revenue_by_day:      groupByDay(current),
       revenue_by_activity: groupBy(current, "activity"),
-      revenue_by_location: groupBy(current, "location"),
+      revenue_by_location: groupBy(current, "location").map((e) => ({ ...e, name: capLoc(e.name) })),
       revenue_by_guide:    groupByGuide(current),
       best_day_of_week:    bestDayOfWeek(current),
       // Helpful for executive summary card client-side
       top_activity: topByRevenue(groupBy(current, "activity")),
-      top_location: topByRevenue(groupBy(current, "location")),
+      top_location: (() => { const t = topByRevenue(groupBy(current, "location")); return t ? { ...t, name: capLoc(t.name) } : null; })(),
       top_guide:    topByRevenue(groupByGuide(current)),
     });
   } catch (err) {
@@ -1080,7 +1096,7 @@ async function fetchBookingsForRevenue(crmSupabase, companies, start, end, opts 
   if (dim === "booked") {
     const { data: ops, error: opsErr } = await crmSupabase
       .from("bookings")
-      .select("fareharbor_pk,guide_name,booked_at,created_at")
+      .select("fareharbor_pk,guide_name,booked_at,created_at,location")
       .in("company", companies)
       .or(`and(booked_at.gte.${start},booked_at.lt.${end}),and(booked_at.is.null,created_at.gte.${start},created_at.lt.${end})`)
       .limit(2000);
@@ -1096,6 +1112,7 @@ async function fetchBookingsForRevenue(crmSupabase, companies, start, end, opts 
     const opsByPk = new Map((ops ?? []).map(o => [o.fareharbor_pk, o]));
     let rows = (manifest ?? []).map(m => ({
       ...m,
+      location:   resolveBookingLocation(opsByPk.get(m.fareharbor_pk)?.location, m.activity, m.location),
       guide_name: opsByPk.get(m.fareharbor_pk)?.guide_name ?? null,
       booked_at:  opsByPk.get(m.fareharbor_pk)?.booked_at ?? opsByPk.get(m.fareharbor_pk)?.created_at ?? null,
     }));
@@ -1121,13 +1138,18 @@ async function fetchBookingsForRevenue(crmSupabase, companies, start, end, opts 
   if (pks.length) {
     const { data: ops } = await crmSupabase
       .from("bookings")
-      .select("fareharbor_pk,guide_name,booked_at,created_at")
+      .select("fareharbor_pk,guide_name,booked_at,created_at,location")
       .in("fareharbor_pk", pks);
     guideMap = new Map((ops ?? []).map(o => [o.fareharbor_pk, o]));
   }
   let rows = rowsRaw.map(r => {
     const o = guideMap.get(r.fareharbor_pk);
-    return { ...r, guide_name: o?.guide_name ?? null, booked_at: o?.booked_at ?? o?.created_at ?? null };
+    return {
+      ...r,
+      location:   resolveBookingLocation(o?.location, r.activity, r.location),
+      guide_name: o?.guide_name ?? null,
+      booked_at:  o?.booked_at ?? o?.created_at ?? null,
+    };
   });
   rows = applySeasonFilter(rows, season);
   return rows;
