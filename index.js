@@ -52,6 +52,7 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handlePortalDashboardWidgets,
   handlePortalSaveDashboardLayout,
   handlePortalWorkOrders,
+  handleSuggestLeadFollowup,
   handlePortalPreviewOpener,
   handlePortalUsage,
   handlePortalPartners, handlePortalCreatePartner, handlePortalUpdatePartner, handlePortalDeletePartner, handlePortalPartnerAnalytics,
@@ -1963,6 +1964,7 @@ app.put(  "/portal/api/dashboard/layout",               requirePortalAuth, (req,
 app.get(  "/portal/api/work-orders",                    requirePortalAuth, (req, res) => handlePortalWorkOrders(req, res, supabase, crmSupabase));
 app.get(  "/portal/api/leads",               requirePortalAuth, (req, res) => handlePortalLeads(req, res, supabase));
 app.patch("/portal/api/leads/:id",           requirePortalAuth, (req, res) => handlePortalUpdateLead(req, res, supabase));
+app.post( "/portal/api/leads/:id/suggest",   requirePortalAuth, (req, res) => handleSuggestLeadFollowup(req, res, supabase, crmSupabase, anthropic));
 app.get(  "/portal/api/campaigns",                  requirePortalAuth, (req, res) => handlePortalCampaigns(req, res, supabase));
 app.post( "/portal/api/campaigns",                  requirePortalAuth, (req, res) => handlePortalCreateCampaign(req, res, supabase));
 app.get(  "/portal/api/campaigns/audience-preview", requirePortalAuth, (req, res) => handlePortalAudiencePreview(req, res, supabase, crmSupabase));

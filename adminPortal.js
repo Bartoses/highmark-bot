@@ -188,6 +188,15 @@ export async function handlePortalDashboard(req, res, supabase) {
   const avgBkgValue  = clientRow?.avgBookingValue ?? 175;
   const twilioNumber = clientRow?.inboundPhones?.[0] ?? null;
 
+  // Operators (staff) are never customers — keep them out of the funnel counts.
+  let opInList = null;
+  try {
+    const { getOperatorPhoneSet } = await import("./operatorBriefing.js");
+    const opSet = await getOperatorPhoneSet(clientId, supabase);
+    if (opSet.size) opInList = "(" + [...opSet].map((p) => `"${String(p).replace(/"/g, "")}"`).join(",") + ")";
+  } catch { /* non-fatal */ }
+  const exOps = (q) => opInList ? q.not("contact_phone", "in", opInList) : q;
+
   // ── Run all queries in parallel ──────────────────────────────────────────
   const [
     smsR, webR, periodConvR,
@@ -213,10 +222,10 @@ export async function handlePortalDashboard(req, res, supabase) {
       return q;
     })(),
 
-    // Period-filtered leads (all, for funnel counts)
+    // Period-filtered leads (all, for funnel counts) — operators excluded
     (() => {
-      let q = supabase.from("leads").select("status")
-        .eq("client_id", clientId).limit(1000);
+      let q = exOps(supabase.from("leads").select("status")
+        .eq("client_id", clientId).limit(1000));
       if (since) q = q.gte("created_at", since);
       return q;
     })(),
@@ -235,10 +244,10 @@ export async function handlePortalDashboard(req, res, supabase) {
       .eq("client_id", clientId).neq("session_type", "test")
       .order("updated_at", { ascending: false }).limit(20),
 
-    // Activity: recent leads
-    supabase.from("leads").select("id, status, created_at")
+    // Activity: recent leads — operators excluded
+    exOps(supabase.from("leads").select("id, status, created_at")
       .eq("client_id", clientId)
-      .order("created_at", { ascending: false }).limit(10),
+      .order("created_at", { ascending: false }).limit(10)),
 
     // Activity: recent web events
     supabase.from("web_events").select("id, event_type, page_url, created_at")
@@ -408,8 +417,9 @@ export async function handlePortalDashboardWidgets(req, res, supabase, crmSupaba
       ob.detectOverlappingArrivals(crmSupabase),
       ob.detectUnresolvedHandoffs(supabase, clientId),
       ob.detectPacingSignal(crmSupabase, supabase),
-      supabase.from("leads").select("status").eq("client_id", clientId).limit(2000),
+      supabase.from("leads").select("status, contact_phone").eq("client_id", clientId).limit(2000),
     ]);
+    const opLeadSet = await ob.getOperatorPhoneSet(clientId, supabase); // keep operators out of the funnel
 
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
     const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toLocaleDateString("en-CA", { timeZone: "America/Denver" }); })();
@@ -431,7 +441,7 @@ export async function handlePortalDashboardWidgets(req, res, supabase, crmSupaba
       upByLoc[k] = (upByLoc[k] ?? 0) + 1;
     }
     const funnel = { new: 0, contacted: 0, engaged: 0, converted: 0, closed: 0 };
-    for (const l of (leadStatus?.data ?? [])) if (l.status in funnel) funnel[l.status] += 1;
+    for (const l of (leadStatus?.data ?? [])) if (l.status in funnel && !opLeadSet.has(l.contact_phone)) funnel[l.status] += 1;
 
     const oos = (workOrders ?? []).filter((w) => w.out_of_service).length;
     const overdue = (workOrders ?? []).filter((w) => w.estimated_completion_date && String(w.estimated_completion_date).slice(0, 10) < today).length;
@@ -588,6 +598,16 @@ export async function handlePortalLeads(req, res, supabase) {
     .order("created_at", { ascending: false })
     .range(Number(offset), Number(offset) + Number(limit) - 1);
 
+  // Operators (staff) are never customers — keep them out of the lead list.
+  try {
+    const { getOperatorPhoneSet } = await import("./operatorBriefing.js");
+    const opSet = await getOperatorPhoneSet(clientId, supabase);
+    if (opSet.size) {
+      const inList = "(" + [...opSet].map((p) => `"${String(p).replace(/"/g, "")}"`).join(",") + ")";
+      query = query.not("contact_phone", "in", inList);
+    }
+  } catch { /* non-fatal — fall back to unfiltered */ }
+
   if (status)    query = query.eq("status", status);
   if (lead_type) query = query.eq("lead_type", lead_type);
   if (search) {
@@ -644,6 +664,68 @@ export async function handlePortalUpdateLead(req, res, supabase) {
     .from("leads").update(updates).eq("id", id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ lead: data });
+}
+
+// ── POST /portal/api/leads/:id/suggest ────────────────────────────────────────
+// AI-suggested follow-up: a one-line next step + a ready-to-send SMS draft,
+// generated from the lead + its recent conversation. Caveman-simple: tells the
+// owner exactly what to do and what to say. Degrades to a deterministic
+// suggestion if Claude is unavailable.
+export async function handleSuggestLeadFollowup(req, res, supabase, crmSupabase = null, anthropic = null) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const { id } = req.params;
+  const { data: lead, error } = await supabase.from("leads").select("*").eq("id", id).single();
+  if (error || !lead)                return res.status(404).json({ error: "Lead not found" });
+  if (lead.client_id !== clientId)   return res.status(403).json({ error: "Access denied" });
+
+  const clients   = getAllClients();
+  const client    = clients[clientId] ?? { name: clientId };
+  const bizName   = client.name ?? "the team";
+  const firstName = (lead.contact_name || "").trim().split(/\s+/)[0] || "there";
+  const service   = lead.requested_service || "an adventure";
+  const daysOld   = lead.created_at ? Math.max(0, Math.round((Date.now() - new Date(lead.created_at)) / 86400000)) : null;
+
+  // Deterministic fallback (also used when Claude is off).
+  const fallback = {
+    next_step: `Text ${firstName} to check in about ${service} and offer to lock in a date.`,
+    message: `Hey ${firstName}! It's the team at ${bizName} 🏔 Still thinking about ${service}? Happy to get you booked or answer any questions — just let us know!`,
+  };
+
+  if (!anthropic) return res.json({ ...fallback, source: "fallback" });
+
+  try {
+    // Recent conversation context (best-effort).
+    let convoText = "";
+    try {
+      const { data: convo } = await supabase.from("conversations")
+        .select("messages").eq("client_id", clientId).eq("from_number", lead.contact_phone).maybeSingle();
+      const msgs = Array.isArray(convo?.messages) ? convo.messages.slice(-8) : [];
+      convoText = msgs.map((m) => `${m.role === "user" ? "Guest" : "Bot"}: ${String(m.content ?? "").slice(0, 160)}`).join("\n");
+    } catch { /* no convo */ }
+
+    const sys = `You help the owner of ${bizName} (a Steamboat Springs outdoor adventure business) follow up with a sales lead by text. Be warm, specific, and concise. Reply ONLY with JSON: {"next_step": "...", "message": "..."}. next_step = ONE short sentence telling the owner what to do next. message = a ready-to-send SMS (under 300 chars, friendly, signed as ${bizName}, NO placeholders or brackets, do not invent prices/dates).`;
+    const usr = `Lead:\n- Name: ${lead.contact_name || "unknown"}\n- Interested in: ${service}\n- Status: ${lead.status}\n- Source: ${lead.source || lead.channel || "sms"}\n- Preferred timeframe: ${lead.preferred_timeframe || "not given"}\n- Age: ${daysOld != null ? daysOld + " day(s) old" : "unknown"}\n- Notes: ${lead.notes || "none"}\n${convoText ? `\nRecent conversation:\n${convoText}` : ""}\n\nWhat's the single best next step, and what should the owner text them?`;
+
+    const resp = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 320,
+      system: sys,
+      messages: [{ role: "user", content: usr }],
+    });
+    const raw = resp?.content?.[0]?.text ?? "";
+    const m = raw.match(/\{[\s\S]*\}/);
+    const parsed = m ? JSON.parse(m[0]) : null;
+    if (parsed?.next_step && parsed?.message) {
+      return res.json({ next_step: String(parsed.next_step).trim(), message: String(parsed.message).trim(), source: "ai" });
+    }
+    return res.json({ ...fallback, source: "fallback" });
+  } catch (err) {
+    console.error("[LEADS] suggest follow-up failed:", err.message);
+    return res.json({ ...fallback, source: "fallback" });
+  }
 }
 
 // ── GET /portal/api/campaigns/audience-preview ────────────────────────────────

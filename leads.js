@@ -25,6 +25,19 @@ export async function saveLead(supabase, {
     // Normalize contact phone for consistent dedup and CRM matching.
     // fromNumber from Twilio is already E.164; contactPhone may be user-entered.
     const normalizedContact = normalizePhone(contactPhone) ?? contactPhone;
+
+    // Never create a lead for a registered operator phone — they're staff, not
+    // customers. (Defense-in-depth; inbound already routes operators to operator
+    // mode. Also catches voice missed-call recovery + any other entry point.)
+    try {
+      const checkPhone = normalizePhone(fromNumber) ?? normalizedContact;
+      const { data: op } = await supabase.from("operator_phones")
+        .select("id").eq("client_id", clientId)
+        .in("phone", [checkPhone, normalizedContact].filter(Boolean))
+        .limit(1).maybeSingle();
+      if (op) { console.log(`[LEADS] Skipping lead — ${normalizedContact} is a registered operator`); return null; }
+    } catch { /* table may be absent — proceed */ }
+
     const row = {
       client_id:           clientId,
       from_number:         fromNumber,
