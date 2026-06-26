@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Highmark Portal</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -3117,7 +3118,158 @@ async function loadDashboard(period) {
       '</div>';
   }
 
-  el.innerHTML = bannerHtml + checklistHtml + heroHtml + periodBar + roiHtml + funnelHtml + activityHtml;
+  // Mission Control widget grid (Phase 2) — loaded async into the placeholder.
+  const missionControl =
+    '<div class="card" style="margin-bottom:18px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
+        '<div class="card-title" style="margin:0;">🎛 Mission Control</div>' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+          '<label style="font-size:11px;color:var(--text2);">View</label>' +
+          '<select id="mcRole" class="form-input" style="width:auto;padding:4px 8px;font-size:12px;" onchange="mcChangeRole(this.value)"></select>' +
+          '<button class="btn btn-ghost btn-sm" id="mcCustomizeBtn" onclick="mcToggleCustomize()">Customize</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="mcPicker" hidden style="margin-bottom:12px;padding:10px;border:1px dashed var(--border);border-radius:8px;"></div>' +
+      '<div id="mcGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">' +
+        '<div class="loading" style="grid-column:1/-1;">Loading Mission Control…</div>' +
+      '</div>' +
+    '</div>';
+
+  el.innerHTML = bannerHtml + checklistHtml + missionControl + heroHtml + periodBar + roiHtml + funnelHtml + activityHtml;
+  loadMissionControl();
+}
+
+// ─── Mission Control (Phase 2) ───────────────────────────────────────────────
+let _mcState = { role: null, widgets: [], available: {}, data: {}, customize: false };
+
+async function loadMissionControl(role) {
+  const grid = document.getElementById('mcGrid');
+  if (!grid) return;
+  const qs = (role ? '?role=' + role : '') + (me?.isAdmin && me?.clientId ? (role ? '&' : '?') + 'client_id=' + me.clientId : '');
+  const r = await apiFetch('/dashboard/widgets' + qs);
+  if (!r || r.error) { grid.innerHTML = '<div class="error-msg" style="grid-column:1/-1;">Couldn’t load widgets: ' + (r?.error ?? _lastApiError ?? 'unknown') + '</div>'; return; }
+  _mcState = { role: r.role, widgets: r.layout?.widgets ?? [], available: r.available ?? {}, data: r.data ?? {}, customize: _mcState.customize };
+
+  // Role dropdown
+  const sel = document.getElementById('mcRole');
+  if (sel && !sel.dataset.filled) {
+    sel.innerHTML = Object.keys(r.presets ?? {}).map(role =>
+      '<option value="' + role + '">' + role.replace(/_/g,' ').replace(/\b\w/g, c=>c.toUpperCase()) + '</option>').join('');
+    sel.dataset.filled = '1';
+  }
+  if (sel) sel.value = _mcState.role;
+
+  mcRenderGrid();
+  mcRenderPicker();
+}
+
+function mcRenderGrid() {
+  const grid = document.getElementById('mcGrid');
+  if (!grid) return;
+  if (!_mcState.widgets.length) { grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">No widgets. Click Customize to add some.</div>'; return; }
+  grid.innerHTML = _mcState.widgets.map(id => mcWidgetHtml(id)).join('');
+  // Drag to reorder
+  if (window.Sortable) {
+    Sortable.create(grid, {
+      animation: 150, handle: '.mc-widget-head', ghostClass: 'mc-drag-ghost',
+      onEnd: () => {
+        _mcState.widgets = [...grid.querySelectorAll('[data-widget]')].map(el => el.dataset.widget);
+        mcSaveLayout();
+      },
+    });
+  }
+}
+
+function mcWidgetHtml(id) {
+  const meta = _mcState.available[id] ?? { title: id, icon: '▫️' };
+  const body = mcWidgetBody(id, _mcState.data[id]);
+  return '<div class="mc-widget" data-widget="' + id + '" style="border:1px solid var(--border);border-radius:10px;background:var(--surface2);overflow:hidden;">' +
+    '<div class="mc-widget-head" style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border);cursor:grab;">' +
+      '<span style="font-weight:600;font-size:13px;">' + (meta.icon || '') + ' ' + escHtml(meta.title) + '</span>' +
+      (_mcState.customize ? '<button class="btn btn-ghost btn-sm" style="padding:0 6px;" onclick="mcRemoveWidget(\'' + id + '\')" title="Remove">✕</button>' : '') +
+    '</div>' +
+    '<div style="padding:12px;font-size:13px;line-height:1.5;">' + body + '</div>' +
+  '</div>';
+}
+
+function mcWidgetBody(id, d) {
+  d = d ?? {};
+  const money = n => '$' + (n ?? 0).toLocaleString();
+  const sevColor = s => s === 'critical' ? 'var(--danger,#ef4444)' : s === 'high' ? 'var(--warn,#f59e0b)' : 'var(--text2)';
+  const empty = t => '<div style="color:var(--text3);">' + t + '</div>';
+  switch (id) {
+    case 'priorities':
+      return (d.length ? d : []).slice(0,6).map((p,i) =>
+        '<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);">' +
+          '<span style="font-weight:700;color:' + sevColor(p.severity) + ';">' + (i+1) + '</span>' +
+          '<span style="flex:1;">' + escHtml(p.headline) + (p.action ? ' <span style="color:var(--text3);font-size:11px;">' + escHtml(p.action) + '</span>' : '') + '</span>' +
+        '</div>').join('') || empty('Nothing flagged — clear plate.');
+    case 'today':
+      return '<div style="font-size:20px;font-weight:700;">' + (d.bookings ?? 0) + ' bookings · ' + (d.guests ?? 0) + ' guests</div>' +
+        '<div style="color:var(--text2);margin-bottom:6px;">' + money(d.revenue) + ' on the books</div>' +
+        (d.rows ?? []).map(r => '<div style="font-size:12px;border-top:1px solid var(--border);padding:3px 0;">' +
+          escHtml((r.name ?? '?').split(' ').slice(0,2).join(' ')) + ' · ' + (r.pax ?? '?') + 'p · ' + escHtml(opCap(r.location)) + (r.waiver ? '' : ' <span style="color:var(--warn,#f59e0b);">⚠ waiver</span>') + '</div>').join('');
+    case 'upcoming':
+      return '<div style="font-size:20px;font-weight:700;">' + (d.bookings ?? 0) + ' bookings</div>' +
+        '<div style="color:var(--text2);">' + money(d.revenue) + ' · next 7 days</div>' +
+        '<div style="font-size:12px;margin-top:6px;">' + Object.entries(d.by_location ?? {}).map(([k,v]) => escHtml(k) + ' ' + v).join(' · ') + '</div>';
+    case 'fleet':
+      return '<div style="font-size:20px;font-weight:700;">' + (d.out_of_service ?? 0) + ' down · ' + (d.overdue ?? 0) + ' overdue</div>' +
+        (d.safety ? '<div style="color:var(--danger,#ef4444);font-size:12px;">⛑ ' + d.safety + ' safety flagged</div>' : '') +
+        (d.rows ?? []).slice(0,5).map(w => '<div style="font-size:12px;border-top:1px solid var(--border);padding:3px 0;">' +
+          (w.overdue ? '⚠️ ' : '') + escHtml(w.asset ?? 'Unit') + (w.unit ? ' (' + escHtml(w.unit) + ')' : '') +
+          (w.url ? ' <a href="' + escHtml(w.url) + '" target="_blank" style="color:var(--accent,#3b82f6);">open</a>' : '') + '</div>').join('') ||
+        empty('Fleet clear — no open work orders.');
+    case 'revenue':
+      return '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Last 7d</span><strong>' + money(d.last_7d) + '</strong></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>Next 7d</span><strong>' + money(d.upcoming_7d) + '</strong></div>' +
+        (d.season?.label ? '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span>' + escHtml(d.season.label) + '</span><strong>' + money(d.season.amount) + '</strong></div>' : '') +
+        (d.pacing_delta != null ? '<div style="font-size:12px;color:' + (d.pacing_delta < 0 ? 'var(--danger,#ef4444)' : 'var(--success,#10b981)') + ';margin-top:4px;">Pacing ' + (d.pacing_delta>0?'+':'') + d.pacing_delta + '% vs last week</div>' : '');
+    case 'leads': {
+      const f = d.funnel ?? {};
+      return '<div style="font-size:12px;margin-bottom:6px;">New ' + (f.new ?? 0) + ' · Contacted ' + (f.contacted ?? 0) + ' · Engaged ' + (f.engaged ?? 0) + ' · Converted ' + (f.converted ?? 0) + '</div>' +
+        (d.hot ?? []).map(l => '<div style="font-size:12px;border-top:1px solid var(--border);padding:3px 0;">🔥 ' + escHtml((l.name ?? 'Lead')) + ' · ' + escHtml(l.status ?? '') + '</div>').join('') || empty('No hot leads right now.');
+    }
+    case 'weather':
+      return d.line && d.line !== 'No weather data available.' ? escHtml(d.line) : empty('No weather data.');
+    default:
+      return empty('—');
+  }
+}
+function opCap(s){ return String(s ?? '?').split(/[\s_-]+/).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '); }
+
+function mcRenderPicker() {
+  const picker = document.getElementById('mcPicker');
+  if (!picker) return;
+  picker.hidden = !_mcState.customize;
+  if (!_mcState.customize) return;
+  picker.innerHTML = '<div style="font-size:11px;color:var(--text2);margin-bottom:6px;">Add or remove widgets:</div>' +
+    '<div style="display:flex;gap:12px;flex-wrap:wrap;">' +
+    Object.entries(_mcState.available).map(([id,meta]) =>
+      '<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer;">' +
+        '<input type="checkbox" ' + (_mcState.widgets.includes(id) ? 'checked' : '') + ' onchange="mcTogglePick(\'' + id + '\',this.checked)"> ' + (meta.icon||'') + ' ' + escHtml(meta.title) +
+      '</label>').join('') + '</div>';
+}
+
+function mcToggleCustomize() {
+  _mcState.customize = !_mcState.customize;
+  const btn = document.getElementById('mcCustomizeBtn');
+  if (btn) btn.textContent = _mcState.customize ? 'Done' : 'Customize';
+  mcRenderGrid(); mcRenderPicker();
+}
+function mcTogglePick(id, on) {
+  if (on && !_mcState.widgets.includes(id)) _mcState.widgets.push(id);
+  if (!on) _mcState.widgets = _mcState.widgets.filter(w => w !== id);
+  mcRenderGrid(); mcSaveLayout();
+}
+function mcRemoveWidget(id) {
+  _mcState.widgets = _mcState.widgets.filter(w => w !== id);
+  mcRenderGrid(); mcRenderPicker(); mcSaveLayout();
+}
+function mcChangeRole(role) { loadMissionControl(role); }
+
+async function mcSaveLayout() {
+  await apiFetch('/dashboard/layout', { method: 'PUT', body: JSON.stringify({ role_preset: _mcState.role, widgets: _mcState.widgets }) });
 }
 
 async function dismissChecklist() {

@@ -49,6 +49,8 @@ import { handlePortalMe, handlePortalDashboard, handlePortalLeads, handlePortalU
   handlePortalAttribution,
   handlePortalPerformance,
   handleDismissChecklist,
+  handlePortalDashboardWidgets,
+  handlePortalSaveDashboardLayout,
   handlePortalPreviewOpener,
   handlePortalUsage,
   handlePortalPartners, handlePortalCreatePartner, handlePortalUpdatePartner, handlePortalDeletePartner, handlePortalPartnerAnalytics,
@@ -1955,6 +1957,8 @@ app.post( "/portal/api/clients",             requirePortalAuth, (req, res) => ha
 app.patch("/portal/api/clients/:id",         requirePortalAuth, (req, res) => handlePortalUpdateClient(req, res, supabase));
 app.get(  "/portal/api/dashboard",                        requirePortalAuth, (req, res) => handlePortalDashboard(req, res, supabase));
 app.post( "/portal/api/dashboard/dismiss-checklist",     requirePortalAuth, (req, res) => handleDismissChecklist(req, res, supabase));
+app.get(  "/portal/api/dashboard/widgets",              requirePortalAuth, (req, res) => handlePortalDashboardWidgets(req, res, supabase, crmSupabase));
+app.put(  "/portal/api/dashboard/layout",               requirePortalAuth, (req, res) => handlePortalSaveDashboardLayout(req, res, supabase));
 app.get(  "/portal/api/leads",               requirePortalAuth, (req, res) => handlePortalLeads(req, res, supabase));
 app.patch("/portal/api/leads/:id",           requirePortalAuth, (req, res) => handlePortalUpdateLead(req, res, supabase));
 app.get(  "/portal/api/campaigns",                  requirePortalAuth, (req, res) => handlePortalCampaigns(req, res, supabase));

@@ -603,7 +603,7 @@ function endHourFromArrival(display) {
 // Display helpers — capitalize lowercase DB values for human-friendly output.
 // Splits on whitespace, hyphen, AND underscore so DB values like "rabbit_ears"
 // render as "Rabbit Ears".
-function capLocation(loc) {
+export function capLocation(loc) {
   if (!loc) return "?";
   return String(loc).split(/[\s_-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
@@ -1672,7 +1672,7 @@ function formatWorkOrdersResponse(rows) {
   return lines.filter(Boolean).join("\n").trim();
 }
 
-function buildConditionsLine(snap) {
+export function buildConditionsLine(snap) {
   if (!snap) return "No weather data available.";
   const w = snap.weather;
   const s = snap.snow;
@@ -1735,7 +1735,7 @@ const TIER_CONFIG = {
   operational: { maxCards: 8, expand: true,  priorities: 3 },
 };
 
-const greetingFor = (tod) => tod === "morning" ? "Good morning" : tod === "evening" ? "Good evening" : "Hi";
+const greetingFor = (tod) => tod === "morning" ? "Good morning" : tod === "evening" ? "Good evening" : tod === "day" ? "Good afternoon" : "Hi";
 const lowerFirst  = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 const usdFromCents = (c) => `$${Math.round((Number(c) || 0) / 100).toLocaleString()}`;
 
@@ -1883,17 +1883,25 @@ export function buildActionCardBriefing(client, ctx = {}, opts = {}) {
   lines.push(`🏔 ${greetingFor(timeOfDay)}, ${name}.`);
   if (priorities.length) {
     const lead = priorities[0];
-    lines.push(timeOfDay === "evening"
-      ? `Tonight's prep: ${lowerFirst(lead.headline)}.`
+    lines.push(
+      timeOfDay === "evening" ? `Tonight's prep: ${lowerFirst(lead.headline)}.`
+      : timeOfDay === "day"   ? `Midday check — top open item: ${lowerFirst(lead.headline)}.`
       : `Your top priority: ${lowerFirst(lead.headline)}.`);
   } else {
-    lines.push(timeOfDay === "evening" ? "Quiet evening — tomorrow looks clear." : "Clear plate — nothing flagged today.");
+    lines.push(
+      timeOfDay === "evening" ? "Quiet evening — tomorrow looks clear."
+      : timeOfDay === "day"   ? "Midday check — nothing outstanding."
+      : "Clear plate — nothing flagged today.");
   }
 
-  // TODAY'S PRIORITIES (or TOMORROW'S PREP in the evening).
+  // Header label adapts to the time of day: morning plan / midday open items /
+  // evening tomorrow-prep.
   if (priorities.length) {
     lines.push("");
-    lines.push(timeOfDay === "evening" ? `📋 TOMORROW'S PREP` : `📋 TODAY'S PRIORITIES`);
+    lines.push(
+      timeOfDay === "evening" ? `📋 TOMORROW'S PREP`
+      : timeOfDay === "day"   ? `📋 STILL OPEN`
+      : `📋 TODAY'S PRIORITIES`);
     priorities.forEach((p, i) => lines.push(`${i + 1}. ${p.headline}${p.action ? ` — ${p.action}` : ""}`));
   }
 
