@@ -14555,6 +14555,31 @@ async function testOperatorIntelligence2() {
   chk("oi2: midday still-open header", mdB.includes("📋 STILL OPEN"));
   chk("oi2: midday lead copy", mdB.includes("Midday check"));
 
+  // ── Season-aware work orders + SMS ordering (iteration) ───────────────────
+  {
+    const { vehicleSeason, isWorkOrderInSeason, currentSeason, splitForSms } = await import("./operatorBriefing.js");
+    chk("oi2: vehicleSeason snowmobile→winter", vehicleSeason("850 RMK KHAOS - 155\"") === "winter" && vehicleSeason("S4 Indy 137 Trail Sled") === "winter");
+    chk("oi2: vehicleSeason RZR→summer", vehicleSeason("RZR PRO S4 PREMIUM") === "summer" && vehicleSeason("GENERAL") === "summer");
+    chk("oi2: vehicleSeason unknown→all", vehicleSeason("Mystery Machine") === "all");
+    chk("oi2: summer hides snowmobile WO", isWorkOrderInSeason({ asset_family: "850 RMK Khaos" }, "summer") === false);
+    chk("oi2: summer keeps RZR WO", isWorkOrderInSeason({ asset_family: "RZR PRO S4" }, "summer") === true);
+    chk("oi2: winter keeps snowmobile WO", isWorkOrderInSeason({ asset_family: "850 RMK Khaos" }, "winter") === true);
+    chk("oi2: unknown vehicle never filtered", isWorkOrderInSeason({ asset_family: "Forklift" }, "summer") === true);
+    chk("oi2: currentSeason July=summer", currentSeason(new Date("2026-07-15")) === "summer");
+    chk("oi2: currentSeason Jan=winter", currentSeason(new Date("2026-01-15")) === "winter");
+    chk("oi2: currentSeason Apr=shoulder", currentSeason(new Date("2026-04-15")) === "shoulder");
+
+    // splitForSms — ordered, never breaks a section, reply menu lands last.
+    const sample = ["🏔 Good morning, Sean.\nYour top priority: x.", "📋 TODAY'S PRIORITIES\n1. a\n2. b", "💰 Revenue · last 7d $1", "🏁 Today · 1 booking", "🔧 Fleet · 5 down", "Reply: 1 Schedule · 2 Revenue\n5 Work orders · 8 Ask AI"].join("\n\n");
+    const parts = splitForSms(sample, 80);
+    chk("oi2: splitForSms returns >1 ordered part", parts.length > 1);
+    chk("oi2: split first part has greeting", parts[0].startsWith("🏔 Good morning"));
+    chk("oi2: split last part has reply menu", parts[parts.length - 1].includes("Reply:"));
+    chk("oi2: split never breaks a section", parts.every((p) => !p.startsWith("\n") && p.trim() === p));
+    chk("oi2: split rejoins to original sections", parts.join("\n\n").replace(/\s+/g, " ") === sample.replace(/\s+/g, " "));
+    chk("oi2: split short text → single part", splitForSms("just one line", 480).length === 1);
+  }
+
   // ── Mission Control widget registry + presets (Phase 2) ───────────────────
   const { resolveDashboardWidgets, dashboardPresetFor, DASHBOARD_WIDGET_IDS, DASHBOARD_WIDGETS } = await import("./operatorRoles.js");
   chk("oi2: widget ids cover priorities+fleet", DASHBOARD_WIDGET_IDS.includes("priorities") && DASHBOARD_WIDGET_IDS.includes("fleet"));
