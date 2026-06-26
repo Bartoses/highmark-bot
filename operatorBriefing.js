@@ -1168,10 +1168,37 @@ export function workOrderUrgencyCmp(a, b) {
   return String(a?.created_date ?? "").localeCompare(String(b?.created_date ?? ""));
 }
 
+// Current operating season (MT). winter Nov–Mar · shoulder Apr–May · summer Jun–Oct.
+export function currentSeason(now = new Date()) {
+  const m = now.getMonth() + 1; // 1-12
+  if (m >= 11 || m <= 3) return "winter";
+  if (m === 4 || m === 5) return "shoulder";
+  return "summer";
+}
+
+// Which season a vehicle operates in, from its asset-family name. Snowmobiles
+// (sleds: RMK / Khaos / Indy / Switchback / Matryx …) run in winter; RZR /
+// Ranger / General / UTV run in summer. Unknown → "all" (never filtered).
+export function vehicleSeason(assetFamily) {
+  const s = String(assetFamily ?? "").toLowerCase();
+  if (/snowmobile|\bsled\b|\brmk\b|khaos|\bindy\b|switchback|assault|matryx|\baxys\b|pro-?rmk|\bsnow\b/.test(s)) return "winter";
+  if (/\brzr\b|ranger|general|\butv\b|\batv\b|off-?road|sportsman/.test(s)) return "summer";
+  return "all";
+}
+
+// Is this work order's vehicle actionable in the given season? In summer,
+// snowmobile (winter-vehicle) work orders are parked — not actionable — so they
+// drop from the briefing + priorities. Conservative: only filters in summer.
+export function isWorkOrderInSeason(wo, season) {
+  if (season !== "summer") return true;
+  return vehicleSeason(wo?.asset_family) !== "winter";
+}
+
 // Open fleet work orders from DB2 `work_orders`, scoped to the given fleets
-// (null = all). Returns the top `limit` by urgency. Degrades to [] if the table
-// is absent or on any error.
-export async function getOpenWorkOrders(crmSupabase, fleets = null, limit = 12) {
+// (null = all) and the current season (out-of-season vehicles excluded — e.g.
+// snowmobiles in summer). Returns the top `limit` by urgency. Degrades to [] if
+// the table is absent or on any error.
+export async function getOpenWorkOrders(crmSupabase, fleets = null, limit = 12, season = currentSeason()) {
   if (!crmSupabase) return [];
   try {
     let q = crmSupabase
@@ -1181,7 +1208,10 @@ export async function getOpenWorkOrders(crmSupabase, fleets = null, limit = 12) 
       .not("retired", "is", true); // exclude retired/dispositioned-vehicle cruft (keeps null = unknown)
     if (Array.isArray(fleets) && fleets.length) q = q.in("fleet", fleets);
     const { data } = await q;
-    return (data ?? []).slice().sort(workOrderUrgencyCmp).slice(0, limit);
+    return (data ?? [])
+      .filter((w) => isWorkOrderInSeason(w, season))
+      .sort(workOrderUrgencyCmp)
+      .slice(0, limit);
   } catch {
     return [];
   }
@@ -1704,6 +1734,36 @@ function smartTruncate(text, max) {
   return (cutAt > 0 ? text.slice(0, cutAt) : text.slice(0, max - 3)) + "...";
 }
 
+// Split a briefing into ordered, SMS-friendly chunks at blank-line (section)
+// boundaries — packing whole sections up to `maxChars` without breaking one.
+// Long concatenated SMS can arrive out of order; sending these chunks
+// sequentially keeps the briefing readable top-to-bottom. Pure.
+export function splitForSms(text, maxChars = 480) {
+  const sections = String(text ?? "").split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
+  const chunks = [];
+  let cur = "";
+  for (const sec of sections) {
+    if (!cur) { cur = sec; continue; }
+    if (cur.length + 2 + sec.length <= maxChars) cur += "\n\n" + sec;
+    else { chunks.push(cur); cur = sec; }
+  }
+  if (cur) chunks.push(cur);
+  return chunks.length ? chunks : [String(text ?? "")];
+}
+
+// Send a long briefing as ordered chunks. Sequential await + a short delay
+// between sends keeps them in order on virtually all carriers (vs. a single
+// 8–10 segment concatenated SMS that can be reassembled out of order). TEST_MODE
+// is handled by callers (no real send). Returns the chunk count.
+async function sendChunkedSms(twilioClient, from, to, text, { delayMs = 1100 } = {}) {
+  const chunks = splitForSms(text);
+  for (let i = 0; i < chunks.length; i++) {
+    await twilioClient.messages.create({ from, to, body: chunks[i] });
+    if (i < chunks.length - 1) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return chunks.length;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // OPERATOR INTELLIGENCE 2.0 — ACTION-CARD BRIEFING
 // Role-aware, action-first. The operator gets their NEXT ACTIONS, not a report.
@@ -2044,11 +2104,7 @@ export async function sendOperatorBriefing(client, supabase, twilioClient) {
     return { success: true, preview: briefing, sent: false, chars: briefing.length };
   }
 
-  await twilioClient.messages.create({
-    from: twilioNumber,
-    to:   ownerPhone,
-    body: briefing,
-  });
+  await sendChunkedSms(twilioClient, twilioNumber, ownerPhone, briefing);
 
   console.log(`[BRIEFING] Sent to ${ownerPhone} for ${client.id} (${briefing.length} chars)`);
   return { success: true, preview: briefing, sent: true, chars: briefing.length };
@@ -2305,9 +2361,9 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     return { success: true, preview: briefing, sent: false, chars: briefing.length, issues };
   }
 
-  await twilioClient.messages.create({ from: twilioNumber, to: toPhone, body: briefing });
-  console.log(`[BRIEFING] Sent to ${toPhone} for ${client.id} (${briefing.length} chars, ${issues.length} alerts)`);
-  return { success: true, preview: briefing, sent: true, chars: briefing.length, issues };
+  const parts = await sendChunkedSms(twilioClient, twilioNumber, toPhone, briefing);
+  console.log(`[BRIEFING] Sent to ${toPhone} for ${client.id} (${briefing.length} chars, ${parts} part${parts !== 1 ? "s" : ""}, ${issues.length} alerts)`);
+  return { success: true, preview: briefing, sent: true, chars: briefing.length, parts, issues };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
