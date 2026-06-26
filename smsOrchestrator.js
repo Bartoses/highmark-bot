@@ -332,9 +332,26 @@ export async function handleSmsRequest(req, res) {
   let orchestratorDebug = null; // Phase 7: populated when AGENT_ORCHESTRATOR_ENABLED=true
 
   try {
+    // OPERATOR EXPERIENCE (Operator Intelligence 2.0) — a recognized operator
+    // phone bypasses EVERY guest flow (booking menus, lead capture, demo). The
+    // orchestrator handles numeric briefing replies (1-8) + structured queries
+    // deterministically, and free-form questions via Claude in owner mode. This
+    // must win over the guest branches below (several of which — booking intent,
+    // menu selection — are not !isOwner-gated), and runs the orchestrator
+    // directly so it works regardless of AGENT_ORCHESTRATOR_ENABLED.
+    if (isOwner) {
+      const knowledgeContext = await getKnowledgeContext(supabase, client).catch(() => "");
+      const orch = await runOrchestrator({
+        message: rawBody, convo, client, anthropic, fromNumber,
+        supabase, crmSupabase, twilioClient, knowledgeContext, extraInstruction: null,
+      }).catch((e) => { console.error("[OPERATOR] orchestrator error:", e.message); return null; });
+      replyText = enforceLength(orch?.reply || "I'm here — reply 1-8 or ask me anything about today's bookings, fleet, revenue, or leads.", 1480);
+      orchestratorDebug = orch ? { agent: orch.agent, action: orch.parsed?.action ?? null, ownerMode: orch.ownerMode } : null;
+    }
+
     // NAME CAPTURE pre-flight — guest said YES on a prior turn; we asked for their name.
     // This must run before the waitlist pre-flight so it doesn't fall through to normal routing.
-    if (convo.leadCapturePendingName === true) {
+    else if (convo.leadCapturePendingName === true) {
       const isSkip = /^(skip|no|nope|nah|n\/a|none|pass)\b/i.test(rawBody.trim());
       const name   = isSkip ? null : rawBody.trim().slice(0, 60) || null;
       const service = convo.waitlistContext?.service ?? "general inquiry";

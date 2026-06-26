@@ -3249,6 +3249,7 @@ async function main() {
     await testOperationalBriefing();   // Operational briefing: classifiers + TODAY'S LOAD section + dispatch-sheet manifest
     await testLocationFleetBriefing(); // Location-scoped briefings + MPWR work orders (fleet section, per-employee filtering)
     await testOperatorIntelligence2(); // OI 2.0: priority engine + roles + action-card briefings + time-of-day
+    await testOperatorInboundRouting(); // OI 2.0: operator phones get operator experience on inbound (not guest flow)
     await testOperatorBotUpgrade(); // Operator Bot: date parsing, daily summary, flag_issue, fallback
     await testSmartCampaigns();   // Sprint 4B: smart event campaigns, trigger eval, cooldown
     await testPartnerActivities(); // Sprint 5: partner distribution, scoring, Source 5, tracking redirect
@@ -14546,6 +14547,51 @@ async function testOperatorIntelligence2() {
     chk("oi2: widgets → 400 when no client_id", r.code === 400);
     r = mkRes(); await handlePortalSaveDashboardLayout({ body: {}, portalUser: {} }, r, { from: () => ({}) });
     chk("oi2: save layout → 401 when unauthenticated", r.code === 401);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Operator inbound routing — a recognized operator phone must get the OPERATOR
+// experience (manifest / Ask-AI), NOT the guest booking flow. Regression for the
+// bug where an operator's numeric briefing reply ("1") returned booking options.
+// ─────────────────────────────────────────────────────────────────────────────
+async function testOperatorInboundRouting() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || `expected truthy`);
+  if (!supabase) { pass("oproute: skipped (no supabase)"); return; }
+
+  const opPhone  = "+15550007077"; // synthetic operator
+  const guestPhn = "+15550008088"; // synthetic guest control
+  let inserted = false;
+  try {
+    await supabase.from("operator_phones").delete().eq("phone", opPhone);
+    const { error } = await supabase.from("operator_phones").insert({
+      client_id: "csr_rea", phone: opPhone, role: "owner",
+      internal_mode_enabled: true, daily_digest_enabled: false,
+    });
+    inserted = !error;
+  } catch { /* table may not exist in some envs */ }
+  if (!inserted) { pass("oproute: skipped (operator_phones unavailable)"); return; }
+
+  try {
+    // Numeric briefing reply "1" → operator manifest, NOT the guest booking menu.
+    const r1 = await sendSms("1", opPhone, TO_PHONE);
+    chk("oproute: operator '1' → operator experience (not booking menu)",
+      !/booking options|adventures\.polaris|here are your booking|book online/i.test(r1) &&
+      /manifest|booking|guest|waiver|revenue|fleet|lead|reply/i.test(r1), r1.slice(0, 180));
+
+    // Free-form operator question stays in operator mode (no guest booking pitch).
+    const r2 = await sendSms("how many bookings today?", opPhone, TO_PHONE);
+    chk("oproute: operator free-form stays operator",
+      !/here are your booking options|adventures\.polaris/i.test(r2), r2.slice(0, 180));
+
+    // Control: a non-operator phone is unaffected (still gets the guest flow).
+    const r3 = await sendSms("hi", guestPhn, TO_PHONE);
+    chk("oproute: non-operator still gets guest flow", typeof r3 === "string" && r3.length > 0, r3.slice(0, 80));
+  } finally {
+    try { await supabase.from("operator_phones").delete().eq("phone", opPhone); } catch { /* cleanup */ }
+    try { await supabase.from("conversations").delete().eq("from_number", opPhone); } catch { /* cleanup */ }
+    try { await supabase.from("conversations").delete().eq("from_number", guestPhn); } catch { /* cleanup */ }
   }
 }
 
