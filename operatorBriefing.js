@@ -563,7 +563,11 @@ export async function getUpcomingManifest(crmSupabase, days = 7) {
       const existingIsReal = !/^BOT-/i.test(existing.fareharbor_pk ?? "");
       if (newIsReal && !existingIsReal) byKey.set(key, r);
     }
-    return [...byKey.values()].sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+    const deduped = [...byKey.values()].sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+    // Resolve the finest location per row (MPWR bookings.location → derive from
+    // activity title → coarse manifest location) so the 4-location split is
+    // correct in the dashboard widget AND the SMS briefing revenue card.
+    return await enrichManifestRows(deduped, crmSupabase);
   } catch {
     return [];
   }
