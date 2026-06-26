@@ -463,6 +463,27 @@ voicemail — never drops a call. Every call is logged for the future dashboard.
   this/next weekend, MM/DD(/YY(YY)), YYYY-MM-DD, "December 15" / "15 December" / "3rd of January".
   Past dates without explicit year roll forward. 32 new unit tests against a fixed Monday anchor.
 
+### Operator Intelligence 2.0 — Mission Control Dashboard, Phase 2 (2026-06-25)
+Per-user customizable "Mission Control" portal dashboard + midday briefing.
+
+- db1_dashboard_layout.sql: portal_users.dashboard_layout JSONB (per-user
+  role preset + widget order). Applied.
+- operatorRoles.js: DASHBOARD_WIDGETS registry, DASHBOARD_PRESETS (role →
+  default widget set), resolveDashboardWidgets(role, saved).
+- adminPortal.js: GET /portal/api/dashboard/widgets (one aggregator — priorities
+  via priorityEngine + today/upcoming/fleet/revenue/leads/weather from the
+  briefing detectors) + PUT /portal/api/dashboard/layout. Exported capLocation +
+  buildConditionsLine from operatorBriefing for reuse.
+- portal.html: SortableJS CDN; Dashboard rebuilt as Mission Control — role-view
+  dropdown + draggable widget grid + Customize (add/remove) + per-user persist;
+  kept the existing ROI/funnel/activity below.
+- operatorBriefing.js: midday briefing variant (resolveTimeOfDay 'day' 11-4) →
+  "Good afternoon" + STILL OPEN header.
+- Decisions: role presets + full per-user customization; all 4 widget groups.
+  DEFERRED Email/Push (no mailer/VAPID infra) + AI-module plug-in framework.
+- Tests: +14 (midday, widget presets/resolve, endpoint guards). 2753/2753.
+  Also fixed a latent TZ-flaky waiver test (UTC vs MT "today").
+
 ### Operator Intelligence 2.0 — SMS Operations Center, Phase 1 (2026-06-25)
 Reframed the briefing from an information report into an action center: each
 employee gets THEIR next actions, role-aware, highest-impact first.

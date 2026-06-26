@@ -359,6 +359,163 @@ export async function handlePortalDashboard(req, res, supabase) {
   });
 }
 
+// ── GET /portal/api/dashboard/widgets ─────────────────────────────────────────
+// Mission Control (Phase 2): aggregates every widget's data in one call + the
+// user's saved layout. Role preset (?role=) drives the priority weighting + the
+// default widget set. Client-scoped (all locations). Reuses the OI 2.0 priority
+// engine + the briefing detectors.
+export async function handlePortalDashboardWidgets(req, res, supabase, crmSupabase = null) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+
+  const clients = getAllClients();
+  const client  = clients[clientId] ?? { id: clientId, name: clientId };
+
+  try {
+    const ob   = await import("./operatorBriefing.js");
+    const roles = await import("./operatorRoles.js");
+    const { scorePriorities, buildTodaysPriorities } = await import("./priorityEngine.js");
+
+    // Saved per-user layout.
+    let saved = null;
+    try {
+      const { data } = await supabase.from("portal_users")
+        .select("dashboard_layout").eq("auth_user_id", req.portalUser?.authUserId).single();
+      saved = data?.dashboard_layout ?? null;
+    } catch { /* none yet */ }
+
+    const role = roles.normalizeRole(req.query.role || saved?.role_preset || "owner");
+
+    // Gather signals in parallel (same sources as the SMS briefing).
+    const [
+      manifest, upcomingManifest, upcomingRevenue, weekRevenue, seasonRevenue,
+      workOrders, hotLeads, weather, unpaid, missingWaivers, missingPhones,
+      highValue, overlaps, handoffs, pacing, leadStatus,
+    ] = await Promise.all([
+      ob.getTodaysManifest(clientId, crmSupabase),
+      ob.getUpcomingManifest(crmSupabase, 7),
+      ob.getUpcomingRevenue(clientId, crmSupabase, 7),
+      ob.getWeeklyRevenueEstimate(clientId, supabase, crmSupabase),
+      ob.getSeasonRevenue(client, crmSupabase, supabase),
+      ob.getOpenWorkOrders(crmSupabase, null, 12),
+      ob.getHotLeads(clientId, supabase, 5),
+      ob.getWeatherSnapshot(supabase, clientId),
+      ob.detectUnpaidBookings(crmSupabase),
+      ob.detectMissingWaivers(crmSupabase),
+      ob.detectMissingPhones(crmSupabase),
+      ob.detectHighValueBookings(crmSupabase),
+      ob.detectOverlappingArrivals(crmSupabase),
+      ob.detectUnresolvedHandoffs(supabase, clientId),
+      ob.detectPacingSignal(crmSupabase, supabase),
+      supabase.from("leads").select("status").eq("client_id", clientId).limit(2000),
+    ]);
+
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+    const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toLocaleDateString("en-CA", { timeZone: "America/Denver" }); })();
+    const ctx = {
+      today, manifest, tomorrowManifest: (upcomingManifest ?? []).filter((r) => String(r.start_at ?? "").slice(0, 10) === tomorrow),
+      upcomingManifest, upcomingRevenue, revenue: weekRevenue, workOrders,
+      unpaid, missingWaivers, missingPhones, highValue, overlaps,
+      unresolvedHandoffs: handoffs, hotLeads, pacing, weather, hasUpcomingWindow: true,
+    };
+    const scored = scorePriorities(ctx, { role });
+
+    // ── Widget data ──────────────────────────────────────────────────────────
+    const sum = (rows, f) => (rows ?? []).reduce((s, r) => s + (Number(f(r)) || 0), 0);
+    const cents = (v) => Math.round((Number(v) || 0) / 100);
+
+    const upByLoc = {};
+    for (const r of (upcomingManifest ?? [])) {
+      const k = ob.capLocation(r.location);
+      upByLoc[k] = (upByLoc[k] ?? 0) + 1;
+    }
+    const funnel = { new: 0, contacted: 0, engaged: 0, converted: 0, closed: 0 };
+    for (const l of (leadStatus?.data ?? [])) if (l.status in funnel) funnel[l.status] += 1;
+
+    const oos = (workOrders ?? []).filter((w) => w.out_of_service).length;
+    const overdue = (workOrders ?? []).filter((w) => w.estimated_completion_date && String(w.estimated_completion_date).slice(0, 10) < today).length;
+    const safety = (workOrders ?? []).filter((w) => w.is_safety_issue).length;
+
+    const widgetData = {
+      priorities: scored.slice(0, 6).map((s) => ({ headline: s.headline, action: s.action, severity: s.severity, category: s.category })),
+      today: {
+        bookings: (manifest ?? []).length,
+        guests:   sum(manifest, (r) => r.pax ?? r.customer_count),
+        revenue:  cents(sum(manifest, (r) => r.receipt_total_cents ?? r.total_cents)),
+        rows: (manifest ?? []).slice(0, 8).map((r) => ({
+          time: r.start_at, name: r.customer_name, activity: r.activity,
+          location: r.location, pax: r.pax ?? r.customer_count, waiver: r.waiver_signed !== false,
+        })),
+      },
+      upcoming: {
+        bookings: upcomingRevenue?.bookings ?? (upcomingManifest ?? []).length,
+        revenue:  cents(upcomingRevenue?.revenue_cents),
+        by_location: upByLoc,
+      },
+      fleet: {
+        open: (workOrders ?? []).length, out_of_service: oos, overdue, safety,
+        rows: (workOrders ?? []).slice(0, 8).map((w) => ({
+          asset: w.asset_family, unit: w.unit_name, type: w.work_type,
+          overdue: !!(w.estimated_completion_date && String(w.estimated_completion_date).slice(0, 10) < today),
+          out_of_service: !!w.out_of_service, due: w.estimated_completion_date, url: w.url,
+        })),
+      },
+      revenue: {
+        last_7d:    weekRevenue?.estimated ?? 0,
+        upcoming_7d: cents(upcomingRevenue?.revenue_cents),
+        season:     { label: seasonRevenue?.period_label ?? null, amount: cents(seasonRevenue?.revenue_cents) },
+        pacing_delta: pacing?.delta_pct ?? null,
+      },
+      leads: {
+        funnel,
+        hot: (hotLeads ?? []).slice(0, 5).map((l) => ({ name: l.name, service: l.service, status: l.status })),
+      },
+      weather: { line: ob.buildConditionsLine(weather), snapshot: weather ?? null },
+    };
+
+    return res.json({
+      role,
+      layout: { role_preset: role, widgets: roles.resolveDashboardWidgets(role, saved) },
+      available: roles.DASHBOARD_WIDGETS,
+      presets: roles.DASHBOARD_PRESETS,
+      data: widgetData,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ── PUT /portal/api/dashboard/layout ──────────────────────────────────────────
+// Saves the logged-in user's Mission Control layout (role preset + widget order).
+export async function handlePortalSaveDashboardLayout(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!req.portalUser?.authUserId) return res.status(401).json({ error: "Not authenticated" });
+
+  const roles = await import("./operatorRoles.js");
+  const body  = req.body ?? {};
+  const preset = roles.normalizeRole(body.role_preset || "owner");
+  const widgets = Array.isArray(body.widgets)
+    ? body.widgets.filter((id) => roles.DASHBOARD_WIDGET_IDS.includes(id))
+    : [];
+  const layout = { role_preset: preset, widgets: [...new Set(widgets)] };
+
+  try {
+    const { error } = await supabase.from("portal_users")
+      .update({ dashboard_layout: layout })
+      .eq("auth_user_id", req.portalUser.authUserId);
+    if (error) {
+      if (error.message?.includes("does not exist")) {
+        return res.status(503).json({ error: "Run db1_dashboard_layout.sql migration first" });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    return res.json({ ok: true, layout });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 // ── POST /portal/api/dashboard/dismiss-checklist ──────────────────────────────
 export async function handleDismissChecklist(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });

@@ -14518,6 +14518,35 @@ async function testOperatorIntelligence2() {
 
   // length guard
   chk("oi2: stays within SMS cap", ownerB.length <= 1480 && opB.length <= 1480);
+
+  // ── Midday variant (Phase 2) ──────────────────────────────────────────────
+  const mdB = buildActionCardBriefing({ name: "CSR" }, ctx, { role: "operations_manager", detail: "auto", timeOfDay: "day", displayName: "Pat" });
+  chk("oi2: midday greeting", mdB.startsWith("🏔 Good afternoon, Pat."));
+  chk("oi2: midday still-open header", mdB.includes("📋 STILL OPEN"));
+  chk("oi2: midday lead copy", mdB.includes("Midday check"));
+
+  // ── Mission Control widget registry + presets (Phase 2) ───────────────────
+  const { resolveDashboardWidgets, dashboardPresetFor, DASHBOARD_WIDGET_IDS, DASHBOARD_WIDGETS } = await import("./operatorRoles.js");
+  chk("oi2: widget ids cover priorities+fleet", DASHBOARD_WIDGET_IDS.includes("priorities") && DASHBOARD_WIDGET_IDS.includes("fleet"));
+  chk("oi2: owner preset leads with priorities", dashboardPresetFor("owner")[0] === "priorities");
+  chk("oi2: mechanic preset is fleet-focused", JSON.stringify(dashboardPresetFor("mechanic")) === JSON.stringify(["priorities", "fleet"]));
+  chk("oi2: legacy role preset (staff→guide)", JSON.stringify(dashboardPresetFor("staff")) === JSON.stringify(dashboardPresetFor("guide")));
+  chk("oi2: resolve saved layout wins + filters junk", JSON.stringify(resolveDashboardWidgets("owner", { widgets: ["fleet", "today", "bogus"] })) === JSON.stringify(["fleet", "today"]));
+  chk("oi2: resolve empty saved → preset", JSON.stringify(resolveDashboardWidgets("marketing", { widgets: [] })) === JSON.stringify(dashboardPresetFor("marketing")));
+  chk("oi2: resolve null → preset", JSON.stringify(resolveDashboardWidgets("guide", null)) === JSON.stringify(dashboardPresetFor("guide")));
+  chk("oi2: every widget has title", DASHBOARD_WIDGET_IDS.every((id) => DASHBOARD_WIDGETS[id]?.title));
+
+  // ── Dashboard widget endpoint guards (Phase 2) ────────────────────────────
+  const { handlePortalDashboardWidgets, handlePortalSaveDashboardLayout } = await import("./adminPortal.js");
+  const mkRes = () => { const r = { code: 200, body: null, status(c){ this.code = c; return this; }, json(b){ this.body = b; return this; } }; return r; };
+  {
+    let r = mkRes(); await handlePortalDashboardWidgets({ query: {}, portalUser: {} }, r, null, null);
+    chk("oi2: widgets → 503 when supabase missing", r.code === 503);
+    r = mkRes(); await handlePortalDashboardWidgets({ query: {}, portalUser: { authUserId: "x" } }, r, { from: () => ({}) }, null);
+    chk("oi2: widgets → 400 when no client_id", r.code === 400);
+    r = mkRes(); await handlePortalSaveDashboardLayout({ body: {}, portalUser: {} }, r, { from: () => ({}) });
+    chk("oi2: save layout → 401 when unauthenticated", r.code === 401);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -14642,7 +14671,10 @@ async function testActionOrientedBriefing() {
 
   // ── formatMissingWaiversResponse ─────────────────────────────────────────
   {
-    const todayIso  = new Date().toISOString();
+    // MT-anchored "today" — isToday() compares against the Denver date, so a raw
+    // UTC toISOString() flakes after ~6pm MT once UTC rolls to tomorrow.
+    const mtToday   = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+    const todayIso  = `${mtToday}T12:00:00`;
     const out = formatMissingWaiversResponse([
       { customer_name: "Alice", start_at: todayIso, customer_count: 4, location: "Kremmling" },
       { customer_name: "Bob",   start_at: new Date(Date.now() + 36 * 3600000).toISOString(), customer_count: 2, location: "Steamboat" },

@@ -141,6 +141,46 @@ export function getRoleProfile(role) {
   return ROLE_PROFILES[normalizeRole(role)] ?? ROLE_PROFILES.owner;
 }
 
+// ── Mission Control dashboard (Phase 2) ───────────────────────────────────────
+// Widget registry — id → display metadata. Order/visibility is per-user.
+export const DASHBOARD_WIDGETS = {
+  priorities: { title: "Action Items",     icon: "📋" },
+  today:      { title: "Today's Bookings",  icon: "🏁" },
+  upcoming:   { title: "Upcoming Week",     icon: "📅" },
+  fleet:      { title: "Fleet & Work Orders", icon: "🔧" },
+  revenue:    { title: "Revenue",           icon: "💰" },
+  leads:      { title: "Leads",             icon: "🔥" },
+  weather:    { title: "Weather",           icon: "🌤" },
+};
+export const DASHBOARD_WIDGET_IDS = Object.keys(DASHBOARD_WIDGETS);
+
+// Default widget set + order per role (the "role preset").
+export const DASHBOARD_PRESETS = {
+  owner:              ["priorities", "revenue", "today", "upcoming", "fleet", "leads", "weather"],
+  general_manager:    ["priorities", "today", "fleet", "revenue", "leads", "upcoming"],
+  operations_manager: ["priorities", "today", "fleet", "upcoming", "weather"],
+  reservations:       ["priorities", "today", "leads", "revenue", "upcoming"],
+  fleet:              ["priorities", "fleet", "today"],
+  mechanic:           ["priorities", "fleet"],
+  guide:              ["priorities", "today", "weather"],
+  marketing:          ["priorities", "leads", "revenue", "upcoming"],
+};
+
+export function dashboardPresetFor(role) {
+  return DASHBOARD_PRESETS[normalizeRole(role)] ?? DASHBOARD_PRESETS.owner;
+}
+
+// Resolve the widget list for a user: a saved layout (filtered to known ids)
+// wins; otherwise the role-preset default. Pure.
+export function resolveDashboardWidgets(role, savedLayout) {
+  const saved = Array.isArray(savedLayout?.widgets) ? savedLayout.widgets : null;
+  if (saved) {
+    const valid = saved.filter((id) => DASHBOARD_WIDGET_IDS.includes(id));
+    if (valid.length) return [...new Set(valid)];
+  }
+  return dashboardPresetFor(role);
+}
+
 // Focus areas for a phone: explicit digest_types win (unless ['all']/empty),
 // otherwise the role default. Returns a lowercase array.
 export function resolveFocusAreas(role, explicitDigestTypes) {
