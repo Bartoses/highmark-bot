@@ -13485,10 +13485,13 @@ async function testOperatorMode() {
     chk("4a: GET /admin/operator-briefings — route registered (not 404)", r.status !== 404, `got ${r.status}`);
   }
 
-  // ── Portal operator API — requires auth ──────────────────────────────────
+  // ── Portal operator-phones API — requires auth ───────────────────────────
+  // (The legacy GET /portal/api/operator "Operator View" endpoint was removed
+  //  when its dead loadOperator() frontend was deleted; auth is covered by the
+  //  operator-phones CRUD guard tests in testSprintCOperatorPortal.)
   {
-    const r = await httpGet("/portal/api/operator");
-    chk("4a: GET /portal/api/operator — 401 without auth", r.status === 401, `got ${r.status}`);
+    const r = await httpGet("/portal/api/operator-phones");
+    chk("4a: GET /portal/api/operator-phones — 401 without auth", r.status === 401, `got ${r.status}`);
   }
 
   // ── buildBriefingText with extras — revenue + issues ─────────────────────

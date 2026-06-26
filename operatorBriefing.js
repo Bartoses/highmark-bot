@@ -7,7 +7,7 @@
 //   sendOperatorBriefing(client, supabase, twilioClient)     → legacy send (no dedup)
 //   detectOperationalIssues(client, supabase, crmSupabase)   → string[] of flagged issues
 //   detectAndHandleOperatorCommand(msg, client, supabase)    → command string | null
-//   buildOperatorApiData(clientId, supabase)                 → { bookings, hot_leads, weather, kb_synced_at }
+//   buildActionCardBriefing(client, ctx, opts)               → role-aware action-card SMS (OI 2.0)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getAllClients } from "./clients.js";
@@ -3333,51 +3333,6 @@ export async function formatUnansweredResponse(client, supabase) {
     console.warn(`[OPERATOR] formatUnansweredResponse failed:`, err.message);
     return "UNANSWERED CONVOS\n\nCouldn't pull conversation status right now.";
   }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PORTAL API DATA — used by GET /portal/api/operator
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function buildOperatorApiData(clientId, supabase, crmSupabase = null) {
-  // Bookings come from DB2 daily_manifest (real bookings) when available;
-  // fall back to FH availability KB only if no CRM is configured.
-  const [manifest, todaySlots, hotLeads, weatherSnap, fhRows] = await Promise.all([
-    getTodaysManifest(clientId, crmSupabase),
-    crmSupabase ? Promise.resolve([]) : getTodaysAvailability(clientId, supabase),
-    getHotLeads(clientId, supabase, 10),
-    getWeatherSnapshot(supabase, clientId),
-    getFhDataForClient(clientId, supabase),
-  ]);
-
-  const kbSyncedAt = fhRows.reduce((latest, row) => {
-    if (!row.fetched_at) return latest;
-    return !latest || row.fetched_at > latest ? row.fetched_at : latest;
-  }, null);
-
-  // Normalize manifest rows into the same shape the portal expects from
-  // todaySlots — { time, name, capacity, pk } — so the Operations view UI
-  // doesn't need to know which source it's reading from.
-  const bookings = manifest.length
-    ? manifest.map((r) => ({
-        time:          formatMTTimeFromNaive(r.start_at),
-        name:          `${r.customer_name ?? "?"} — ${compactActivity(r.activity)}`,
-        capacity:      r.pax ?? r.customer_count ?? null,
-        pk:            r.fareharbor_pk,
-        revenue_cents: r.receipt_total_cents ?? r.total_cents ?? null,
-        location:      capLocation(r.location),
-        source:        "manifest",
-      }))
-    : todaySlots.map((s) => ({ ...s, source: "fh_kb" }));
-
-  return {
-    bookings,
-    bookings_source: manifest.length ? "manifest" : (crmSupabase ? "manifest_empty" : "fh_kb"),
-    hot_leads:    hotLeads,
-    weather:      weatherSnap,
-    kb_synced_at: kbSyncedAt,
-    date:         todayMT(),
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

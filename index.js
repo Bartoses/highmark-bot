@@ -78,7 +78,7 @@ import { extractBookingContext, resolveBookingLink } from "./bookingLinks.js";
 import { getOrchestratorReply, runOrchestrator } from "./agentOrchestrator.js";
 import { detectOwner } from "./ownerMode.js";
 import { callClaudeForChannel } from "./messageEngine.js";
-import { sendOperatorBriefing, buildOperatorApiData } from "./operatorBriefing.js";
+import { sendOperatorBriefing } from "./operatorBriefing.js";
 import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
@@ -2071,18 +2071,6 @@ app.get("/portal/api/geocode", requirePortalAuth, async (req, res) => {
     res.json(results);
   } catch (err) {
     res.status(503).json({ error: err.message });
-  }
-});
-
-app.get("/portal/api/operator", requirePortalAuth, async (req, res) => {
-  if (!req.portalUser?.isClientAdmin) return res.status(403).json({ error: "client_admin or internal_admin role required" });
-  const clientId = resolvePortalClientId(req);
-  if (!clientId) return res.status(400).json({ error: "client_id required" });
-  try {
-    const data = await buildOperatorApiData(clientId, supabase, crmSupabase);
-    res.json(data);
-  } catch (err) {
-    res.status(503).json({ error: "DB unavailable: " + err.message });
   }
 });
 
