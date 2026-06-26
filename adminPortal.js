@@ -516,6 +516,38 @@ export async function handlePortalSaveDashboardLayout(req, res, supabase) {
   }
 }
 
+// ── GET /portal/api/work-orders ───────────────────────────────────────────────
+// Open fleet work orders (season-filtered) with full detail for the portal
+// Operator Intelligence hub — each individually accessible via its MPWR link.
+export async function handlePortalWorkOrders(req, res, supabase, crmSupabase = null) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId)  return res.status(400).json({ error: "client_id is required" });
+  try {
+    const ob = await import("./operatorBriefing.js");
+    const { humanizeWorkType } = await import("./mpwrWorkOrders.js");
+    const rows = await ob.getOpenWorkOrders(crmSupabase, null, 50);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+    const orders = (rows ?? []).map((w) => ({
+      id:              w.id,
+      fleet:           w.fleet,
+      asset_family:    w.asset_family,
+      unit_name:       w.unit_name,
+      work_type:       w.work_type ? humanizeWorkType(w.work_type) : null,
+      notes:           w.work_to_be_done || w.notes || null,
+      out_of_service:  !!w.out_of_service,
+      is_safety_issue: !!w.is_safety_issue,
+      overdue:         !!(w.estimated_completion_date && String(w.estimated_completion_date).slice(0, 10) < today),
+      created_date:    w.created_date,
+      due_date:        w.estimated_completion_date,
+      url:             w.url,
+    }));
+    return res.json({ season: ob.currentSeason(), count: orders.length, orders });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 // ── POST /portal/api/dashboard/dismiss-checklist ──────────────────────────────
 export async function handleDismissChecklist(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });

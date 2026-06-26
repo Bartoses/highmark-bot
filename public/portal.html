@@ -649,6 +649,8 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item active" data-section="dashboard">
         <span class="nav-icon">⊞</span> Dashboard
       </div>
+
+      <div class="nav-section-label" style="padding:12px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Customers</div>
       <div class="nav-item" data-section="conversations">
         <span class="nav-icon">💬</span> Conversations
       </div>
@@ -658,37 +660,44 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="campaigns">
         <span class="nav-icon">📣</span> Campaigns
       </div>
+      <div class="nav-item" data-section="messaging">
+        <span class="nav-icon">📨</span> Messaging
+      </div>
+
+      <div class="nav-section-label client-admin-only" style="padding:12px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Operations</div>
+      <div class="nav-item client-admin-only" data-section="operations">
+        <span class="nav-icon">🛠</span> Operations
+      </div>
+      <div class="nav-item client-admin-only" data-section="operator">
+        <span class="nav-icon">🤖</span> Operator Intelligence
+      </div>
+      <div class="nav-item client-admin-only" data-section="voice">
+        <span class="nav-icon">📞</span> Voice AI
+      </div>
+
+      <div class="nav-section-label" style="padding:12px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Growth</div>
       <div class="nav-item" data-section="analytics">
         <span class="nav-icon">📊</span> Analytics
       </div>
       <div class="nav-item" data-section="optimization">
         <span class="nav-icon">🎯</span> Optimization
       </div>
-      <div class="nav-item" data-section="settings">
-        <span class="nav-icon">⚙</span> Settings
-      </div>
-      <div class="nav-item" data-section="knowledge">
-        <span class="nav-icon">📚</span> Knowledge
-      </div>
-      <div class="nav-item" data-section="messaging">
-        <span class="nav-icon">📨</span> Messaging
-      </div>
       <div class="nav-item" data-section="partners">
         <span class="nav-icon">🤝</span> Partners
       </div>
-      <div class="nav-item client-admin-only" data-section="voice">
-        <span class="nav-icon">📞</span> Voice AI
+
+      <div class="nav-section-label" style="padding:12px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Setup</div>
+      <div class="nav-item" data-section="knowledge">
+        <span class="nav-icon">📚</span> Knowledge
       </div>
-      <div class="nav-section-label client-admin-only" style="padding:10px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Admin</div>
-      <div class="nav-item client-admin-only" data-section="operations">
-        <span class="nav-icon">🛠</span> Operations
-      </div>
-      <div class="nav-item client-admin-only" data-section="operator">
-        <span class="nav-icon">📋</span> Operator View
+      <div class="nav-item" data-section="settings">
+        <span class="nav-icon">⚙</span> Settings
       </div>
       <div class="nav-item client-admin-only" data-section="users">
         <span class="nav-icon">🔑</span> Users
       </div>
+
+      <div class="nav-section-label admin-only" style="padding:12px 16px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">Admin</div>
       <div class="nav-item admin-only" data-section="clients">
         <span class="nav-icon">🏢</span> Clients
       </div>
@@ -1613,33 +1622,36 @@ tr:hover td { background: var(--panel2); }
 
       <div class="section client-admin-only" id="sec-operator">
         <div class="section-header">
-          <span class="section-title">Operator View</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadOperator()" id="operatorRefreshBtn">↻ Refresh</button>
+          <span class="section-title">Operator Intelligence</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadOperatorHub()" id="operatorRefreshBtn">↻ Refresh</button>
         </div>
+        <div class="form-hint" style="margin:-6px 0 16px;">Who gets the daily SMS briefings, and what's open on the fleet right now.</div>
 
-        <!-- Today's Schedule -->
+        <!-- Briefing Recipients (operator phones config, moved out of Settings) -->
         <div class="card" style="margin-bottom:16px;">
-          <div class="card-title" style="margin-bottom:12px;" id="operatorDateTitle">Today's Schedule</div>
-          <div id="operatorSchedule" style="font-size:13px;color:var(--text2);">Loading...</div>
-          <div style="margin-top:10px;font-size:11px;color:var(--text3);" id="operatorSyncedAt"></div>
+          <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>📟 Briefing Recipients</span>
+            <button class="btn btn-ghost btn-sm" onclick="previewBriefingNow()">Preview today's briefing</button>
+          </div>
+          <div class="form-hint" style="margin-bottom:14px;">
+            Each phone that gets the morning/midday/evening briefing. Set their role, locations, detail level, and delivery times — every person sees what matters to them.
+          </div>
+          <div id="operatorIntelligenceList">
+            <div style="font-size:12px;color:var(--text2);padding:12px 0;">Loading briefing recipients…</div>
+          </div>
+          <pre id="briefingPreviewBox" hidden style="margin-top:14px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:480px;overflow:auto;"></pre>
         </div>
 
-        <!-- Hot Leads -->
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-title" style="margin-bottom:12px;">Hot Leads — Follow Up Today</div>
-          <div id="operatorLeads" style="font-size:13px;color:var(--text2);">Loading...</div>
-        </div>
-
-        <!-- Weather Snapshot -->
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-title" style="margin-bottom:12px;">Conditions</div>
-          <div id="operatorWeather" style="font-size:13px;color:var(--text2);">Loading...</div>
-        </div>
-
-        <!-- Staff Roles Placeholder -->
-        <div class="card" style="border:1px dashed var(--border);background:transparent;">
-          <div class="card-title" style="margin-bottom:6px;">Staff Role Briefings</div>
-          <p style="font-size:13px;color:var(--text2);margin:0;">Configure role-specific morning briefings for your team — coming in a future update.</p>
+        <!-- Open Work Orders -->
+        <div class="card">
+          <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>🔧 Open Work Orders</span>
+            <span id="workOrdersMeta" style="font-size:11px;color:var(--text3);font-weight:400;"></span>
+          </div>
+          <div class="form-hint" style="margin-bottom:12px;">Live from MPWR — only vehicles in service this season. Tap any to open it.</div>
+          <div id="workOrdersList">
+            <div style="font-size:12px;color:var(--text2);padding:12px 0;">Loading work orders…</div>
+          </div>
         </div>
       </div><!-- /sec-operator -->
 
@@ -1656,6 +1668,10 @@ tr:hover td { background: var(--panel2); }
           <div class="more-link-list">
             <div class="more-link-item client-admin-only" onclick="switchSection('operations')">
               <span>🛠</span> Operations
+              <span class="more-link-arrow">›</span>
+            </div>
+            <div class="more-link-item client-admin-only" onclick="switchSection('operator')">
+              <span>🤖</span> Operator Intelligence
               <span class="more-link-arrow">›</span>
             </div>
             <div class="more-link-item" onclick="switchSection('analytics')">
@@ -2612,7 +2628,7 @@ const sectionTitles = {
   analytics: 'Analytics', optimization: 'Optimization', settings: 'Settings', knowledge: 'Knowledge',
   integrations: 'Integrations', messaging: 'Messaging', partners: 'Partners',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
-  operator: 'Operator View', operations: 'Operations', voice: 'Voice AI',
+  operator: 'Operator Intelligence', operations: 'Operations', voice: 'Voice AI',
 };
 function switchSection(name, tabParam) {
   // Close any open modals before navigating
@@ -2653,7 +2669,7 @@ function switchSection(name, tabParam) {
   if (name === 'messaging')     loadMessaging();
   if (name === 'partners')      loadPartners();
   if (name === 'onboarding')    resetOnboarding();
-  if (name === 'operator')      loadOperator();
+  if (name === 'operator')      loadOperatorHub();
   if (name === 'operations')    { opsHydrateRangeFromUrl(); opsHydrateFiltersFromUrl(); loadOperations(); }
   if (name === 'voice')         loadVoiceSection();
 }
@@ -4534,19 +4550,15 @@ async function loadSettings() {
       </div>
     </div>
 
-    <!-- Operator Intelligence — Sprint C: per-phone digest preferences + preview/test -->
-    <div class="card" style="margin-top:16px;">
-      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>🤖 Operator Intelligence</span>
-        <button class="btn btn-ghost btn-sm" onclick="previewBriefingNow()">Preview today's briefing</button>
+    <!-- Operator briefings live in their own section now: Operator Intelligence -->
+    <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);cursor:pointer;" onclick="switchSection('operator')">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:2px;">📟 Operator Briefings &amp; Work Orders</div>
+          <div style="font-size:12px;color:var(--text2);">Manage who gets the daily SMS briefings + see open fleet work orders</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();switchSection('operator')">Go to Operator Intelligence →</button>
       </div>
-      <div class="form-hint" style="margin-bottom:14px;">
-        Tune what each operator phone receives. Numbers added in the Internal section above appear here automatically — set their digest times, sections, and internal-mode access.
-      </div>
-      <div id="operatorIntelligenceList">
-        <div style="font-size:12px;color:var(--text2);padding:12px 0;">Loading operator phones…</div>
-      </div>
-      <pre id="briefingPreviewBox" hidden style="margin-top:14px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:480px;overflow:auto;"></pre>
     </div>
 
     <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);">
@@ -4854,7 +4866,7 @@ async function loadSettings() {
 
   onBookingModeChange(); // init conditional visibility
   loadPlanUsage();       // async — loads into #planUsageContent
-  loadOperatorIntelligence(); // Sprint C: per-phone digest preferences
+  // Operator briefings moved to their own section (loadOperatorHub).
 }
 
 function onBookingModeChange() {
@@ -6193,6 +6205,44 @@ const LEGACY_ROLE_MAP   = { manager:'operations_manager', sales:'reservations', 
 const LEGACY_DETAIL_MAP = { summary:'executive', detailed:'operational' };
 const opRoleValue   = (r) => LEGACY_ROLE_MAP[r] ?? r ?? 'owner';
 const opDetailValue = (d) => LEGACY_DETAIL_MAP[d] ?? d ?? 'auto';
+
+// Operator Intelligence hub — briefing recipients + open work orders.
+async function loadOperatorHub() {
+  loadOperatorIntelligence();
+  loadWorkOrders();
+}
+
+async function loadWorkOrders() {
+  const list = document.getElementById('workOrdersList');
+  const meta = document.getElementById('workOrdersMeta');
+  if (!list) return;
+  const r = await apiFetch('/work-orders');
+  if (!r || r.error) {
+    list.innerHTML = '<div class="form-hint" style="color:var(--danger);">Couldn’t load work orders: ' + (r?.error ?? _lastApiError ?? 'unknown') + '</div>';
+    return;
+  }
+  const orders = r.orders ?? [];
+  if (meta) meta.textContent = orders.length + ' open · ' + (r.season ?? '') + ' season';
+  if (!orders.length) { list.innerHTML = '<div class="empty-state">No open work orders — fleet is clear. 🎉</div>'; return; }
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  list.innerHTML = orders.map(w => {
+    const badges = [
+      w.out_of_service ? '<span style="background:rgba(239,68,68,.15);color:#fca5a5;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;">OUT OF SERVICE</span>' : '',
+      w.overdue ? '<span style="background:rgba(245,158,11,.15);color:#fcd34d;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;">OVERDUE</span>' : '',
+      w.is_safety_issue ? '<span style="background:rgba(245,158,11,.12);color:#fcd34d;padding:1px 7px;border-radius:10px;font-size:10px;">⚠ flagged</span>' : '',
+    ].filter(Boolean).join(' ');
+    const veh = [escHtml(w.asset_family || 'Unit'), w.unit_name ? '(' + escHtml(w.unit_name) + ')' : ''].filter(Boolean).join(' ');
+    return '<a href="' + escHtml(w.url || '#') + '" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface2);">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">' +
+        '<span style="font-weight:700;font-size:13px;">' + veh + '</span>' +
+        '<span style="display:flex;gap:5px;flex-wrap:wrap;">' + badges + '</span>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">' + escHtml(w.work_type || 'Work order') + ' · ' + escHtml(opCap(w.fleet)) + ' fleet</div>' +
+      (w.notes ? '<div style="font-size:12px;color:var(--text);margin-bottom:6px;">“' + escHtml(w.notes) + '”</div>' : '') +
+      '<div style="font-size:11px;color:var(--text3);">Created ' + fmtDate(w.created_date) + ' · Est. completion ' + fmtDate(w.due_date) + ' <span style="color:var(--accent,#3b82f6);float:right;">Open in MPWR →</span></div>' +
+    '</a>';
+  }).join('');
+}
 
 async function loadOperatorIntelligence() {
   const list = document.getElementById('operatorIntelligenceList');

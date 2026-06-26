@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getRoleProfile } from "./operatorRoles.js";
+import { humanizeWorkType } from "./mpwrWorkOrders.js";
 
 // Card category → numeric reply shortcut (matches OPERATOR_MENU 2.0).
 export const CATEGORY_REPLY = {
@@ -72,13 +73,16 @@ function candidates(ctx) {
   const out = [];
   const arr = (x) => (Array.isArray(x) ? x : []);
 
-  // 1. Safety — open safety-flagged work orders.
+  // 1. Flagged work order — open WO marked a safety issue (a work order, NOT a
+  //    "safety check" — surface the actual unit + work type).
   const safetyWos = arr(ctx.workOrders).filter((w) => w.is_safety_issue && !w.is_closed);
   if (safetyWos.length) {
     const w = safetyWos[0];
     const unit = w.unit_name || w.asset_family || "a unit";
+    const wt = w.work_type ? humanizeWorkType(w.work_type) : "work order";
+    const more = safetyWos.length > 1 ? ` (+${safetyWos.length - 1} more)` : "";
     out.push({ id: "safety", category: "safety", base: BASE.safety,
-      headline: `Safety check: ${unit}${safetyWos.length > 1 ? ` +${safetyWos.length - 1}` : ""}`,
+      headline: `Open work order: ${unit} — ${wt}${more}`,
       action: replyFor("safety") });
   }
 
@@ -138,7 +142,7 @@ function candidates(ctx) {
   // 7. Unresolved guest handoff.
   if (arr(ctx.unresolvedHandoffs).length) {
     out.push({ id: "handoff", category: "handoff", base: BASE.handoff,
-      headline: `${ctx.unresolvedHandoffs.length} guest message${ctx.unresolvedHandoffs.length !== 1 ? "s" : ""} need a reply`,
+      headline: `${ctx.unresolvedHandoffs.length} guest message${ctx.unresolvedHandoffs.length !== 1 ? "s" : ""} need${ctx.unresolvedHandoffs.length !== 1 ? "" : "s"} a reply`,
       action: replyFor("handoff") });
   }
 
