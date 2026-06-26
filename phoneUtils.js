@@ -50,3 +50,14 @@ export function formatPhoneForDisplay(e164) {
   const m = String(e164).match(/^\+1(\d{3})(\d{3})(\d{4})$/);
   return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
 }
+
+/**
+ * True for synthetic/test phone numbers — the fictional 555 / 999 area codes
+ * used by the test suite + testing portal (e.g. +15550009999, +15559999999).
+ * Never real customers, so they're excluded from lead reporting in production.
+ */
+export function isTestPhone(phone) {
+  let d = String(phone ?? "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) d = d.slice(1); // drop US country code
+  return /^(555|999)/.test(d);
+}

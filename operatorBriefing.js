@@ -20,6 +20,7 @@ import {
 } from "./operatorIntentParser.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
 import { humanizeWorkType } from "./mpwrWorkOrders.js";
+import { isTestPhone } from "./phoneUtils.js";
 import {
   normalizeRole, getRoleProfile, resolveFocusAreas, CARD_FOCUS, normalizeDetail,
 } from "./operatorRoles.js";
@@ -437,8 +438,11 @@ export async function getHotLeads(clientId, supabase, limit = 5) {
       .eq("client_id", clientId)
       .in("status", ["new", "contacted", "engaged"])
       .order("created_at", { ascending: false })
-      .limit(limit + 15); // overfetch so the operator filter still yields `limit`
-    return (data ?? []).filter((l) => !opSet.has(l.contact_phone)).slice(0, limit);
+      .limit(limit + 15); // overfetch so the filters still yield `limit`
+    const dropTest = process.env.TEST_MODE !== "true"; // keep synthetic phones in the test env
+    return (data ?? [])
+      .filter((l) => !opSet.has(l.contact_phone) && (!dropTest || !isTestPhone(l.contact_phone)))
+      .slice(0, limit);
   } catch {
     return [];
   }
@@ -455,7 +459,10 @@ export async function getRecentLeads(clientId, supabase, hours = 24) {
       .gte("created_at", since)
       .order("created_at", { ascending: false })
       .limit(25);
-    return (data ?? []).filter((l) => !opSet.has(l.contact_phone)).slice(0, 10);
+    const dropTest = process.env.TEST_MODE !== "true";
+    return (data ?? [])
+      .filter((l) => !opSet.has(l.contact_phone) && (!dropTest || !isTestPhone(l.contact_phone)))
+      .slice(0, 10);
   } catch {
     return [];
   }
