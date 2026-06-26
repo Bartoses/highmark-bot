@@ -14508,6 +14508,14 @@ async function testOperatorIntelligence2() {
   chk("oi2: mechanic leads with fleet", mechB.indexOf("🔧 Fleet") > 0 && !mechB.includes("💰 Revenue"));
   chk("oi2: roles produce different briefings", ownerB !== guideB && guideB !== mechB);
 
+  // Role-aware reply menu — canonical numbers, only relevant commands shown.
+  const { buildReplyMenu } = await import("./operatorBriefing.js");
+  chk("oi2: owner menu shows all 8", buildReplyMenu("owner").includes("7 Staff") && buildReplyMenu("owner").includes("2 Revenue"));
+  chk("oi2: mechanic menu is decluttered", buildReplyMenu("mechanic") === "Reply: 1 Schedule · 5 Work orders · 8 Ask AI");
+  chk("oi2: guide menu hides revenue/staff", !buildReplyMenu("guide").includes("Revenue") && !buildReplyMenu("guide").includes("Staff"));
+  chk("oi2: every role menu keeps Schedule + Ask AI", ["owner","operations_manager","reservations","fleet","mechanic","guide","marketing"].every(r => { const m = buildReplyMenu(r); return m.includes("1 Schedule") && m.includes("8 Ask AI"); }));
+  chk("oi2: guide briefing uses the role menu", guideB.includes("Reply: 1 Schedule") && !guideB.includes("7 Staff"), guideB);
+
   // operational expands per-booking detail; executive does not.
   const opB = buildActionCardBriefing({ name: "CSR" }, ctx, { role: "reservations", detail: "operational", timeOfDay: "morning", displayName: "Lee" });
   chk("oi2: operational shows phone + no-waiver", opB.includes("907-952-7082") && opB.includes("no waiver"));
