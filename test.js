@@ -14517,6 +14517,35 @@ async function testOperatorIntelligence2() {
   chk("oi2: evening tomorrow prep header", evB.includes("📋 TOMORROW'S PREP"));
   chk("oi2: evening tomorrow card", evB.includes("📅 Tomorrow"));
 
+  // ── Owner/manager richness: locations + 7-day projection + largest upcoming ──
+  {
+    const richCtx = {
+      today: ctx.today,
+      manifest: [{ start_at: `${ctx.today} 09:00:00`, customer_name: "A B", activity: "Turbo RZR XP 1000", location: "north_routt", pax: 1, phone: "+19990001111", waiver_signed: true, receipt_total_cents: 41350 }],
+      upcomingManifest: [
+        { start_at: "2099-01-02 09:00:00", activity: "RZR Experience", location: "kremmling", pax: 1 },
+        { start_at: "2099-01-02 09:00:00", activity: "RZR Experience", location: "kremmling", pax: 1 },
+      ],
+      upcomingRevenue: { bookings: 4, revenue_cents: 172200 },
+      revenue: { estimated: 13377 },
+      highValue: [{ customer_name: "Jared Torres", receipt_total_cents: 471100, start_at: "2099-01-03 09:00:00", activity: "Turbo RZR", balance_due_cents: 0 }],
+      workOrders: [
+        { fleet: "kremmling", out_of_service: true, unit_name: "K49", estimated_completion_date: "2020-02-28", is_closed: false },
+        { fleet: "steamboat", out_of_service: true, unit_name: "S1", estimated_completion_date: "2020-03-01", is_closed: false },
+      ],
+      missingWaivers: [], unpaid: [], missingPhones: [], overlaps: [], unresolvedHandoffs: [], hotLeads: [], pacing: null, weather: null, hasUpcomingWindow: true,
+    };
+    const ownerRich = buildActionCardBriefing({ name: "CSR" }, richCtx, { role: "owner", detail: "executive", timeOfDay: "morning", displayName: "O" });
+    chk("oi2: owner today shows which locations", ownerRich.includes("Locations: North Routt"), ownerRich);
+    chk("oi2: owner has 7-day projection w/ locations", ownerRich.includes("📅 Next 7 days") && ownerRich.includes("Locations: Kremmling"), ownerRich);
+    chk("oi2: owner revenue shows largest upcoming", ownerRich.includes("Largest upcoming: Jared Torres"), ownerRich);
+    chk("oi2: owner fleet shows location breakdown + oldest overdue", ownerRich.includes("Kremmling") && ownerRich.includes("Steamboat") && ownerRich.includes("Oldest overdue"), ownerRich);
+    chk("oi2: owner executive still hides per-booking phone", !ownerRich.includes("999-000-1111"), ownerRich);
+
+    const mgrRich = buildActionCardBriefing({ name: "CSR" }, richCtx, { role: "operations_manager", detail: "standard", timeOfDay: "morning", displayName: "M" });
+    chk("oi2: manager also gets projection + revenue", mgrRich.includes("📅 Next 7 days") && mgrRich.includes("💰 Revenue"), mgrRich);
+  }
+
   // length guard
   chk("oi2: stays within SMS cap", ownerB.length <= 1480 && opB.length <= 1480);
 

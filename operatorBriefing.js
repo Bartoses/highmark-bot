@@ -1728,16 +1728,46 @@ export function resolveBriefingTier(detail, locations, role) {
   return getRoleProfile(role).defaultDetail;
 }
 
-// Per-tier verbosity knobs.
+// Per-tier verbosity knobs. Owners/execs still want the full high-level picture
+// (revenue · today · next-7-days projection · fleet · leads · which locations) —
+// just no per-booking detail. Only operational expands to per-booking lines.
 const TIER_CONFIG = {
-  executive:   { maxCards: 4, expand: false, priorities: 3 },
-  standard:    { maxCards: 6, expand: false, priorities: 3 },
+  executive:   { maxCards: 6, expand: false, priorities: 3 },
+  standard:    { maxCards: 7, expand: false, priorities: 3 },
   operational: { maxCards: 8, expand: true,  priorities: 3 },
 };
 
 const greetingFor = (tod) => tod === "morning" ? "Good morning" : tod === "evening" ? "Good evening" : tod === "day" ? "Good afternoon" : "Hi";
 const lowerFirst  = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 const usdFromCents = (c) => `$${Math.round((Number(c) || 0) / 100).toLocaleString()}`;
+
+// Summary breakdown lines for a set of manifest rows — Locations · Vehicles ·
+// (optionally) Pickups. Mirrors the legacy briefing's TODAY'S LOAD detail so
+// owners/managers see WHICH LOCATIONS the day is at + the vehicle mix. Pure.
+function breakdownLines(rows, { pickups = false } = {}) {
+  const list = Array.isArray(rows) ? rows : [];
+  const out = [];
+  if (!list.length) return out;
+  const byLoc = new Map();
+  for (const r of list) { const k = capLocation(r.location); byLoc.set(k, (byLoc.get(k) ?? 0) + 1); }
+  const locParts = [...byLoc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ${v}`);
+  if (locParts.length) out.push(`  Locations: ${locParts.join(" · ")}`);
+  const byVeh = new Map();
+  for (const r of list) { const v = classifyActivity(r.activity).short_label; byVeh.set(v, (byVeh.get(v) ?? 0) + 1); }
+  const vehParts = [...byVeh.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${v} ${k}`);
+  if (vehParts.length) out.push(`  Vehicles: ${vehParts.join(", ")}`);
+  if (pickups) {
+    const clusters = { morning: 0, midday: 0, afternoon: 0, evening: 0 };
+    for (const r of list) { const b = timeBlock(r.start_at); if (b in clusters) clusters[b] += 1; }
+    const bits = [];
+    if (clusters.morning)   bits.push(`${clusters.morning} morning`);
+    if (clusters.midday)    bits.push(`${clusters.midday} midday`);
+    if (clusters.afternoon) bits.push(`${clusters.afternoon} afternoon`);
+    if (clusters.evening)   bits.push(`${clusters.evening} evening`);
+    if (bits.length) out.push(`  Pickups: ${bits.join(" / ")}`);
+  }
+  return out;
+}
 
 // Build a single action card from ctx. Returns { line, detail:[...] } or null
 // when there's nothing to surface for that category.
@@ -1757,7 +1787,11 @@ function buildCard(category, ctx, snap, { expand, timeOfDay }) {
       const head = evening
         ? `📅 Tomorrow · ${rows.length} booking${rows.length !== 1 ? "s" : ""} · ${pax} guests`
         : `🏁 Today · ${rows.length} booking${rows.length !== 1 ? "s" : ""} · ${pax} guests · ${usdFromCents(cents)}`;
-      const detail = [];
+      // Summary breakdown (Locations · Vehicles · Pickups) — every tier; tells
+      // owners/managers WHICH LOCATIONS the day is at. Operational adds per-booking.
+      const detail = breakdownLines(rows, { pickups: !evening });
+      const late = (snap.late_returns ?? []).length;
+      if (!evening && late) detail.push(`  ${late} return${late !== 1 ? "s" : ""} after 5pm`);
       if (expand && rows.length <= 8) {
         for (const r of rows) {
           const time = formatMTTimeFromNaive(r.start_at);
@@ -1768,21 +1802,57 @@ function buildCard(category, ctx, snap, { expand, timeOfDay }) {
       }
       return { line: head, detail };
     }
+    case "upcoming": {
+      // NEXT 7 DAYS projection — bookings · guests · revenue + which locations +
+      // vehicle mix + busiest day. The high-level forward look owners want.
+      const rows = arr(ctx.upcomingManifest);
+      const bookings = ctx.upcomingRevenue?.bookings ?? rows.length;
+      if (!bookings) return null;
+      const pax   = rows.reduce((s, r) => s + (Number(r.pax ?? r.customer_count) || 0), 0);
+      const dol   = ctx.upcomingRevenue?.revenue_cents ? ` · ${usdFromCents(ctx.upcomingRevenue.revenue_cents)}` : "";
+      const detail = breakdownLines(rows);
+      // Busiest upcoming day
+      const byDay = new Map();
+      for (const r of rows) { const d = String(r.start_at ?? "").slice(0, 10); if (d) byDay.set(d, (byDay.get(d) ?? 0) + 1); }
+      const top = [...byDay.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (top && top[1] >= 2) detail.push(`  Busiest: ${formatMTDateFromNaive(top[0], { weekday: "short", month: "short", day: "numeric" })} (${top[1]})`);
+      return { line: `📅 Next 7 days · ${bookings} booking${bookings !== 1 ? "s" : ""}${pax ? ` · ${pax} guests` : ""}${dol}`, detail };
+    }
     case "revenue": {
       const last7 = ctx.revenue?.estimated ? `last 7d $${Number(ctx.revenue.estimated).toLocaleString()}` : null;
       const up    = ctx.upcomingRevenue?.revenue_cents ? `next 7d ${usdFromCents(ctx.upcomingRevenue.revenue_cents)}` : null;
       const bits  = [last7, up].filter(Boolean).join(" · ");
-      return bits ? { line: `💰 Revenue · ${bits}`, detail: [] } : null;
+      if (!bits) return null;
+      // Largest upcoming booking — the high-value projection owners track.
+      const detail = [];
+      const hv = arr(ctx.highValue)[0];
+      if (hv) {
+        const name = (hv.customer_name ?? "?").split(" ").slice(0, 2).join(" ");
+        const date = formatMTDateFromNaive(hv.start_at, { month: "short", day: "numeric" });
+        const unpaidNote = (hv.balance_due_cents ?? 0) > 0 ? " · UNPAID" : "";
+        detail.push(`  Largest upcoming: ${name} ${usdFromCents(hv.receipt_total_cents ?? hv.total_cents)} (${date}, ${compactActivity(hv.activity)})${unpaidNote}`);
+      }
+      return { line: `💰 Revenue · ${bits}`, detail };
     }
     case "fleet": {
       const wos = arr(ctx.workOrders);
       if (!wos.length) return null;
-      const lines = buildWorkOrdersLines(wos, { detail: expand ? "detailed" : "summary" });
-      // lines[0] is "", lines[1] is the header — reshape to a card.
       const oos = wos.filter((w) => w.out_of_service).length;
       const overdue = wos.filter((w) => isWorkOrderOverdue(w, today)).length;
       const status = [oos ? `${oos} down` : null, overdue ? `${overdue} overdue` : null].filter(Boolean).join(" · ") || `${wos.length} open`;
-      const detail = expand ? lines.filter((l) => l && !l.startsWith("🔧")).slice(1) : [];
+      const detail = [];
+      // Which locations the down units are at + oldest overdue (every tier).
+      const byFleet = new Map();
+      for (const w of wos.filter((x) => x.out_of_service)) { const f = capLocation(w.fleet); byFleet.set(f, (byFleet.get(f) ?? 0) + 1); }
+      const fleetParts = [...byFleet.entries()].sort((a, b) => b[1] - a[1]).map(([f, n]) => `${n} ${f}`);
+      if (fleetParts.length) detail.push(`  ${fleetParts.join(", ")}`);
+      const oldest = wos.filter((w) => isWorkOrderOverdue(w, today))
+        .sort((a, b) => String(a.estimated_completion_date).localeCompare(String(b.estimated_completion_date)))[0];
+      if (oldest) detail.push(`  Oldest overdue: ${oldest.unit_name || oldest.asset_family || "unit"} (due ${formatMTDateFromNaive(oldest.estimated_completion_date, { month: "short", day: "numeric" })})`);
+      if (expand) {
+        const lines = buildWorkOrdersLines(wos, { detail: "detailed" });
+        for (const l of lines.filter((l) => l && !l.startsWith("🔧")).slice(1)) detail.push(l);
+      }
       return { line: `🔧 Fleet · ${status} · Reply 5`, detail };
     }
     case "maintenance": {
