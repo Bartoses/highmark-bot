@@ -1024,12 +1024,16 @@ export async function runMissedCallRecovery(deps, row) {
     }
   }
 
-  // (c) Track the communication: record the inbound call + the recovery text in
-  // the conversation thread so the operator sees it (and a reply continues it).
-  if (smsSent) {
-    await trackRecoveryConversation(deps, {
+  // (c) Track the communication in the conversation thread so the operator sees
+  // EVERY call — answered (the AI receptionist transcript), transferred, or
+  // missed (the recovery text). Skipped only for content-free hangups.
+  const hasTurns = Array.isArray(meta.turns) && meta.turns.length > 0;
+  if (smsSent || hasTurns || outcome === "transferred") {
+    await trackCallConversation(deps, {
       caller, toNumber: row.to_number, clientId: row.client_id,
-      smsBody, summary: row.summary, afterHours, outcome,
+      smsBody: smsSent ? smsBody : null,
+      turns:   hasTurns ? meta.turns : null,
+      summary: row.summary, afterHours, outcome,
     });
   }
 
@@ -1038,30 +1042,44 @@ export async function runMissedCallRecovery(deps, row) {
   await updateCallBySid(supabase, row.call_sid, { metadata: meta });
 }
 
-// Record a missed call + its recovery SMS into the conversations table so every
-// communication with a caller is tracked in one thread. Keyed by (caller,
-// business number) — the same key the inbound-SMS flow uses, so when the caller
-// texts back their reply lands in THIS thread and the bot just continues.
-async function trackRecoveryConversation(deps, info) {
+// Record a call into the conversations table so every communication with a
+// caller is tracked in one thread, keyed by (caller, business number) — the same
+// key the inbound-SMS flow uses, so a later text-back lands in THIS thread and
+// the bot just continues. Logs a 📞 header, then the AI receptionist transcript
+// (when the call was answered) and/or the automated recovery text (when missed).
+export async function trackCallConversation(deps, info) {
   const { getConversation, saveConversation } = deps;
   if (typeof getConversation !== "function" || typeof saveConversation !== "function") return;
-  const { caller, toNumber, clientId, smsBody, summary, afterHours } = info;
+  const { caller, toNumber, clientId, smsBody, turns, summary, afterHours, outcome } = info;
   if (!caller || !toNumber) return;
   try {
     const { convo } = await getConversation(caller, toNumber);
     const now = new Date().toISOString();
     convo.messages = Array.isArray(convo.messages) ? convo.messages : [];
-    // Inbound call as a guest-side event, then the automated recovery text.
-    convo.messages.push({
-      role: "user", channel: "voice", timestamp: now,
-      content: `📞 Called in${afterHours ? " (after hours)" : ""}${summary ? ` — ${summary}` : ""}`,
-    });
-    convo.messages.push({ role: "assistant", channel: "sms", auto: true, timestamp: now, content: smsBody });
+    const hasTurns = Array.isArray(turns) && turns.length > 0;
+    // 📞 header (guest-side event). Append the summary only when there's no
+    // transcript to show (a voicemail/missed call) so we don't repeat it.
+    let header = `📞 Called in${afterHours ? " (after hours)" : ""}`;
+    if (outcome === "transferred")       header += " — transferred to the team";
+    else if (!hasTurns && summary)       header += ` — ${summary}`;
+    convo.messages.push({ role: "user", channel: "voice", timestamp: now, content: header });
+    // The actual back-and-forth with the AI receptionist (caller ↔ agent).
+    if (hasTurns) {
+      for (const t of turns) {
+        if (!t || !t.text) continue;
+        convo.messages.push({
+          role: t.role === "agent" ? "assistant" : "user",
+          channel: "voice", timestamp: now, content: t.text,
+        });
+      }
+    }
+    // Automated recovery text on a missed call.
+    if (smsBody) convo.messages.push({ role: "assistant", channel: "sms", auto: true, timestamp: now, content: smsBody });
     convo.bookingData = { ...(convo.bookingData || {}), _origin: convo.bookingData?._origin || "voice" };
     await saveConversation(caller, toNumber, convo, clientId);
-    console.log(`[VOICE] tracked call + recovery text in conversation for ${caller}`);
+    console.log(`[VOICE] tracked call in conversation for ${caller} (turns:${hasTurns ? turns.length : 0}, sms:${smsBody ? 1 : 0})`);
   } catch (err) {
-    console.error("[VOICE] track recovery conversation failed:", err?.message);
+    console.error("[VOICE] track call conversation failed:", err?.message);
   }
 }
 

@@ -17808,6 +17808,30 @@ async function testVoiceAI() {
     chk("voice3: thread records the inbound call", msgs.some(m => m.role === "user" && /Called in/i.test(m.content)));
     chk("voice3: thread records the recovery text", msgs.some(m => m.role === "assistant" && /missed you|closed right now/i.test(m.content)));
     chk("voice3: thread marks voice origin", savedConvo?.bookingData?._origin === "voice");
+    // ANSWERED call: the AI receptionist transcript is tracked (no recovery SMS).
+    let answeredConvo = null, answeredSms = null;
+    const deps2 = {
+      supabase: { from: () => chain() },
+      twilioClient: { messages: { create: async (m) => { answeredSms = m; return { sid: "SM2" }; } } },
+      saveLead: async () => {},
+      resolveClientById: () => ({ name: "CSR", botName: "Summit" }),
+      getConversation: async () => ({ isNew: true, convo: { messages: [], bookingData: {} } }),
+      saveConversation: async (from, to, convo) => { answeredConvo = convo; },
+    };
+    const answeredRow = { call_sid: "CA10", caller_number: "+19705551111", to_number: "+18335786496",
+      client_id: "csr_rea", outcome: "lead", status: "completed", summary: "Booked a Saturday tour",
+      metadata: { within_hours: true, turns: [
+        { role: "caller", text: "Do you have snowmobile tours Saturday?" },
+        { role: "agent",  text: "We do! 9 AM and 1 PM out of Kremmling. Want me to hold 4 spots?" },
+        { role: "caller", text: "Yes please, the 9 AM." },
+      ] } };
+    await runMissedCallRecovery(deps2, answeredRow);
+    const am = answeredConvo?.messages ?? [];
+    chk("voice3: answered call tracked as a thread", am.length >= 4);
+    chk("voice3: answered thread keeps caller turns", am.some(m => m.role === "user" && /snowmobile tours Saturday/i.test(m.content)));
+    chk("voice3: answered thread keeps receptionist turns", am.some(m => m.role === "assistant" && /Kremmling/i.test(m.content)));
+    chk("voice3: answered call sends NO recovery SMS", answeredSms === null);
+    chk("voice3: answered thread has no missed-call text", !am.some(m => /missed you|closed right now/i.test(m.content)));
     process.env.TEST_MODE = _prevTM;
   }
   chk("voice3: normalizeBusinessHoursInput valid day",
