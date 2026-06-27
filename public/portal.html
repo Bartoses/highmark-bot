@@ -1489,12 +1489,15 @@ tr:hover td { background: var(--panel2); }
               <button class="btn btn-primary btn-sm" onclick="opsApplyCustomRange()">Apply</button>
             </div>
             <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-top:1px solid var(--border);padding-top:10px;">
-              <div style="display:flex;align-items:center;gap:10px;min-width:max-content;">
-                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;">Dim</span>
+              <div style="display:flex;align-items:center;gap:6px;min-width:max-content;">
+                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;padding-right:2px;">Dim</span>
                 <button class="btn btn-ghost btn-sm ops-dim-btn active" data-dim="start"  style="flex-shrink:0;" title="Filter on the trip date">Start date</button>
                 <button class="btn btn-ghost btn-sm ops-dim-btn"        data-dim="booked" style="flex-shrink:0;" title="Filter on when the booking was created">Booked date</button>
-                <span style="width:1px;height:18px;background:var(--border);flex-shrink:0;"></span>
-                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;">Season</span>
+              </div>
+            </div>
+            <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;">
+              <div style="display:flex;align-items:center;gap:6px;min-width:max-content;">
+                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;padding-right:2px;">Season</span>
                 <button class="btn btn-ghost btn-sm ops-season-btn active" data-season=""         style="flex-shrink:0;">All</button>
                 <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="summer"   style="flex-shrink:0;" title="Apr–Oct trips">Summer</button>
                 <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="winter"   style="flex-shrink:0;" title="Nov–Mar trips">Winter</button>
