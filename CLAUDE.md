@@ -316,6 +316,11 @@ A focused mobile-first pass (PR #16) across the three daily-driver surfaces; ver
 - **Operations bookings table → mobile cards (public/portal.html `renderOpsBookingCard` + `#opsCardList`).** The 8-col table hid Location + Status on mobile and had 11px tap targets. A card list shows ≤720px (desktop keeps the full **sortable table** — both populated from the same sorted rows in `renderOpsTableRows`): time + status pill, customer + pax, **activity · location** (no longer hidden), color-coded risk pills (Waiver / $due / No guide / VIP / Repeat), 44px Text/Call/Open. Reuses `openOpsBooking` + `statusPill`. The old mobile column-hiding CSS was removed in favor of the card swap.
 - **Briefing → role-aware reply menu (operatorBriefing.js `buildReplyMenu`).** The SMS footer always listed all 8 commands; now it shows only those relevant to the recipient's role (owner/GM = all 8 unchanged, mechanic = 3, guide = 4), packed ≤4/line. **Canonical numbers never change** (every inline "Reply N" + `OPERATOR_MENU` depend on them); `1 Schedule` + `8 Ask AI` are universal. `ROLE_REPLY_MENU` maps role→numbers; pure + exported; +5 tests in `testOperatorIntelligence2`.
 
+### Settings editable-form polish (2026-06-27)
+PR #22, public/portal.html.
+- **Real toggle switches.** The Conversation card used `.toggle`/`.toggle-slider` classes that had **no CSS** (rendered as bare checkboxes). Added iOS-style switch CSS (on/off/disabled/focus-ring) and converted the **Features** card + **human-handoff** control to the same `.toggle-row` markup — every on/off control is now one consistent switch.
+- **Sticky save bar.** The Save button sat at the bottom of a long multi-card form; wrapped it in `.settings-savebar` (sticky `bottom:0`, frosted, pinned to the viewport bottom of the `#content` scroller) + a "applies to your live bot" hint, so Save is always reachable.
+
 ### Knowledge + Settings UX pass (2026-06-27)
 PR #21, public/portal.html. Suite 2808/2808.
 - **Knowledge coverage strip (`loadKnowledge`).** A "📚 What your bot knows" hero card at the top: ok-page count + last-updated (`relTime`) + chips for each page type covered (`PAGE_TYPE_ICONS`/`LABELS`), so the owner answers "what does my bot know?" at a glance. Empty state prompts adding a URL + crawling.
