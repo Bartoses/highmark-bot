@@ -17750,6 +17750,8 @@ async function testVoiceAI() {
     chk("voice2: Gather TwiML valid + speech input + action + actionOnEmptyResult",
       g.startsWith("<?xml") && g.includes("<Gather") && g.includes('input="speech"') && g.includes("/voice/respond") &&
       g.includes("Hi there") && g.includes('actionOnEmptyResult="true"'), g.slice(0, 120));
+    chk("voice2: Gather gives callers a generous start-speaking window (timeout >= 8)",
+      g.includes('timeout="8"'), g.slice(0, 160));
   }
   chk("voice2: buildTranscript renders caller/agent turns",
     buildTranscript([{ role: "caller", text: "hi" }, { role: "agent", text: "hello" }]) === "Caller: hi\nReceptionist: hello");
@@ -17832,6 +17834,22 @@ async function testVoiceAI() {
     chk("voice3: answered thread keeps receptionist turns", am.some(m => m.role === "assistant" && /Kremmling/i.test(m.content)));
     chk("voice3: answered call sends NO recovery SMS", answeredSms === null);
     chk("voice3: answered thread has no missed-call text", !am.some(m => /missed you|closed right now/i.test(m.content)));
+    // OPERATOR caller: staff calling in are not tracked as a guest conversation.
+    let opTracked = null, opSms = null;
+    const opChain = { select: () => opChain, eq: () => opChain, limit: () => opChain, update: () => opChain, maybeSingle: async () => ({ data: { id: 'op1' }, error: null }) };
+    const deps3 = {
+      supabase: { from: () => opChain },
+      twilioClient: { messages: { create: async (m) => { opSms = m; return { sid: 'SM3' }; } } },
+      saveLead: async () => {},
+      resolveClientById: () => ({ name: 'CSR', botName: 'Summit' }),
+      getConversation: async () => ({ isNew: true, convo: { messages: [], bookingData: {} } }),
+      saveConversation: async (f, t, c) => { opTracked = c; },
+    };
+    const opRow = { call_sid: 'CA11', caller_number: '+17202892483', to_number: '+18335786496',
+      client_id: 'csr_rea', outcome: 'lead', status: 'completed', summary: 'Owner test call',
+      metadata: { within_hours: true, turns: [{ role: 'caller', text: 'hi' }, { role: 'agent', text: 'hello' }] } };
+    await runMissedCallRecovery(deps3, opRow);
+    chk("voice3: operator/owner call is NOT tracked as a guest conversation", opTracked === null);
     process.env.TEST_MODE = _prevTM;
   }
   chk("voice3: normalizeBusinessHoursInput valid day",

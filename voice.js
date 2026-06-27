@@ -417,11 +417,15 @@ export function buildGatherTwiml({
   voiceName = VOICE_TTS,
   speechHints = "",
   speechTimeout = "auto",
+  timeout = 8,           // seconds to wait for the caller to START speaking
 } = {}) {
   const gAttrs = [
     `input="speech"`,
     `action="${escapeXml(action)}"`,
     `method="POST"`,
+    // Initial-silence window: Twilio's default is only 5s, which cuts off a
+    // caller who pauses to think right after a question. Give them longer.
+    `timeout="${escapeXml(String(timeout))}"`,
     `speechTimeout="${escapeXml(speechTimeout)}"`,
     `speechModel="phone_call"`,
     `enhanced="true"`,
@@ -825,7 +829,7 @@ export async function handleVoiceRespond(req, res, deps = {}) {
     // ── No speech captured → reprompt once, then wrap up gracefully ──────────────
     if (!speech) {
       meta.no_input = (meta.no_input || 0) + 1;
-      if (meta.no_input >= 2) {
+      if (meta.no_input >= 3) {
         if (supabase) await updateCallBySid(supabase, callSid, { metadata: meta });
         if (canTransfer) {
           return sendTwiml(res, twiml(
@@ -972,6 +976,17 @@ export async function handleVoiceStatus(req, res, deps = {}) {
   return sendTwiml(res, twiml(""));
 }
 
+// True if `phone` is a registered operator/staff number for this client — they
+// get internal mode, not guest treatment. Mirrors the check in leads.saveLead.
+async function isRegisteredOperator(supabase, clientId, phone) {
+  if (!supabase || !clientId || !phone) return false;
+  try {
+    const { data } = await supabase.from("operator_phones")
+      .select("id").eq("client_id", clientId).eq("phone", phone).limit(1).maybeSingle();
+    return !!data;
+  } catch { return false; }
+}
+
 // ── Phase 3: missed-call recovery ──────────────────────────────────────────────
 // On a completed call, log a lead (any real, non-spam caller) and — for genuinely
 // missed calls (after hours / no answer / voicemail) — text the caller back so the
@@ -995,6 +1010,10 @@ export async function runMissedCallRecovery(deps, row) {
     || ["voicemail", "no_answer"].includes(outcome)
     || ["no_answer", "failed"].includes(row.status);
 
+  // Staff calling in are not customers — don't recover or track them as a guest
+  // communication (mirrors saveLead, which already refuses operator phones).
+  const isOperator = await isRegisteredOperator(supabase, row.client_id, caller);
+
   // (a) Log a lead for any real call so it surfaces in the Leads tab.
   if (typeof saveLead === "function") {
     await saveLead(supabase, {
@@ -1010,7 +1029,7 @@ export async function runMissedCallRecovery(deps, row) {
   // (b) Recovery SMS only for genuinely missed calls (and never if a human took it).
   let smsSent = false;
   const smsBody = buildMissedCallSms(client, { afterHours });
-  if (missed && outcome !== "transferred" && twilioClient && row.to_number && process.env.TEST_MODE !== "true") {
+  if (missed && outcome !== "transferred" && !isOperator && twilioClient && row.to_number && process.env.TEST_MODE !== "true") {
     try {
       await twilioClient.messages.create({
         body: smsBody,
@@ -1028,7 +1047,7 @@ export async function runMissedCallRecovery(deps, row) {
   // EVERY call — answered (the AI receptionist transcript), transferred, or
   // missed (the recovery text). Skipped only for content-free hangups.
   const hasTurns = Array.isArray(meta.turns) && meta.turns.length > 0;
-  if (smsSent || hasTurns || outcome === "transferred") {
+  if (!isOperator && (smsSent || hasTurns || outcome === "transferred")) {
     await trackCallConversation(deps, {
       caller, toNumber: row.to_number, clientId: row.client_id,
       smsBody: smsSent ? smsBody : null,
