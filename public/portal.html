@@ -672,6 +672,18 @@ tr:hover td { background: var(--panel2); }
 .msg-row.assistant .msg-ts { text-align:right; }
 .msg-badges { display:flex; gap:4px; margin-top:3px; flex-wrap:wrap; }
 .msg-row.assistant .msg-badges { justify-content:flex-end; }
+
+/* ── Mission Control widgets ─────────────────────────────────────────────── */
+.mc-widget { transition: border-color .12s; }
+.mc-num { font-size:22px; font-weight:800; line-height:1.1; color:var(--text); letter-spacing:-.01em; }
+.mc-sub { color:var(--text2); font-size:12.5px; margin-top:2px; }
+.mc-tap { display:flex; align-items:center; gap:8px; padding:7px 8px; margin:0 -8px; border-radius:8px; cursor:pointer; transition:background .1s; }
+.mc-tap:hover { background:rgba(255,255,255,.04); }
+.mc-tap .mc-chev { margin-left:auto; color:var(--text3); font-size:14px; }
+.mc-prio { border-left:3px solid var(--border2); }
+.mc-prio.sev-critical { border-left-color:#ef4444; }
+.mc-prio.sev-high     { border-left-color:#f59e0b; }
+.mc-prio-rank { font-weight:800; font-size:13px; min-width:14px; }
 .msg-badge { font-size:10px; padding:1px 5px; border-radius:6px; background:var(--panel2); color:var(--text2); border:1px solid var(--border); }
 
 /* ── Dashboard v2 ────────────────────────────────────────────────────────── */
@@ -3330,10 +3342,11 @@ function mcWidgetBody(id, d) {
   switch (id) {
     case 'priorities':
       return (d.length ? d : []).slice(0,6).map((p,i) =>
-        '<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);">' +
-          '<span style="font-weight:700;color:' + sevColor(p.severity) + ';">' + (i+1) + '</span>' +
-          '<span style="flex:1;">' + escHtml(p.headline) + (p.action ? ' <span style="color:var(--text3);font-size:11px;">' + escHtml(p.action) + '</span>' : '') + '</span>' +
-        '</div>').join('') || empty('Nothing flagged — clear plate.');
+        '<div class="mc-tap mc-prio sev-' + (p.severity || 'normal') + '" onclick="mcGotoCategory(\'' + (p.category || '') + '\')">' +
+          '<span class="mc-prio-rank" style="color:' + sevColor(p.severity) + ';">' + (i+1) + '</span>' +
+          '<span style="flex:1;min-width:0;">' + escHtml(p.headline) + '</span>' +
+          '<span class="mc-chev">›</span>' +
+        '</div>').join('') || empty('Nothing flagged — clear plate. 🌤');
     case 'today':
       return '<div style="font-size:20px;font-weight:700;">' + (d.bookings ?? 0) + ' bookings · ' + (d.guests ?? 0) + ' guests</div>' +
         '<div style="color:var(--text2);margin-bottom:6px;">' + money(d.revenue) + ' on the books</div>' +
@@ -3370,8 +3383,13 @@ function mcWidgetBody(id, d) {
     }
     case 'leads': {
       const f = d.funnel ?? {};
-      return '<div style="font-size:12px;margin-bottom:6px;">New ' + (f.new ?? 0) + ' · Contacted ' + (f.contacted ?? 0) + ' · Engaged ' + (f.engaged ?? 0) + ' · Converted ' + (f.converted ?? 0) + '</div>' +
-        (d.hot ?? []).map(l => '<div style="font-size:12px;border-top:1px solid var(--border);padding:3px 0;">🔥 ' + escHtml((l.name ?? 'Lead')) + ' · ' + escHtml(l.status ?? '') + '</div>').join('') || empty('No hot leads right now.');
+      const hot = d.hot ?? [];
+      return '<div class="mc-num">' + (f.new ?? 0) + ' <span style="font-size:13px;font-weight:600;color:var(--text2);">new</span></div>' +
+        '<div class="mc-sub">Contacted ' + (f.contacted ?? 0) + ' · Engaged ' + (f.engaged ?? 0) + ' · Converted ' + (f.converted ?? 0) + '</div>' +
+        (hot.length
+          ? '<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:4px;">' +
+            hot.map(l => '<div class="mc-tap" onclick="switchSection(\'leads\')">🔥 <span style="flex:1;min-width:0;">' + escHtml(l.name ?? 'Lead') + ' <span style="color:var(--text3);">· ' + escHtml(l.status ?? '') + '</span></span><span class="mc-chev">›</span></div>').join('') + '</div>'
+          : '<div style="margin-top:6px;">' + empty('No hot leads right now.') + '</div>');
     }
     case 'weather':
       return d.line && d.line !== 'No weather data available.' ? escHtml(d.line) : empty('No weather data.');
@@ -3380,6 +3398,17 @@ function mcWidgetBody(id, d) {
   }
 }
 function opCap(s){ return String(s ?? '?').split(/[\s_-]+/).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '); }
+// Route a priority's category to the section where you'd act on it.
+function mcGotoCategory(cat) {
+  const map = {
+    handoff: 'conversations',
+    leads: 'leads', missed_lead: 'leads',
+    fleet: 'operator', maintenance: 'operator', safety: 'operator',
+  };
+  // Everything operational (waivers, unpaid, vip, bookings, late_returns,
+  // underbooked, pacing, missing_phone) lives on the Operations board.
+  switchSection(map[cat] || 'operations');
+}
 
 function mcRenderPicker() {
   const picker = document.getElementById('mcPicker');
