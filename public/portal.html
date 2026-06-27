@@ -615,8 +615,17 @@ tr:hover td { background: var(--panel2); }
   #opsShareLinksList > div > div[style*="display:flex;gap:6px"] { flex-wrap: wrap; }
   #opsShareLinksList input[readonly] { width: 100%; min-width: 0; }
   #opsHealthRow { grid-template-columns: 1fr !important; }
-  .ops-dispatch-item { grid-template-columns: 60px 1fr !important; }
-  .ops-dispatch-actions { display: none !important; }
+  /* Dispatch board: time + details on top, actions as a full-width button row
+     below (was hidden on mobile — the dispatcher needs Call/Text in the field) */
+  .ops-dispatch-item { grid-template-columns: 64px 1fr !important; column-gap: 10px; }
+  .ops-dispatch-actions {
+    grid-column: 1 / -1; display: flex !important; justify-content: stretch;
+    gap: 8px; margin-top: 8px;
+  }
+  .ops-dispatch-actions .btn {
+    flex: 1; min-height: 42px; font-size: 15px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
 }
 /* ── KPI micro-context ─────────────────────────────────────────────────────── */
 .ops-kpi-ctx { font-size:11px; color:var(--text3); margin-top:4px; line-height:1.3; }
