@@ -416,7 +416,9 @@ export function buildGatherTwiml({
   action,
   voiceName = VOICE_TTS,
   speechHints = "",
-  speechTimeout = "auto",
+  // End-of-speech wait: "auto" lags 2–3s after the caller stops, which feels
+  // dead. A short fixed value makes the agent respond the moment they finish.
+  speechTimeout = "2",
   timeout = 8,           // seconds to wait for the caller to START speaking
 } = {}) {
   const gAttrs = [

@@ -17752,6 +17752,8 @@ async function testVoiceAI() {
       g.includes("Hi there") && g.includes('actionOnEmptyResult="true"'), g.slice(0, 120));
     chk("voice2: Gather gives callers a generous start-speaking window (timeout >= 8)",
       g.includes('timeout="8"'), g.slice(0, 160));
+    chk("voice2: Gather uses a snappy fixed end-of-speech timeout (not auto)",
+      g.includes('speechTimeout="2"') && !g.includes('speechTimeout="auto"'), g.slice(0, 200));
   }
   chk("voice2: buildTranscript renders caller/agent turns",
     buildTranscript([{ role: "caller", text: "hi" }, { role: "agent", text: "hello" }]) === "Caller: hi\nReceptionist: hello");
