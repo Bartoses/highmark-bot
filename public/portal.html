@@ -250,6 +250,22 @@ tr:hover td { background: var(--panel2); }
 .lp-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text3); }
 .lp-value { font-size: 13px; color: var(--text); }
 .lp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* Action-first lead panel: big reach-out buttons + prominent request */
+.lp-reach { display: flex; gap: 10px; }
+.lp-action-btn {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 46px; border-radius: 10px; font-size: 14px; font-weight: 600;
+  text-decoration: none; cursor: pointer; border: 1px solid var(--border2); color: var(--text);
+}
+.lp-action-btn.lp-call { background: rgba(16,185,129,.14); border-color: rgba(16,185,129,.3); color: #6ee7b7; }
+.lp-action-btn.lp-text { background: rgba(59,130,246,.14); border-color: rgba(59,130,246,.3); color: #93c5fd; }
+.lp-want { font-size: 16px; font-weight: 600; color: var(--text); line-height: 1.35; }
+/* Compact key/value facts list (replaces the tall 2-col card grid) */
+.lp-kv { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.lp-kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.lp-kv-row:last-child { border-bottom: none; }
+.lp-kv-row .k { color: var(--text3); flex-shrink: 0; }
+.lp-kv-row .v { color: var(--text); text-align: right; word-break: break-word; }
 .lp-status-select {
   background: var(--bg); border: 1px solid var(--border2); color: var(--text);
   border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600;
@@ -1856,47 +1872,19 @@ tr:hover td { background: var(--panel2); }
     <button class="lp-close" onclick="closeLeadPanel()">×</button>
   </div>
   <div class="lp-body">
-    <div class="lp-grid">
-      <div class="lp-field">
-        <div class="lp-label">Phone</div>
-        <div class="lp-value" id="lpPhone">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Email</div>
-        <div class="lp-value" id="lpEmail">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Wants</div>
-        <div class="lp-value" id="lpService">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Came in via</div>
-        <div class="lp-value" id="lpSource">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Timeframe</div>
-        <div class="lp-value" id="lpTimeframe">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Created</div>
-        <div class="lp-value" id="lpCreated">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Last contacted</div>
-        <div class="lp-value" id="lpLastContacted">—</div>
-      </div>
+    <!-- Primary action: one tap to the dialer / messages (only when a phone exists) -->
+    <div class="lp-reach" id="lpReachWrap">
+      <a id="lpCallBtn" class="lp-action-btn lp-call" href="#">📞 Call</a>
+      <a id="lpTextBtn" class="lp-action-btn lp-text" href="#">💬 Text</a>
     </div>
 
-    <!-- Reach out — one tap opens the phone's dialer / messages -->
-    <div class="lp-field" id="lpReachWrap">
-      <div class="lp-label">Reach out</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a id="lpCallBtn" class="btn btn-ghost btn-sm" href="#" style="text-decoration:none;">📞 Call</a>
-        <a id="lpTextBtn" class="btn btn-ghost btn-sm" href="#" style="text-decoration:none;">💬 Text</a>
-      </div>
+    <!-- What they want — the reason they're here -->
+    <div class="lp-field">
+      <div class="lp-label">Wants</div>
+      <div class="lp-want" id="lpService">—</div>
     </div>
 
-    <!-- AI suggested follow-up -->
+    <!-- AI suggested follow-up — the "what next" -->
     <div class="lp-field" style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface2);">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
         <div class="lp-label" style="margin:0;">✨ Suggested follow-up</div>
@@ -1905,6 +1893,7 @@ tr:hover td { background: var(--panel2); }
       <div id="lpSuggestBox" style="font-size:13px;color:var(--text2);line-height:1.5;">Tap <strong>Suggest</strong> for an AI next step + a ready-to-send message.</div>
     </div>
 
+    <!-- Status -->
     <div class="lp-field">
       <div class="lp-label">Status</div>
       <select class="lp-status-select" id="lpStatusSelect" onchange="updateLeadStatusFromPanel()">
@@ -1917,6 +1906,20 @@ tr:hover td { background: var(--panel2); }
         <option value="ignored">Ignored</option>
       </select>
     </div>
+
+    <!-- Compact facts (reference, not actions) -->
+    <div class="lp-field">
+      <div class="lp-label">Details</div>
+      <div class="lp-kv">
+        <div class="lp-kv-row"><span class="k">Phone</span><span class="v" id="lpPhone">—</span></div>
+        <div class="lp-kv-row"><span class="k">Email</span><span class="v" id="lpEmail">—</span></div>
+        <div class="lp-kv-row"><span class="k">Timeframe</span><span class="v" id="lpTimeframe">—</span></div>
+        <div class="lp-kv-row"><span class="k">Came in via</span><span class="v" id="lpSource">—</span></div>
+        <div class="lp-kv-row"><span class="k">Created</span><span class="v" id="lpCreated">—</span></div>
+        <div class="lp-kv-row"><span class="k">Last contacted</span><span class="v" id="lpLastContacted">—</span></div>
+      </div>
+    </div>
+
     <div class="lp-notes-wrap">
       <div class="lp-label">Notes</div>
       <textarea class="lp-notes" id="lpNotes" placeholder="Add notes…" oninput="debouncedSaveNotes()"></textarea>
