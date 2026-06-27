@@ -4689,10 +4689,10 @@ async function loadSettings() {
   const canEdit = me?.isAdmin || (d.editable && me?.isClientAdmin);
 
   function row(label, value) {
-    return `<tr><td style="padding:8px 0;color:var(--text2);width:160px;font-size:13px;">${label}</td><td style="padding:8px 0;font-size:13px;">${value ?? '—'}</td></tr>`;
+    return `<div class="lp-kv-row"><span class="k">${label}</span><span class="v">${value ?? '—'}</span></div>`;
   }
   function tog(label, val) {
-    return `<tr><td style="padding:8px 0;color:var(--text2);width:160px;font-size:13px;">${label}</td><td style="padding:8px 0;"><span class="pill ${val ? 'pill-green' : 'pill-gray'}">${val ? 'On' : 'Off'}</span></td></tr>`;
+    return `<div class="lp-kv-row"><span class="k">${label}</span><span class="v"><span class="pill ${val ? 'pill-green' : 'pill-gray'}">${val ? 'On' : 'Off'}</span></span></div>`;
   }
 
   const BOOKING_MODE_LABELS = {
@@ -4764,30 +4764,30 @@ async function loadSettings() {
       <div class="card">
         <div class="card-title">General</div>
         ${!d.editable ? '<p style="color:var(--text2);font-size:12px;margin-bottom:12px;">This account uses a managed configuration. Contact Highmark support to make changes.</p>' : ''}
-        <table style="width:100%;border-collapse:collapse;">
+        <div class="lp-kv">
           ${row('Business name', d.name)}
           ${row('Bot name', d.botName)}
           ${row('Support phone', d.supportPhone)}
           ${row('Support email', d.supportEmail)}
           ${row('Website', d.websiteUrl)}
-        </table>
+        </div>
       </div>
       <div class="card" style="margin-top:16px;">
         <div class="card-title">Booking</div>
-        <table style="width:100%;border-collapse:collapse;">
+        <div class="lp-kv">
           ${row('Booking mode', BOOKING_MODE_LABELS[d.bookingMode] ?? d.bookingMode)}
           ${row('Booking link', d.bookingLink)}
           ${tog('Human handoff', d.humanHandoffEnabled)}
-        </table>
+        </div>
       </div>
       <div class="card" style="margin-top:16px;">
         <div class="card-title">Features</div>
-        <table style="width:100%;border-collapse:collapse;">
+        <div class="lp-kv">
           ${tog('Campaigns', d.campaignsEnabled)}
           ${tog('Follow-ups', d.followupsEnabled)}
           ${tog('Lead capture', d.leadCaptureEnabled)}
           ${tog('Waitlist', d.waitlistEnabled)}
-        </table>
+        </div>
       </div>
       <div class="card" style="margin-top:16px;background:var(--surface2);border:1px dashed var(--border);">
         <div style="display:flex;align-items:center;justify-content:space-between;">
@@ -5755,6 +5755,24 @@ async function loadKnowledge() {
   const lastCrawled = pages.length ? pages.reduce((latest, p) => p.fetched_at > latest ? p.fetched_at : latest, '') : null;
   const okPages = pages.filter(p => p.status === 'ok');
 
+  // ── Coverage strip — answers "what does my bot know?" at a glance ────────────
+  const typeOrderCov = ['homepage','services','pricing','booking','faq','policies','hours','contact','seasonal','other'];
+  const coveredTypes = [...new Set(okPages.map(p => p.page_type ?? 'other'))]
+    .sort((a, b) => typeOrderCov.indexOf(a) - typeOrderCov.indexOf(b));
+  const typeChips = coveredTypes.map(t =>
+    `<span class="pill pill-gray">${PAGE_TYPE_ICONS[t] ?? '📄'} ${PAGE_TYPE_LABELS[t] ?? t}</span>`).join(' ');
+  const coverageCard = `
+    <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,var(--panel),var(--panel2));">
+      <div class="card-title" style="margin-bottom:10px;">📚 What your bot knows</div>
+      ${okPages.length ? `
+        <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:${typeChips ? '12px' : '0'};">
+          <span style="font-size:26px;font-weight:800;color:var(--text);line-height:1;">${okPages.length}</span>
+          <span style="color:var(--text2);font-size:13px;">page${okPages.length !== 1 ? 's' : ''} of website knowledge${lastCrawled ? ` · updated ${relTime(lastCrawled)}` : ''}</span>
+        </div>
+        ${typeChips ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">${typeChips}</div>` : ''}`
+      : `<div style="color:var(--text2);font-size:13px;">No website knowledge yet — add your URL below and crawl to teach the bot about your business.</div>`}
+    </div>`;
+
   // ── Website card ────────────────────────────────────────────────────────────
   const crawlStatus = pages.length === 0
     ? '<span style="color:var(--text3);">Not crawled yet</span>'
@@ -5851,7 +5869,7 @@ async function loadKnowledge() {
       ${integHtml || '<div style="color:var(--text3);font-size:12px;">Could not load live data status.</div>'}
     </div>`;
 
-  document.getElementById('knowledgeContent').innerHTML = websiteCard + knowsCard + liveCard;
+  document.getElementById('knowledgeContent').innerHTML = coverageCard + websiteCard + knowsCard + liveCard;
 }
 
 async function knSaveWebsite() {
