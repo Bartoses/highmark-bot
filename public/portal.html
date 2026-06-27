@@ -222,6 +222,16 @@ tr:hover td { background: var(--panel2); }
 .leads-summary { font-size: 12.5px; color: var(--text3); margin: 0 0 12px; }
 .leads-summary strong { color: var(--text2); }
 
+/* ── Campaign cards (mobile only; desktop keeps the table + bulk-select) ──── */
+.campaigns-cards { display: none; flex-direction: column; gap: 10px; }
+.camp-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 13px 14px; }
+.camp-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.camp-card-name { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.25; }
+.camp-card-sub { font-size: 12.5px; color: var(--text2); margin-top: 3px; }
+.camp-card-meta { font-size: 11.5px; color: var(--text3); margin-top: 7px; }
+.camp-card-actions { display: flex; align-items: center; gap: 14px; margin-top: 11px; }
+.camp-card-actions .row-action { font-size: 13px; }
+
 /* ── Lead slide-in panel ─────────────────────────────────────────────────── */
 #leadPanel {
   position: fixed; top: 0; right: -440px; width: 420px; max-width: 95vw;
@@ -456,6 +466,10 @@ tr:hover td { background: var(--panel2); }
     border-right: none !important;
     border-bottom: 1px solid var(--border);
   }
+  /* Campaigns: cards on mobile, hide the desktop table + bulk-select bar */
+  #campaignsTable .tbl-wrap { display: none; }
+  .campaigns-cards { display: flex; }
+  #campBulkBar { display: none !important; }
   /* Conversations list → cards on mobile (matches Leads/Operations) */
   #convList { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
   .conv-item {
@@ -3793,12 +3807,34 @@ async function loadCampaigns() {
 
   const isAdmin = me?.isAdmin || me?.isClientAdmin;
   const bulkBar = isAdmin ? `
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+    <div id="campBulkBar" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
       <button type="button" class="btn btn-secondary" id="campBulkDelete" disabled>Delete selected</button>
       <span id="campSelCount" class="text-muted text-xs">No rows selected</span>
     </div>` : '';
 
-  document.getElementById('campaignsTable').innerHTML = bulkBar + `
+  // Mobile card list — same data + view/delete actions; bulk-select stays desktop-only.
+  const cardsHtml = `<div class="campaigns-cards">${d.campaigns.map(c => {
+    const isEvent = c.campaign_type === 'event_triggered';
+    const typeLabel = isEvent ? '⚡ Smart' : '📣 Manual';
+    const audience = (c.audience_filter || c.audience_type || '').replace(/_/g,' ') || '—';
+    const lastFired = c.last_fired_at ? fmt(c.last_fired_at) : 'never';
+    return `<div class="camp-card">
+      <div class="camp-card-top">
+        <div style="min-width:0;">
+          <div class="camp-card-name">${escHtml(c.name)}</div>
+          <div class="camp-card-sub">${typeLabel} · ${audience}</div>
+        </div>
+        ${pill(c.status)}
+      </div>
+      <div class="camp-card-meta">Last fired ${lastFired} · ${c.fire_count ?? 0}× fired</div>
+      <div class="camp-card-actions">
+        <span class="row-action camp-view" data-cid="${c.id}">View →</span>
+        ${isAdmin ? `<span class="row-action camp-del" style="color:var(--danger);cursor:pointer;" data-cid="${c.id}" data-cname="${escHtml(c.name)}">Delete</span>` : ''}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+
+  document.getElementById('campaignsTable').innerHTML = bulkBar + cardsHtml + `
     <div class="tbl-wrap"><table>
       <thead><tr>
         ${isAdmin ? '<th style="width:24px;"><input type="checkbox" id="campSelAll" onclick="toggleAllCampaigns(this.checked)"></th>' : ''}
