@@ -627,6 +627,14 @@ tr:hover td { background: var(--panel2); }
 .ops-dispatch-cd.cd-ok { color:var(--text3); }
 .ops-dispatch-avatar { width:30px; height:30px; border-radius:50%; background:var(--panel2); display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:var(--text2); margin-right:8px; flex-shrink:0; vertical-align:middle; }
 .ops-dispatch-actions { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+
+/* ── Lead funnel chart (Analytics) ───────────────────────────────────────── */
+.funnel-row { display:flex; align-items:center; gap:10px; margin-bottom:9px; }
+.funnel-row:last-child { margin-bottom:0; }
+.funnel-lbl { font-size:12px; color:var(--text2); width:82px; flex-shrink:0; }
+.funnel-track { flex:1; height:28px; background:var(--panel2); border-radius:7px; overflow:hidden; }
+.funnel-fill { height:100%; border-radius:7px; display:flex; align-items:center; padding:0 9px; font-size:13px; font-weight:800; color:#06140e; min-width:26px; box-sizing:border-box; transition:width .4s ease; }
+.funnel-pct { font-size:11px; color:var(--text3); width:54px; text-align:right; flex-shrink:0; }
 .ops-dispatch-tags { display:flex; gap:4px; flex-wrap:wrap; margin-top:5px; }
 /* ── Risk badges ─────────────────────────────────────────────────────────── */
 .ops-risk { display:inline-flex; align-items:center; gap:3px; padding:1px 6px; border-radius:8px; font-size:10.5px; font-weight:700; white-space:nowrap; }
@@ -4190,6 +4198,32 @@ async function loadAttribution() {
 }
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────────
+// Proportional lead-funnel chart — bars scale to the top stage, with the
+// stage-to-stage conversion % so you see where leads drop off.
+function renderLeadFunnelChart(lf) {
+  const stages = [
+    { key: 'new',       label: 'New',       color: '#3b82f6' },
+    { key: 'contacted', label: 'Contacted', color: '#14b8a6' },
+    { key: 'engaged',   label: 'Engaged',   color: '#f59e0b' },
+    { key: 'converted', label: 'Converted', color: '#22c55e' },
+  ];
+  const top = Math.max(1, lf.new ?? 0);
+  if (!stages.some(s => (lf[s.key] ?? 0) > 0)) {
+    return '<div class="empty-state" style="font-size:13px;padding:20px;">No leads in this period yet.</div>';
+  }
+  return stages.map((s, i) => {
+    const n    = lf[s.key] ?? 0;
+    const w    = Math.max(6, Math.round((n / top) * 100));
+    const prev = i === 0 ? null : (lf[stages[i - 1].key] ?? 0);
+    const pct  = prev ? Math.round((n / prev) * 100) : null;
+    return `<div class="funnel-row">
+      <span class="funnel-lbl">${s.label}</span>
+      <div class="funnel-track"><div class="funnel-fill" style="width:${w}%;background:${s.color};">${n}</div></div>
+      <span class="funnel-pct">${pct != null ? pct + '%' : ''}</span>
+    </div>`;
+  }).join('');
+}
+
 async function loadAnalytics() {
   document.getElementById('analyticsContent').innerHTML = '<div class="loading">Loading…</div>';
   const days = document.getElementById('analyticsPeriod').value;
@@ -4266,13 +4300,8 @@ async function loadAnalytics() {
         </table>
       </div>
       <div class="card">
-        <div class="card-title">Lead Funnel</div>
-        <div class="stats-grid" style="margin-bottom:0;grid-template-columns:repeat(2,1fr);">
-          <div class="stat-card"><div class="val">${lf.new}</div><div class="lbl">New</div></div>
-          <div class="stat-card"><div class="val">${lf.contacted}</div><div class="lbl">Contacted</div></div>
-          <div class="stat-card"><div class="val">${lf.engaged}</div><div class="lbl">Engaged</div></div>
-          <div class="stat-card"><div class="val">${lf.converted}</div><div class="lbl">Converted</div></div>
-        </div>
+        <div class="card-title" style="margin-bottom:12px;">Lead Funnel</div>
+        ${renderLeadFunnelChart(lf)}
       </div>
     </div>
 
