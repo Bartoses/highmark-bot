@@ -202,6 +202,10 @@ export async function handlePortalDashboard(req, res, supabase) {
     if (dropTestLeads) q = q.not("contact_phone", "ilike", "+1555%").not("contact_phone", "ilike", "+1999%");
     return q;
   };
+  // Same for conversation queries — keep test-phone convos out of the ROI/time-saved
+  // counts (web: sessions are unaffected; the filter only matches phone from_numbers).
+  const exTestConv = (q) =>
+    dropTestLeads ? q.not("from_number", "ilike", "+1555%").not("from_number", "ilike", "+1999%") : q;
 
   // ── Run all queries in parallel ──────────────────────────────────────────
   const [
@@ -211,9 +215,9 @@ export async function handlePortalDashboard(req, res, supabase) {
     checklistR,
   ] = await Promise.allSettled([
     // All-time SMS conversations
-    supabase.from("conversations").select("*", { count: "exact", head: true })
+    exTestConv(supabase.from("conversations").select("*", { count: "exact", head: true })
       .eq("client_id", clientId).neq("session_type", "test")
-      .not("from_number", "like", "web:%"),
+      .not("from_number", "like", "web:%")),
 
     // All-time web conversations
     supabase.from("conversations").select("*", { count: "exact", head: true })
@@ -222,8 +226,8 @@ export async function handlePortalDashboard(req, res, supabase) {
 
     // Period-filtered conversations
     (() => {
-      let q = supabase.from("conversations").select("*", { count: "exact", head: true })
-        .eq("client_id", clientId).neq("session_type", "test");
+      let q = exTestConv(supabase.from("conversations").select("*", { count: "exact", head: true })
+        .eq("client_id", clientId).neq("session_type", "test"));
       if (since) q = q.gte("updated_at", since);
       return q;
     })(),
@@ -245,10 +249,10 @@ export async function handlePortalDashboard(req, res, supabase) {
     })(),
 
     // Activity: recent conversations
-    supabase.from("conversations")
+    exTestConv(supabase.from("conversations")
       .select("id, from_number, handoff, updated_at")
       .eq("client_id", clientId).neq("session_type", "test")
-      .order("updated_at", { ascending: false }).limit(20),
+      .order("updated_at", { ascending: false }).limit(20)),
 
     // Activity: recent leads — operators excluded
     exOps(supabase.from("leads").select("id, status, created_at")
@@ -1533,12 +1537,18 @@ export async function handlePortalUsage(req, res, supabase) {
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 
+  // Exclude test sessions + (in prod) synthetic 555/999 test-phone convos.
+  let convQ = supabase
+    .from("conversations")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", clientId)
+    .neq("session_type", "test")
+    .gte("updated_at", monthStart);
+  if (process.env.TEST_MODE !== "true") {
+    convQ = convQ.not("from_number", "ilike", "+1555%").not("from_number", "ilike", "+1999%");
+  }
   const [convRes, webRes] = await Promise.all([
-    supabase
-      .from("conversations")
-      .select("id", { count: "exact", head: true })
-      .eq("client_id", clientId)
-      .gte("updated_at", monthStart),
+    convQ,
     supabase
       .from("web_events")
       .select("id", { count: "exact", head: true })
