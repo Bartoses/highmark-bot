@@ -456,6 +456,17 @@ tr:hover td { background: var(--panel2); }
     border-right: none !important;
     border-bottom: 1px solid var(--border);
   }
+  /* Conversations list → cards on mobile (matches Leads/Operations) */
+  #convList { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+  .conv-item {
+    border: 1px solid var(--border); border-radius: 12px; padding: 13px 14px;
+    min-height: 56px;
+  }
+  .conv-item.needs-attn { border-left: 3px solid #ef4444; }
+  .conv-item.is-paused  { border-left: 3px solid #f97316; }
+  .conv-item-label { font-size: 14px; }
+  .conv-item-snippet { max-width: 100%; font-size: 12.5px; }
+  .conv-item-meta { font-size: 11px; margin-top: 5px; }
   /* Thread panel hidden until a conv is selected */
   #convLayout:not(.thread-open) #convThreadPanel { display: none !important; }
   #convLayout.thread-open #convListPanel { display: none !important; }
@@ -2881,7 +2892,8 @@ async function fetchConvList() {
     const needsAttn = c.handoff && !c.handoff_resolved;
     const paused    = c.bot_paused;
     const timeAgo   = relTime(c.last_message_at);
-    return `<div class="conv-item${isActive ? ' active' : ''}" onclick="openConversation('${c.id}')" data-conv-id="${c.id}">
+    const cls = `conv-item${isActive ? ' active' : ''}${needsAttn ? ' needs-attn' : (paused ? ' is-paused' : '')}`;
+    return `<div class="${cls}" onclick="openConversation('${c.id}')" data-conv-id="${c.id}">
       <div class="conv-item-label">
         ${needsAttn ? '<span class="conv-handoff-dot"></span>' : ''}
         <span>${channelIcon}</span>
