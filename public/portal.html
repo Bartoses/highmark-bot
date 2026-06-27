@@ -307,6 +307,35 @@ tr:hover td { background: var(--panel2); }
 }
 .form-hint { font-size: 11px; color: var(--text2); margin-top: 4px; }
 
+/* ── Toggle switches (Settings — consistent on/off control) ──────────────── */
+.toggle-list { display: flex; flex-direction: column; gap: 14px; }
+.toggle-row { display: flex; align-items: flex-start; gap: 12px; }
+.toggle-row > label[for] { cursor: pointer; font-size: 13px; line-height: 1.35; }
+.toggle { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; margin-top: 1px; }
+.toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; inset: 0; cursor: pointer; border-radius: 22px;
+  background: var(--panel2); border: 1px solid var(--border2); transition: background .16s, border-color .16s;
+}
+.toggle-slider::before {
+  content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px;
+  background: var(--text2); border-radius: 50%; transition: transform .16s, background .16s;
+}
+.toggle input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: #fff; }
+.toggle input:focus-visible + .toggle-slider { box-shadow: 0 0 0 2px rgba(16,185,129,.4); }
+.toggle input:disabled + .toggle-slider { opacity: .45; cursor: not-allowed; }
+
+/* ── Sticky save bar (long Settings form) ────────────────────────────────── */
+.settings-savebar {
+  position: sticky; bottom: 0; z-index: 20; margin: 18px -2px 0;
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  padding: 12px 14px; border-radius: 12px;
+  background: rgba(20,22,26,.82); backdrop-filter: blur(10px);
+  border: 1px solid var(--border2); box-shadow: 0 -4px 20px rgba(0,0,0,.35);
+}
+.settings-savebar .sb-hint { font-size: 12px; color: var(--text2); margin-right: auto; }
+
 /* ── Booking mode radio cards ────────────────────────────────────────────── */
 .booking-mode-cards { display: flex; flex-direction: column; gap: 10px; }
 .mode-card {
@@ -4941,9 +4970,9 @@ async function loadSettings() {
         <input type="text" id="set_call_cta_text" value="${escHtml(_callCtaText)}" placeholder="e.g. Call us to book: (970) 555-1234">
         <div class="form-hint">Shown when the bot can't book directly — for phone-only mode.</div>
       </div>
-      <div style="display:flex;align-items:center;gap:12px;">
-        <input type="checkbox" id="set_human_handoff" ${d.humanHandoffEnabled ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
-        <label for="set_human_handoff" style="cursor:pointer;font-size:13px;">Human handoff enabled
+      <div class="toggle-row">
+        <label class="toggle"><input type="checkbox" id="set_human_handoff" ${d.humanHandoffEnabled ? 'checked' : ''}><span class="toggle-slider"></span></label>
+        <label for="set_human_handoff"><span style="font-weight:600;">Human handoff enabled</span>
           <span style="display:block;color:var(--text2);font-size:11px;">Guests can text "speak to a person" to get routed to your team</span></label>
       </div>
       <div id="bkSection" style="margin-top:20px;">
@@ -4958,17 +4987,17 @@ async function loadSettings() {
 
     <div class="card" style="margin-top:16px;">
       <div class="card-title">Features</div>
-      <div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">
+      <div class="toggle-list" style="margin-top:4px;">
         ${[
           ['set_campaigns',    d.campaignsEnabled,   'Campaigns',    'Enable outbound SMS campaign sending to leads'],
           ['set_followups',    d.followupsEnabled,   'Follow-ups',   'Automatically follow up on captured leads (1 day + 3 day)'],
           ['set_lead_capture', d.leadCaptureEnabled, 'Ask for contact info after engaged conversations', 'Captured leads appear in your Leads tab'],
           ['set_waitlist',     d.waitlistEnabled,    'Waitlist',     'Allow guests to join a waitlist when requested tours are full'],
         ].map(([id,val,label,desc]) => `
-          <div style="display:flex;align-items:center;gap:12px;">
-            <input type="checkbox" id="${id}" ${val ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
-            <label for="${id}" style="cursor:pointer;">
-              <span style="font-size:13px;font-weight:500;">${label}</span>
+          <div class="toggle-row">
+            <label class="toggle"><input type="checkbox" id="${id}" ${val ? 'checked' : ''}><span class="toggle-slider"></span></label>
+            <label for="${id}">
+              <span style="font-weight:600;">${label}</span>
               <span style="display:block;color:var(--text2);font-size:11px;">${desc}</span>
             </label>
           </div>`).join('')}
@@ -5081,7 +5110,8 @@ async function loadSettings() {
       <div id="planUsageContent"><div class="loading">Loading…</div></div>
     </div>
 
-    <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+    <div class="settings-savebar">
+      <span class="sb-hint">Changes apply to your live bot as soon as you save.</span>
       <button class="btn btn-primary" id="settingsSaveBtn">Save changes</button>
     </div>`;
 
