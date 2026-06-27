@@ -250,6 +250,22 @@ tr:hover td { background: var(--panel2); }
 .lp-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text3); }
 .lp-value { font-size: 13px; color: var(--text); }
 .lp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* Action-first lead panel: big reach-out buttons + prominent request */
+.lp-reach { display: flex; gap: 10px; }
+.lp-action-btn {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 46px; border-radius: 10px; font-size: 14px; font-weight: 600;
+  text-decoration: none; cursor: pointer; border: 1px solid var(--border2); color: var(--text);
+}
+.lp-action-btn.lp-call { background: rgba(16,185,129,.14); border-color: rgba(16,185,129,.3); color: #6ee7b7; }
+.lp-action-btn.lp-text { background: rgba(59,130,246,.14); border-color: rgba(59,130,246,.3); color: #93c5fd; }
+.lp-want { font-size: 16px; font-weight: 600; color: var(--text); line-height: 1.35; }
+/* Compact key/value facts list (replaces the tall 2-col card grid) */
+.lp-kv { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.lp-kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.lp-kv-row:last-child { border-bottom: none; }
+.lp-kv-row .k { color: var(--text3); flex-shrink: 0; }
+.lp-kv-row .v { color: var(--text); text-align: right; word-break: break-word; }
 .lp-status-select {
   background: var(--bg); border: 1px solid var(--border2); color: var(--text);
   border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600;
@@ -611,6 +627,14 @@ tr:hover td { background: var(--panel2); }
 .ops-dispatch-cd.cd-ok { color:var(--text3); }
 .ops-dispatch-avatar { width:30px; height:30px; border-radius:50%; background:var(--panel2); display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:var(--text2); margin-right:8px; flex-shrink:0; vertical-align:middle; }
 .ops-dispatch-actions { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+
+/* ── Lead funnel chart (Analytics) ───────────────────────────────────────── */
+.funnel-row { display:flex; align-items:center; gap:10px; margin-bottom:9px; }
+.funnel-row:last-child { margin-bottom:0; }
+.funnel-lbl { font-size:12px; color:var(--text2); width:82px; flex-shrink:0; }
+.funnel-track { flex:1; height:28px; background:var(--panel2); border-radius:7px; overflow:hidden; }
+.funnel-fill { height:100%; border-radius:7px; display:flex; align-items:center; padding:0 9px; font-size:13px; font-weight:800; color:#06140e; min-width:26px; box-sizing:border-box; transition:width .4s ease; }
+.funnel-pct { font-size:11px; color:var(--text3); width:54px; text-align:right; flex-shrink:0; }
 .ops-dispatch-tags { display:flex; gap:4px; flex-wrap:wrap; margin-top:5px; }
 /* ── Risk badges ─────────────────────────────────────────────────────────── */
 .ops-risk { display:inline-flex; align-items:center; gap:3px; padding:1px 6px; border-radius:8px; font-size:10.5px; font-weight:700; white-space:nowrap; }
@@ -1473,12 +1497,15 @@ tr:hover td { background: var(--panel2); }
               <button class="btn btn-primary btn-sm" onclick="opsApplyCustomRange()">Apply</button>
             </div>
             <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-top:1px solid var(--border);padding-top:10px;">
-              <div style="display:flex;align-items:center;gap:10px;min-width:max-content;">
-                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;">Dim</span>
+              <div style="display:flex;align-items:center;gap:6px;min-width:max-content;">
+                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;padding-right:2px;">Dim</span>
                 <button class="btn btn-ghost btn-sm ops-dim-btn active" data-dim="start"  style="flex-shrink:0;" title="Filter on the trip date">Start date</button>
                 <button class="btn btn-ghost btn-sm ops-dim-btn"        data-dim="booked" style="flex-shrink:0;" title="Filter on when the booking was created">Booked date</button>
-                <span style="width:1px;height:18px;background:var(--border);flex-shrink:0;"></span>
-                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;">Season</span>
+              </div>
+            </div>
+            <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;">
+              <div style="display:flex;align-items:center;gap:6px;min-width:max-content;">
+                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);flex-shrink:0;padding-right:2px;">Season</span>
                 <button class="btn btn-ghost btn-sm ops-season-btn active" data-season=""         style="flex-shrink:0;">All</button>
                 <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="summer"   style="flex-shrink:0;" title="Apr–Oct trips">Summer</button>
                 <button class="btn btn-ghost btn-sm ops-season-btn"        data-season="winter"   style="flex-shrink:0;" title="Nov–Mar trips">Winter</button>
@@ -1856,47 +1883,19 @@ tr:hover td { background: var(--panel2); }
     <button class="lp-close" onclick="closeLeadPanel()">×</button>
   </div>
   <div class="lp-body">
-    <div class="lp-grid">
-      <div class="lp-field">
-        <div class="lp-label">Phone</div>
-        <div class="lp-value" id="lpPhone">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Email</div>
-        <div class="lp-value" id="lpEmail">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Wants</div>
-        <div class="lp-value" id="lpService">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Came in via</div>
-        <div class="lp-value" id="lpSource">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Timeframe</div>
-        <div class="lp-value" id="lpTimeframe">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Created</div>
-        <div class="lp-value" id="lpCreated">—</div>
-      </div>
-      <div class="lp-field">
-        <div class="lp-label">Last contacted</div>
-        <div class="lp-value" id="lpLastContacted">—</div>
-      </div>
+    <!-- Primary action: one tap to the dialer / messages (only when a phone exists) -->
+    <div class="lp-reach" id="lpReachWrap">
+      <a id="lpCallBtn" class="lp-action-btn lp-call" href="#">📞 Call</a>
+      <a id="lpTextBtn" class="lp-action-btn lp-text" href="#">💬 Text</a>
     </div>
 
-    <!-- Reach out — one tap opens the phone's dialer / messages -->
-    <div class="lp-field" id="lpReachWrap">
-      <div class="lp-label">Reach out</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a id="lpCallBtn" class="btn btn-ghost btn-sm" href="#" style="text-decoration:none;">📞 Call</a>
-        <a id="lpTextBtn" class="btn btn-ghost btn-sm" href="#" style="text-decoration:none;">💬 Text</a>
-      </div>
+    <!-- What they want — the reason they're here -->
+    <div class="lp-field">
+      <div class="lp-label">Wants</div>
+      <div class="lp-want" id="lpService">—</div>
     </div>
 
-    <!-- AI suggested follow-up -->
+    <!-- AI suggested follow-up — the "what next" -->
     <div class="lp-field" style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface2);">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
         <div class="lp-label" style="margin:0;">✨ Suggested follow-up</div>
@@ -1905,6 +1904,7 @@ tr:hover td { background: var(--panel2); }
       <div id="lpSuggestBox" style="font-size:13px;color:var(--text2);line-height:1.5;">Tap <strong>Suggest</strong> for an AI next step + a ready-to-send message.</div>
     </div>
 
+    <!-- Status -->
     <div class="lp-field">
       <div class="lp-label">Status</div>
       <select class="lp-status-select" id="lpStatusSelect" onchange="updateLeadStatusFromPanel()">
@@ -1917,6 +1917,20 @@ tr:hover td { background: var(--panel2); }
         <option value="ignored">Ignored</option>
       </select>
     </div>
+
+    <!-- Compact facts (reference, not actions) -->
+    <div class="lp-field">
+      <div class="lp-label">Details</div>
+      <div class="lp-kv">
+        <div class="lp-kv-row"><span class="k">Phone</span><span class="v" id="lpPhone">—</span></div>
+        <div class="lp-kv-row"><span class="k">Email</span><span class="v" id="lpEmail">—</span></div>
+        <div class="lp-kv-row"><span class="k">Timeframe</span><span class="v" id="lpTimeframe">—</span></div>
+        <div class="lp-kv-row"><span class="k">Came in via</span><span class="v" id="lpSource">—</span></div>
+        <div class="lp-kv-row"><span class="k">Created</span><span class="v" id="lpCreated">—</span></div>
+        <div class="lp-kv-row"><span class="k">Last contacted</span><span class="v" id="lpLastContacted">—</span></div>
+      </div>
+    </div>
+
     <div class="lp-notes-wrap">
       <div class="lp-label">Notes</div>
       <textarea class="lp-notes" id="lpNotes" placeholder="Add notes…" oninput="debouncedSaveNotes()"></textarea>
@@ -4184,6 +4198,32 @@ async function loadAttribution() {
 }
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────────
+// Proportional lead-funnel chart — bars scale to the top stage, with the
+// stage-to-stage conversion % so you see where leads drop off.
+function renderLeadFunnelChart(lf) {
+  const stages = [
+    { key: 'new',       label: 'New',       color: '#3b82f6' },
+    { key: 'contacted', label: 'Contacted', color: '#14b8a6' },
+    { key: 'engaged',   label: 'Engaged',   color: '#f59e0b' },
+    { key: 'converted', label: 'Converted', color: '#22c55e' },
+  ];
+  const top = Math.max(1, lf.new ?? 0);
+  if (!stages.some(s => (lf[s.key] ?? 0) > 0)) {
+    return '<div class="empty-state" style="font-size:13px;padding:20px;">No leads in this period yet.</div>';
+  }
+  return stages.map((s, i) => {
+    const n    = lf[s.key] ?? 0;
+    const w    = Math.max(6, Math.round((n / top) * 100));
+    const prev = i === 0 ? null : (lf[stages[i - 1].key] ?? 0);
+    const pct  = prev ? Math.round((n / prev) * 100) : null;
+    return `<div class="funnel-row">
+      <span class="funnel-lbl">${s.label}</span>
+      <div class="funnel-track"><div class="funnel-fill" style="width:${w}%;background:${s.color};">${n}</div></div>
+      <span class="funnel-pct">${pct != null ? pct + '%' : ''}</span>
+    </div>`;
+  }).join('');
+}
+
 async function loadAnalytics() {
   document.getElementById('analyticsContent').innerHTML = '<div class="loading">Loading…</div>';
   const days = document.getElementById('analyticsPeriod').value;
@@ -4260,13 +4300,8 @@ async function loadAnalytics() {
         </table>
       </div>
       <div class="card">
-        <div class="card-title">Lead Funnel</div>
-        <div class="stats-grid" style="margin-bottom:0;grid-template-columns:repeat(2,1fr);">
-          <div class="stat-card"><div class="val">${lf.new}</div><div class="lbl">New</div></div>
-          <div class="stat-card"><div class="val">${lf.contacted}</div><div class="lbl">Contacted</div></div>
-          <div class="stat-card"><div class="val">${lf.engaged}</div><div class="lbl">Engaged</div></div>
-          <div class="stat-card"><div class="val">${lf.converted}</div><div class="lbl">Converted</div></div>
-        </div>
+        <div class="card-title" style="margin-bottom:12px;">Lead Funnel</div>
+        ${renderLeadFunnelChart(lf)}
       </div>
     </div>
 

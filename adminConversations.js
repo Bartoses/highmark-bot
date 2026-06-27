@@ -80,6 +80,13 @@ export async function handleListConversations(req, res, supabase) {
       .neq("session_type", "test")           // hide automated test sessions
       .order("updated_at", { ascending: false });
 
+    // Hide synthetic 555/999 test-phone conversations in production so they
+    // never inflate real numbers. Gated on TEST_MODE so the integration suite
+    // (which uses +1555 numbers on the live DB) still sees them.
+    if (process.env.TEST_MODE !== "true") {
+      query = query.not("from_number", "ilike", "+1555%").not("from_number", "ilike", "+1999%");
+    }
+
     if (filter === "sms")     query = query.not("from_number", "like", "web:%");
     if (filter === "web")     query = query.like("from_number", "web:%");
     if (filter === "handoff") query = query.eq("handoff", true).eq("handoff_resolved", false);
@@ -129,13 +136,18 @@ export async function handleConversationBadgeCount(req, res, supabase) {
     const clientId = resolvePortalClientId(req);
     if (!clientId) return res.status(400).json({ error: "client_id required" });
 
-    const { count, error } = await supabase
+    let q = supabase
       .from("conversations")
       .select("id", { count: "exact", head: true })
       .eq("client_id", clientId)
       .eq("handoff", true)
       .eq("handoff_resolved", false)
       .neq("session_type", "test");
+    // Test-phone convos never count toward the "needs attention" badge in prod.
+    if (process.env.TEST_MODE !== "true") {
+      q = q.not("from_number", "ilike", "+1555%").not("from_number", "ilike", "+1999%");
+    }
+    const { count, error } = await q;
 
     if (error) return res.status(500).json({ error: error.message });
     return res.json({ count: count ?? 0 });
