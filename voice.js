@@ -976,7 +976,7 @@ export async function handleVoiceStatus(req, res, deps = {}) {
 // On a completed call, log a lead (any real, non-spam caller) and — for genuinely
 // missed calls (after hours / no answer / voicemail) — text the caller back so the
 // missed call becomes a conversation. Idempotent via metadata.recovery_done.
-async function runMissedCallRecovery(deps, row) {
+export async function runMissedCallRecovery(deps, row) {
   const { supabase, twilioClient, saveLead, resolveClientById, resolveClient } = deps;
   if (!supabase || !row) return;
   const meta = (row.metadata && typeof row.metadata === "object") ? row.metadata : {};
@@ -1009,10 +1009,11 @@ async function runMissedCallRecovery(deps, row) {
 
   // (b) Recovery SMS only for genuinely missed calls (and never if a human took it).
   let smsSent = false;
+  const smsBody = buildMissedCallSms(client, { afterHours });
   if (missed && outcome !== "transferred" && twilioClient && row.to_number && process.env.TEST_MODE !== "true") {
     try {
       await twilioClient.messages.create({
-        body: buildMissedCallSms(client, { afterHours }),
+        body: smsBody,
         from: row.to_number,
         to:   caller,
       });
@@ -1023,9 +1024,45 @@ async function runMissedCallRecovery(deps, row) {
     }
   }
 
+  // (c) Track the communication: record the inbound call + the recovery text in
+  // the conversation thread so the operator sees it (and a reply continues it).
+  if (smsSent) {
+    await trackRecoveryConversation(deps, {
+      caller, toNumber: row.to_number, clientId: row.client_id,
+      smsBody, summary: row.summary, afterHours, outcome,
+    });
+  }
+
   meta.recovery_done = true;
   meta.recovery_sms  = smsSent;
   await updateCallBySid(supabase, row.call_sid, { metadata: meta });
+}
+
+// Record a missed call + its recovery SMS into the conversations table so every
+// communication with a caller is tracked in one thread. Keyed by (caller,
+// business number) — the same key the inbound-SMS flow uses, so when the caller
+// texts back their reply lands in THIS thread and the bot just continues.
+async function trackRecoveryConversation(deps, info) {
+  const { getConversation, saveConversation } = deps;
+  if (typeof getConversation !== "function" || typeof saveConversation !== "function") return;
+  const { caller, toNumber, clientId, smsBody, summary, afterHours } = info;
+  if (!caller || !toNumber) return;
+  try {
+    const { convo } = await getConversation(caller, toNumber);
+    const now = new Date().toISOString();
+    convo.messages = Array.isArray(convo.messages) ? convo.messages : [];
+    // Inbound call as a guest-side event, then the automated recovery text.
+    convo.messages.push({
+      role: "user", channel: "voice", timestamp: now,
+      content: `📞 Called in${afterHours ? " (after hours)" : ""}${summary ? ` — ${summary}` : ""}`,
+    });
+    convo.messages.push({ role: "assistant", channel: "sms", auto: true, timestamp: now, content: smsBody });
+    convo.bookingData = { ...(convo.bookingData || {}), _origin: convo.bookingData?._origin || "voice" };
+    await saveConversation(caller, toNumber, convo, clientId);
+    console.log(`[VOICE] tracked call + recovery text in conversation for ${caller}`);
+  } catch (err) {
+    console.error("[VOICE] track recovery conversation failed:", err?.message);
+  }
 }
 
 // POST /voice/recording — Twilio recording-status callback (voicemail or dual).

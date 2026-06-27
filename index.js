@@ -1578,6 +1578,8 @@ const voiceDeps = {
   getKnowledgeContext,
   twilioClient,   // Phase 3: missed-call recovery SMS
   saveLead,       // Phase 3: log voice calls as leads
+  getConversation, // track call + recovery text in the conversation thread
+  saveConversation,
   baseUrl: process.env.PUBLIC_BASE_URL || null,
 };
 app.post("/voice/incoming",  validateTwilioSignature, ipLimiter, (req, res) => handleVoiceIncoming(req, res, voiceDeps));

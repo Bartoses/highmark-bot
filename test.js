@@ -17588,6 +17588,7 @@ async function testVoiceAI() {
     // Phase 3 — hours, seasons, missed-call recovery
     resolveVoiceSeason,
     buildMissedCallSms,
+    runMissedCallRecovery,
     normalizeBusinessHoursInput,
     // Phase 4 — shared spam network + pre-answer block
     isBlockedCaller,
@@ -17782,6 +17783,33 @@ async function testVoiceAI() {
     /closed right now/i.test(buildMissedCallSms({ name: "CSR" }, { afterHours: true })) && /STOP/.test(buildMissedCallSms({ name: "CSR" }, { afterHours: true })));
   chk("voice3: missed-call SMS in-hours says missed you",
     /missed you/i.test(buildMissedCallSms({ name: "CSR" }, { afterHours: false })));
+  // Missed-call recovery TRACKS the call + recovery text in a conversation thread.
+  {
+    const _prevTM = process.env.TEST_MODE;
+    process.env.TEST_MODE = "false";  // exercise the real send + track path deterministically
+    const chain = () => { const c = { update: () => c, eq: () => c, select: () => c, maybeSingle: async () => ({ data: null, error: null }) }; return c; };
+    let savedConvo = null, savedKey = null, leadSaved = false, smsTo = null;
+    const deps = {
+      supabase: { from: () => chain() },
+      twilioClient: { messages: { create: async (m) => { smsTo = m.to; return { sid: "SM1" }; } } },
+      saveLead: async () => { leadSaved = true; },
+      resolveClientById: () => ({ name: "CSR", botName: "Summit" }),
+      getConversation: async () => ({ isNew: true, convo: { messages: [], bookingData: {} } }),
+      saveConversation: async (from, to, convo) => { savedConvo = convo; savedKey = { from, to }; },
+    };
+    const row = { call_sid: "CA9", caller_number: "+19705550000", to_number: "+18335786496",
+      client_id: "csr_rea", outcome: "no_answer", status: "no_answer", summary: "Asked about Saturday tours",
+      metadata: { within_hours: false } };
+    await runMissedCallRecovery(deps, row);
+    chk("voice3: recovery logs a lead", leadSaved);
+    chk("voice3: recovery sends SMS to caller", smsTo === "+19705550000");
+    chk("voice3: recovery tracks conversation keyed by caller", savedKey?.from === "+19705550000" && savedKey?.to === "+18335786496");
+    const msgs = savedConvo?.messages ?? [];
+    chk("voice3: thread records the inbound call", msgs.some(m => m.role === "user" && /Called in/i.test(m.content)));
+    chk("voice3: thread records the recovery text", msgs.some(m => m.role === "assistant" && /missed you|closed right now/i.test(m.content)));
+    chk("voice3: thread marks voice origin", savedConvo?.bookingData?._origin === "voice");
+    process.env.TEST_MODE = _prevTM;
+  }
   chk("voice3: normalizeBusinessHoursInput valid day",
     normalizeBusinessHoursInput({ timezone: "America/Denver", hours: { "1": { open: "09:00", close: "17:00" } } }).value.hours["1"].open === "09:00");
   chk("voice3: normalizeBusinessHoursInput empty = always open",
