@@ -17740,8 +17740,9 @@ async function testVoiceAI() {
     const sp = buildReceptionistSystemPrompt({ client: { name: "Acme" }, agentCfg: { forwardingNumber: "+15551112222" }, knowledge: "Hours: 9-5" });
     chk("voice2: system prompt includes business + KB + transfer rule",
       sp.includes("Acme") && sp.includes("Hours: 9-5") && sp.includes("[TRANSFER]"));
-    chk("voice2: system prompt forbids revealing AI + requires engaging follow-up",
-      /never say or imply you are an ai/i.test(sp) && /anything else i can help/i.test(sp));
+    chk("voice2: system prompt forbids revealing AI + answers first + no re-greet + no question-every-turn",
+      /never say or imply you are an ai/i.test(sp) && /answer first/i.test(sp) &&
+      /already heard a greeting/i.test(sp) && /do not need to end every reply with a question/i.test(sp));
     const sp2 = buildReceptionistSystemPrompt({ client: { name: "Acme" }, agentCfg: { forwardingNumber: null }, knowledge: "" });
     chk("voice2: system prompt with no agent notes take-a-message", sp2.includes("take a message"));
   }
@@ -17753,7 +17754,7 @@ async function testVoiceAI() {
     chk("voice2: Gather gives callers a generous start-speaking window (timeout >= 8)",
       g.includes('timeout="8"'), g.slice(0, 160));
     chk("voice2: Gather uses a snappy fixed end-of-speech timeout (not auto)",
-      g.includes('speechTimeout="2"') && !g.includes('speechTimeout="auto"'), g.slice(0, 200));
+      g.includes('speechTimeout="1"') && !g.includes('speechTimeout="auto"'), g.slice(0, 200));
   }
   chk("voice2: buildTranscript renders caller/agent turns",
     buildTranscript([{ role: "caller", text: "hi" }, { role: "agent", text: "hello" }]) === "Caller: hi\nReceptionist: hello");
