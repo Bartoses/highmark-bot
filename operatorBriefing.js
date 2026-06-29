@@ -2744,8 +2744,11 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
   }
 
   // ── Structured intent parser (date-aware, action-routed) ──────────────────
-  const rawIntent = detectOperatorIntent(message, client?.seasonConfig);
-  const intent    = mergeOperatorContext(rawIntent, message, priorContext);
+  // Parse the RESOLVED text (effectiveMessage), so a numeric quick-reply like
+  // "2" → "revenue this week" is routed structurally instead of parsing the bare
+  // digit (which yields no intent → an unhelpful Claude fallthrough).
+  const rawIntent = detectOperatorIntent(effectiveMessage, client?.seasonConfig);
+  const intent    = mergeOperatorContext(rawIntent, effectiveMessage, priorContext);
   const integrations = buildIntegrations({ supabase, crmSupabase, client });
 
   if (intent.intent === "help") {
@@ -2856,13 +2859,13 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
 
 function formatHelpResponse() {
   return [
-    "Reply 1-7 or ask anything:",
-    "1 Today's manifest  5 Weather",
-    "2 Revenue           6 Tomorrow outlook",
-    "3 Open leads        7 Unanswered convos",
-    "4 Ops load",
+    "Reply any number, anytime:",
+    "1 Schedule       5 Work orders",
+    "2 Revenue        6 Hot leads",
+    "3 Waivers        7 Staff/ops load",
+    "4 Late returns   8 Ask AI",
     "",
-    "Other things you can ask:",
+    "Or just ask, anytime:",
     "• largest bookings this month",
     "• who needs follow up",
     "• which tours are underbooked",

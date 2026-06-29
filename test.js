@@ -13819,6 +13819,21 @@ async function testSprintBOperatorUX() {
   chk("sprintB: shortcut null → null", resolveMenuShortcut(null) === null);
   chk("sprintB: OPERATOR_MENU exposes 8 slots", Object.keys(OPERATOR_MENU).length === 8);
 
+  // ── Numeric shortcut → RESOLVED text is parsed structurally ──────────────
+  // Regression: "2" → "revenue this week" used to parse the bare digit "2"
+  // (no intent → null → unhelpful Claude fallthrough). detectAndHandleOperatorCommand
+  // now feeds the resolved shortcut text to the structured parser.
+  {
+    const { detectOperatorIntent: doi } = await import("./operatorIntentParser.js");
+    const resolved = resolveMenuShortcut("2");            // "revenue this week"
+    const intent = doi(resolved, null);
+    chk("sprintB: numeric '2' resolves to a structured revenue intent w/ date range",
+      intent.intent === "bookings_by_date" && intent.metric === "revenue" && !!intent.date_range,
+      JSON.stringify(intent));
+    chk("sprintB: bare digit '2' alone yields no structured intent (why resolved text matters)",
+      doi("2", null).intent === "unknown");
+  }
+
   // ── buildBriefingText includes the numeric menu ──────────────────────────
   {
     const mc = { id: "csr_rea", name: "Test Co", inboundPhones: ["+18335786496"] };
