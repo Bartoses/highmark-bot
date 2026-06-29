@@ -14925,23 +14925,28 @@ async function testActionOrientedBriefing() {
     chk("action: location concentration computes pct", result[0]?.pct === 68);
   }
 
-  // ── detectUnresolvedHandoffs filters test sessions + 555 / 999 phones ────
+  // ── detectUnresolvedHandoffs filters test sessions, 555/999 phones,
+  //    registered operators, and already-answered (bot spoke last) threads ──
   {
     const { detectUnresolvedHandoffs } = await import("./operatorBriefing.js");
+    const makeChain = (data) => {
+      const chain = {
+        select() { return chain; }, eq() { return chain; }, neq() { return chain; },
+        order() { return chain; }, limit() { return chain; },
+        then(resolve) { resolve({ data, error: null }); },
+      };
+      return chain;
+    };
     const supabaseStub = {
-      from() {
-        return {
-          select() { return this; },
-          eq()     { return this; },
-          neq()    { return this; },
-          order()  { return this; },
-          limit()  { return Promise.resolve({ data: [
-            { from_number: "+19705551234", messages: [{ role: "user", content: "real customer" }], session_type: "live" },
-            { from_number: "+15550010005", messages: [{ role: "user", content: "test message" }], session_type: "live" },
-            { from_number: "+19999999999", messages: [{ role: "user", content: "placeholder" }], session_type: "live" },
-            { from_number: "+13035551234", messages: [{ role: "user", content: "actually real (970 area + 555 prefix)" }], session_type: "live" },
-          ], error: null }); },
-        };
+      from(table) {
+        if (table === "operator_phones") return makeChain([{ phone: "+19708199687" }]);
+        return makeChain([
+          { from_number: "+19705551234", messages: [{ role: "user", content: "real customer" }], session_type: "live" },
+          { from_number: "+15550010005", messages: [{ role: "user", content: "test message" }], session_type: "live" },
+          { from_number: "+19999999999", messages: [{ role: "user", content: "placeholder" }], session_type: "live" },
+          { from_number: "+19708199687", messages: [{ role: "user", content: "Hot Leads: No open leads." }], session_type: "live" },
+          { from_number: "+12025550199", messages: [{ role: "user", content: "Q" }, { role: "assistant", content: "Want me to save your number?" }], session_type: "live" },
+        ]);
       },
     };
     const rows = await detectUnresolvedHandoffs(supabaseStub, "csr_rea");
@@ -14951,6 +14956,10 @@ async function testActionOrientedBriefing() {
         !rows.some((r) => r.from_number === "+15550010005"), JSON.stringify(rows));
     chk("action: unresolved handoffs exclude +1 999 placeholder prefix",
         !rows.some((r) => r.from_number === "+19999999999"), JSON.stringify(rows));
+    chk("action: unresolved handoffs exclude registered operator phones",
+        !rows.some((r) => r.from_number === "+19708199687"), JSON.stringify(rows));
+    chk("action: unresolved handoffs exclude threads where the bot already replied last",
+        !rows.some((r) => r.from_number === "+12025550199"), JSON.stringify(rows));
   }
 
   // ── detectPacingSignal — chains .not("fareharbor_pk", "ilike", "BOT-%") ──

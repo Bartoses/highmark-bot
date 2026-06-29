@@ -905,12 +905,17 @@ export async function detectLocationConcentration(crmSupabase) {
   } catch { return []; }
 }
 
-// Unresolved handoffs from DB1 conversations. Excludes test sessions and
-// obvious test phone numbers (555-XXX, +1555...) so the briefing only
-// surfaces real customer issues.
+// Unresolved handoffs from DB1 conversations. Surfaces only REAL customer
+// issues that actually need an operator's reply, by excluding:
+//   - test sessions + obvious test phone numbers (555-XXX, +1555…, 999…)
+//   - registered operator/staff phones (they text the briefing system, which
+//     can leave a stale handoff=true flag — they are not guests)
+//   - threads where the LAST message is already from the bot/agent (the guest
+//     was answered; there's nothing waiting on the operator)
 export async function detectUnresolvedHandoffs(supabase, clientId) {
   if (!supabase || !clientId) return [];
   try {
+    const opSet = await getOperatorPhoneSet(clientId, supabase);
     const { data } = await supabase
       .from("conversations")
       .select("from_number, updated_at, messages, session_type")
@@ -919,14 +924,19 @@ export async function detectUnresolvedHandoffs(supabase, clientId) {
       .eq("handoff_resolved", false)
       .neq("session_type", "test")
       .order("updated_at", { ascending: false })
-      .limit(10);
+      .limit(15);
     const rows = data ?? [];
-    // Filter out test phone patterns: anything starting with +1555 / 555 / 999
-    // (Twilio test numbers + obvious placeholders).
     return rows.filter((r) => {
-      const phone = String(r.from_number ?? "").replace(/^\+1/, "");
-      if (/^555/.test(phone)) return false;
-      if (/^999/.test(phone)) return false;
+      const raw = String(r.from_number ?? "");
+      const phone = raw.replace(/^\+1/, "");
+      if (/^555/.test(phone)) return false;            // Twilio test numbers
+      if (/^999/.test(phone)) return false;            // placeholders
+      if (opSet.has(raw)) return false;                // registered operator/staff
+      if (isTestPhone(raw)) return false;              // synthetic 555/999 (defense-in-depth)
+      // Only "needs a reply" if the guest spoke last (last msg not from bot/agent).
+      const msgs = Array.isArray(r.messages) ? r.messages : [];
+      const last = msgs[msgs.length - 1];
+      if (last && (last.role === "assistant" || last.role === "agent" || last.role === "bot")) return false;
       return true;
     }).slice(0, 5);
   } catch { return []; }
