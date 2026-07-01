@@ -407,6 +407,31 @@ export function parseBookingNotice(text) {
   };
 }
 
+// True when the operator is asking about bookings MADE (created) in a window —
+// the booking-creation dimension — vs trips taking place. Conservative: requires
+// explicit creation framing (made/created/new/came in/sold/"booked <when>") so
+// bare "bookings today" still means the day's manifest (trips taking place).
+export function isBookedDimension(msg) {
+  const m = String(msg ?? "").toLowerCase();
+  // Self-contained creation framing (implies bookings on their own).
+  if (/\bbooked\s+(today|yesterday|this\s+week|last\s+week|this\s+month|last\s+month|last\s+\d+\s+days?|so\s+far)\b/.test(m)) return true;
+  if (/\bnew\s+(bookings?|reservations?|orders?|sales?|rentals?)\b/.test(m)) return true;
+  // Other creation verbs count only when the message is about bookings/sales, so
+  // bare "bookings today" still means the day's manifest (trips taking place).
+  const aboutBookings = /\b(bookings?|reservations?|orders?|rentals?|trips?|sales?)\b/.test(m);
+  if (!aboutBookings) return false;
+  return (
+    /\bmade\b/.test(m) ||
+    /\bcreated?\b/.test(m) ||
+    /\bplaced\b/.test(m) ||
+    /\bcame?\s+in\b/.test(m) ||
+    /\bcoming\s+in\b/.test(m) ||
+    /\bcome\s+(in|through)\b/.test(m) ||
+    /\bsold\b/.test(m) ||
+    /\bbookings?\s+booked\b/.test(m)
+  );
+}
+
 export function detectOperatorIntent(message, seasonConfig = null) {
   const raw = (message ?? "").trim();
   const msg = raw.toLowerCase();
@@ -497,6 +522,29 @@ export function detectOperatorIntent(message, seasonConfig = null) {
         return { intent: "report", date_range: dateRange, metric, group_by: groupBy, raw };
       }
     }
+  }
+
+  // Bookings MADE / created in a window (creation-date dimension) — distinct from
+  // trips taking place. Catches: "how many bookings were made today", "new
+  // bookings yesterday", "bookings created this week", "booked today", "what
+  // came in over the last 7 days", "sales today". Must precede the generic
+  // bookings branches so the "booked" dimension isn't lost to a start_at query.
+  if (isBookedDimension(msg)) {
+    const range  = ps(msg) ?? parseDateRange(msg) ?? parseDateRange("today");
+    const metric = /\brevenue\b|\brev\b|\bearnings?\b/.test(msg) ? "revenue" : "bookings";
+    // Strip creation-framing + window words before company extraction so filler
+    // like "new"/"made" isn't mistaken for a company/location filter.
+    const cleaned = msg.replace(/\b(new|made|create[ds]?|placed|booked|came?\s+in|coming\s+in|come\s+(in|through)|sold|how\s+many|bookings?|reservations?|orders?|sales?|rentals?|trips?|revenue|today|yesterday|this\s+week|last\s+week|this\s+month|last\s+month|last\s+\d+\s+days?|so\s+far|and)\b/g, " ").trim();
+    return {
+      intent:          "bookings_by_date",
+      date_range:      range,
+      metric,
+      date_dimension:  "booked",
+      company_filter:  (cleaned ? extractCompanyFilter(cleaned) : null) ?? null,
+      location_filter: null,
+      list_mode:       /\blist\b|\beach\b|\bevery\b|\bindividual\b|\bdetails?\b|\bbreakdown\b/.test(msg),
+      raw,
+    };
   }
 
   // List-mode: per-booking detail rather than aggregated summary.

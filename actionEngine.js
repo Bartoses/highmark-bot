@@ -726,12 +726,14 @@ function resolveBookingSource(integrations) {
       source:        "manifest",
       supabase:      crmSb,
       table:         "daily_manifest",
-      columns:       "fareharbor_pk, company, location, activity, customer_name, phone, start_at, arrival_display, pax, total",
+      columns:       "fareharbor_pk, company, location, activity, customer_name, phone, start_at, booked_at, arrival_display, pax, total, booking_source",
       dedupKey:      "fareharbor_pk",
       paxField:      "pax",
       totalField:    "total",
       itemField:     "activity",
       locationField: "location",
+      sourceField:   "booking_source",
+      bookedField:   "booked_at",
       nameField:     "customer_name",
       phoneField:    "phone",
       arrivalField:  "arrival_display",
@@ -760,6 +762,7 @@ export function aggregateBookings(rows, src) {
   const byCompany  = {};
   const byItem     = {};
   const byLocation = {};
+  const bySource   = {};
   const seenPks    = src.dedupKey ? new Set() : null;
   let totalRows    = 0;
   let totalPax     = 0;
@@ -775,6 +778,10 @@ export function aggregateBookings(rows, src) {
       const loc = r[src.locationField] ?? "unspecified";
       byLocation[loc] = (byLocation[loc] ?? 0) + 1;
     }
+    if (src.sourceField) {
+      const s = r[src.sourceField] ?? "unknown";
+      bySource[s] = (bySource[s] ?? 0) + 1;
+    }
     if (seenPks && r[src.dedupKey] != null) seenPks.add(r[src.dedupKey]);
     if (src.paxField   && typeof r[src.paxField]   === "number") totalPax += r[src.paxField];
     if (src.totalField && r[src.totalField] != null) totalRev += Number(r[src.totalField]) || 0;
@@ -788,6 +795,7 @@ export function aggregateBookings(rows, src) {
     byCompany,
     byItem,
     byLocation,
+    bySource,
   };
 }
 
@@ -1002,6 +1010,10 @@ export function buildOperatorInsight(sum, src) {
  *
  *   By location: / By company: / Top activities: (optional)
  */
+// Normalized booking-source bucket → operator-facing label (mirrors mpwrSync).
+const BOOKING_SOURCE_LABEL = { walkin_phone: "Walk-in/Phone", online: "Online", marketplace: "Marketplace", unknown: "Unknown" };
+function srcLabel(s) { return BOOKING_SOURCE_LABEL[s] ?? String(s ?? "Unknown").replace(/_/g, " "); }
+
 function formatPhaseXBookingReply({ scopeLabel, sum, src, headline }) {
   const cap = capitalizeFirst(scopeLabel);
   const lines = [cap, ""];
@@ -1017,6 +1029,12 @@ function formatPhaseXBookingReply({ scopeLabel, sum, src, headline }) {
   const insight = buildOperatorInsight(sum, src);
   if (insight) {
     lines.push("", insight);
+  }
+
+  // How they booked — source breakdown (online vs walk-in/phone vs marketplace).
+  const sourceSorted = limitTopResults(sum.bySource ?? {});
+  if (sourceSorted.length) {
+    lines.push("", "How they booked:", ...sourceSorted.map(([s, n]) => `• ${srcLabel(s)}: ${n}`));
   }
 
   // Optional groupings
@@ -1042,13 +1060,16 @@ function formatPhaseXBookingReply({ scopeLabel, sum, src, headline }) {
  * Run a single Supabase query for booking rows. Reusable across initial query
  * + fallback retries.
  */
-async function fetchBookingRows(src, { range, shortnames = [], companyShortname = null, locationFilter = null }) {
+async function fetchBookingRows(src, { range, shortnames = [], companyShortname = null, locationFilter = null, dateField = "start_at" }) {
+  // dateField selects the reporting dimension: "start_at" = trips taking place in
+  // the window; "booked_at" = bookings MADE (created) in the window.
+  const field = (dateField === "booked_at" && src.bookedField) ? src.bookedField : "start_at";
   let query = src.supabase
     .from(src.table)
     .select(src.columns)
-    .gte("start_at", range.start)
-    .lte("start_at", range.end)
-    .order("start_at", { ascending: true });
+    .gte(field, range.start)
+    .lte(field, range.end)
+    .order(field, { ascending: true });
 
   if (companyShortname) {
     query = query.eq("company", companyShortname);
@@ -1101,6 +1122,10 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
     const label    = range.label ?? "that range";
     const metric   = data.metric ?? "bookings";
     const listMode = data.list_mode === true;
+    // Reporting dimension: "booked" → filter by booked_at (bookings MADE in the
+    // window); default → start_at (trips taking place in the window).
+    const dateField = data.date_dimension === "booked" ? "booked_at" : "start_at";
+    const madeMode  = dateField === "booked_at";
 
     // Original scope label — used in the relax-note when fallback fires
     const originalScope = effectiveCompany
@@ -1115,6 +1140,7 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
       shortnames,
       companyShortname: effectiveCompany?.shortname ?? null,
       locationFilter:   effectiveLocation,
+      dateField,
     });
     if (error) {
       console.error(`[actionEngine] get_bookings_by_date_range ${src.table} error:`, error.message);
@@ -1134,6 +1160,7 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         range, shortnames,
         companyShortname: usedCompany?.shortname ?? null,
         locationFilter:   null,
+        dateField,
       }));
     }
     if (!rows.length && usedCompany) {
@@ -1143,9 +1170,13 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         range, shortnames,
         companyShortname: null,
         locationFilter:   null,
+        dateField,
       }));
     }
-    if (!rows.length) {
+    // "Made in window" queries: 0 is a real, useful answer ("nothing booked today
+    // yet") — don't broaden to 90 days (that would be misleading). Trip-date
+    // queries keep the broaden so "today has no trips" still surfaces recent data.
+    if (!rows.length && !madeMode) {
       const now = new Date();
       const ago = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
       const broadened = {
@@ -1159,10 +1190,17 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         range: broadened, shortnames,
         companyShortname: null,
         locationFilter:   null,
+        dateField,
       }));
     }
 
     if (!rows.length) {
+      if (madeMode) {
+        return ownerOk(
+          { total: 0, range, source: src.source, date_dimension: "booked", made_empty: true },
+          `No bookings made ${label} yet.`
+        );
+      }
       // Truly empty across every relaxation. Phase X: still useful, never raw "no data".
       return ownerOk(
         { total: 0, range, source: src.source, fallback_exhausted: true },
@@ -1173,11 +1211,14 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
     const list      = rows;
     const sum       = aggregateBookings(list, src);
     const headline  = src.dedupKey ? sum.distinctBookings : sum.totalRows;
+    // "Made" queries read as "Booked <window>" (e.g. "Booked today") so the
+    // header makes the creation-date dimension unmistakable.
+    const rangeLabel = madeMode ? `booked ${usedRange.label}` : usedRange.label;
     const usedScope = usedCompany
-      ? `${usedCompany.displayName} — ${usedRange.label}`
+      ? `${usedCompany.displayName} — ${rangeLabel}`
       : usedLocation
-        ? `${usedLocation} — ${usedRange.label}`
-        : usedRange.label;
+        ? `${usedLocation} — ${rangeLabel}`
+        : rangeLabel;
 
     // ── List mode ─────────────────────────────────────────────────────────────
     if (listMode) {
@@ -1202,7 +1243,11 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
         const time = src.arrivalField ? formatTimeWindow(r[src.arrivalField]) : "";
         const isMultiDay = time.includes("→");
         const head = isMultiDay ? time : `${date}${time ? ` · ${time}` : ""}`;
-        const parts = [head, name, loc ? `(${loc})` : null, item, pax != null ? `${pax} pax` : null, rev].filter(Boolean);
+        // Both dates + source: trip date is the head; append when it was booked
+        // and how (created date + source) so every line answers "when made, how".
+        const booked = r.booked_at ? new Date(r.booked_at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Denver" }) : null;
+        const bookedTag = booked ? `booked ${booked}${r.booking_source ? ` (${srcLabel(r.booking_source)})` : ""}` : null;
+        const parts = [head, name, loc ? `(${loc})` : null, item, pax != null ? `${pax} pax` : null, rev, bookedTag].filter(Boolean);
         lines.push(`- ${parts.join(" · ")}`);
       }
       if (distinct.length > 20) lines.push(`... +${distinct.length - 20} more`);
