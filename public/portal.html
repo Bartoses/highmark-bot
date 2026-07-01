@@ -1636,6 +1636,15 @@ tr:hover td { background: var(--panel2); }
           <div id="opsArrivingNext" style="font-size:13px;color:var(--text2);">Loading…</div>
         </div>
 
+        <!-- BOOKED (made) — new bookings by creation date + source -->
+        <div class="card" id="opsMadeCard" style="margin-bottom:16px;display:none;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div class="card-title" style="margin:0;">📥 Booked (new orders)</div>
+            <span style="font-size:11px;color:var(--text3);">by date created</span>
+          </div>
+          <div id="opsMadeBody" style="font-size:13px;color:var(--text2);"></div>
+        </div>
+
         <!-- ALERTS — actionable cards -->
         <div class="card" style="margin-bottom:16px;display:none;" id="opsAlertsCard">
           <div class="card-title" style="margin-bottom:10px;">⚠ Action required</div>
@@ -7566,9 +7575,41 @@ async function loadOperationsSummary() {
     : '';
 
   renderOpsArrivingNext();
+  renderOpsMade(data.made);
   renderOpsAlerts(t);
   renderOpsHealthScore();
   renderOpsTodayPriorities();
+}
+
+// "Booked (made)" card — bookings by creation date (today/yesterday/7d) + source.
+function renderOpsMade(made) {
+  const card = document.getElementById('opsMadeCard');
+  const body = document.getElementById('opsMadeBody');
+  if (!card || !body) return;
+  if (!made || !(made.last7d && made.last7d.count)) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  const usd = (n) => '$' + Number(n || 0).toLocaleString();
+  const stat = (label, b) => `
+    <div style="flex:1;min-width:90px;text-align:center;padding:8px 4px;">
+      <div style="font-size:22px;font-weight:700;color:var(--text1);">${b?.count ?? 0}</div>
+      <div style="font-size:11px;color:var(--text3);">${label}</div>
+      <div style="font-size:12px;color:var(--accent);margin-top:2px;">${usd(b?.revenue)}</div>
+    </div>`;
+  const bars = (made.by_source_7d || []).map(s => {
+    const pct = Math.round((s.count / made.last7d.count) * 100);
+    return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px;">
+      <div style="width:110px;color:var(--text2);">${s.label}</div>
+      <div style="flex:1;background:var(--bg3,#1c2230);border-radius:4px;overflow:hidden;height:14px;">
+        <div style="width:${pct}%;background:var(--accent);height:100%;"></div></div>
+      <div style="width:52px;text-align:right;color:var(--text3);">${s.count} · ${pct}%</div>
+    </div>`;
+  }).join('');
+  body.innerHTML = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+      ${stat('Today', made.today)}${stat('Yesterday', made.yesterday)}${stat('Last 7 days', made.last7d)}
+    </div>
+    <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;margin:8px 0 4px;">How they booked (7 days)</div>
+    ${bars || '<div style="color:var(--text3);">No source data.</div>'}`;
 }
 
 function fmtCountdown(startMs) {

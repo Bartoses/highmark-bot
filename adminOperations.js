@@ -17,7 +17,8 @@
 import crypto from "node:crypto";
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients } from "./clients.js";
-import { deriveLocationFromTitle } from "./mpwrSync.js";
+import { deriveLocationFromTitle, bookingSourceLabel } from "./mpwrSync.js";
+import { getBookingsMadeStats } from "./operatorBriefing.js";
 
 // Resolve a booking's finest-grained location: the MPWR-synced bookings.location
 // (Kremmling / Steamboat / North Routt / Rabbit Ears) wins; else derive it from
@@ -413,7 +414,10 @@ export async function handleOperationsSummary(req, res, _supabase, crmSupabase =
     ];
     // Always pull "today" rows for the arriving-next list when a custom range is set
     if (range) fetches.push(fetchBookingsInWindow(crmSupabase, companies, today.start, today.end, { limit: 500 }));
-    const [primaryResult, tomorrowResult, todayForArrivals] = await Promise.all(fetches);
+    fetches.push(getBookingsMadeStats(crmSupabase)); // bookings MADE today/yesterday/7d + source
+    const [primaryResult, tomorrowResult, ...rest] = await Promise.all(fetches);
+    const madeStats        = rest[rest.length - 1] ?? null;
+    const todayForArrivals = range ? rest[0] : null;
 
     const primaryKpis  = summarize(primaryResult.rows);
     const tomorrowKpis = summarize(tomorrowResult.rows);
@@ -439,10 +443,22 @@ export async function handleOperationsSummary(req, res, _supabase, crmSupabase =
         operational_status: b.operational_status,
       }));
 
+    // Bookings MADE (created) — today / yesterday / last 7 days + source mix.
+    // Pre-labeled so the portal renders without knowing the normalization.
+    const made = madeStats ? {
+      today:     madeStats.today,
+      yesterday: madeStats.yesterday,
+      last7d:    madeStats.last7d,
+      by_source_7d: Object.entries(madeStats.last7d?.bySource ?? {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([s, n]) => ({ source: s, label: bookingSourceLabel(s), count: n })),
+    } : null;
+
     return res.json({
       today: primaryKpis,           // Legacy field name; reflects ?range when provided
       tomorrow: tomorrowKpis,
       arriving_next: arrivingNext,
+      made,
       window: range ? { start: range.start, end: range.end, label: range.label, days: range.days } : null,
     });
   } catch (err) {
