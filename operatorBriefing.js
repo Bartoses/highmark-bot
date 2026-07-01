@@ -20,7 +20,7 @@ import {
 } from "./operatorIntentParser.js";
 import { executeAction, buildIntegrations } from "./actionEngine.js";
 import { humanizeWorkType } from "./mpwrWorkOrders.js";
-import { deriveLocationFromTitle } from "./mpwrSync.js";
+import { deriveLocationFromTitle, bookingSourceLabel } from "./mpwrSync.js";
 import { isTestPhone } from "./phoneUtils.js";
 import {
   normalizeRole, getRoleProfile, resolveFocusAreas, CARD_FOCUS, normalizeDetail,
@@ -387,6 +387,73 @@ export async function getNewBookingsStats(crmSupabase, supabase) {
   }
 
   return { last_24h: 0, last_7d: 0, source: "unavailable" };
+}
+
+// Bookings MADE (created) today / yesterday / last 7 days, with revenue + a
+// source breakdown (online / walk-in-phone / marketplace). Uses the real
+// booking-creation date (daily_manifest.booked_date, Denver-local) — distinct
+// from trips taking place. Deduped by fareharbor_pk. Returns null on error so
+// the briefing degrades gracefully. Powers the "📥 Booked recently" section
+// and the "text to learn more" nudge (free-text "booked today" → full detail).
+export async function getBookingsMadeStats(crmSupabase) {
+  if (!crmSupabase) return null;
+  try {
+    const dayStr = (offset = 0) => {
+      const d = new Date();
+      const local = new Date(d.toLocaleString("en-US", { timeZone: "America/Denver" }));
+      local.setDate(local.getDate() + offset);
+      return local.toLocaleDateString("en-CA"); // YYYY-MM-DD
+    };
+    const today = dayStr(0);
+    const yday  = dayStr(-1);
+    const weekAgo = dayStr(-6); // inclusive 7-day window (today + prior 6)
+
+    const { data, error } = await crmSupabase
+      .from("daily_manifest")
+      .select("fareharbor_pk, booked_date, booking_source, total")
+      .gte("booked_date", weekAgo);
+    if (error) return null;
+
+    const bucket = () => ({ count: 0, revenue: 0, bySource: {}, seen: new Set() });
+    const acc = { today: bucket(), yesterday: bucket(), last7d: bucket() };
+    const add = (b, r) => {
+      const pk = r.fareharbor_pk;
+      if (pk != null && b.seen.has(pk)) return;
+      if (pk != null) b.seen.add(pk);
+      b.count += 1;
+      b.revenue += Number(r.total) || 0;
+      const s = r.booking_source ?? "unknown";
+      b.bySource[s] = (b.bySource[s] ?? 0) + 1;
+    };
+    for (const r of data ?? []) {
+      const bd = r.booked_date;
+      if (!bd) continue;
+      if (bd >= weekAgo) add(acc.last7d, r);
+      if (bd === today) add(acc.today, r);
+      else if (bd === yday) add(acc.yesterday, r);
+    }
+    const clean = (b) => ({ count: b.count, revenue: Math.round(b.revenue), bySource: b.bySource });
+    return { today: clean(acc.today), yesterday: clean(acc.yesterday), last7d: clean(acc.last7d) };
+  } catch { return null; }
+}
+
+// Render the "📥 Booked recently" briefing section from getBookingsMadeStats().
+// Returns null when there's nothing booked in the window (keeps briefings tight).
+export function formatBookedRecently(stats) {
+  if (!stats) return null;
+  const { today, yesterday, last7d } = stats;
+  if (!last7d?.count) return null;
+  const usd = (n) => `$${Number(n || 0).toLocaleString()}`;
+  const lines = ["📥 BOOKED (made)"];
+  lines.push(`Today: ${today.count} · ${usd(today.revenue)}`);
+  lines.push(`Yesterday: ${yesterday.count} · ${usd(yesterday.revenue)}`);
+  lines.push(`Last 7 days: ${last7d.count} · ${usd(last7d.revenue)}`);
+  const srcSorted = Object.entries(last7d.bySource || {}).sort((a, b) => b[1] - a[1]);
+  if (srcSorted.length) {
+    lines.push(`Sources (7d): ${srcSorted.map(([s, n]) => `${bookingSourceLabel(s)} ${n}`).join(" · ")}`);
+  }
+  lines.push(`Text "booked today" or "new bookings this week" for detail.`);
+  return lines.join("\n");
 }
 
 async function getCustomWeatherData(clientId, supabase) {
@@ -2137,6 +2204,14 @@ export function buildActionCardBriefing(client, ctx = {}, opts = {}) {
     shown++;
   }
 
+  // "📥 Booked (made) recently" — today/yesterday/7d creation-date counts +
+  // revenue + source mix. Company-wide, so suppressed for location-scoped
+  // recipients upstream (passed as null in ctx). "Text to learn more" nudge.
+  if (ctx.bookedRecently) {
+    lines.push("");
+    lines.push(ctx.bookedRecently);
+  }
+
   // Reply menu — role-aware (only the commands this role actually uses).
   lines.push("");
   lines.push(buildReplyMenu(role));
@@ -2376,6 +2451,14 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
     fRevenue = null; fSeason = null; fNewBookings = null; fPacing = null;
   }
 
+  // "Booked (made) recently" — company-wide creation-date stats; suppressed for
+  // location-scoped recipients so a post never sees another location's sales.
+  let bookedRecentlyText = null;
+  if (!scoped) {
+    const madeStats = await getBookingsMadeStats(crmSupabase);
+    bookedRecentlyText = formatBookedRecently(madeStats);
+  }
+
   // Operator Intelligence 2.0 — route by altitude tier. executive/standard/
   // operational → role-aware action-card briefing; diagnostic → the legacy
   // full report (buildBriefingText) for raw troubleshooting. Role drives which
@@ -2407,6 +2490,7 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
       unpaid: fUnpaid, missingWaivers: fWaivers, missingPhones: fMissingPhones,
       highValue: fHighValue, overlaps, unresolvedHandoffs, hotLeads,
       pacing: fPacing, weather: weatherSnap, hasUpcomingWindow: true,
+      bookedRecently: bookedRecentlyText,
     };
     briefing = buildActionCardBriefing(client, ctx, {
       role, locations: options.locations ?? null, detail: options.briefingDetail ?? "auto",
@@ -2787,6 +2871,7 @@ export async function detectAndHandleOperatorCommand(message, client, supabase, 
         company_filter:  intent.company_filter  ?? null,
         location_filter: intent.location_filter ?? null,
         list_mode:       intent.list_mode       ?? false,
+        date_dimension:  intent.date_dimension  ?? null,
       },
       context: {},
       client,

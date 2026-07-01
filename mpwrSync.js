@@ -42,6 +42,33 @@ const LOCATION_PREFIXES = [
   { match: /^ava kremmling/i, location: 'kremmling' },
 ];
 
+// ── Booking source ────────────────────────────────────────────────────────────
+// MPWR `order.bookingMethod` → a normalized, operator-facing source bucket.
+//   outfitter     → staff created it in the HQ dashboard (walk-in / over the phone)
+//   advWhiteLabel → the outfitter's own Polaris-powered booking site (self-serve online)
+//   adv           → the Polaris Adventures consumer marketplace (self-serve online)
+// Unknown/new methods pass through lowercased so nothing is silently lost.
+export function normalizeBookingSource(method) {
+  const m = String(method ?? '').trim();
+  if (!m) return null;
+  switch (m) {
+    case 'outfitter':     return 'walkin_phone';
+    case 'advWhiteLabel': return 'online';
+    case 'adv':           return 'marketplace';
+    default:              return m.toLowerCase();
+  }
+}
+
+// Human labels for the normalized source buckets (used in briefing + portal).
+export const BOOKING_SOURCE_LABELS = {
+  walkin_phone: 'Walk-in/Phone',
+  online:       'Online',
+  marketplace:  'Marketplace',
+};
+export function bookingSourceLabel(src) {
+  return BOOKING_SOURCE_LABELS[src] ?? (src ? String(src).replace(/_/g, ' ') : 'Unknown');
+}
+
 // Derive a DB2 `bookings.location` value from the MPWR productTitle.
 // Returns null when no prefix matches — caller may fall back to outfitter label.
 export function deriveLocationFromTitle(productTitle) {
@@ -330,19 +357,25 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
   let vehicle    = null;
   let guestEmail = null;
   let affiliate  = null;
-  let _dbgDetail = null; // TEMP: discovery dump for booking-source fields
+  // Booking-source method comes from the order DETAIL; the creation timestamp is
+  // on the list row (order.createdDate) with the detail as a fallback.
+  let bookingMethod = null;
   if (outfitterId && token) {
     try {
       const detail = await fetchOrderDetail(order.shortId, outfitterId, token);
-      _dbgDetail = detail; // TEMP
       vehicle = resolveVehicleFromDetail(detail);
       const contact = extractGuestContact(detail, order);
       guestEmail = contact.email;
       affiliate  = contact.affiliate;
+      bookingMethod = detail?.order?.bookingMethod ?? null;
     } catch (err) {
       console.warn(`[mpwrSync] detail fetch failed for ${order.shortId}: ${err.message}`);
     }
   }
+  // True booking-creation timestamp (when the guest/staff actually booked) — used
+  // for "bookings made today/yesterday/last 7 days" reporting, distinct from start_at.
+  const bookedAt      = order.createdDate ?? null;
+  const bookingSource = normalizeBookingSource(bookingMethod);
 
   // ── Step 1: upsert customer ─────────────────────────────────────────────────
   let customerId = null;
@@ -405,7 +438,9 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
     product_title:       productTitle,
     vehicle,
     affiliate,
-    _dbg_dump:           { order, detail: _dbgDetail }, // TEMP: discovery — remove after
+    booked_at:           bookedAt,
+    booking_method:      bookingMethod,
+    booking_source:      bookingSource,
   }, { onConflict: 'fareharbor_pk' });
 
   if (error) throw new Error(error.message);

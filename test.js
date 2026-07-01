@@ -15091,6 +15091,69 @@ async function testPolarisConfirmations() {
     chk("mpwr: empty string safe", deriveLocationFromTitle("") === null);
   }
 
+  // Booking source normalization (MPWR order.bookingMethod → operator bucket)
+  {
+    const { normalizeBookingSource, bookingSourceLabel } = await import("./mpwrSync.js");
+    chk("mpwr: outfitter → walkin_phone",     normalizeBookingSource("outfitter") === "walkin_phone");
+    chk("mpwr: advWhiteLabel → online",       normalizeBookingSource("advWhiteLabel") === "online");
+    chk("mpwr: adv → marketplace",            normalizeBookingSource("adv") === "marketplace");
+    chk("mpwr: unknown method passes through lowercased", normalizeBookingSource("SomethingNew") === "somethingnew");
+    chk("mpwr: null method → null",           normalizeBookingSource(null) === null);
+    chk("mpwr: empty method → null",          normalizeBookingSource("  ") === null);
+    chk("mpwr: label walkin_phone",           bookingSourceLabel("walkin_phone") === "Walk-in/Phone");
+    chk("mpwr: label online",                 bookingSourceLabel("online") === "Online");
+    chk("mpwr: label marketplace",            bookingSourceLabel("marketplace") === "Marketplace");
+    chk("mpwr: label unknown bucket humanized", bookingSourceLabel("foo_bar") === "foo bar");
+  }
+
+  // "Bookings made" dimension detection (creation-date vs trips taking place)
+  {
+    const { isBookedDimension, detectOperatorIntent } = await import("./operatorIntentParser.js");
+    chk("dim: 'bookings made today' → booked",       isBookedDimension("how many bookings were made today"));
+    chk("dim: 'bookings created yesterday' → booked", isBookedDimension("bookings created yesterday"));
+    chk("dim: 'new bookings this week' → booked",     isBookedDimension("new bookings this week"));
+    chk("dim: 'booked today' → booked",               isBookedDimension("booked today"));
+    chk("dim: 'what came in last 7 days' → booked",   isBookedDimension("what bookings came in the last 7 days"));
+    chk("dim: bare 'bookings today' is NOT booked (=manifest)", !isBookedDimension("bookings today"));
+    chk("dim: 'whats on the manifest today' NOT booked", !isBookedDimension("what's on the manifest today"));
+    const i = detectOperatorIntent("how many bookings were made today and revenue", null);
+    chk("dim: made-today intent routes bookings_by_date + booked dim",
+        i.intent === "bookings_by_date" && i.date_dimension === "booked" && i.date_range?.label === "today");
+    const i2 = detectOperatorIntent("bookings today", null);
+    chk("dim: bare 'bookings today' keeps start_at dimension",
+        i2.date_dimension == null);
+  }
+
+  // aggregateBookings bySource breakdown
+  {
+    const { aggregateBookings } = await import("./actionEngine.js");
+    const src = { dedupKey: "fareharbor_pk", paxField: "pax", totalField: "total", itemField: "activity", locationField: "location", sourceField: "booking_source" };
+    const rows = [
+      { fareharbor_pk: "A", company: "x", activity: "RZR", location: "steamboat", pax: 2, total: 500, booking_source: "walkin_phone" },
+      { fareharbor_pk: "B", company: "x", activity: "RZR", location: "steamboat", pax: 1, total: 300, booking_source: "online" },
+      { fareharbor_pk: "C", company: "x", activity: "RZR", location: "kremmling", pax: 1, total: 200, booking_source: "walkin_phone" },
+    ];
+    const sum = aggregateBookings(rows, src);
+    chk("agg: bySource counts walkin_phone", sum.bySource.walkin_phone === 2);
+    chk("agg: bySource counts online",       sum.bySource.online === 1);
+  }
+
+  // formatBookedRecently — briefing section
+  {
+    const { formatBookedRecently } = await import("./operatorBriefing.js");
+    const txt = formatBookedRecently({
+      today:     { count: 6, revenue: 3652, bySource: { walkin_phone: 5, marketplace: 1 } },
+      yesterday: { count: 7, revenue: 4878, bySource: { walkin_phone: 4 } },
+      last7d:    { count: 18, revenue: 11174, bySource: { walkin_phone: 11, online: 3, marketplace: 4 } },
+    });
+    chk("booked-recently: shows today/yesterday/7d + revenue",
+        /Today: 6 · \$3,652/.test(txt) && /Yesterday: 7/.test(txt) && /Last 7 days: 18 · \$11,174/.test(txt));
+    chk("booked-recently: source mix + learn-more nudge",
+        /Walk-in\/Phone 11/.test(txt) && /Text "booked today"/.test(txt));
+    chk("booked-recently: empty window → null", formatBookedRecently({ last7d: { count: 0, bySource: {} } }) === null);
+    chk("booked-recently: null-safe", formatBookedRecently(null) === null);
+  }
+
   // Vehicle resolution from order detail
   {
     const { resolveVehicleFromDetail } = await import("./mpwrSync.js");
