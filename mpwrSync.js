@@ -330,9 +330,11 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
   let vehicle    = null;
   let guestEmail = null;
   let affiliate  = null;
+  let _dbgDetail = null; // TEMP: discovery dump for booking-source fields
   if (outfitterId && token) {
     try {
       const detail = await fetchOrderDetail(order.shortId, outfitterId, token);
+      _dbgDetail = detail; // TEMP
       vehicle = resolveVehicleFromDetail(detail);
       const contact = extractGuestContact(detail, order);
       guestEmail = contact.email;
@@ -403,6 +405,7 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
     product_title:       productTitle,
     vehicle,
     affiliate,
+    _dbg_dump:           { order, detail: _dbgDetail }, // TEMP: discovery — remove after
   }, { onConflict: 'fareharbor_pk' });
 
   if (error) throw new Error(error.message);
