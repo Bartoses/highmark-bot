@@ -1014,7 +1014,7 @@ export function buildOperatorInsight(sum, src) {
 const BOOKING_SOURCE_LABEL = { walkin_phone: "Walk-in/Phone", online: "Online", marketplace: "Marketplace", unknown: "Unknown" };
 function srcLabel(s) { return BOOKING_SOURCE_LABEL[s] ?? String(s ?? "Unknown").replace(/_/g, " "); }
 
-function formatPhaseXBookingReply({ scopeLabel, sum, src, headline }) {
+function formatPhaseXBookingReply({ scopeLabel, sum, src, headline, madeMode = false }) {
   const cap = capitalizeFirst(scopeLabel);
   const lines = [cap, ""];
 
@@ -1031,10 +1031,15 @@ function formatPhaseXBookingReply({ scopeLabel, sum, src, headline }) {
     lines.push("", insight);
   }
 
-  // How they booked — source breakdown (online vs walk-in/phone vs marketplace).
+  // How they booked — source breakdown (Walk-in/Phone vs Online vs Marketplace).
+  // The scope header above ("This week", "Today", etc.) is by TRIP date unless
+  // madeMode (a "booked/made X" query), where it already reads "Booked this
+  // week" — so only the default trip-date case needs a disambiguating tag here,
+  // otherwise "How they booked" could be misread as "how many were booked X."
   const sourceSorted = limitTopResults(sum.bySource ?? {});
   if (sourceSorted.length) {
-    lines.push("", "How they booked:", ...sourceSorted.map(([s, n]) => `• ${srcLabel(s)}: ${n}`));
+    const sourceHeader = madeMode ? "How they booked:" : "How they booked (by trip date):";
+    lines.push("", sourceHeader, ...sourceSorted.map(([s, n]) => `• ${srcLabel(s)}: ${n}`));
   }
 
   // Optional groupings
@@ -1264,6 +1269,7 @@ async function handleGetBookingsByDateRange(data, context, client, integrations)
       sum,
       src,
       headline,
+      madeMode,
     });
     const reply = relaxNote ? `${relaxNote}\n\n${body}` : body;
 

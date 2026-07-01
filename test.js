@@ -16661,6 +16661,44 @@ async function testOperatorBotUpgrade() {
         r.result?.fallback_exhausted === true, JSON.stringify(r.result));
   }
 
+  // 2b. "How they booked" date-basis label — trip-date (default) queries tag the
+  // section "(by trip date)" since the scope header above it ("This week") is by
+  // trip date, not booking-creation date; "booked/made X" queries don't need the
+  // tag since their scope header already reads "Booked this week".
+  {
+    const sourceRows = [
+      { fareharbor_pk: "S-1", company: "coloradosledrentals", activity: "RZR Kremmling", location: "kremmling", start_at: "2026-07-02T15:00:00Z", pax: 2, total: 400, booking_source: "walkin_phone" },
+      { fareharbor_pk: "S-2", company: "coloradosledrentals", activity: "RZR Kremmling", location: "kremmling", start_at: "2026-07-03T15:00:00Z", pax: 1, total: 200, booking_source: "online" },
+    ];
+    const sourceQuery = {
+      select() { return this; }, gte() { return this; }, lte() { return this; },
+      order() { return this; }, in() { return this; }, eq() { return this; }, ilike() { return this; },
+      then(resolve) { resolve({ data: sourceRows, error: null }); return this; },
+    };
+    const stubCrm = { from: () => sourceQuery };
+
+    const tripReply = await execActionForFallback({
+      action: "get_bookings_by_date_range",
+      data: { date_range: parseDR("this week") },
+      client: { id: "csr_rea", fareharborCompanies: [{ shortname: "coloradosledrentals" }] },
+      integrations: { crmDatabase: { supabase: stubCrm } },
+    });
+    chk("opbot: trip-date query tags source breakdown '(by trip date)'",
+        (tripReply.ownerReply ?? "").includes("How they booked (by trip date):"), tripReply.ownerReply);
+
+    const bookedReply = await execActionForFallback({
+      action: "get_bookings_by_date_range",
+      data: { date_range: parseDR("this week"), date_dimension: "booked" },
+      client: { id: "csr_rea", fareharborCompanies: [{ shortname: "coloradosledrentals" }] },
+      integrations: { crmDatabase: { supabase: stubCrm } },
+    });
+    chk("opbot: booked/made query does not add the trip-date tag (scope header already says 'Booked')",
+        (bookedReply.ownerReply ?? "").includes("How they booked:") && !(bookedReply.ownerReply ?? "").includes("How they booked (by trip date):"),
+        bookedReply.ownerReply);
+    chk("opbot: booked/made query header reads 'Booked this week'",
+        /booked\s+this\s+week/i.test(bookedReply.ownerReply ?? ""), bookedReply.ownerReply);
+  }
+
   // 3. handleReport: Phase X bullet format + insight in result
   {
     const reportRows = [
