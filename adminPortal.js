@@ -2157,7 +2157,7 @@ export async function handlePortalRunPostExperience(req, res, supabase, crmSupab
   // Look up bookings + customer info
   const { data: bookings } = await crmSupabase
     .from("bookings")
-    .select("fareharbor_pk, customer_id, end_at, product_title, vehicle, location")
+    .select("fareharbor_pk, customer_id, end_at, product_title, vehicle, location, company")
     .in("fareharbor_pk", pks);
   const custIds = [...new Set((bookings ?? []).map(b => b.customer_id).filter(Boolean))];
   const { data: custs } = await crmSupabase
@@ -2166,7 +2166,7 @@ export async function handlePortalRunPostExperience(req, res, supabase, crmSupab
     .in("id", custIds);
   const custMap = new Map((custs ?? []).map(c => [c.id, c]));
 
-  const { schedulePostExperienceFollowUp } = await import("./messagingEngine.js");
+  const { schedulePostExperienceFollowUp, resolveBusinessName } = await import("./messagingEngine.js");
   const fromPhone = process.env.CSR_REA_TWILIO_NUMBER || process.env.TWILIO_PHONE_NUMBER || null;
 
   const results = [];
@@ -2182,6 +2182,10 @@ export async function handlePortalRunPostExperience(req, res, supabase, crmSupab
       phone:      cust.normalized_phone,
       name:       cust.name ?? null,
       activity:   b.vehicle ?? b.product_title ?? "your adventure",
+      // company on DB2 bookings is 'coloradosledrentals' | 'rabbitearsadventures' —
+      // same shortname vocabulary resolveBusinessName expects, so a Rabbit Ears
+      // Adventures past booking doesn't get a Colorado Sled Rentals-branded text.
+      business:   resolveBusinessName(b.company),
     }, supabase, {
       hoursAfter: cfg?.post_experience_hours_after ?? 24,
       template:   cfg?.custom_templates?.post_experience ?? null,

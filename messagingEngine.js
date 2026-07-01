@@ -30,15 +30,17 @@ export const DEFAULT_TEMPLATES = {
   // Brand mentioned in every customer-facing message so guests know who
   // they booked with — operators can override per client via the portal
   // template editor (covers non-CSR clients without code changes).
-  confirmation:      "Hey {name}! You're booked with Colorado Sled Rentals for {activity} at {location} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
+  // {business} resolves per-booking (Colorado Sled Rentals vs Rabbit Ears
+  // Adventures) — see resolveTemplate's default fallback + callers below.
+  confirmation:      "Hey {name}! You're booked with {business} for {activity} at {location} on {date} at {time}. Save this number for any questions — we'll send a reminder before. See you out there! 🏔",
   // 30-min post-booking nudge: simple recap + open door. Tips moved to same-day
   // reminder so guests get them when they're most actionable.
-  booking_followup:  "Hey {name}! Thanks for booking {activity} with Colorado Sled Rentals at {location} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
-  reminder_24h:      "Reminder from Colorado Sled Rentals: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
+  booking_followup:  "Hey {name}! Thanks for booking {activity} with {business} at {location} on {date}. You're all set — we'll send a reminder before. Questions in the meantime? Just reply, we're here.",
+  reminder_24h:      "Reminder from {business}: Your {activity} at {location} is tomorrow at {time}. Looking forward to seeing you! Any questions? Just reply.",
   // Same-day: reminder + the prep tips guests actually need that morning.
-  reminder_same_day: "Today's the day! Your {activity} with Colorado Sled Rentals at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
+  reminder_same_day: "Today's the day! Your {activity} with {business} at {location} starts at {time}. Quick tips: dress in layers, bring water, and arrive ~15 min early. Questions? Reply anytime!",
   cancellation_rebook: "Want to pick a new date? {booking_link}",
-  post_experience:   "Hey {name}! Thanks for riding with Colorado Sled Rentals 🏔 Hope you had a blast on the {activity} at {location}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
+  post_experience:   "Hey {name}! Thanks for riding with {business} 🏔 Hope you had a blast on the {activity} at {location}. Quick review? {review_url} Already missing the trails? Book again: {website_url}. Know someone who'd love this? Send 'em our way!",
 };
 
 // ── Template Resolution ───────────────────────────────────────────────────────
@@ -65,7 +67,14 @@ export function resolveTemplate(config, type, data) {
     .replace(/\{booking_link\}/g, data.bookingLink  ?? "")
     .replace(/\{review_url\}/g,   data.reviewUrl    ?? "")
     .replace(/\{website_url\}/g,  data.websiteUrl   ?? "")
-    .replace(/\{business\}/g,     data.business     ?? "");
+    .replace(/\{business\}/g,     data.business     ?? "Colorado Sled Rentals");
+}
+
+// Resolve the guest-facing brand name from a FareHarbor-style company shortname.
+// Shared by scheduleReminders/schedulePostExperienceFollowUp callers so Rabbit
+// Ears Adventures guests don't get a Colorado Sled Rentals-branded text.
+export function resolveBusinessName(shortname) {
+  return shortname === "rabbitearsadventures" ? "Rabbit Ears Adventures" : "Colorado Sled Rentals";
 }
 
 // ── Reminder Scheduling ───────────────────────────────────────────────────────
@@ -89,7 +98,8 @@ export async function scheduleReminders(supabase, booking, sendTo, fromPhone, co
     hour: "numeric", minute: "2-digit", timeZoneName: "short",
   });
 
-  const tplData = { name, activity, date: dateStr, time: timeStr };
+  const business = resolveBusinessName(booking.company?.shortname);
+  const tplData = { name, activity, date: dateStr, time: timeStr, business };
   const scheduled = [];
 
   // Idempotency: when this is called from a recurring sync (MPWR runs every
@@ -196,7 +206,7 @@ export async function schedulePostExperienceFollowUp(booking, supabase, options 
     activity:    booking.activity    ?? "your adventure",
     reviewUrl:   options.reviewUrl   ?? "",
     websiteUrl:  options.websiteUrl  ?? "",
-    business:    booking.business    ?? "us",
+    business:    booking.business    ?? resolveBusinessName(booking.company?.shortname),
   }).slice(0, 320);
 
   // Send-at must be at least 1 min in the future (otherwise drop send_at to now+1min
@@ -222,6 +232,99 @@ export async function schedulePostExperienceFollowUp(booking, supabase, options 
   } catch (err) {
     console.error(`[MSG] post_experience schedule failed for ${booking.booking_pk}: ${err.message}`);
     return { scheduled: false, reason: "scheduler_error", error: err.message };
+  }
+}
+
+// ── Confirmed-guest conversation tracking ──────────────────────────────────────
+// Shared by the FareHarbor webhook path (bookingConfirmations.js) and the MPWR/
+// Polaris sync path (mpwrSync.js) so both booking sources give guests the same
+// downstream experience: cancel/reschedule auto-replies, a "you're all set"
+// recognition on their next text, and a visible thread in the portal.
+
+// Upsert the guest's conversation row right after a booking confirmation text
+// is sent — session_type "confirmed_guest" is what gates the deterministic
+// cancel/reschedule handlers in smsOrchestrator.js. Note: like the prior
+// FareHarbor-only preSeedConversation, this REPLACES the row (a repeat guest's
+// prior thread history is not preserved) — a known limitation, not new here.
+export async function preSeedConfirmedGuestConversation(supabase, {
+  guestPhone, toNumber, confirmationText, bookingData,
+}) {
+  if (!supabase || !guestPhone) return { seeded: false, reason: "missing_required_field" };
+  try {
+    const { error } = await supabase.from("conversations").upsert(
+      {
+        from_number:  guestPhone,
+        to_number:    toNumber ?? process.env.TWILIO_PHONE_NUMBER,
+        session_type: "confirmed_guest",
+        booking_step: 3,
+        booking_data: bookingData ?? {},
+        handoff:      false,
+        messages:     [
+          {
+            role:      "assistant",
+            content:   confirmationText ?? "",
+            timestamp: new Date().toISOString(),
+            intent:    "booking",
+            sentiment: "positive",
+          },
+        ],
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "from_number,to_number" }
+    );
+    if (error) {
+      console.error("[MSG] preSeedConfirmedGuestConversation failed:", error.message);
+      return { seeded: false, reason: error.message };
+    }
+    return { seeded: true };
+  } catch (err) {
+    console.error("[MSG] preSeedConfirmedGuestConversation error:", err.message);
+    return { seeded: false, reason: err.message };
+  }
+}
+
+// Append an automated outbound (reminder / post-experience / 30-min follow-up /
+// cancellation) to an already-seeded guest conversation so staff reviewing the
+// thread in the portal see everything that actually went out — not just the
+// initial confirmation. Best-effort: if no conversation row exists yet (e.g.
+// pre-seed failed or hasn't run), it's a no-op rather than fabricating a new
+// thread. Does not run the full lock_version CAS used by index.js's
+// saveConversation — these are low-frequency scheduled sends, not live turns,
+// so a simple read-then-update is an acceptable tradeoff for staying decoupled
+// from the web server module (this is also called from the standalone cron
+// worker process).
+export async function trackAutomatedMessage(supabase, { phone, toNumber, body, messageType }) {
+  if (!supabase || !phone || !toNumber || !body) return { tracked: false, reason: "missing_required_field" };
+  try {
+    const { data: row } = await supabase
+      .from("conversations")
+      .select("messages, lock_version")
+      .eq("from_number", phone)
+      .eq("to_number", toNumber)
+      .maybeSingle();
+    if (!row) return { tracked: false, reason: "no_conversation" };
+
+    const messages = Array.isArray(row.messages) ? row.messages : [];
+    const nextMessages = [
+      ...messages,
+      {
+        role:      "assistant",
+        content:   body,
+        timestamp: new Date().toISOString(),
+        intent:    messageType ?? "automated",
+        sentiment: "neutral",
+      },
+    ].slice(-20);
+
+    const update = { messages: nextMessages, updated_at: new Date().toISOString() };
+    if (Number.isInteger(row.lock_version)) update.lock_version = row.lock_version + 1;
+
+    const { error } = await supabase.from("conversations").update(update)
+      .eq("from_number", phone).eq("to_number", toNumber);
+    if (error) return { tracked: false, reason: error.message };
+    return { tracked: true };
+  } catch (err) {
+    return { tracked: false, reason: err.message };
   }
 }
 

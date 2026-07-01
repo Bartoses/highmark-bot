@@ -27,6 +27,15 @@ const RETRY_DELAYS_MS = [5 * 60 * 1000, 15 * 60 * 1000]; // per-retry delay
 const STALE_LOCK_MS   = 5 * 60 * 1000;                    // reclaim stale locks after 5 min
 const BATCH_SIZE      = 10;                                // max rows per worker run
 
+// Message types that belong to a specific confirmed guest's conversation
+// thread (as opposed to campaigns / lead follow-ups, which aren't tied to a
+// pre-seeded confirmed_guest conversation). Reflected into `conversations`
+// on send so staff reviewing a guest's thread in the portal see the full
+// lifecycle, not just the initial confirmation.
+const GUEST_LIFECYCLE_TYPES = new Set([
+  "reminder_24h", "reminder_same_day", "post_experience", "booking_followup",
+]);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SCHEDULE A MESSAGE
 // Inserts a row into scheduled_messages. Returns the created row.
@@ -197,6 +206,17 @@ async function processSingleMessage(msg, supabase, twilioClient, crmSupabase, fr
     }).eq("id", msg.id);
 
     counts.sent++;
+
+    // Reflect guest-lifecycle sends (reminders, post-experience, 30-min
+    // follow-up) into the guest's conversation thread — best-effort, never
+    // blocks the send. No-ops if no conversation row exists yet.
+    if (GUEST_LIFECYCLE_TYPES.has(msg.message_type)) {
+      import("./messagingEngine.js")
+        .then(({ trackAutomatedMessage }) => trackAutomatedMessage(supabase, {
+          phone: msg.phone, toNumber: sendFrom, body: msg.body, messageType: msg.message_type,
+        }))
+        .catch(err => console.warn(`[SCHEDULER] conversation tracking failed for ${msg.id}: ${err.message}`));
+    }
 
     // Update campaign_recipients status → sent
     if (msg.metadata?.campaign_recipient_id) {

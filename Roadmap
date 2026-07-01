@@ -186,6 +186,25 @@ Done when:
 
 ## COMPLETED SPRINTS
 
+### Messaging Pipeline Audit — MPWR Conversation Tracking + Branding Fix (2026-07-01)
+Owner asked for a review of the portal Messaging page. Found `messaging_config`
+fully OFF for csr_rea (confirmed intentional, left off) — but 3 real code gaps
+fixed underneath so the pipeline is correct once it's turned on:
+- MPWR/Polaris (RZR) confirmations never seeded a `conversations` row (only the
+  FareHarbor path did) — RZR guests got no cancel/reschedule auto-reply and no
+  portal conversation thread. New shared `preSeedConfirmedGuestConversation`
+  (messagingEngine.js) used by both booking sources now.
+- Reminders/post-experience/30-min follow-up sends were invisible in the portal
+  (only the initial confirmation was ever logged). New `trackAutomatedMessage`
+  appends automated sends to the guest's thread; wired into scheduler.js +
+  the cancellation-text send.
+- Branding bug: default templates hardcoded "Colorado Sled Rentals" — a Rabbit
+  Ears Adventures guest would get the wrong brand name on a reminder or manual
+  post-experience send. Templates now use `{business}`, resolved per-booking.
+- All changes are inert while automation stays off — no live guest impact.
+  +16 tests. 2856/2856 passing. See CLAUDE.md for full detail + open TODOs
+  (#23 automation-off state, #24 conversation-overwrite limitation).
+
 ### Voice AI — Phase 4: Shared Spam Network + Pre-Answer Block (2026-06-05)
 - spam_numbers (DB1, cross-client): a solicitor flagged on any client's call is
   remembered network-wide. recordSpamNumber upserts/raises score+reports and sets

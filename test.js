@@ -64,6 +64,7 @@ import {
   detectCancellationIntent, detectRescheduleIntent,
   handleCancellationMessage, handleRescheduleMessage,
   resolveTemplate, scheduleReminders, DEFAULT_TEMPLATES,
+  resolveBusinessName, preSeedConfirmedGuestConversation, trackAutomatedMessage,
 } from "./messagingEngine.js";
 import { slugifyName, detectBookingSignals, buildConfidenceScore, getDraft, updateDraft, commitDraftToDb,
   buildNextSteps, findRecentDraftForUrl } from "./onboardingConfig.js";
@@ -9451,6 +9452,142 @@ async function test66() {
     allPresent
       ? pass("test66: DEFAULT_TEMPLATES — all expected keys present")
       : fail("test66: DEFAULT_TEMPLATES missing keys", JSON.stringify(Object.keys(DEFAULT_TEMPLATES)));
+  }
+
+  // ── Branding fix — DEFAULT_TEMPLATES no longer hardcode a company name ────
+  // (was a live bug: Rabbit Ears Adventures guests got "Colorado Sled Rentals"
+  // branded reminders/follow-ups). Every guest-facing template must use
+  // {business} instead so resolveTemplate/scheduleReminders can substitute
+  // the correct brand per booking.
+  {
+    const brandedTypes = ["confirmation", "booking_followup", "reminder_24h", "reminder_same_day", "post_experience"];
+    const noHardcode = brandedTypes.every(k => !DEFAULT_TEMPLATES[k].includes("Colorado Sled Rentals"));
+    noHardcode
+      ? pass("test66: DEFAULT_TEMPLATES — no hardcoded company name")
+      : fail("test66: DEFAULT_TEMPLATES hardcoded brand", brandedTypes.filter(k => DEFAULT_TEMPLATES[k].includes("Colorado Sled Rentals")).join(", "));
+    const allUseBusinessPlaceholder = brandedTypes.every(k => DEFAULT_TEMPLATES[k].includes("{business}"));
+    allUseBusinessPlaceholder
+      ? pass("test66: DEFAULT_TEMPLATES — all branded types use {business}")
+      : fail("test66: DEFAULT_TEMPLATES missing {business}", brandedTypes.filter(k => !DEFAULT_TEMPLATES[k].includes("{business}")).join(", "));
+  }
+
+  // ── resolveBusinessName ────────────────────────────────────────────────────
+  {
+    resolveBusinessName("rabbitearsadventures") === "Rabbit Ears Adventures"
+      ? pass("test66: resolveBusinessName — rabbitearsadventures → Rabbit Ears Adventures")
+      : fail("test66: resolveBusinessName rea", resolveBusinessName("rabbitearsadventures"));
+    resolveBusinessName("coloradosledrentals") === "Colorado Sled Rentals"
+      ? pass("test66: resolveBusinessName — coloradosledrentals → Colorado Sled Rentals")
+      : fail("test66: resolveBusinessName csr", resolveBusinessName("coloradosledrentals"));
+    resolveBusinessName(undefined) === "Colorado Sled Rentals"
+      ? pass("test66: resolveBusinessName — undefined defaults to Colorado Sled Rentals")
+      : fail("test66: resolveBusinessName undefined", resolveBusinessName(undefined));
+  }
+
+  // ── resolveTemplate — business defaults to Colorado Sled Rentals when omitted ──
+  {
+    const tpl = resolveTemplate(null, "reminder_24h", { name: "Alice", activity: "Snowmobile Tour", time: "10am" });
+    tpl.includes("Colorado Sled Rentals")
+      ? pass("test66: resolveTemplate — {business} defaults to Colorado Sled Rentals")
+      : fail("test66: resolveTemplate business default", tpl);
+  }
+
+  // ── scheduleReminders — REA booking gets Rabbit Ears Adventures branding ──
+  {
+    const captured = [];
+    const mockSb = {
+      from: () => ({
+        select: () => ({ in: () => ({ eq: async () => ({ data: [] }) }) }),
+        insert: (row) => {
+          captured.push(row);
+          return { select: () => ({ single: async () => ({ data: { ...row, id: "x" }, error: null }) }) };
+        },
+      }),
+    };
+    const reaBooking = {
+      pk: "REA-1",
+      contact: { name: "Jamie" },
+      company: { shortname: "rabbitearsadventures" },
+      availability: {
+        start_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+        item: { name: "Backcountry Tour" },
+      },
+    };
+    await scheduleReminders(mockSb, reaBooking, "+15551234567", "+15559999999",
+      { enable_reminders: true, reminder_24h: true, reminder_same_day: false }, "csr_rea");
+    const body = captured[0]?.body ?? "";
+    (body.includes("Rabbit Ears Adventures") && !body.includes("Colorado Sled Rentals"))
+      ? pass("test66: scheduleReminders — REA booking branded correctly, not CSR")
+      : fail("test66: scheduleReminders REA branding", body);
+  }
+
+  // ── preSeedConfirmedGuestConversation ─────────────────────────────────────
+  {
+    const captured = [];
+    const mockSb = { from: () => ({ upsert: (row, opts) => { captured.push({ row, opts }); return { error: null }; } }) };
+    const r = await preSeedConfirmedGuestConversation(mockSb, {
+      guestPhone: "+15551234567",
+      toNumber:   "+15559999999",
+      confirmationText: "Hey Jamie! You're booked...",
+      bookingData: { activity: "RZR Kremmling", date: "Monday", groupSize: 2, company: "csr", booking_pk: "CO-1" },
+    });
+    r.seeded === true
+      ? pass("test66: preSeedConfirmedGuestConversation — reports seeded")
+      : fail("test66: preSeedConfirmedGuestConversation seeded", JSON.stringify(r));
+    const row = captured[0]?.row;
+    (row?.session_type === "confirmed_guest" && row?.booking_data?.activity === "RZR Kremmling" && row?.messages?.[0]?.content === "Hey Jamie! You're booked...")
+      ? pass("test66: preSeedConfirmedGuestConversation — upserts confirmed_guest row")
+      : fail("test66: preSeedConfirmedGuestConversation row", JSON.stringify(row));
+    captured[0]?.opts?.onConflict === "from_number,to_number"
+      ? pass("test66: preSeedConfirmedGuestConversation — upserts on (from_number,to_number)")
+      : fail("test66: preSeedConfirmedGuestConversation onConflict", JSON.stringify(captured[0]?.opts));
+  }
+
+  // ── preSeedConfirmedGuestConversation — missing phone → no-op ─────────────
+  {
+    const r = await preSeedConfirmedGuestConversation({ from: () => ({}) }, { guestPhone: null });
+    r.seeded === false
+      ? pass("test66: preSeedConfirmedGuestConversation — missing phone skips")
+      : fail("test66: preSeedConfirmedGuestConversation missing phone", JSON.stringify(r));
+  }
+
+  // ── trackAutomatedMessage — no existing conversation → no-op ──────────────
+  {
+    const mockSb = { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }) }) };
+    const r = await trackAutomatedMessage(mockSb, { phone: "+15551234567", toNumber: "+15559999999", body: "Reminder!", messageType: "reminder_24h" });
+    (r.tracked === false && r.reason === "no_conversation")
+      ? pass("test66: trackAutomatedMessage — no-ops when no conversation exists")
+      : fail("test66: trackAutomatedMessage no conversation", JSON.stringify(r));
+  }
+
+  // ── trackAutomatedMessage — appends to existing conversation ─────────────
+  {
+    let updatePayload = null;
+    const existingMessages = [{ role: "assistant", content: "Confirmed!", timestamp: "t0", intent: "booking", sentiment: "positive" }];
+    const mockSb = {
+      from: () => ({
+        select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { messages: existingMessages, lock_version: 3 } }) }) }) }),
+        update: (payload) => { updatePayload = payload; return { eq: () => ({ eq: async () => ({ error: null }) }) }; },
+      }),
+    };
+    const r = await trackAutomatedMessage(mockSb, { phone: "+15551234567", toNumber: "+15559999999", body: "Your reminder!", messageType: "reminder_24h" });
+    r.tracked === true
+      ? pass("test66: trackAutomatedMessage — reports tracked")
+      : fail("test66: trackAutomatedMessage tracked", JSON.stringify(r));
+    (updatePayload?.messages?.length === 2 && updatePayload.messages[1].content === "Your reminder!" && updatePayload.messages[1].intent === "reminder_24h")
+      ? pass("test66: trackAutomatedMessage — appends new message, keeps existing")
+      : fail("test66: trackAutomatedMessage append", JSON.stringify(updatePayload));
+    updatePayload?.lock_version === 4
+      ? pass("test66: trackAutomatedMessage — increments lock_version when present")
+      : fail("test66: trackAutomatedMessage lock_version", JSON.stringify(updatePayload?.lock_version));
+  }
+
+  // ── trackAutomatedMessage — missing required fields → no-op ──────────────
+  {
+    const r = await trackAutomatedMessage({ from: () => ({}) }, { phone: null, toNumber: "+15559999999", body: "x" });
+    r.tracked === false
+      ? pass("test66: trackAutomatedMessage — missing phone skips")
+      : fail("test66: trackAutomatedMessage missing phone", JSON.stringify(r));
   }
 }
 

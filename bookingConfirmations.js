@@ -12,7 +12,7 @@ import fetch from "node-fetch";
 import { timingSafeEqual } from "crypto";
 import { scheduleMessage } from "./scheduler.js";
 import { getAllClients } from "./clients.js";
-import { scheduleReminders } from "./messagingEngine.js";
+import { scheduleReminders, preSeedConfirmedGuestConversation, trackAutomatedMessage } from "./messagingEngine.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WEBHOOK AUTH (P0-2) — authenticate the FareHarbor webhook with a shared secret
@@ -171,27 +171,12 @@ async function preSeedConversation(booking, confirmationText, supabase, toNumber
     booking_pk: String(booking.pk),
   };
 
-  await supabase.from("conversations").upsert(
-    {
-      from_number:   guestPhone,
-      to_number:     toNumber ?? process.env.TWILIO_PHONE_NUMBER,
-      session_type:  "confirmed_guest",
-      booking_step:  3,
-      booking_data:  bookingData,
-      handoff:       false,
-      messages:      [
-        {
-          role:      "assistant",
-          content:   confirmationText,
-          timestamp: new Date().toISOString(),
-          intent:    "booking",
-          sentiment: "positive",
-        },
-      ],
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "from_number,to_number" }
-  );
+  await preSeedConfirmedGuestConversation(supabase, {
+    guestPhone,
+    toNumber,
+    confirmationText,
+    bookingData,
+  });
 }
 
 // Normalize FareHarbor phone numbers to E.164 format (+1XXXXXXXXXX for US)
@@ -274,6 +259,12 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
       console.error(`[CONFIRM] Cancellation send failed:`, err.message);
       return;
     }
+
+    // Non-fatal — reflect the cancellation text into the guest's conversation
+    // thread (if one exists) so staff reviewing it in the portal see it.
+    trackAutomatedMessage(supabase, {
+      phone: sendTo, toNumber: fromNumber, body: cancelText, messageType: "cancellation",
+    }).catch(err => console.warn(`[CONFIRM] conversation tracking failed for ${bookingPk}: ${err.message}`));
 
     // Mark cancellation sent (upsert in case no prior confirmation row exists)
     await supabase.from("confirmations_sent").upsert(

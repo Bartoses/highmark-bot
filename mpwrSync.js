@@ -494,6 +494,7 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
         guestPhone:    phone,
         guestName:     name,
         locationLabel: locationLabel ?? null,
+        groupSize:     order.reservationVehiclesCount ?? null,
         beginDate,
         startTime,
         endTime,
@@ -589,7 +590,7 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
 // CONFIRMATIONS_TEST_PHONE if set; otherwise the send is skipped entirely.
 // ─────────────────────────────────────────────────────────────────────────────
 async function sendPolarisConfirmationIfNeeded({
-  bookingPk, guestPhone, guestName, locationLabel,
+  bookingPk, guestPhone, guestName, locationLabel, groupSize,
   beginDate, startTime, endTime, db1, twilioClient,
 }) {
   const clientId = 'csr_rea';
@@ -657,19 +658,49 @@ async function sendPolarisConfirmationIfNeeded({
     },
     { onConflict: 'booking_pk' }
   );
+
+  // Seed the guest's conversation the same way the FareHarbor webhook path
+  // does (bookingConfirmations.js preSeedConversation) — without this, RZR
+  // guests never get session_type='confirmed_guest', so the cancel/reschedule
+  // auto-replies never fire and the portal Conversations tab shows nothing
+  // for them. Keyed on the real guestPhone (not the test-mode redirect
+  // target), matching the FH path.
+  try {
+    const { preSeedConfirmedGuestConversation } = await import('./messagingEngine.js');
+    await preSeedConfirmedGuestConversation(db1, {
+      guestPhone,
+      toNumber: fromNumber,
+      confirmationText: text,
+      bookingData: {
+        activity:   locationLabel ? `RZR ${locationLabel}` : 'RZR Adventure',
+        date:       friendlyDateFromYmd(beginDate),
+        groupSize:  groupSize ?? null,
+        company:    'csr',
+        booking_pk: String(bookingPk),
+      },
+    });
+  } catch (err) {
+    console.warn(`[mpwrSync] conversation pre-seed failed for ${bookingPk}: ${err.message}`);
+  }
+}
+
+// Friendly "Monday, July 4" string from a YYYY-MM-DD date. Falls back to the
+// raw string on parse failure. Shared by the confirmation text + the
+// conversation pre-seed so both show the same date format.
+function friendlyDateFromYmd(ymd) {
+  try {
+    const [y, m, d] = String(ymd).split('-').map(Number);
+    if (y && m && d) {
+      return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    }
+  } catch { /* leave as-is */ }
+  return ymd;
 }
 
 export function buildPolarisConfirmationText({ guestName, locationLabel, beginDate, startTime, endTime, bookingPk }) {
   const firstName = (guestName ?? 'there').split(' ')[0];
   const loc       = locationLabel ?? 'Steamboat';
-  // Build a friendly date string from beginDate (YYYY-MM-DD)
-  let dateStr = beginDate;
-  try {
-    const [y, m, d] = String(beginDate).split('-').map(Number);
-    if (y && m && d) {
-      dateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-    }
-  } catch { /* leave as-is */ }
+  const dateStr   = friendlyDateFromYmd(beginDate);
   const timeRange = startTime && endTime ? ` from ${formatTime12(startTime)}–${formatTime12(endTime)}` : '';
 
   const body = `Hey ${firstName}! Your ${loc} RZR ride with Colorado Sled Rentals is confirmed for ${dateStr}${timeRange} 🏔`;
