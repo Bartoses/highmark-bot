@@ -1,0 +1,49 @@
+# Daily MPWR (Polaris) token refresh — cloud-hosted so it no longer depends on
+# a laptop being awake + online at 8am. Mirrors mpwrTokenRefresh.js exactly:
+# headless-logs into mpwr-hq.poladv.com, extracts the fresh __xauth JWT, and
+# pushes it to both Railway services (highmark-cron + highmark-bot) via the
+# Railway GraphQL API, which auto-redeploys them with the new token.
+#
+# Why this exists: MPWR_TOKEN is a ~24h JWT. When it expires, highmark-cron
+# (the Railway cron service running the MPWR sync every 5 min) crash-loops
+# until a fresh token is pushed. The prior refresh mechanism was a macOS
+# LaunchAgent on a personal laptop — if the laptop was asleep or offline at
+# 8am, the refresh silently failed and cron crashed for up to ~24h (this
+# happened 2026-07-03). This workflow replaces that dependency with a
+# GitHub-hosted runner that's always available.
+#
+# Required repo secrets: MPWR_EMAIL, MPWR_PASSWORD, RAILWAY_API_TOKEN
+# (RAILWAY_PROJECT_ID is hardcoded in mpwrTokenRefresh.js — no secret needed).
+
+name: mpwr-token-refresh
+
+on:
+  schedule:
+    # 13:00 UTC = 7am MDT (summer) / 6am MST (winter) — a comfortable margin
+    # ahead of the ~8-9am MT expiry regardless of daylight saving.
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      MPWR_EMAIL:        ${{ secrets.MPWR_EMAIL }}
+      MPWR_PASSWORD:     ${{ secrets.MPWR_PASSWORD }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Chromium (Playwright)
+        run: npx playwright install --with-deps chromium
+
+      - name: Refresh MPWR token + push to Railway
+        run: node mpwrTokenRefresh.js
