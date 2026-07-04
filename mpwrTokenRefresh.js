@@ -16,8 +16,11 @@
 //   npm run refresh-token          (runs this script)
 //   npx playwright install chromium  (installs headless Chrome, ~90MB, one time)
 //
-// To automate daily on Mac: add to crontab
-//   0 8 * * * cd /Users/sbartosewcz/Desktop/highmark-bot && node mpwrTokenRefresh.js >> ~/.mpwr-refresh.log 2>&1
+// Automated daily run: .github/workflows/mpwr-token-refresh.yml (GitHub Actions,
+// 0 13 * * * UTC ≈ 7am MT). Runs on a GitHub-hosted runner so it doesn't depend on
+// any laptop being awake/online — a prior macOS LaunchAgent doing this locally
+// missed a run when the laptop had no internet at 8am, leaving highmark-cron
+// crash-looping for ~24h (2026-07-03). That LaunchAgent has been removed.
 
 import 'dotenv/config';
 import { chromium } from 'playwright';

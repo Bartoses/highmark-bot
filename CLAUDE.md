@@ -37,6 +37,20 @@ are in the workflow header. Set secrets with `gh secret set NAME` reading **stdi
 **TODO:** enable Railway "Wait for CI" to block deploys on red (pending a GitHub API incident
 when first attempted; revisit). Until then CI is advisory.
 
+**MPWR token refresh (`.github/workflows/mpwr-token-refresh.yml`, added 2026-07-04).**
+`MPWR_TOKEN` is a ~24h JWT (see `mpwrSync.js` header) — when it expires, `highmark-cron`
+crash-loops until a fresh one is pushed. This workflow runs daily (`0 13 * * *` UTC ≈
+7am MT) on a GitHub-hosted runner: Playwright headless-logs into mpwr-hq.poladv.com
+(`mpwrTokenRefresh.js`, now committed — was untracked before), extracts the fresh
+`__xauth` JWT, and pushes it to both Railway services via the Railway GraphQL API
+(`RAILWAY_API_TOKEN`), which auto-redeploys them. Secrets: `MPWR_EMAIL`, `MPWR_PASSWORD`,
+`RAILWAY_API_TOKEN`. **Replaces** the prior macOS LaunchAgent (`com.highmark.mpwr-token-refresh`,
+removed) — that ran from a personal laptop, so a missed 8am window (laptop asleep/offline)
+left `highmark-cron` crash-looping for up to ~24h with no refresh until the next day
+(happened 2026-07-03). The cloud runner has no such dependency. Verify health any time
+with `gh run list --workflow=mpwr-token-refresh.yml` or trigger manually via
+`gh workflow run mpwr-token-refresh.yml`.
+
 ---
 
 ## File Structure
