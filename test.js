@@ -16855,16 +16855,17 @@ async function testSmartCampaigns() {
   {
     // Test cleanup: the duplicate-name guard (added 2026-05-25) will refuse a
     // second create with the same (client_id, name) while a live row exists.
-    // Park any prior test rows in a terminal status so the create succeeds.
+    // DELETE any prior test rows outright (was: mark 'failed' and leave it —
+    // that left 148 dead "4B Test Snow Campaign" rows cluttering the real
+    // portal Campaigns list for csr_rea since every run left one behind).
     if (typeof crmSupabase === "undefined" || true) {
       try {
         const { createClient } = await import("@supabase/supabase-js");
         const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY);
         await db.from("campaigns")
-          .update({ status: "failed", updated_at: new Date().toISOString() })
+          .delete()
           .eq("client_id", "csr_rea")
-          .eq("name", "4B Test Snow Campaign")
-          .in("status", ["draft", "scheduled", "active", "sending"]);
+          .eq("name", "4B Test Snow Campaign");
       } catch { /* fixture cleanup — non-fatal */ }
     }
 
@@ -16889,15 +16890,16 @@ async function testSmartCampaigns() {
     chk("4b: event campaign has trigger_type", d.campaign?.trigger_type === "snow_fresh", JSON.stringify(d.campaign));
     chk("4b: event campaign has cooldown_days", d.campaign?.cooldown_days === 3, JSON.stringify(d.campaign));
 
-    // CLEANUP — archive the just-created campaign so it never lingers as an
-    // ACTIVE event campaign in the shared prod DB (the live cron would fire it
-    // on a real snow event → real SMS). The test asserted creation above; it
-    // must not leave a live blaster behind.
+    // CLEANUP — delete the just-created campaign outright so it never lingers
+    // as an ACTIVE event campaign in the shared prod DB (the live cron would
+    // fire it on a real snow event → real SMS) AND doesn't leave a dead row
+    // behind cluttering the real portal Campaigns list (was: mark 'failed'
+    // and keep it — see the pre-test cleanup above for the same fix).
     if (d.campaign?.id) {
       try {
         const { createClient } = await import("@supabase/supabase-js");
         const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY);
-        await db.from("campaigns").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", d.campaign.id);
+        await db.from("campaigns").delete().eq("id", d.campaign.id);
       } catch { /* cleanup — non-fatal */ }
     }
   }

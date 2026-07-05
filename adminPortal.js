@@ -797,6 +797,13 @@ export async function handlePortalAudiencePreview(req, res, supabase, crmSupabas
 }
 
 // ── GET /portal/api/campaigns ─────────────────────────────────────────────────
+// Fixture campaign names created by the automated test suite against the live
+// prod DB (test.js POSTs to the real /admin/campaigns route for csr_rea to
+// exercise the event-triggered create path) — hidden from the portal so they
+// don't clutter a real client's Campaigns list. Gated on TEST_MODE so the
+// suite itself (which asserts against its own creates) still sees them.
+const TEST_CAMPAIGN_NAMES = ["4B Test Snow Campaign"];
+
 export async function handlePortalCampaigns(req, res, supabase) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   const clientId = resolvePortalClientId(req);
@@ -810,6 +817,10 @@ export async function handlePortalCampaigns(req, res, supabase) {
     .eq("client_id", clientId)
     .order("created_at", { ascending: false })
     .range(Number(offset), Number(offset) + Number(limit) - 1);
+
+  if (process.env.TEST_MODE !== "true") {
+    query = query.not("name", "in", `(${TEST_CAMPAIGN_NAMES.map(n => `"${n}"`).join(",")})`);
+  }
 
   if (status) query = query.eq("status", status);
 
@@ -2371,6 +2382,14 @@ export async function handlePortalMessagingActivity(req, res, supabase) {
     .gte("send_at", since)
     .order("send_at", { ascending: false })
     .limit(limit);
+
+  // Hide the automated test suite's synthetic 555/999 numbers from the
+  // activity report — same convention as conversations/leads. Gated on
+  // TEST_MODE so the suite (which uses these numbers on the live DB) still
+  // sees its own rows.
+  if (process.env.TEST_MODE !== "true") {
+    q = q.not("phone", "ilike", "+1555%").not("phone", "ilike", "+1999%");
+  }
 
   if (type)   q = q.eq("message_type", type);
   if (status) q = q.eq("status", status);
