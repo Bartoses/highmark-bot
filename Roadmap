@@ -872,6 +872,30 @@ handlers.
 
 ---
 
+### Portal invite delivery fix — onboarding/user-add end-to-end (2026-07-05)
+Users & Access "Invite user" never actually reached anyone — it only generated a raw
+link the admin had to copy/paste and deliver themselves out-of-band. Also, invites
+past their 72h expiry kept showing PENDING (and falsely blocked a fresh invite to the
+same email with a 409) until someone clicked the dead link.
+
+- New emailService.js — Resend-backed transactional email (sendEmail, buildInviteEmail),
+  degrades to {sent:false} when RESEND_API_KEY unset or TEST_MODE, never throws.
+- adminInvites.js: createInvite/resendInvite now call deliverInvite() — email first,
+  SMS fallback via the existing Twilio account when a phone was given and email
+  isn't sent, manual copy-link as the last resort. delivery_method persisted +
+  returned in the API response; portal invite modal + invites table surface it.
+- effectiveInviteStatus() fixes the stale-PENDING display bug; the duplicate-pending
+  check in createInvite now auto-expires a genuinely-dead blocker instead of
+  rejecting a fresh invite with 409.
+- Migration db1_portal_invites_delivery.sql (portal_invites.phone, .delivery_method)
+  applied to DB1. +14 assertions in test.js (test37), TEST_MODE-guarded throughout —
+  full suite 2873/2873 passing.
+- Requires RESEND_API_KEY (+ optional RESEND_FROM_EMAIL) set in Railway + .env to
+  actually send email — without it, invites fall back to SMS (if a phone was given)
+  or the manual link, same as before.
+
+---
+
 ## NEXT 5 BUILDS (STRICT ORDER)
 
 1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)

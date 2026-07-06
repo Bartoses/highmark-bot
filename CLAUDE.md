@@ -51,6 +51,21 @@ left `highmark-cron` crash-looping for up to ~24h with no refresh until the next
 with `gh run list --workflow=mpwr-token-refresh.yml` or trigger manually via
 `gh workflow run mpwr-token-refresh.yml`.
 
+**Crash-isolation fix (2026-07-06).** GitHub's own scheduled-workflow delivery is
+best-effort — the 13:00 UTC schedule silently didn't fire on 2026-07-06 (no run at all
+that day), so the token still went stale and `highmark-cron` crash-looped for ~2h until
+manually re-triggered. Separately, the crash was worse than it needed to be:
+`mpwrWorkOrders.runWorkOrderSync()` called `getToken()` **outside** its per-outfitter
+try/catch (unlike `mpwrSync.runMpwrSync`, which already catches per-location), so the
+expired-token throw propagated to `cron-worker.js`'s top-level catch → `process.exit(1)`
+→ the **entire** worker died, blocking scheduled messages / operator digests / KB
+refresh for that whole tick, not just the MPWR sync. Fixed: `getToken()` in
+`runWorkOrderSync` is now try/caught (degrades to per-outfitter `{fleet, error}`), and
+the MPWR sync window block in `cron-worker.js` is wrapped in its own try/catch as
+defense-in-depth — an MPWR-side failure now only degrades MPWR, never the whole worker.
+This does **not** fix GitHub's scheduling reliability — if the daily refresh keeps
+getting silently skipped, add a second offset daily schedule as a cheap safety net.
+
 ---
 
 ## File Structure
@@ -79,7 +94,8 @@ campaigns.js           — campaign engine: createCampaign, selectAudience, enqu
 adminCampaigns.js      — campaign admin routes: POST/GET/PATCH campaigns + POST :id/send
 portalAuth.js          — portal JWT middleware factory: makePortalAuth(supabase) + resolvePortalClientId(req)
 adminPortal.js         — portal API handlers: dashboard, leads, campaigns, analytics, settings + admin user mgmt
-adminInvites.js        — invite lifecycle handlers: create, info, accept, revoke, resend, deactivate
+adminInvites.js        — invite lifecycle handlers: create, info, accept, revoke, resend, deactivate; auto-delivers via emailService.js (email) or Twilio SMS fallback
+emailService.js        — Resend-backed transactional email (portal invites): sendEmail(), buildInviteEmail(); degrades to {sent:false} when unconfigured or TEST_MODE
 leads.js               — lead capture module: saveLead() + notifyBusinessOfLead() for informational clients
 adminLeads.js          — admin lead management: list, get, update, summary routes
 adminScheduledMessages.js — scheduled message queue visibility: GET /admin/scheduled-messages
@@ -112,7 +128,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1)
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1)
 
 ---
 
@@ -414,7 +430,10 @@ Outbound SMS to filtered audience (`all_leads`, `engaged_leads`, `new_leads`). T
 - Settings PATCH: identity, contact info, booking mode, feature toggles (DB-backed clients only)
 
 ### Invite-Based Portal Access (adminInvites.js)
-64-char token, 72h expiry, single-use. `portal-accept.html` → client sets password → auto sign-in. Admin routes: `POST/GET /admin/portal-invites`, `:id/resend`, `:id/revoke`. Portal routes: `GET/POST /portal/api/invites`, `GET/POST /portal/api/users`.
+64-char token, 72h expiry, single-use. `portal-accept.html` → client sets password → auto sign-in. Admin routes: `POST/GET /admin/portal-invites`, `:id/resend`, `:id/revoke`. Portal routes: `GET/POST /portal/api/invites`, `GET/POST /portal/api/users`. `portal_users.client_id` (set from the invite's `client_id` at accept time) is what scopes a logged-in user to their assigned client — `portalAuth.js` reads it on every request.
+
+**Auto-delivery (2026-07-05).** Invite creation/resend used to only return a raw `invite_url` for the admin to copy/paste and send out-of-band — no email was ever actually sent. `createInvite`/`resendInvite` now call `deliverInvite()`: attempts a real email via `emailService.js` (Resend), and if that isn't sent (no `RESEND_API_KEY`, or the send fails) falls back to texting the link via the existing Twilio account **when a phone number was given** on the invite. `delivery_method` (`email`/`sms`/null=manual) is persisted on the invite row and returned in the API response as `delivery: { method, email, sms }`; the portal's invite modal (`public/portal.html`) surfaces this ("✓ emailed to…" / "✓ texted the link" / "⚠ couldn't auto-deliver — copy this link") instead of always showing a raw link, and the invites table shows a "Sent via" column. Both channels self-guard on `TEST_MODE` (never fire for real during `npm test`, mirroring the `enqueueCampaign`/`notifyTeam` outbound-send convention) and degrade to the manual copy-link when neither is configured — zero-risk to deploy without `RESEND_API_KEY` set.
+**Stale-invite fix.** A "pending" invite past its 72h `expires_at` used to still display as PENDING (and falsely block a fresh invite to the same email with a 409) until someone actually clicked the dead link. `effectiveInviteStatus()` now computes the true display status in both list endpoints, and `createInvite`'s duplicate-pending check auto-expires a stale blocker instead of rejecting the new invite. Migration: `db1_portal_invites_delivery.sql` (`portal_invites.phone`, `.delivery_method` — applied to DB1).
 
 ### Runtime Config Loader (clientConfig.js)
 `getRuntimeClientConfig(client, supabase)` — called per request, applies DB overrides to static client objects. Normalizes `api_live_booking → fareharbor`. Builds `scrapeSources` from `client_scrape_sources` table and `bookingLinks` from `client_booking_options` table (both optional; fall back to static config). `humanHandoffEnabled: false` suppresses handoff routing.

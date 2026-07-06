@@ -83,10 +83,19 @@ try {
   // MPWR booking sync — runs at :00 and :30 of each hour
   // Passes db1 + twilioClient so per-booking confirmation texts can fire
   // (gated by messaging_config.enable_confirmation_texts for csr_rea).
+  // Isolated in its own try/catch: an MPWR-side failure (e.g. an expired
+  // MPWR_TOKEN — a recurring ~24h expiry, see mpwrSync.js getToken()) must
+  // degrade only the MPWR sync, not crash the whole worker and block the
+  // unrelated duties below (operator digests, KB refresh, FareHarbor poll)
+  // for the rest of this tick.
   if (crmSupabase && isMpwrSyncWindow()) {
-    await runMpwrSync(crmSupabase, { db1: supabase, twilioClient });
-    // MPWR fleet work-order sync — same :00/:30 window (open WOs change slowly).
-    await runWorkOrderSync(crmSupabase);
+    try {
+      await runMpwrSync(crmSupabase, { db1: supabase, twilioClient });
+      // MPWR fleet work-order sync — same :00/:30 window (open WOs change slowly).
+      await runWorkOrderSync(crmSupabase);
+    } catch (err) {
+      console.error(`[CRON-WORKER] MPWR sync window failed (non-fatal): ${err.message}`);
+    }
   }
 
   // Operator digests — every cron tick, per-phone digest_times decides who's due

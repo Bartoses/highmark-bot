@@ -2130,8 +2130,8 @@ app.post("/portal/api/crawl-now",   requirePortalAuth, async (req, res) => {
 app.get(  "/portal/api/users",               requirePortalAuth, (req, res) => handlePortalUsers(req, res, supabase));
 app.patch("/portal/api/users/:id",           requirePortalAuth, (req, res) => handlePortalUpdateUser(req, res, supabase));
 app.get(  "/portal/api/invites",             requirePortalAuth, (req, res) => handlePortalInvites(req, res, supabase));
-app.post( "/portal/api/invites",             requirePortalAuth, (req, res) => handlePortalCreateInvite(req, res, supabase));
-app.post( "/portal/api/invites/:id/resend",  requirePortalAuth, (req, res) => handlePortalResendInvite(req, res, supabase));
+app.post( "/portal/api/invites",             requirePortalAuth, (req, res) => handlePortalCreateInvite(req, res, supabase, twilioClient));
+app.post( "/portal/api/invites/:id/resend",  requirePortalAuth, (req, res) => handlePortalResendInvite(req, res, supabase, twilioClient));
 app.post( "/portal/api/invites/:id/revoke",  requirePortalAuth, (req, res) => handlePortalRevokeInvite(req, res, supabase));
 
 // Admin portal user management (UI_SECRET — internal only)
@@ -2139,9 +2139,9 @@ app.post( "/admin/portal-users",             requireUiAccess, (req, res) => hand
 app.get(  "/admin/portal-users",             requireUiAccess, (req, res) => handleListPortalUsers(req, res, supabase));
 app.patch("/admin/portal-users/:id",         requireUiAccess, (req, res) => handleUpdatePortalUser(req, res, supabase));
 // Admin invite management (UI_SECRET — internal only)
-app.post("/admin/portal-invites",            requireUiAccess, (req, res) => handleCreateInvite(req, res, supabase));
+app.post("/admin/portal-invites",            requireUiAccess, (req, res) => handleCreateInvite(req, res, supabase, twilioClient));
 app.get( "/admin/portal-invites",            requireUiAccess, (req, res) => handleListInvites(req, res, supabase));
-app.post("/admin/portal-invites/:id/resend", requireUiAccess, (req, res) => handleResendInvite(req, res, supabase));
+app.post("/admin/portal-invites/:id/resend", requireUiAccess, (req, res) => handleResendInvite(req, res, supabase, twilioClient));
 app.post("/admin/portal-invites/:id/revoke", requireUiAccess, (req, res) => handleRevokeInvite(req, res, supabase));
 
 // ─────────────────────────────────────────────────────────────────────────────

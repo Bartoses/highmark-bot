@@ -4030,6 +4030,13 @@ async function test37() {
     return r;
   }
 
+  // createInvite/resendInvite now attempt real email (Resend) + SMS (Twilio)
+  // delivery. This suite runs with live credentials in .env, so force
+  // TEST_MODE for the duration — mirrors the outbound-send guard convention
+  // used elsewhere (enqueueCampaign, scheduleFollowUps) — restored at the end.
+  const _test37PrevTestMode = process.env.TEST_MODE;
+  process.env.TEST_MODE = "true";
+
   // ── handleCreateInvite: missing email → 400 ───────────────────────────────
   {
     const res = mockRes();
@@ -4520,6 +4527,162 @@ async function test37() {
       : fail("test37: client_user update user wrong status", res._status);
   }
 
+  // ── handleCreateInvite: a stale (expired but not yet flagged) pending
+  //    invite auto-expires instead of falsely blocking a fresh invite ───────
+  {
+    const res = mockRes();
+    let autoExpired = false;
+    let inserted = null;
+    const mockSb = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { id: "stale-1", status: "pending", expires_at: new Date(Date.now() - 3600000).toISOString() },
+              }),
+            }),
+          }),
+        }),
+        update: (d) => ({
+          eq: async () => { if (d.status === "expired") autoExpired = true; return { error: null }; },
+        }),
+        insert: (row) => {
+          inserted = row;
+          return {
+            select: () => ({
+              single: async () => ({
+                data: { id: "inv-fresh", email: row.email, role: row.role, client_id: row.client_id,
+                        invited_by: row.invited_by, status: "pending", expires_at: row.expires_at, created_at: new Date().toISOString() },
+                error: null,
+              }),
+            }),
+          };
+        },
+      }),
+    };
+    await handleCreateInvite({ body: { email: "stale@b.com", role: "client_user", client_id: "csr_rea" } }, res, mockSb);
+    autoExpired
+      ? pass("test37: createInvite auto-expires a stale pending invite instead of blocking")
+      : fail("test37: stale pending invite not auto-expired");
+    res._status === 201 && inserted?.email === "stale@b.com"
+      ? pass("test37: createInvite allows a fresh invite after auto-expiring the stale one")
+      : fail("test37: fresh invite not created after auto-expire", res._status);
+  }
+
+  // ── createInvite: falls back to SMS when email isn't configured + a phone
+  //    was given. Flips TEST_MODE=false + strips RESEND_API_KEY around this
+  //    one block to exercise the real delivery path deterministically with a
+  //    mock Twilio client (mirrors the existing "exercise real send path"
+  //    convention elsewhere in this suite) — never touches a real network. ──
+  {
+    const prevResendKey = process.env.RESEND_API_KEY;
+    process.env.TEST_MODE = "false";
+    delete process.env.RESEND_API_KEY;
+
+    const res = mockRes();
+    let smsBody = null, smsTo = null;
+    const fakeTwilio = { messages: { create: async (opts) => { smsBody = opts.body; smsTo = opts.to; return {}; } } };
+    const mockSb = {
+      from: () => ({
+        select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }),
+        insert: (row) => ({
+          select: () => ({
+            single: async () => ({
+              data: { id: "inv-sms", email: row.email, role: row.role, client_id: row.client_id,
+                      phone: row.phone, invited_by: row.invited_by, status: "pending",
+                      expires_at: row.expires_at, created_at: new Date().toISOString() },
+              error: null,
+            }),
+          }),
+        }),
+        update: () => ({ eq: async () => ({ error: null }) }),
+      }),
+    };
+
+    await handleCreateInvite(
+      { body: { email: "smsuser@b.com", phone: "+15551234567", role: "client_user", client_id: "csr_rea" } },
+      res, mockSb, fakeTwilio,
+    );
+
+    process.env.TEST_MODE = "true";
+    if (prevResendKey !== undefined) process.env.RESEND_API_KEY = prevResendKey;
+
+    smsTo === "+15551234567" && smsBody?.includes("/portal/invite?token=")
+      ? pass("test37: createInvite falls back to SMS when email isn't configured")
+      : fail("test37: SMS fallback not triggered correctly", JSON.stringify({ smsTo, smsBody }));
+    res._body?.delivery?.method === "sms"
+      ? pass("test37: createInvite response reports delivery.method === 'sms'")
+      : fail("test37: delivery method wrong", JSON.stringify(res._body?.delivery));
+  }
+
+  // ── effectiveInviteStatus: display-layer fix for stale "pending" invites ──
+  {
+    const { effectiveInviteStatus } = await import("./adminInvites.js");
+    const future = new Date(Date.now() + 3600000).toISOString();
+    const past   = new Date(Date.now() - 3600000).toISOString();
+
+    effectiveInviteStatus({ status: "pending", expires_at: future }) === "pending"
+      ? pass("test37: effectiveInviteStatus keeps a not-yet-expired pending invite as pending")
+      : fail("test37: effectiveInviteStatus wrong for fresh pending");
+    effectiveInviteStatus({ status: "pending", expires_at: past }) === "expired"
+      ? pass("test37: effectiveInviteStatus reports 'expired' for a stale pending invite")
+      : fail("test37: effectiveInviteStatus wrong for stale pending");
+    effectiveInviteStatus({ status: "accepted", expires_at: past }) === "accepted"
+      ? pass("test37: effectiveInviteStatus leaves non-pending statuses untouched")
+      : fail("test37: effectiveInviteStatus wrongly altered accepted status");
+  }
+
+  // ── emailService.js: pure helpers (Resend invite email) ──────────────────
+  {
+    const { sendEmail, buildInviteEmail, isEmailConfigured } = await import("./emailService.js");
+
+    const prevKey = process.env.RESEND_API_KEY;
+
+    // "not_configured" branch: no key. TEST_MODE is briefly flipped off just
+    // for this one check — still zero network risk, since the missing-key
+    // guard in sendEmail returns before any fetch is attempted.
+    delete process.env.RESEND_API_KEY;
+    process.env.TEST_MODE = "false";
+    isEmailConfigured() === false
+      ? pass("test37: emailService.isEmailConfigured() false without RESEND_API_KEY")
+      : fail("test37: isEmailConfigured wrong without key");
+
+    const skippedNoKey = await sendEmail({ to: "a@b.com", subject: "s", html: "<p>h</p>", text: "t" });
+    skippedNoKey.sent === false && skippedNoKey.reason === "not_configured"
+      ? pass("test37: emailService.sendEmail skips with reason 'not_configured' when unset")
+      : fail("test37: sendEmail not_configured branch wrong", JSON.stringify(skippedNoKey));
+
+    process.env.TEST_MODE = "true"; // back to suite-safe default before setting a key
+
+    process.env.RESEND_API_KEY = "test-key-for-mode-check";
+    isEmailConfigured() === true
+      ? pass("test37: emailService.isEmailConfigured() true once RESEND_API_KEY is set")
+      : fail("test37: isEmailConfigured wrong with key");
+
+    // TEST_MODE guard takes priority over "configured" — never a real send during the suite
+    const skippedTestMode = await sendEmail({ to: "a@b.com", subject: "s", html: "<p>h</p>", text: "t" });
+    skippedTestMode.sent === false && skippedTestMode.reason === "test_mode"
+      ? pass("test37: emailService.sendEmail skips with reason 'test_mode' even when configured")
+      : fail("test37: sendEmail test_mode branch wrong", JSON.stringify(skippedTestMode));
+
+    if (prevKey !== undefined) process.env.RESEND_API_KEY = prevKey; else delete process.env.RESEND_API_KEY;
+
+    const built = buildInviteEmail({ email: "a@b.com", inviteUrl: "https://x/portal/invite?token=abc", role: "client_admin", clientName: "Rabbit Ears Adventures" });
+    built.subject?.includes("Rabbit Ears Adventures") && built.html?.includes("https://x/portal/invite?token=abc") && built.text?.includes("https://x/portal/invite?token=abc")
+      ? pass("test37: buildInviteEmail includes client name + invite link in subject/html/text")
+      : fail("test37: buildInviteEmail missing expected content", JSON.stringify(built));
+    built.text?.includes("a manager")
+      ? pass("test37: buildInviteEmail maps client_admin role to a friendly label")
+      : fail("test37: buildInviteEmail role label wrong", built.text);
+
+    const noClient = buildInviteEmail({ email: "a@b.com", inviteUrl: "https://x/portal/invite?token=def", role: "client_user" });
+    !noClient.subject.includes("undefined") && !noClient.subject.includes("null")
+      ? pass("test37: buildInviteEmail handles a missing clientName gracefully")
+      : fail("test37: buildInviteEmail broke without clientName", noClient.subject);
+  }
+
+  process.env.TEST_MODE = _test37PrevTestMode;
 }
 
 async function test37Integration() {
@@ -4584,6 +4747,11 @@ async function test38() {
     r.json   = (b) => { r._body = b; return r; };
     return r;
   }
+
+  // See test37 — force TEST_MODE so createInvite/resendInvite never attempt a
+  // real email/SMS send against live credentials during this suite.
+  const _test38PrevTestMode = process.env.TEST_MODE;
+  process.env.TEST_MODE = "true";
 
   const adminReq = { portalUser: { role: "internal_admin", email: "admin@test.com", isClientAdmin: true }, query: {}, body: {} };
 
@@ -4879,6 +5047,8 @@ async function test38() {
       ? pass("test38: handlePortalUpdateUser reactivates user (active: true)")
       : fail("test38: reactivate wrong response", JSON.stringify(res._body));
   }
+
+  process.env.TEST_MODE = _test38PrevTestMode;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -14408,7 +14578,7 @@ async function testLocationFleetBriefing() {
   } = await import("./operatorBriefing.js");
   const {
     humanizeWorkType, deriveOutOfService, isVehicleRetired,
-    buildWorkOrderUrl, normalizeWorkOrderRow,
+    buildWorkOrderUrl, normalizeWorkOrderRow, runWorkOrderSync,
   } = await import("./mpwrWorkOrders.js");
 
   // ── fleetForLocation — Kremmling is its own fleet; the rest are Steamboat ──
@@ -14575,6 +14745,39 @@ async function testLocationFleetBriefing() {
       manifest: [], workOrders, locations: ["kremmling"], digestTypes: ["bookings"],
     });
     chk("wo: fleet gated off by digest_types", !noFleet.includes("🔧 FLEET / WORK ORDERS"));
+  }
+
+  // ── runWorkOrderSync: an expired MPWR_TOKEN must degrade gracefully, not
+  //    throw — an uncaught throw here crashes the entire cron-worker process
+  //    (blocking scheduled messages / operator digests / KB refresh for the
+  //    rest of that tick, see cron-worker.js). Regression for a real incident
+  //    (2026-07-06): getToken() was called outside the per-outfitter
+  //    try/catch and its throw propagated all the way to cron-worker's
+  //    top-level catch → process.exit(1). ──────────────────────────────────
+  {
+    const prevToken = process.env.MPWR_TOKEN;
+    const prevKrem  = process.env.MPWR_OUTFITTER_KREMMLING;
+    const prevSteam = process.env.MPWR_OUTFITTER_STEAMBOAT;
+
+    const expiredPayload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 3600 })).toString("base64url");
+    process.env.MPWR_TOKEN = `header.${expiredPayload}.sig`;
+    process.env.MPWR_OUTFITTER_KREMMLING = "111";
+    process.env.MPWR_OUTFITTER_STEAMBOAT = "222";
+
+    let threw = false;
+    let result = null;
+    try {
+      result = await runWorkOrderSync({ from: () => ({ upsert: async () => ({ error: null }) }) });
+    } catch {
+      threw = true;
+    }
+
+    process.env.MPWR_TOKEN = prevToken;
+    process.env.MPWR_OUTFITTER_KREMMLING = prevKrem;
+    process.env.MPWR_OUTFITTER_STEAMBOAT = prevSteam;
+
+    chk("wo: runWorkOrderSync doesn't throw on an expired MPWR_TOKEN", !threw);
+    chk("wo: runWorkOrderSync reports per-outfitter errors instead", Array.isArray(result) && result.length === 2 && result.every((r) => r.error?.includes("expired")), JSON.stringify(result));
   }
 }
 

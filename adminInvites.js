@@ -28,6 +28,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { randomBytes } from "crypto";
+import { sendEmail, buildInviteEmail } from "./emailService.js";
+import { getAllClients } from "./clients.js";
+import { normalizePhone, isValidPhone } from "./phoneUtils.js";
 
 const INVITE_EXPIRY_HOURS = 72;
 const INVITE_EXPIRY_MS    = INVITE_EXPIRY_HOURS * 60 * 60 * 1000;
@@ -49,27 +52,109 @@ function makeInviteUrl(token) {
   return `${appBaseUrl()}/portal/invite?token=${token}`;
 }
 
+// ── Effective status (display-layer fix) ──────────────────────────────────────
+// A "pending" invite whose expires_at has already passed is functionally dead,
+// but nothing flips its DB row to 'expired' until someone actually opens the
+// link (handleInviteInfo/handleAcceptInvite do that lazily). Lists must not
+// show a dead invite as "pending" in the meantime.
+export function effectiveInviteStatus(invite, now = new Date()) {
+  if (invite?.status === "pending" && new Date(invite.expires_at) < now) return "expired";
+  return invite?.status;
+}
+
+function resolveClientName(clientId) {
+  if (!clientId) return null;
+  return getAllClients()?.[clientId]?.name ?? null;
+}
+
+function buildInviteSmsBody({ inviteUrl, clientName }) {
+  const forClient = clientName ? ` to the ${clientName}` : "";
+  return `Highmark: You've been invited${forClient} portal. Set up your account: ${inviteUrl} (expires in 72h, one-time use)`;
+}
+
+// ── Invite delivery — email first, SMS fallback, manual as last resort ───────
+// Never throws; always resolves to a result describing what actually happened
+// so the caller can surface it in the API response. Self-guards on TEST_MODE
+// for both channels (mirrors the outbound-send guard used elsewhere — see
+// selfSignup.js notifyTeam / campaigns.js enqueueCampaign) so the integration
+// suite never fires a real email or text even if live credentials are present.
+export async function deliverInvite({ email, phone, inviteUrl, role, clientId, twilioClient }) {
+  const clientName = resolveClientName(clientId);
+  const result = {
+    method: "manual",
+    email: { attempted: false, sent: false },
+    sms:   { attempted: false, sent: false },
+  };
+
+  const { subject, html, text } = buildInviteEmail({ email, inviteUrl, role, clientName });
+  result.email.attempted = true;
+  const emailResult = await sendEmail({ to: email, subject, html, text });
+  result.email.sent   = emailResult.sent;
+  result.email.reason = emailResult.reason;
+  if (emailResult.sent) {
+    result.method = "email";
+    return result;
+  }
+
+  if (phone) {
+    if (process.env.TEST_MODE === "true") {
+      result.sms = { attempted: true, sent: false, reason: "test_mode" };
+    } else if (!twilioClient) {
+      result.sms = { attempted: false, sent: false, reason: "not_configured" };
+    } else {
+      result.sms.attempted = true;
+      try {
+        const from = process.env.TWILIO_PHONE_NUMBER || "+18668906657";
+        await twilioClient.messages.create({
+          body: buildInviteSmsBody({ inviteUrl, clientName }).slice(0, 320),
+          from,
+          to: phone,
+        });
+        result.sms.sent = true;
+        result.method   = "sms";
+      } catch (err) {
+        console.error("[INVITES] SMS delivery failed:", err.message);
+        result.sms.sent   = false;
+        result.sms.reason = "send_failed";
+      }
+    }
+  }
+
+  return result;
+}
+
 // ── Shared invite creation logic ──────────────────────────────────────────────
-async function createInvite(supabase, { email, role, client_id, invited_by }) {
+async function createInvite(supabase, { email, role, client_id, invited_by, phone = null, twilioClient = null }) {
   const normalizedEmail = email.toLowerCase().trim();
 
-  // Block duplicate pending invites for the same email
+  // Block duplicate pending invites for the same email — unless the existing
+  // one is already past its expiry (dead, just not flagged yet); auto-expire
+  // it and let a fresh invite through instead of falsely blocking the admin.
   const { data: existing } = await supabase
     .from("portal_invites")
-    .select("id, status")
+    .select("id, status, expires_at")
     .eq("email", normalizedEmail)
     .eq("status", "pending")
     .maybeSingle();
 
   if (existing) {
-    const err = new Error("A pending invite already exists for this email. Resend or revoke it first.");
-    err.status = 409;
-    err.existing_id = existing.id;
-    throw err;
+    if (new Date(existing.expires_at) < new Date()) {
+      try {
+        await supabase.from("portal_invites")
+          .update({ status: "expired", updated_at: new Date().toISOString() })
+          .eq("id", existing.id);
+      } catch { /* best-effort */ }
+    } else {
+      const err = new Error("A pending invite already exists for this email. Resend or revoke it first.");
+      err.status = 409;
+      err.existing_id = existing.id;
+      throw err;
+    }
   }
 
   const token     = generateToken();
   const expiresAt = new Date(Date.now() + INVITE_EXPIRY_MS).toISOString();
+  const normalizedPhone = phone ? normalizePhone(phone) : null;
 
   const { data, error } = await supabase
     .from("portal_invites")
@@ -77,25 +162,35 @@ async function createInvite(supabase, { email, role, client_id, invited_by }) {
       email:        normalizedEmail,
       role,
       client_id:    client_id ?? null,
+      phone:        normalizedPhone,
       invited_by:   invited_by ?? "admin",
       status:       "pending",
       invite_token: token,
       expires_at:   expiresAt,
     })
-    .select("id, email, role, client_id, invited_by, status, expires_at, created_at")
+    .select("id, email, role, client_id, phone, invited_by, status, expires_at, created_at")
     .single();
 
   if (error) throw new Error(error.message);
 
-  console.log(`[INVITES] Created invite id=${data.id} for ${normalizedEmail} (role=${role}, client=${client_id ?? "admin"})`);
-  return { invite: data, invite_url: makeInviteUrl(token), expires_at: expiresAt };
+  const inviteUrl = makeInviteUrl(token);
+  const delivery  = await deliverInvite({ email: normalizedEmail, phone: normalizedPhone, inviteUrl, role, clientId: client_id, twilioClient });
+
+  if (delivery.method !== "manual") {
+    try {
+      await supabase.from("portal_invites").update({ delivery_method: delivery.method }).eq("id", data.id);
+    } catch { /* best-effort — doesn't block invite creation */ }
+  }
+
+  console.log(`[INVITES] Created invite id=${data.id} for ${normalizedEmail} (role=${role}, client=${client_id ?? "admin"}, delivery=${delivery.method})`);
+  return { invite: data, invite_url: inviteUrl, expires_at: expiresAt, delivery };
 }
 
 // ── Shared resend logic ───────────────────────────────────────────────────────
-async function resendInvite(supabase, id) {
+async function resendInvite(supabase, id, { twilioClient = null } = {}) {
   const { data: invite, error: fetchErr } = await supabase
     .from("portal_invites")
-    .select("id, email, status")
+    .select("id, email, phone, status")
     .eq("id", id)
     .single();
 
@@ -110,13 +205,22 @@ async function resendInvite(supabase, id) {
     .from("portal_invites")
     .update({ invite_token: token, expires_at: expiresAt, status: "pending", updated_at: new Date().toISOString() })
     .eq("id", id)
-    .select("id, email, role, client_id, status, expires_at")
+    .select("id, email, role, client_id, phone, status, expires_at")
     .single();
 
   if (error) throw new Error(error.message);
 
-  console.log(`[INVITES] Resent invite id=${id} for ${invite.email}`);
-  return { invite: data, invite_url: makeInviteUrl(token), expires_at: expiresAt };
+  const inviteUrl = makeInviteUrl(token);
+  const delivery  = await deliverInvite({ email: invite.email, phone: invite.phone, inviteUrl, role: data.role, clientId: data.client_id, twilioClient });
+
+  if (delivery.method !== "manual") {
+    try {
+      await supabase.from("portal_invites").update({ delivery_method: delivery.method }).eq("id", id);
+    } catch { /* best-effort */ }
+  }
+
+  console.log(`[INVITES] Resent invite id=${id} for ${invite.email} (delivery=${delivery.method})`);
+  return { invite: data, invite_url: inviteUrl, expires_at: expiresAt, delivery };
 }
 
 // ── Shared revoke logic ───────────────────────────────────────────────────────
@@ -174,10 +278,10 @@ async function updatePortalUser(supabase, id, { active }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // POST /admin/portal-invites
-export async function handleCreateInvite(req, res, supabase) {
+export async function handleCreateInvite(req, res, supabase, twilioClient) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
 
-  const { email, client_id = null, role = "client_user", invited_by = "admin" } = req.body;
+  const { email, phone = null, client_id = null, role = "client_user", invited_by = "admin" } = req.body;
 
   if (!email) return res.status(400).json({ error: "email is required" });
   if (!VALID_ROLES.includes(role)) {
@@ -186,9 +290,12 @@ export async function handleCreateInvite(req, res, supabase) {
   if ((role === "client_user" || role === "client_admin") && !client_id) {
     return res.status(400).json({ error: "client_id is required for client_user and client_admin roles" });
   }
+  if (phone && !isValidPhone(phone)) {
+    return res.status(400).json({ error: "phone must be a valid US phone number" });
+  }
 
   try {
-    const result = await createInvite(supabase, { email, role, client_id, invited_by });
+    const result = await createInvite(supabase, { email, phone, role, client_id, invited_by, twilioClient });
     return res.status(201).json(result);
   } catch (err) {
     const status = err.status ?? 500;
@@ -206,7 +313,7 @@ export async function handleListInvites(req, res, supabase) {
 
   let query = supabase
     .from("portal_invites")
-    .select("id, email, role, client_id, invited_by, status, expires_at, accepted_at, created_at", { count: "exact" })
+    .select("id, email, role, client_id, invited_by, status, expires_at, accepted_at, created_at, delivery_method", { count: "exact" })
     .order("created_at", { ascending: false })
     .range(Number(offset), Number(offset) + Number(limit) - 1);
 
@@ -215,14 +322,15 @@ export async function handleListInvites(req, res, supabase) {
 
   const { data, error, count } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ invites: data ?? [], total: count ?? 0 });
+  const invites = (data ?? []).map((inv) => ({ ...inv, status: effectiveInviteStatus(inv) }));
+  return res.json({ invites, total: count ?? 0 });
 }
 
 // POST /admin/portal-invites/:id/resend
-export async function handleResendInvite(req, res, supabase) {
+export async function handleResendInvite(req, res, supabase, twilioClient) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   try {
-    return res.json(await resendInvite(supabase, req.params.id));
+    return res.json(await resendInvite(supabase, req.params.id, { twilioClient }));
   } catch (err) {
     return res.status(err.status ?? 500).json({ error: err.message });
   }
@@ -422,7 +530,7 @@ export async function handlePortalInvites(req, res, supabase) {
 
   let query = supabase
     .from("portal_invites")
-    .select("id, email, role, client_id, invited_by, status, expires_at, accepted_at, created_at")
+    .select("id, email, role, client_id, invited_by, status, expires_at, accepted_at, created_at, delivery_method")
     .order("created_at", { ascending: false });
 
   if (scopedClientId) query = query.eq("client_id", scopedClientId);
@@ -430,16 +538,17 @@ export async function handlePortalInvites(req, res, supabase) {
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ invites: data ?? [] });
+  const invites = (data ?? []).map((inv) => ({ ...inv, status: effectiveInviteStatus(inv) }));
+  return res.json({ invites });
 }
 
 // POST /portal/api/invites
-export async function handlePortalCreateInvite(req, res, supabase) {
+export async function handlePortalCreateInvite(req, res, supabase, twilioClient) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   if (!assertClientAdmin(req, res)) return;
 
   const { portalUser } = req;
-  const { email, role = "client_user" } = req.body;
+  const { email, phone = null, role = "client_user" } = req.body;
   const invited_by = portalUser?.email ?? "admin";
 
   // client_admin always invites into their own client; internal_admin can specify any client_id
@@ -458,9 +567,12 @@ export async function handlePortalCreateInvite(req, res, supabase) {
   if ((role === "client_user" || role === "client_admin") && !client_id) {
     return res.status(400).json({ error: "client_id is required for client_user and client_admin roles" });
   }
+  if (phone && !isValidPhone(phone)) {
+    return res.status(400).json({ error: "phone must be a valid US phone number" });
+  }
 
   try {
-    const result = await createInvite(supabase, { email, role, client_id, invited_by });
+    const result = await createInvite(supabase, { email, phone, role, client_id, invited_by, twilioClient });
     return res.status(201).json(result);
   } catch (err) {
     const body = { error: err.message };
@@ -470,7 +582,7 @@ export async function handlePortalCreateInvite(req, res, supabase) {
 }
 
 // POST /portal/api/invites/:id/resend
-export async function handlePortalResendInvite(req, res, supabase) {
+export async function handlePortalResendInvite(req, res, supabase, twilioClient) {
   if (!supabase) return res.status(503).json({ error: "DB unavailable" });
   if (!assertClientAdmin(req, res)) return;
 
@@ -483,7 +595,7 @@ export async function handlePortalResendInvite(req, res, supabase) {
   }
 
   try {
-    return res.json(await resendInvite(supabase, req.params.id));
+    return res.json(await resendInvite(supabase, req.params.id, { twilioClient }));
   } catch (err) {
     return res.status(err.status ?? 500).json({ error: err.message });
   }

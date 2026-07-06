@@ -2323,6 +2323,10 @@ tr:hover td { background: var(--panel2); }
           <input type="email" id="inviteEmail" placeholder="client@example.com">
         </div>
         <div class="form-group">
+          <label>Phone <span style="color:var(--text2);font-weight:400">(optional — texted the link if email can't be delivered)</span></label>
+          <input type="tel" id="invitePhone" placeholder="(970) 555-0100">
+        </div>
+        <div class="form-group">
           <label>Client</label>
           <select id="inviteClient"></select>
         </div>
@@ -2338,7 +2342,7 @@ tr:hover td { background: var(--panel2); }
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" id="inviteModalCancel">Cancel</button>
-      <button class="btn btn-primary" id="inviteModalSend">Create invite link</button>
+      <button class="btn btn-primary" id="inviteModalSend">Send invite</button>
     </div>
   </div>
 </div>
@@ -5467,11 +5471,12 @@ async function loadUsers() {
   } else {
     document.getElementById('invitesTable').innerHTML = `
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Email</th><th>Role</th><th>Client</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+        <thead><tr><th>Email</th><th>Role</th><th>Client</th><th>Sent via</th><th>Status</th><th>Expires</th><th></th></tr></thead>
         <tbody>${invites.map(inv => `<tr>
           <td style="font-size:12px">${inv.email}</td>
           <td>${pill(inv.role === 'internal_admin' ? 'admin' : inv.role === 'client_admin' ? 'mgr' : 'client')}</td>
           <td class="text-muted text-xs">${inv.client_id ?? '—'}</td>
+          <td class="text-muted text-xs">${inv.delivery_method === 'email' ? '📧 Email' : inv.delivery_method === 'sms' ? '💬 SMS' : '🔗 Manual'}</td>
           <td>${pill(inv.status)}</td>
           <td class="text-muted text-xs">${inv.status === 'pending' ? fmt(inv.expires_at) : '—'}</td>
           <td style="display:flex;gap:4px;flex-wrap:wrap">
@@ -5501,7 +5506,9 @@ async function toggleUser(id, currentlyActive) {
 async function doResendInvite(id) {
   const r = await apiFetch(`/invites/${id}/resend`, { method: 'POST', body: '{}' });
   if (!r) { showToast(_lastApiError || 'Failed to resend invite.'); return; }
-  showInviteResult(r.invite_url, r.invite.email, 'Invite link refreshed');
+  document.getElementById('inviteModalForm').style.display = 'none';
+  document.getElementById('inviteModal').classList.add('open');
+  showInviteResult(r, r.invite.email, 'Invite resent');
   loadUsers();
 }
 
@@ -5536,6 +5543,7 @@ function openInviteModal() {
   }
 
   document.getElementById('inviteEmail').value = '';
+  document.getElementById('invitePhone').value = '';
   document.getElementById('inviteModalError').style.display = 'none';
   document.getElementById('inviteModalResult').style.display = 'none';
   document.getElementById('inviteModalForm').style.display   = '';
@@ -5544,6 +5552,7 @@ function openInviteModal() {
 
 async function sendInvite() {
   const email    = document.getElementById('inviteEmail').value.trim();
+  const phone    = document.getElementById('invitePhone').value.trim();
   const role     = document.getElementById('inviteRole').value;
   const clientId = role === 'internal_admin' ? null : document.getElementById('inviteClient').value;
   const errEl    = document.getElementById('inviteModalError');
@@ -5551,10 +5560,10 @@ async function sendInvite() {
 
   if (!email) { errEl.textContent = 'Email is required.'; errEl.style.display = 'block'; return; }
   errEl.style.display = 'none';
-  btn.disabled = true; btn.textContent = 'Creating…';
+  btn.disabled = true; btn.textContent = 'Sending…';
 
-  const r = await apiFetch('/invites', { method: 'POST', body: JSON.stringify({ email, role, client_id: clientId }) });
-  btn.disabled = false; btn.textContent = 'Create invite link';
+  const r = await apiFetch('/invites', { method: 'POST', body: JSON.stringify({ email, phone: phone || null, role, client_id: clientId }) });
+  btn.disabled = false; btn.textContent = 'Send invite';
 
   if (!r) {
     const existingId = _lastApiData?.existing_id;
@@ -5570,12 +5579,12 @@ async function sendInvite() {
         if (!rv) { errEl.textContent = _lastApiError || 'Revoke failed.'; return; }
         errEl.style.display = 'none';
         // Re-submit automatically
-        btn.disabled = true; btn.textContent = 'Creating…';
-        const r2 = await apiFetch('/invites', { method: 'POST', body: JSON.stringify({ email, role, client_id: clientId }) });
-        btn.disabled = false; btn.textContent = 'Create invite link';
+        btn.disabled = true; btn.textContent = 'Sending…';
+        const r2 = await apiFetch('/invites', { method: 'POST', body: JSON.stringify({ email, phone: phone || null, role, client_id: clientId }) });
+        btn.disabled = false; btn.textContent = 'Send invite';
         if (!r2) { errEl.textContent = _lastApiError || 'Failed to create invite.'; errEl.style.display = 'block'; return; }
         document.getElementById('inviteModalForm').style.display = 'none';
-        showInviteResult(r2.invite_url, email, 'Invite created');
+        showInviteResult(r2, email, 'Invite created');
         loadUsers();
       };
     } else {
@@ -5586,16 +5595,26 @@ async function sendInvite() {
   }
 
   document.getElementById('inviteModalForm').style.display   = 'none';
-  showInviteResult(r.invite_url, email, 'Invite created');
+  showInviteResult(r, email, 'Invite created');
   loadUsers();
 }
 
-function showInviteResult(url, email, heading) {
+function showInviteResult(r, email, heading) {
+  const url = r.invite_url;
+  const d   = r.delivery ?? {};
+  let statusLine;
+  if (d.method === 'email') {
+    statusLine = `<div style="margin-bottom:14px;font-weight:600;color:var(--accent)">✓ ${heading} — emailed to <strong>${email}</strong></div>`;
+  } else if (d.method === 'sms') {
+    statusLine = `<div style="margin-bottom:14px;font-weight:600;color:var(--accent)">✓ ${heading} — texted the link</div>`;
+  } else {
+    statusLine = `<div style="margin-bottom:14px;font-weight:600;color:var(--warn,#f59e0b)">⚠ ${heading} — couldn't auto-deliver. Copy the link below and send it yourself.</div>`;
+  }
   const resEl = document.getElementById('inviteModalResult');
   resEl.innerHTML = `
-    <div style="margin-bottom:14px;font-weight:600;color:var(--accent)">✓ ${heading}</div>
+    ${statusLine}
     <p style="color:var(--text2);font-size:12px;margin-bottom:8px;">
-      Send this link to <strong>${email}</strong>. It expires in 72 hours and can only be used once.
+      Backup link for <strong>${email}</strong> — expires in 72 hours, one-time use.
     </p>
     <input type="text" readonly id="inviteUrlBox" value="${url}"
       style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--text1);cursor:pointer;word-break:break-all;"

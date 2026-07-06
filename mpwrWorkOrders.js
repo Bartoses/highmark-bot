@@ -199,7 +199,19 @@ export async function runWorkOrderSync(db2) {
     return null;
   }
 
-  const token   = getToken();
+  // getToken() throws when MPWR_TOKEN is expired/missing — must not propagate
+  // past this function. Left uncaught, it crashes the whole cron-worker
+  // process (see runMpwrSync's per-outfitter catch for the same reasoning),
+  // blocking unrelated duties (scheduled messages, operator digests, KB
+  // refresh) for the rest of that tick.
+  let token;
+  try {
+    token = getToken();
+  } catch (err) {
+    console.error(`[mpwrWorkOrders] Skipping — ${err.message}`);
+    return outfitters.map((o) => ({ fleet: o.fleet, error: err.message }));
+  }
+
   const results = [];
   for (const o of outfitters) {
     try {
