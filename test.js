@@ -4687,10 +4687,15 @@ async function test37() {
 
 async function test37Integration() {
   // ── Integration: /portal/invite route serves portal-accept.html ───────────
-  const acceptRes = await fetch(`${BASE_URL}/portal/invite?token=test123`);
-  acceptRes.status === 200
-    ? pass("test37: GET /portal/invite returns 200 (portal-accept.html)")
-    : fail("test37: /portal/invite wrong status", acceptRes.status);
+  // Must check BODY content, not just status — the /portal/:section SPA
+  // catch-all also returns 200 for this path if route ordering ever regresses
+  // (it did, 2026-07-06: /portal/:section was registered before /portal/invite
+  // and silently swallowed every invite link, serving portal.html instead).
+  const acceptRes  = await fetch(`${BASE_URL}/portal/invite?token=test123`);
+  const acceptBody = await acceptRes.text();
+  acceptRes.status === 200 && acceptBody.includes("accept-invite") && acceptBody.includes('id="password"')
+    ? pass("test37: GET /portal/invite serves portal-accept.html (not the SPA)")
+    : fail("test37: /portal/invite wrong status or wrong file served", acceptRes.status);
 
   // ── Integration: /portal/api/invite-info without token → 400 ─────────────
   const infoNoToken = await fetch(`${BASE_URL}/portal/api/invite-info`);

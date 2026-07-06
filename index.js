@@ -1944,15 +1944,21 @@ app.get('/portal/attribution',    (_req, res) => res.redirect(302, '/portal/anal
 // because the user has no client_id assigned yet)
 app.get("/portal/onboarding",     (_req, res) => res.sendFile(path.join(__uiDir, "portal-onboarding.html")));
 
-// Catch-all for portal SPA sub-paths (dashboard, leads, campaigns, analytics,
-// settings, conversations, knowledge, integrations, messaging, users, clients, etc.)
-// login and invite have their own routes above and match first.
-app.get("/portal/:section", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
-
 // Portal invite acceptance — public, no auth (serves portal-accept.html)
+// Must be registered BEFORE the /portal/:section catch-all below — Express
+// matches routes in registration order, so /portal/:section would otherwise
+// swallow /portal/invite (matches any single path segment) and serve the
+// full portal.html SPA instead of the password-creation page, which then
+// bounces an unauthenticated visitor to /portal/login. (Found 2026-07-06:
+// every invite link was silently hitting this instead of the accept page.)
 app.get("/portal/invite",             (_req, res) => res.sendFile(path.join(__uiDir, "portal-accept.html")));
 app.get("/portal/api/invite-info",    (req, res) => handleInviteInfo(req, res, supabase));
 app.post("/portal/api/accept-invite", (req, res) => handleAcceptInvite(req, res, supabase));
+
+// Catch-all for portal SPA sub-paths (dashboard, leads, campaigns, analytics,
+// settings, conversations, knowledge, integrations, messaging, users, clients, etc.)
+// login/onboarding/invite have their own routes above and match first.
+app.get("/portal/:section", (_req, res) => res.sendFile(path.join(__uiDir, "portal.html")));
 
 // Portal API — all require valid Supabase JWT
 app.get(  "/portal/api/me",                  requirePortalAuth, (req, res) => handlePortalMe(req, res));
