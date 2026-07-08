@@ -839,6 +839,9 @@ tr:hover td { background: var(--panel2); }
       <div class="nav-item" data-section="campaigns">
         <span class="nav-icon">📣</span> Campaigns
       </div>
+      <div class="nav-item" data-section="email-campaigns">
+        <span class="nav-icon">✉️</span> Email Marketing
+      </div>
       <div class="nav-item" data-section="messaging">
         <span class="nav-icon">📨</span> Messaging
       </div>
@@ -1013,6 +1016,19 @@ tr:hover td { background: var(--panel2); }
           <button class="btn btn-primary btn-sm" id="newCampaignBtn">+ New campaign</button>
         </div>
         <div id="campaignsTable"><div class="loading">Loading…</div></div>
+      </div>
+
+      <!-- EMAIL MARKETING -->
+      <div class="section" id="sec-email-campaigns">
+        <div class="section-header">
+          <span class="section-title">Email Marketing</span>
+          <button class="btn btn-primary btn-sm" id="newEmailCampaignBtn">+ New email</button>
+        </div>
+        <div style="background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.2);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--text2);">
+          Create and preview newsletters/promos here. Sending to your full customer list is coming soon —
+          for now, save a draft and use <strong>Send test</strong> to see exactly what recipients will get.
+        </div>
+        <div id="emailCampaignsTable"><div class="loading">Loading…</div></div>
       </div>
 
       <!-- ANALYTICS -->
@@ -2361,6 +2377,97 @@ tr:hover td { background: var(--panel2); }
   </div>
 </div>
 
+<!-- ── Email campaign create/edit modal ──────────────────────────────────────── -->
+<div class="modal-backdrop" id="emailCampaignModal">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-title" id="emailCampaignModalTitle">New Email</div>
+    <div class="modal-body">
+      <div id="emailCampaignModalError" class="error-msg" style="display:none"></div>
+
+      <div class="form-group">
+        <label>Template</label>
+        <div id="ecTemplatePicker" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
+      </div>
+
+      <div class="form-group">
+        <label>Internal name <span class="form-hint" style="display:inline;">(for your reference only)</span></label>
+        <input type="text" id="ecName" placeholder="e.g. July Newsletter">
+      </div>
+
+      <div class="two-col">
+        <div class="form-group">
+          <label>Subject line</label>
+          <input type="text" id="ecSubject" placeholder="e.g. What's new at {{business_name}}">
+        </div>
+        <div class="form-group">
+          <label>Preview text <span class="form-hint" style="display:inline;">(shown in inbox)</span></label>
+          <input type="text" id="ecPreviewText" placeholder="A short teaser…">
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="form-group">
+          <label>From name <span class="form-hint" style="display:inline;">(optional)</span></label>
+          <input type="text" id="ecFromName" placeholder="Defaults to your business name">
+        </div>
+        <div class="form-group">
+          <label>Reply-to <span class="form-hint" style="display:inline;">(optional)</span></label>
+          <input type="email" id="ecReplyTo" placeholder="Defaults to your support email">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Audience</label>
+        <select id="ecAudience" onchange="ecUpdateAudiencePanel()">
+          <option value="crm_contacts">CRM contacts (customers with an email on file)</option>
+          <option value="custom_emails">Custom email list (testing / one-off)</option>
+        </select>
+        <div id="ecAudiencePreview" class="form-hint" style="margin-top:4px;min-height:16px;"></div>
+      </div>
+      <div id="ecCustomEmailsPanel" style="display:none;border:1px solid var(--border2);border-radius:8px;padding:12px 14px;background:var(--bg2);margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;letter-spacing:.04em;">EMAIL ADDRESSES</div>
+        <textarea id="ecCustomEmails" class="form-input" rows="3" placeholder="alex@example.com&#10;one per line or comma-separated" oninput="ecFetchAudiencePreview()" style="font-family:monospace;font-size:13px;resize:vertical;"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label style="display:flex;justify-content:space-between;align-items:center;">
+          Body
+          <span style="display:flex;gap:6px;flex-wrap:wrap;" id="ecMergeFieldButtons"></span>
+        </label>
+        <textarea id="ecBody" rows="10" style="font-family:monospace;font-size:13px;" placeholder="&lt;p&gt;Hi {{first_name}}, ...&lt;/p&gt;"></textarea>
+        <div class="form-hint">Basic HTML (&lt;p&gt;, &lt;h1&gt;, &lt;a&gt;, &lt;br&gt;) — merge fields are substituted per recipient.</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="emailCampaignModalCancel">Cancel</button>
+      <button class="btn btn-primary" id="emailCampaignModalSave">Save draft</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Email campaign detail/preview modal ───────────────────────────────────── -->
+<div class="modal-backdrop" id="emailCampaignDetailModal">
+  <div class="modal" style="max-width:720px;">
+    <div class="modal-title" id="ecdTitle">Email</div>
+    <div class="modal-body">
+      <div id="ecdMeta" style="font-size:12px;color:var(--text2);margin-bottom:12px;"></div>
+      <div id="ecdSendTestRow" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+        <input type="email" id="ecdTestEmail" class="form-input" placeholder="you@example.com" style="max-width:260px;">
+        <button class="btn btn-secondary btn-sm" id="ecdSendTest">Send test</button>
+        <span id="ecdSendTestMsg" class="form-hint"></span>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff;">
+        <iframe id="ecdPreviewFrame" style="width:100%;height:420px;border:none;display:block;"></iframe>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" style="color:var(--danger);" id="ecdDelete">Delete</button>
+      <button class="btn btn-ghost" id="ecdEdit">Edit</button>
+      <button class="btn btn-primary" id="ecdClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Scrape source modal ────────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="srcModal">
   <div class="modal">
@@ -2842,6 +2949,7 @@ const sectionTitles = {
   integrations: 'Integrations', messaging: 'Messaging', partners: 'Partners',
   users: 'Users & Access', clients: 'Clients', onboarding: 'New Client', more: 'More',
   operator: 'Operator Intelligence', operations: 'Operations', voice: 'Voice AI',
+  'email-campaigns': 'Email Marketing',
 };
 function switchSection(name, tabParam) {
   // Close any open modals before navigating
@@ -2871,6 +2979,7 @@ function switchSection(name, tabParam) {
   if (name === 'dashboard')     loadDashboard();
   if (name === 'leads')         { leadsOffset = 0; loadLeads(); setupLeadsEvents(); }
   if (name === 'campaigns')     { loadCampaigns(); setupCampaignEvents(); }
+  if (name === 'email-campaigns') { loadEmailCampaigns(); setupEmailCampaignEvents(); }
   if (name === 'analytics')     { loadAnalytics(); if (tabParam) switchAnalyticsTab(tabParam); }
   if (name === 'optimization')  loadOptimization();
   if (name === 'settings')      { loadSettings(); if (tabParam) switchSettingsTab(tabParam); }
@@ -4239,6 +4348,277 @@ async function sendCampaign() {
   if (!r) { alert('Failed to send campaign. Check the console.'); return; }
   document.getElementById('campaignDetailModal').classList.remove('open');
   loadCampaigns();
+}
+
+// ── EMAIL MARKETING ──────────────────────────────────────────────────────────
+let emailCampaignEventsSet = false;
+let activeEmailCampaignId  = null;
+let ecTemplates            = [];
+let ecMergeFields          = [];
+let ecSelectedTemplate     = 'newsletter';
+let ecEditingId            = null;
+
+function setupEmailCampaignEvents() {
+  if (emailCampaignEventsSet) return;
+  emailCampaignEventsSet = true;
+  document.getElementById('newEmailCampaignBtn').addEventListener('click', () => openEmailCampaignModal());
+  document.getElementById('emailCampaignModalCancel').addEventListener('click', () => document.getElementById('emailCampaignModal').classList.remove('open'));
+  document.getElementById('emailCampaignModalSave').addEventListener('click', saveEmailCampaignDraft);
+  document.getElementById('ecdClose').addEventListener('click', () => document.getElementById('emailCampaignDetailModal').classList.remove('open'));
+  document.getElementById('ecdDelete').addEventListener('click', deleteActiveEmailCampaign);
+  document.getElementById('ecdEdit').addEventListener('click', () => {
+    document.getElementById('emailCampaignDetailModal').classList.remove('open');
+    openEmailCampaignModal(activeEmailCampaignId);
+  });
+  document.getElementById('ecdSendTest').addEventListener('click', sendTestEmailCampaign);
+}
+
+async function loadEmailCampaigns() {
+  document.getElementById('emailCampaignsTable').innerHTML = '<div class="loading">Loading…</div>';
+  const clientParam = me?.isAdmin ? `?client_id=${me.clientId ?? ''}` : '';
+  const d = await apiFetch(`/email-campaigns${clientParam}`);
+  if (!d) { document.getElementById('emailCampaignsTable').innerHTML = '<div class="error-msg">Failed to load email campaigns.</div>'; return; }
+
+  if (d.campaigns.length === 0) {
+    document.getElementById('emailCampaignsTable').innerHTML = '<div class="empty-state"><div class="esc-icon">✉️</div>No emails yet.<br><span class="text-muted">Click "+ New email" to create your first one.</span></div>';
+    return;
+  }
+
+  const cardsHtml = `<div class="campaigns-cards">${d.campaigns.map(c => {
+    const audience = (c.audience_type || '').replace(/_/g,' ') || '—';
+    return `<div class="camp-card">
+      <div class="camp-card-top">
+        <div style="min-width:0;">
+          <div class="camp-card-name">${escHtml(c.name)}</div>
+          <div class="camp-card-sub">${escHtml(c.subject)}</div>
+        </div>
+        ${pill(c.status)}
+      </div>
+      <div class="camp-card-meta">${(c.template_key || '').replace(/_/g,' ')} · ${audience}</div>
+      <div class="camp-card-actions">
+        <span class="row-action ec-view" data-cid="${c.id}">View →</span>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+
+  document.getElementById('emailCampaignsTable').innerHTML = cardsHtml + `
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Name</th><th>Subject</th><th>Template</th><th>Audience</th><th>Status</th><th></th></tr></thead>
+      <tbody>${d.campaigns.map(c => `<tr>
+          <td><strong>${escHtml(c.name)}</strong></td>
+          <td class="text-muted">${escHtml(c.subject)}</td>
+          <td class="text-muted text-xs">${(c.template_key || '').replace(/_/g,' ')}</td>
+          <td class="text-muted text-xs">${(c.audience_type || '').replace(/_/g,' ')}</td>
+          <td>${pill(c.status)}</td>
+          <td><span class="row-action ec-view" data-cid="${c.id}">View</span></td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+
+  document.querySelectorAll('.ec-view[data-cid]').forEach(el => {
+    el.addEventListener('click', () => openEmailCampaignDetail(el.dataset.cid));
+  });
+}
+
+async function ecLoadTemplatesAndMergeFields() {
+  if (ecTemplates.length) return;
+  const d = await apiFetch('/email-campaigns/templates');
+  if (!d) return;
+  ecTemplates   = d.templates ?? [];
+  ecMergeFields = d.merge_fields ?? [];
+}
+
+function ecRenderTemplatePicker() {
+  const el = document.getElementById('ecTemplatePicker');
+  el.innerHTML = ecTemplates.map(t => `
+    <label class="camp-type-card ${t.key === ecSelectedTemplate ? 'active' : ''}" data-tpl="${t.key}"
+      style="cursor:pointer;border:2px solid ${t.key === ecSelectedTemplate ? 'var(--accent)' : 'var(--border2)'};border-radius:8px;padding:10px 12px;display:block;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:2px;">${escHtml(t.label)}</div>
+      <div style="font-size:11px;color:var(--text2);">${escHtml(t.description)}</div>
+    </label>`).join('');
+  el.querySelectorAll('[data-tpl]').forEach(card => {
+    card.addEventListener('click', () => ecSelectTemplate(card.dataset.tpl));
+  });
+}
+
+function ecSelectTemplate(key, applyDefaults = true) {
+  ecSelectedTemplate = key;
+  document.querySelectorAll('#ecTemplatePicker [data-tpl]').forEach(card => {
+    card.style.borderColor = card.dataset.tpl === key ? 'var(--accent)' : 'var(--border2)';
+  });
+  if (!applyDefaults) return;
+  const tpl = ecTemplates.find(t => t.key === key);
+  if (!tpl) return;
+  document.getElementById('ecSubject').value      = tpl.defaultSubject ?? '';
+  document.getElementById('ecPreviewText').value  = tpl.defaultPreviewText ?? '';
+  document.getElementById('ecBody').value         = tpl.defaultBodyHtml ?? '';
+}
+
+function ecRenderMergeFieldButtons() {
+  const el = document.getElementById('ecMergeFieldButtons');
+  el.innerHTML = ecMergeFields.map(f =>
+    `<button type="button" class="btn btn-ghost btn-sm" data-token="${f.token}">{{${f.token}}}</button>`
+  ).join('');
+  el.querySelectorAll('[data-token]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ta = document.getElementById('ecBody');
+      const insert = `{{${btn.dataset.token}}}`;
+      const start = ta.selectionStart ?? ta.value.length;
+      const end   = ta.selectionEnd ?? ta.value.length;
+      ta.value = ta.value.slice(0, start) + insert + ta.value.slice(end);
+      ta.focus();
+      ta.selectionStart = ta.selectionEnd = start + insert.length;
+    });
+  });
+}
+
+function ecUpdateAudiencePanel() {
+  const audience = document.getElementById('ecAudience').value;
+  document.getElementById('ecCustomEmailsPanel').style.display = audience === 'custom_emails' ? '' : 'none';
+  ecFetchAudiencePreview();
+}
+
+let ecAudiencePreviewTimer = null;
+async function ecFetchAudiencePreview() {
+  const audience = document.getElementById('ecAudience').value;
+  const el = document.getElementById('ecAudiencePreview');
+  clearTimeout(ecAudiencePreviewTimer);
+
+  if (audience === 'custom_emails') {
+    const raw = document.getElementById('ecCustomEmails')?.value ?? '';
+    const emails = [...new Set(raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean))];
+    el.textContent = emails.length ? `${emails.length} recipient${emails.length !== 1 ? 's' : ''}` : 'Enter email addresses above';
+    return;
+  }
+
+  el.textContent = 'Checking…';
+  ecAudiencePreviewTimer = setTimeout(async () => {
+    const clientParam = me?.isAdmin && me.clientId ? `&client_id=${me.clientId}` : '';
+    const d = await apiFetch(`/email-campaigns/audience-preview?audience_type=${audience}${clientParam}`);
+    if (!d) { el.textContent = ''; return; }
+    const sample = d.sample?.length ? ` (e.g. ${d.sample.join(', ')})` : '';
+    el.textContent = `${d.count} recipient${d.count !== 1 ? 's' : ''}${sample}`;
+  }, 300);
+}
+
+async function openEmailCampaignModal(editId = null) {
+  await ecLoadTemplatesAndMergeFields();
+  ecEditingId = editId;
+  document.getElementById('emailCampaignModalError').style.display = 'none';
+  document.getElementById('emailCampaignModalTitle').textContent = editId ? 'Edit Email' : 'New Email';
+
+  if (editId) {
+    const d = await apiFetch(`/email-campaigns/${editId}`);
+    const c = d?.campaign;
+    if (!c) { alert('Failed to load email campaign.'); return; }
+    document.getElementById('ecName').value        = c.name ?? '';
+    document.getElementById('ecSubject').value     = c.subject ?? '';
+    document.getElementById('ecPreviewText').value = c.preview_text ?? '';
+    document.getElementById('ecFromName').value    = c.from_name ?? '';
+    document.getElementById('ecReplyTo').value     = c.reply_to ?? '';
+    document.getElementById('ecBody').value        = c.body_html ?? '';
+    document.getElementById('ecAudience').value    = c.audience_type ?? 'crm_contacts';
+    document.getElementById('ecCustomEmails').value = (c.audience_filter?.emails ?? []).join('\n');
+    ecSelectedTemplate = c.template_key ?? 'newsletter';
+  } else {
+    document.getElementById('ecName').value        = '';
+    document.getElementById('ecFromName').value     = '';
+    document.getElementById('ecReplyTo').value      = '';
+    document.getElementById('ecAudience').value     = 'crm_contacts';
+    document.getElementById('ecCustomEmails').value = '';
+    ecSelectedTemplate = 'newsletter';
+  }
+
+  ecRenderTemplatePicker();
+  ecRenderMergeFieldButtons();
+  if (!editId) ecSelectTemplate(ecSelectedTemplate, true);
+  ecUpdateAudiencePanel();
+  document.getElementById('emailCampaignModal').classList.add('open');
+}
+
+function ecBuildAudienceFilter() {
+  if (document.getElementById('ecAudience').value !== 'custom_emails') return {};
+  const raw = document.getElementById('ecCustomEmails')?.value ?? '';
+  const emails = [...new Set(raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean))];
+  return { emails };
+}
+
+async function saveEmailCampaignDraft() {
+  const btn = document.getElementById('emailCampaignModalSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const body = {
+    name:            document.getElementById('ecName').value.trim(),
+    template_key:    ecSelectedTemplate,
+    subject:         document.getElementById('ecSubject').value.trim(),
+    preview_text:    document.getElementById('ecPreviewText').value.trim() || null,
+    body_html:       document.getElementById('ecBody').value,
+    from_name:       document.getElementById('ecFromName').value.trim() || null,
+    reply_to:        document.getElementById('ecReplyTo').value.trim() || null,
+    audience_type:   document.getElementById('ecAudience').value,
+    audience_filter: ecBuildAudienceFilter(),
+  };
+  if (me?.isAdmin && me.clientId) body.client_id = me.clientId;
+
+  const r = ecEditingId
+    ? await apiFetch(`/email-campaigns/${ecEditingId}`, { method: 'PATCH', body: JSON.stringify(body) })
+    : await apiPost('/email-campaigns', body);
+
+  btn.disabled = false; btn.textContent = 'Save draft';
+  if (!r || r.error) {
+    const errEl = document.getElementById('emailCampaignModalError');
+    errEl.textContent = r?.error ?? _lastApiError ?? 'Save failed';
+    errEl.style.display = '';
+    return;
+  }
+  document.getElementById('emailCampaignModal').classList.remove('open');
+  showToast('Email draft saved');
+  loadEmailCampaigns();
+}
+
+async function openEmailCampaignDetail(id) {
+  activeEmailCampaignId = id;
+  document.getElementById('ecdTitle').textContent = 'Loading…';
+  document.getElementById('ecdSendTestMsg').textContent = '';
+  document.getElementById('emailCampaignDetailModal').classList.add('open');
+
+  const d = await apiFetch(`/email-campaigns/${id}`);
+  if (!d) { document.getElementById('ecdTitle').textContent = 'Failed to load'; return; }
+  const c = d.campaign;
+  document.getElementById('ecdTitle').textContent = c.name;
+  document.getElementById('ecdMeta').innerHTML =
+    `${pill(c.status)} &nbsp; <strong>${escHtml(c.subject)}</strong> &nbsp; · &nbsp; ${(c.audience_type||'').replace(/_/g,' ')}`;
+  document.getElementById('ecdTestEmail').value = me?.email ?? '';
+
+  const preview = await apiFetch(`/email-campaigns/${id}/preview`, { method: 'POST', body: JSON.stringify({}) });
+  const frame = document.getElementById('ecdPreviewFrame');
+  if (preview?.html) frame.srcdoc = preview.html;
+}
+
+async function sendTestEmailCampaign() {
+  const btn = document.getElementById('ecdSendTest');
+  const msgEl = document.getElementById('ecdSendTestMsg');
+  const testEmail = document.getElementById('ecdTestEmail').value.trim();
+  btn.disabled = true; btn.textContent = 'Sending…';
+  msgEl.textContent = '';
+  const r = await apiFetch(`/email-campaigns/${activeEmailCampaignId}/send-test`, {
+    method: 'POST', body: JSON.stringify({ test_email: testEmail || undefined }),
+  });
+  btn.disabled = false; btn.textContent = 'Send test';
+  if (!r || !r.sent) {
+    msgEl.textContent = r?.error ?? 'Could not send — check RESEND_API_KEY is configured.';
+    msgEl.style.color = 'var(--err)';
+    return;
+  }
+  msgEl.style.color = 'var(--accent)';
+  msgEl.textContent = `Sent to ${r.to}`;
+}
+
+async function deleteActiveEmailCampaign() {
+  if (!confirm('Delete this email? This cannot be undone.')) return;
+  const r = await apiFetch(`/email-campaigns/${activeEmailCampaignId}`, { method: 'DELETE' });
+  if (!r || r.error) { alert(r?.error ?? 'Delete failed'); return; }
+  document.getElementById('emailCampaignDetailModal').classList.remove('open');
+  showToast('Email deleted');
+  loadEmailCampaigns();
 }
 
 // ── ATTRIBUTION ────────────────────────────────────────────────────────────

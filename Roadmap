@@ -896,13 +896,85 @@ same email with a 409) until someone clicked the dead link.
 
 ---
 
+## PLANNED — Email Marketing (CRM Email Campaigns) (added 2026-07-08)
+
+Goal: let every client (CSR/REA + all future operators) create, schedule, and send
+marketing emails (newsletters/promos/announcements) to their DB2 CRM contacts —
+a Mailchimp-lite built on the existing Resend integration + campaign engine
+patterns, not a rebuild of either.
+
+**STATUS (2026-07-08): Phase 1 (compliance/data model) + Phase 3 (campaign creation UI)
+are BUILT** — see CLAUDE.md "Email Marketing — 'email creation' phase" for full detail.
+Create/edit/preview/test-send an email campaign works end-to-end once the two
+migrations below are run. **Still needed before this is live-usable:**
+1. Run `db1_email_campaigns.sql` in Supabase DB1 SQL editor.
+2. Run `db2_email_consent.sql` in Supabase DB2 (CRM) SQL editor.
+Phases 2 (per-client domain verification UI), 4 (send-to-full-audience pipeline +
+open/click/bounce tracking), 5 (already covered by Send Test), and 6 (portal
+analytics) remain unbuilt — see the phase list below, now annotated with status.
+
+**Decisions locked in (2026-07-08):**
+- **Per-client sending domain, not shared.** Each client verifies their own domain
+  in Resend (SPF/DKIM/DMARC) so deliverability/reputation is fully isolated —
+  chosen over a shared `@usehighmark.com` domain despite the extra onboarding
+  friction. Needs a portal flow that shows the exact DNS records to add + a live
+  "verified?" check (Resend's domain API), and clear instructions since this is
+  the step most likely to silently fail the way `RESEND_FROM_EMAIL` did for
+  invites (see CLAUDE.md 2026-07-06 note) — a client's campaign must not be
+  sendable until their domain shows verified.
+- **Curated templates + merge fields for v1**, not a drag-and-drop block builder.
+  A handful of prebuilt templates (newsletter / promo-discount / season
+  announcement / thank-you) with `{{name}}`/`{{business}}` merge fields, mirroring
+  the existing SMS campaign template UX. Full visual builder deferred — revisit
+  only if clients ask for more creative control than templates provide.
+- **Existing DB2 `contacts.email` rows are treated as already consented** — no
+  blocking re-opt-in campaign required before this ships. CAN-SPAM's unsubscribe
+  requirement still applies regardless of consent history: every email needs a
+  one-click unsubscribe link, and a new consent/unsubscribe flag must exist going
+  forward for any newly-captured email.
+- **Outbound-only.** Reply-to forwards to the client's real business inbox (or a
+  configured reply-to address) — no inbound email processing/inbox inside the
+  portal. This is a marketing tool, not a second Conversations channel.
+
+**Build phases (in order):**
+1. **[DONE 2026-07-08] Compliance + data model** — `email_marketing_consent`/`unsubscribed_at`/
+   `email_unsubscribe_token` on DB2 `contacts` (`db2_email_consent.sql`, not yet applied),
+   unsubscribe token + landing page (`GET /email/unsubscribe/:token`), physical-address
+   footer baked into every render (`emailTemplates.buildEmailFooter`).
+2. **[NOT STARTED] Per-client domain config** — extend `emailService.js` beyond the single
+   global `RESEND_FROM_EMAIL` to a per-client from-address; portal UI (Settings
+   → Email, or a new "Email Marketing" section) showing DNS records to add +
+   verification status via Resend's domain API. A client's campaign UI stays
+   disabled/warned until verified. (`sendEmail()` already accepts a `from` display-name
+   override as of Phase 3, but the underlying address is still the single shared one.)
+3. **[DONE 2026-07-08] Campaign creation UI** — `email_campaigns` table + portal screens:
+   template picker, subject/preview text, merge-field body editor, audience
+   selection (`crm_contacts`/`custom_emails`; `past_guests`-style filters not built).
+   Scheduling deliberately NOT exposed yet — no send pipeline exists to consume `scheduled_at`.
+4. **[NOT STARTED] Send pipeline + tracking** — batch sending via Resend (rate-paced like the
+   SMS `PACE_MS` pattern), Resend webhook receiver for
+   delivered/opened/clicked/bounced/complained → new `email_events` table.
+   Bounce/complaint handling feeds back into unsubscribe/suppression so one bad
+   list doesn't damage the client's own domain reputation.
+5. **[DONE 2026-07-08] Preview + test send** — send-to-self test email before a real send
+   (`sendTestEmail`, portal "Send test" button), mirroring the Settings "Preview opener" pattern.
+6. **[NOT STARTED] Portal analytics** — open rate / click rate / bounces / unsubscribes per
+   campaign, mirroring the existing SMS campaign stats page. Blocked on Phase 4's tracking data.
+
+Open question to revisit before build: Resend plan/volume limits and per-client
+cost allocation once multiple clients are sending real volume.
+
+---
+
 ## NEXT 5 BUILDS (STRICT ORDER)
 
 1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
 2. Sprint 3D — Campaigns v2 (send history, delivery stats)
-3. Sprint 6 — Partner onboarding UX (bulk CSV import, auto-season from keywords)
-4. Analytics deep-dive (per-channel funnel, lead source attribution)
-5. Billing & plan enforcement (message limits, upgrade flow)
+3. Email Marketing — Phase 1-2 (compliance + data model, per-client domain config)
+4. Email Marketing — Phase 3-6 (campaign UI, send pipeline/tracking, preview, analytics)
+5. Sprint 6 — Partner onboarding UX (bulk CSV import, auto-season from keywords)
+6. Analytics deep-dive (per-channel funnel, lead source attribution)
+7. Billing & plan enforcement (message limits, upgrade flow)
 
 ---
 

@@ -22,15 +22,26 @@ export function isEmailConfigured() {
   return !!process.env.RESEND_API_KEY;
 }
 
-function fromAddress() {
-  return process.env.RESEND_FROM_EMAIL || "Highmark <onboarding@resend.dev>";
+// displayName lets a caller show e.g. "Colorado Sled Rentals" in the From
+// field while still sending from the one Resend-verified address configured
+// via RESEND_FROM_EMAIL — swapping the address itself requires that client's
+// own domain to be verified in Resend (not yet built, see Roadmap "Email
+// Marketing" Phase 2 — per-client domain config).
+function fromAddress(displayName) {
+  const configured = process.env.RESEND_FROM_EMAIL || "Highmark <onboarding@resend.dev>";
+  if (!displayName) return configured;
+  const match = configured.match(/<(.+)>/);
+  const address = match ? match[1] : configured;
+  return `${displayName} <${address}>`;
 }
 
 /**
  * Sends a transactional email via Resend.
  * Returns { sent: true, id } on success, or { sent: false, reason } — never throws.
+ * `from` (optional) — display name shown in the From field (see fromAddress above).
+ * `replyTo` (optional) — Reply-To address; lets a client's replies land in their real inbox.
  */
-export async function sendEmail({ to, subject, html, text }) {
+export async function sendEmail({ to, subject, html, text, from, replyTo }) {
   if (process.env.TEST_MODE === "true") return { sent: false, reason: "test_mode" };
   if (!process.env.RESEND_API_KEY)      return { sent: false, reason: "not_configured" };
 
@@ -41,7 +52,12 @@ export async function sendEmail({ to, subject, html, text }) {
         Authorization:  `Bearer ${process.env.RESEND_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ from: fromAddress(), to: [to], subject, html, text }),
+      body: JSON.stringify({
+        from: fromAddress(from),
+        to: [to],
+        subject, html, text,
+        ...(replyTo ? { reply_to: replyTo } : {}),
+      }),
     });
 
     if (!res.ok) {

@@ -85,6 +85,12 @@ import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock,
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
 import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls, handlePortalVoiceConfig, handlePortalUpdateVoiceConfig, handlePortalVoiceSpam } from "./voice.js";
 import { incrWithTtl, storeMode, storeHealth } from "./sharedStore.js";
+import {
+  handlePortalEmailTemplates, handlePortalEmailAudiencePreview, handlePortalEmailCampaigns,
+  handlePortalCreateEmailCampaign, handlePortalGetEmailCampaign, handlePortalUpdateEmailCampaign,
+  handlePortalDeleteEmailCampaign, handlePortalPreviewEmailCampaign, handlePortalSendTestEmailCampaign,
+  handleEmailUnsubscribe,
+} from "./adminEmailCampaigns.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1617,6 +1623,10 @@ app.get("/embed.js", (_req, res) => {
   res.sendFile(path.join(__uiDir, "embed.js"));
 });
 
+// ─── Email Marketing: one-click unsubscribe (CAN-SPAM) ──────────────────────
+// Public route — no portal auth. Linked from every marketing email footer.
+app.get("/email/unsubscribe/:token", (req, res) => handleEmailUnsubscribe(req, res, crmSupabase));
+
 // ─── Sprint 5: partner activity click tracker ───────────────────────────────
 // 302 redirect to the partner's booking_url and fire-and-forget log to web_events.
 // Params: id=<partner_activities.id>  s=<session_id?>  c=<channel?>
@@ -1981,6 +1991,15 @@ app.patch("/portal/api/campaigns/:id",              requirePortalAuth, (req, res
 app.post( "/portal/api/campaigns/:id/send",         requirePortalAuth, (req, res) => handlePortalSendCampaign(req, res, supabase, crmSupabase));
 app.delete("/portal/api/campaigns",                 requirePortalAuth, (req, res) => handlePortalBulkDeleteCampaigns(req, res, supabase));
 app.delete("/portal/api/campaigns/:id",             requirePortalAuth, (req, res) => handlePortalDeleteCampaign(req, res, supabase));
+app.get(  "/portal/api/email-campaigns/templates",         requirePortalAuth, (req, res) => handlePortalEmailTemplates(req, res));
+app.get(  "/portal/api/email-campaigns/audience-preview",  requirePortalAuth, (req, res) => handlePortalEmailAudiencePreview(req, res, supabase, crmSupabase));
+app.get(  "/portal/api/email-campaigns",                   requirePortalAuth, (req, res) => handlePortalEmailCampaigns(req, res, supabase));
+app.post( "/portal/api/email-campaigns",                   requirePortalAuth, (req, res) => handlePortalCreateEmailCampaign(req, res, supabase));
+app.get(  "/portal/api/email-campaigns/:id",               requirePortalAuth, (req, res) => handlePortalGetEmailCampaign(req, res, supabase));
+app.patch("/portal/api/email-campaigns/:id",               requirePortalAuth, (req, res) => handlePortalUpdateEmailCampaign(req, res, supabase));
+app.delete("/portal/api/email-campaigns/:id",              requirePortalAuth, (req, res) => handlePortalDeleteEmailCampaign(req, res, supabase));
+app.post( "/portal/api/email-campaigns/:id/preview",       requirePortalAuth, (req, res) => handlePortalPreviewEmailCampaign(req, res, supabase));
+app.post( "/portal/api/email-campaigns/:id/send-test",     requirePortalAuth, (req, res) => handlePortalSendTestEmailCampaign(req, res, supabase));
 app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
 app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res, supabase));
 app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));

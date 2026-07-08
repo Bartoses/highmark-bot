@@ -92,6 +92,9 @@ demoAnalytics.js       — demo funnel event tracking: trackDemoEvent() + admin 
 followUpEngine.js      — lead follow-up sequencing: scheduleFollowUps() + checkAndMarkLeadEngaged()
 campaigns.js           — campaign engine: createCampaign, selectAudience, enqueueCampaign, getCampaignStats
 adminCampaigns.js      — campaign admin routes: POST/GET/PATCH campaigns + POST :id/send
+emailTemplates.js      — Email Marketing: curated templates (newsletter/promo/season_announcement/thank_you), merge-field rendering, CAN-SPAM footer, HTML shell
+emailCampaigns.js      — Email Marketing: email_campaigns CRUD, selectEmailAudience (crm_contacts/custom_emails), previewEmailCampaign, sendTestEmail
+adminEmailCampaigns.js — Email Marketing portal routes: CRUD + templates + audience-preview + preview + send-test + public /email/unsubscribe/:token
 portalAuth.js          — portal JWT middleware factory: makePortalAuth(supabase) + resolvePortalClientId(req)
 adminPortal.js         — portal API handlers: dashboard, leads, campaigns, analytics, settings + admin user mgmt
 adminInvites.js        — invite lifecycle handlers: create, info, accept, revoke, resend, deactivate; auto-delivers via emailService.js (email) or Twilio SMS fallback
@@ -128,7 +131,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1)
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — **NOT YET APPLIED**, run in DB1 before using the Email Marketing portal section), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — **NOT YET APPLIED**, run in DB2 before using crm_contacts audience selection)
 
 ---
 
@@ -612,6 +615,40 @@ DELETE FROM opt_outs;  -- clear test opt-outs (DB1 only)
 When `TEST_MODE=true` (local only, never set on Railway):
 - Twilio sends skipped; `/sms` returns `{ reply: "..." }` JSON
 - `/reset` endpoint available
+
+---
+
+### Email Marketing — "email creation" phase (2026-07-08)
+First slice of the planned CRM Email Marketing feature (see Roadmap "PLANNED — Email Marketing" for
+the full multi-phase plan and the locked design decisions). This phase covers **creating, previewing,
+and test-sending** an email — it does NOT send to a full audience yet (that's a later phase, gated on
+per-client domain verification + bounce/complaint handling).
+
+- `emailTemplates.js` — pure module: `EMAIL_TEMPLATES` (newsletter/promo/season_announcement/thank_you),
+  `renderMergeFields` (`{{first_name}}`/`{{last_name}}`/`{{business_name}}`), `buildEmailFooter` (CAN-SPAM
+  physical address + unsubscribe link — appended to every render regardless of template),
+  `wrapEmailShell` (table-based, inline-styled HTML shell for email-client compatibility),
+  `renderEmailForRecipient` (full per-recipient render → `{subject, html, text}`).
+- `emailCampaigns.js` — `email_campaigns` CRUD (draft-only edits), `selectEmailAudience` (`crm_contacts` —
+  DB2 contacts with an email + `email_marketing_consent=true` + not unsubscribed, degrades gracefully to
+  unfiltered contacts if `db2_email_consent.sql` hasn't been run yet; `custom_emails` — manual list),
+  `previewEmailCampaign` (pure render for one sample recipient), `sendTestEmail` (one real Resend send via
+  `emailService.js`, never touches the real audience).
+- `emailService.js` — `sendEmail()` extended with optional `from` (display-name override, still uses the
+  single Resend-verified `RESEND_FROM_EMAIL` address — per-client domains are a later phase) and `replyTo`.
+  Backward compatible; existing invite-email callers unaffected.
+- `adminEmailCampaigns.js` — portal routes (`/portal/api/email-campaigns*`, client_admin+ for
+  mutations) + public `GET /email/unsubscribe/:token` (no auth — the CAN-SPAM one-click unsubscribe link
+  embedded in every email footer; always returns a friendly page even for an unknown/stale token).
+- Portal **Email Marketing** section (`sec-email-campaigns`, nav under Customers, next to Campaigns):
+  card list, template picker, subject/preview-text/from-name/reply-to fields, merge-field insert buttons,
+  audience selector (CRM contacts / custom list), a live iframe preview, and **Send test** (to the logged-in
+  portal user's own email by default) — no "send to audience" button yet, by design.
+- **Migrations needed before this is usable — NOT YET APPLIED:** `db1_email_campaigns.sql` (DB1,
+  `email_campaigns` table) and `db2_email_consent.sql` (DB2, consent/unsubscribe columns on `contacts`).
+  Existing `contacts.email` rows are grandfathered in as consented once the DB2 migration runs (2026-07-08
+  decision) — no re-opt-in campaign required, but CAN-SPAM unsubscribe still applies to every send.
+- +30 tests (`testEmailCampaigns` in test.js) — pure helpers + route guards/validation. 2908/2908 passing.
 
 ---
 

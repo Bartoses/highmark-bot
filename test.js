@@ -3258,6 +3258,7 @@ async function main() {
     await testSelfSignup();       // Sprint 7: self-serve signup + onboarding polling page
     await testOperationsDashboard(); // Phase 1 ops dashboard: read-only routes + auth guards
     await testVoiceAI();          // Voice AI Phase 1: TwiML builders, config merge, hours, call-log routes
+    await testEmailCampaigns();   // Email Marketing (email creation phase): templates, merge fields, footer/render, CRUD + preview/send-test route guards
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -18416,6 +18417,224 @@ async function testVoiceAI() {
   {
     const res = await httpGet("/portal/api/voice/spam");
     chk("voice4: GET /portal/api/voice/spam → 401 without token", res.status === 401, `status=${res.status}`);
+  }
+}
+
+// ── Email Marketing — "email creation" phase (Roadmap, added 2026-07-08) ────
+// Pure helper unit tests (templates/merge fields/footer/render) + route
+// guards/validation via direct handler import (mirrors testSprintCOperatorPortal).
+async function testEmailCampaigns() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || "expected truthy");
+
+  const { default: fetch } = await import("node-fetch");
+  const emailTemplates = await import("./emailTemplates.js");
+  const emailCampaignsMod = await import("./emailCampaigns.js");
+  const adminEmailCampaigns = await import("./adminEmailCampaigns.js");
+
+  // ── Pure helpers: emailTemplates.js ─────────────────────────────────────
+  chk("email: renderMergeFields substitutes known tokens",
+    emailTemplates.renderMergeFields("Hi {{first_name}}, welcome to {{business_name}}", { first_name: "Alex", business_name: "CSR" })
+      === "Hi Alex, welcome to CSR");
+
+  chk("email: renderMergeFields leaves unknown tokens blank (no crash)",
+    emailTemplates.renderMergeFields("Hi {{nonexistent_token}}!", {}) === "Hi !");
+
+  chk("email: escapeHtml escapes angle brackets and quotes",
+    emailTemplates.escapeHtml(`<b>"quote"</b>`) === "&lt;b&gt;&quot;quote&quot;&lt;/b&gt;");
+
+  chk("email: VALID_TEMPLATE_KEYS has all 4 curated templates",
+    emailTemplates.VALID_TEMPLATE_KEYS.length === 4 &&
+    ["newsletter", "promo", "season_announcement", "thank_you"].every(k => emailTemplates.VALID_TEMPLATE_KEYS.includes(k)));
+
+  chk("email: getEmailTemplate falls back to newsletter for unknown key",
+    emailTemplates.getEmailTemplate("bogus_key").key === "newsletter");
+
+  {
+    const footer = emailTemplates.buildEmailFooter({ businessName: "Colorado Sled Rentals", address: "123 Main St", unsubscribeUrl: "https://example.com/email/unsubscribe/abc" });
+    chk("email: buildEmailFooter includes business name + address + unsubscribe link",
+      footer.includes("Colorado Sled Rentals") && footer.includes("123 Main St") && footer.includes("https://example.com/email/unsubscribe/abc"),
+      footer);
+  }
+
+  chk("email: htmlToPlainText strips tags and collapses whitespace",
+    emailTemplates.htmlToPlainText("<p>Hello <b>world</b></p><p>Second para</p>").includes("Hello world") &&
+    emailTemplates.htmlToPlainText("<p>Hello <b>world</b></p><p>Second para</p>").includes("Second para"));
+
+  chk("email: buildUnsubscribeUrl builds a full URL from base + token",
+    emailTemplates.buildUnsubscribeUrl("https://usehighmark.com", "tok-123") === "https://usehighmark.com/email/unsubscribe/tok-123");
+
+  chk("email: buildUnsubscribeUrl trims a trailing slash on baseUrl",
+    emailTemplates.buildUnsubscribeUrl("https://usehighmark.com/", "tok-123") === "https://usehighmark.com/email/unsubscribe/tok-123");
+
+  {
+    const rendered = emailTemplates.renderEmailForRecipient({
+      subject: "Hi {{first_name}}", previewText: "teaser", bodyHtml: "<p>Hey {{first_name}} from {{business_name}}</p>",
+      businessName: "Colorado Sled Rentals", address: "123 Main St", baseUrl: "https://usehighmark.com",
+      mergeVars: { first_name: "Alex" }, unsubscribeToken: "tok-abc",
+    });
+    chk("email: renderEmailForRecipient substitutes subject merge fields", rendered.subject === "Hi Alex", rendered.subject);
+    chk("email: renderEmailForRecipient body includes merged name + business + unsubscribe link",
+      rendered.html.includes("Hey Alex from Colorado Sled Rentals") && rendered.html.includes("/email/unsubscribe/tok-abc"));
+    chk("email: renderEmailForRecipient produces a non-empty plain-text alternative",
+      rendered.text.includes("Hey Alex from Colorado Sled Rentals") && rendered.text.includes("Unsubscribe:"));
+  }
+
+  // ── Pure helpers: emailCampaigns.js ─────────────────────────────────────
+  chk("email: isValidEmail accepts a normal address", emailCampaignsMod.isValidEmail("alex@example.com"));
+  chk("email: isValidEmail rejects a malformed address", !emailCampaignsMod.isValidEmail("not-an-email"));
+  chk("email: isValidEmail rejects empty/undefined", !emailCampaignsMod.isValidEmail("") && !emailCampaignsMod.isValidEmail(undefined));
+
+  {
+    const parsed = emailCampaignsMod.parseEmailList("alex@example.com, BAD, Sam@Example.com\nalex@example.com");
+    chk("email: parseEmailList lowercases, dedupes, and drops invalid entries",
+      parsed.length === 2 && parsed.map(p => p.email).includes("alex@example.com") && parsed.map(p => p.email).includes("sam@example.com"),
+      JSON.stringify(parsed));
+  }
+
+  chk("email: VALID_EMAIL_AUDIENCE_TYPES covers crm_contacts + custom_emails",
+    emailCampaignsMod.VALID_EMAIL_AUDIENCE_TYPES.includes("crm_contacts") && emailCampaignsMod.VALID_EMAIL_AUDIENCE_TYPES.includes("custom_emails"));
+
+  // custom_emails audience selection needs no crmSupabase — pure parsing path
+  {
+    const recipients = await emailCampaignsMod.selectEmailAudience(null, { audienceType: "custom_emails", filterConfig: { emails: "a@example.com, b@example.com" } });
+    chk("email: selectEmailAudience(custom_emails) parses the manual list", recipients.length === 2, JSON.stringify(recipients));
+  }
+  {
+    const recipients = await emailCampaignsMod.selectEmailAudience(null, { clientId: "csr_rea", audienceType: "crm_contacts" });
+    chk("email: selectEmailAudience(crm_contacts) degrades to [] when CRM_SUPABASE not configured", Array.isArray(recipients) && recipients.length === 0);
+  }
+
+  // previewEmailCampaign — pure render, no DB
+  {
+    const campaign = { subject: "Hi {{first_name}}", preview_text: "teaser", body_html: "<p>Hello {{first_name}} at {{business_name}}</p>" };
+    const client = { name: "Colorado Sled Rentals", address: "123 Main St" };
+    const preview = emailCampaignsMod.previewEmailCampaign(campaign, client, { first_name: "Sam" });
+    chk("email: previewEmailCampaign renders subject + body with sample recipient",
+      preview.subject === "Hi Sam" && preview.html.includes("Hello Sam at Colorado Sled Rentals"));
+  }
+
+  // ── HTTP auth guards — every /portal/api/email-campaigns route requires auth ──
+  const emailRoutes = [
+    ["GET",    "/portal/api/email-campaigns"],
+    ["POST",   "/portal/api/email-campaigns"],
+    ["GET",    "/portal/api/email-campaigns/templates"],
+    ["GET",    "/portal/api/email-campaigns/audience-preview"],
+    ["GET",    "/portal/api/email-campaigns/abc"],
+    ["PATCH",  "/portal/api/email-campaigns/abc"],
+    ["DELETE", "/portal/api/email-campaigns/abc"],
+    ["POST",   "/portal/api/email-campaigns/abc/preview"],
+    ["POST",   "/portal/api/email-campaigns/abc/send-test"],
+  ];
+  let all401 = true;
+  for (const [method, route] of emailRoutes) {
+    const res = await fetch(`${BASE_URL}${route}`, {
+      method,
+      headers: method === "POST" || method === "PATCH" ? { "Content-Type": "application/json" } : {},
+      body:    method === "POST" || method === "PATCH" ? "{}" : undefined,
+    });
+    if (res.status !== 401) { all401 = false; console.log(`  Expected 401 on ${method} ${route}, got ${res.status}`); }
+  }
+  chk("email: all /portal/api/email-campaigns routes return 401 without token", all401);
+
+  // ── Public unsubscribe route — no auth required, always 200 ────────────
+  {
+    const res = await httpGet("/email/unsubscribe/some-unknown-token");
+    const body = await res.text();
+    chk("email: GET /email/unsubscribe/:token → 200 friendly page even for an unknown token",
+      res.status === 200 && body.includes("Unsubscribed"), `status=${res.status}`);
+  }
+
+  // ── Direct handler-import tests — stubbed req/res/supabase, no live DB ──
+  const makeReq = (body = {}, params = {}, query = {}, portalUser = { isClientAdmin: true, isAdmin: false, clientId: "csr_rea" }) =>
+    ({ body, params, query, portalUser });
+  const makeRes = () => {
+    const res = { statusCode: 200, jsonBody: null };
+    res.status = (c) => { res.statusCode = c; return res; };
+    res.json   = (b) => { res.jsonBody   = b; return res; };
+    return res;
+  };
+
+  // templates endpoint — no DB dependency
+  {
+    const res = makeRes();
+    adminEmailCampaigns.handlePortalEmailTemplates(makeReq(), res);
+    chk("email: GET templates returns all 4 templates + merge fields",
+      res.jsonBody?.templates?.length === 4 && res.jsonBody?.merge_fields?.length === 3, JSON.stringify(res.jsonBody));
+  }
+
+  // create — validation errors (no DB call reached)
+  {
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalCreateEmailCampaign(makeReq({}), res, {});
+    chk("email: POST create rejects missing name with 400", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+  {
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalCreateEmailCampaign(makeReq({ name: "Test" }), res, {});
+    chk("email: POST create rejects missing subject with 400", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+  {
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalCreateEmailCampaign(
+      makeReq({}, {}, {}, { isClientAdmin: false, isAdmin: false, clientId: "csr_rea" }), res, {}
+    );
+    chk("email: POST create blocked for non-admin (client_user) with 403", res.statusCode === 403, JSON.stringify(res.jsonBody));
+  }
+
+  // create — happy path (mocked supabase insert)
+  {
+    let insertedRow = null;
+    const supa = {
+      from: () => ({
+        insert: (row) => { insertedRow = row; return { select: () => ({ single: () => Promise.resolve({ data: { id: "ec-uuid-1", ...row }, error: null }) }) }; },
+      }),
+    };
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalCreateEmailCampaign(
+      makeReq({ name: "July Newsletter", subject: "Hi {{first_name}}", body_html: "<p>hi</p>", template_key: "newsletter" }), res, supa
+    );
+    chk("email: POST create happy path returns 201 with the inserted campaign",
+      res.statusCode === 201 && res.jsonBody?.campaign?.id === "ec-uuid-1", JSON.stringify(res.jsonBody));
+    chk("email: POST create defaults status to draft", insertedRow?.status === "draft", JSON.stringify(insertedRow));
+    chk("email: POST create scopes the row to the portal user's client_id", insertedRow?.client_id === "csr_rea");
+  }
+
+  // get — cross-tenant access denied
+  {
+    const supa = { from: () => ({ select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { id: "ec-1", client_id: "other_client" }, error: null }) }) }) }) };
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalGetEmailCampaign(makeReq({}, { id: "ec-1" }), res, supa);
+    chk("email: GET :id returns 403 for a campaign belonging to a different client", res.statusCode === 403, JSON.stringify(res.jsonBody));
+  }
+
+  // update — only drafts can be edited
+  {
+    const supa = { from: () => ({ select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { id: "ec-1", client_id: "csr_rea", status: "sent" }, error: null }) }) }) }) };
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalUpdateEmailCampaign(makeReq({ name: "New name" }, { id: "ec-1" }), res, supa);
+    chk("email: PATCH :id rejects editing a non-draft campaign with 409", res.statusCode === 409, JSON.stringify(res.jsonBody));
+  }
+
+  // preview — renders without needing a real client row
+  {
+    const supa = { from: () => ({ select: () => ({ eq: () => ({ single: () => Promise.resolve({
+      data: { id: "ec-1", client_id: "csr_rea", subject: "Hi {{first_name}}", preview_text: "t", body_html: "<p>Hello {{first_name}}</p>" }, error: null,
+    }) }) }) }) };
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalPreviewEmailCampaign(makeReq({ first_name: "Sam" }, { id: "ec-1" }), res, supa);
+    chk("email: POST :id/preview renders a subject + html body",
+      res.jsonBody?.subject === "Hi Sam" && res.jsonBody?.html?.includes("Hello Sam"), JSON.stringify(res.jsonBody));
+  }
+
+  // send-test — rejects an invalid test_email
+  {
+    const supa = { from: () => ({ select: () => ({ eq: () => ({ single: () => Promise.resolve({
+      data: { id: "ec-1", client_id: "csr_rea", subject: "Hi", body_html: "<p>hi</p>" }, error: null,
+    }) }) }) }) };
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalSendTestEmailCampaign(makeReq({ test_email: "not-an-email" }, { id: "ec-1" }), res, supa);
+    chk("email: POST :id/send-test rejects an invalid test_email with 400", res.statusCode === 400, JSON.stringify(res.jsonBody));
   }
 }
 
