@@ -98,7 +98,7 @@ export async function upsertContact(phone, data, crmSupabase) {
     // Check if contact exists to handle tags merge
     const { data: existing } = await crmSupabase
       .from("contacts")
-      .select("tags, total_bookings, opted_in")
+      .select("tags, total_bookings, opted_in, email")
       .eq("phone", normalizedPhone)
       .single();
 
@@ -110,7 +110,10 @@ export async function upsertContact(phone, data, crmSupabase) {
       phone: normalizedPhone,
       first_name:    data.firstName ?? null,
       last_name:     data.lastName  ?? null,
-      email:         data.email     ?? null,
+      // Most callers don't know the guest's email (SMS conversations never ask)
+      // — preserve whatever's already on file instead of clobbering it with
+      // null on every sync. A caller that DOES have a fresh email still wins.
+      email:         data.email || existing?.email || null,
       source:        data.source    || "sms_conversation",
       tags:          mergedTags,
       last_activity: new Date().toISOString(),

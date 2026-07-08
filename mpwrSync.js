@@ -476,6 +476,7 @@ async function upsertOrder(order, activityId, db2, { db1, twilioClient, location
       await upsertContact(phone, {
         firstName:         order.customerFirstName ?? null,
         lastName:          order.customerLastName  ?? null,
+        email:             guestEmail,
         source:            'mpwr_sync',
         tags,
         incrementBookings: false, // upsert is idempotent per sync cycle — don't double-count
