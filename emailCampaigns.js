@@ -20,6 +20,7 @@
 
 import { sendEmail } from "./emailService.js";
 import { getEmailTemplate, VALID_TEMPLATE_KEYS, renderEmailForRecipient } from "./emailTemplates.js";
+import { resolveSendFrom } from "./emailDomains.js";
 
 export const VALID_EMAIL_AUDIENCE_TYPES = ["crm_contacts", "custom_emails"];
 export const VALID_EMAIL_CAMPAIGN_STATUSES = ["draft", "scheduled", "sending", "sent", "failed"];
@@ -204,12 +205,17 @@ export function previewEmailCampaign(campaign, client, sampleContact = {}) {
 // ── sendTestEmail ─────────────────────────────────────────────────────────────
 // Sends ONE real email (via Resend) to a test address — used by the composer's
 // "Send test to me" button. Never touches the real audience/consent list.
-export async function sendTestEmail(campaign, client, testEmail) {
+// domainRow (optional) — the client's client_email_domains row, if any; when
+// its status is "verified" the test send goes out from the client's own
+// domain (via resolveSendFrom), otherwise it falls back to the existing
+// shared RESEND_FROM_EMAIL — same behavior as before Phase 2 existed.
+export async function sendTestEmail(campaign, client, testEmail, domainRow = null) {
   if (!isValidEmail(testEmail)) throw new Error("A valid test email address is required");
 
   const rendered = previewEmailCampaign(campaign, client, { first_name: "Alex", last_name: "Guest" });
   const fromName = campaign.from_name || client?.name || "Highmark";
   const replyTo  = campaign.reply_to || client?.supportEmail || undefined;
+  const fromOverride = resolveSendFrom(domainRow, fromName);
 
   const result = await sendEmail({
     to:      testEmail,
@@ -218,6 +224,7 @@ export async function sendTestEmail(campaign, client, testEmail) {
     text:    rendered.text,
     from:    fromName,
     replyTo,
+    fromOverride,
   });
   return result;
 }

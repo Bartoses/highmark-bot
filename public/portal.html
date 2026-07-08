@@ -1024,6 +1024,7 @@ tr:hover td { background: var(--panel2); }
           <span class="section-title">Email Marketing</span>
           <button class="btn btn-primary btn-sm" id="newEmailCampaignBtn">+ New email</button>
         </div>
+        <div id="emailDomainCard" style="margin-bottom:16px;"></div>
         <div style="background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.2);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--text2);">
           Create and preview newsletters/promos here. Sending to your full customer list is coming soon —
           for now, save a draft and use <strong>Send test</strong> to see exactly what recipients will get.
@@ -2979,7 +2980,7 @@ function switchSection(name, tabParam) {
   if (name === 'dashboard')     loadDashboard();
   if (name === 'leads')         { leadsOffset = 0; loadLeads(); setupLeadsEvents(); }
   if (name === 'campaigns')     { loadCampaigns(); setupCampaignEvents(); }
-  if (name === 'email-campaigns') { loadEmailCampaigns(); setupEmailCampaignEvents(); }
+  if (name === 'email-campaigns') { loadEmailCampaigns(); loadEmailDomainCard(); setupEmailCampaignEvents(); }
   if (name === 'analytics')     { loadAnalytics(); if (tabParam) switchAnalyticsTab(tabParam); }
   if (name === 'optimization')  loadOptimization();
   if (name === 'settings')      { loadSettings(); if (tabParam) switchSettingsTab(tabParam); }
@@ -4371,6 +4372,124 @@ function setupEmailCampaignEvents() {
     openEmailCampaignModal(activeEmailCampaignId);
   });
   document.getElementById('ecdSendTest').addEventListener('click', sendTestEmailCampaign);
+}
+
+// ── Sending Domain (Email Marketing Phase 2) ──────────────────────────────────
+const DOMAIN_STATUS_PILL = { verified: 'green', pending: 'sending', not_started: 'gray', failed: 'failed', temporary_failure: 'failed' };
+const DOMAIN_STATUS_LABEL = {
+  verified: 'Verified', pending: 'Pending DNS', not_started: 'Not started',
+  failed: 'Failed', temporary_failure: 'Temporary failure',
+};
+
+async function loadEmailDomainCard() {
+  const el = document.getElementById('emailDomainCard');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">Loading sending domain…</div>';
+  const d = await apiFetch('/email-domain');
+  if (!d) { el.innerHTML = ''; return; }
+  renderEmailDomainCard(d.domain, d.resend_configured);
+}
+
+function renderEmailDomainCard(domain, resendConfigured) {
+  const el = document.getElementById('emailDomainCard');
+  const cardStyle = 'border:1px solid var(--border2);border-radius:10px;padding:14px 16px;';
+
+  if (!resendConfigured) {
+    el.innerHTML = `<div style="${cardStyle}background:rgba(107,114,128,.06);font-size:12px;color:var(--text2);">
+      Email sending isn't configured yet — contact Highmark support to enable it.
+    </div>`;
+    return;
+  }
+
+  if (!domain) {
+    el.innerHTML = `<div style="${cardStyle}">
+      <div style="font-weight:600;font-size:13px;margin-bottom:4px;">📧 Sending domain</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">
+        Not set up yet — emails send from a shared Highmark address. Add your own domain
+        (e.g. <em>yourbusiness.com</em>) so newsletters come from your brand and land better in inboxes.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input type="text" id="edDomainInput" placeholder="yourbusiness.com" style="flex:1;min-width:180px;background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:8px 10px;font-size:12.5px;outline:none;">
+        <input type="text" id="edLocalPartInput" placeholder="hello" value="hello" style="width:90px;background:var(--panel);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:8px 10px;font-size:12.5px;outline:none;" title="Sends from this@yourdomain.com">
+        <button class="btn btn-primary btn-sm" onclick="edCreateDomain()">Add domain</button>
+      </div>
+      <div id="edError" style="color:#fca5a5;font-size:11.5px;margin-top:8px;"></div>
+    </div>`;
+    return;
+  }
+
+  const statusClass = DOMAIN_STATUS_PILL[domain.status] ?? 'gray';
+  const statusLabel = DOMAIN_STATUS_LABEL[domain.status] ?? domain.status;
+  const fromAddr = `${domain.from_local_part}@${domain.domain}`;
+
+  if (domain.status === 'verified') {
+    el.innerHTML = `<div style="${cardStyle}background:rgba(16,185,129,.06);border-color:rgba(16,185,129,.25);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:600;font-size:13px;">📧 Sending domain <span class="pill pill-${statusClass}">${statusLabel}</span></div>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px;">Newsletters send from <strong>${escHtml(fromAddr)}</strong></div>
+        </div>
+        <span class="row-action" onclick="edRemoveDomain()">Change domain</span>
+      </div>
+    </div>`;
+    return;
+  }
+
+  const records = Array.isArray(domain.records) ? domain.records : [];
+  const recordsHtml = records.length
+    ? `<div class="lp-kv" style="margin-top:10px;">${records.map(r => `
+        <div class="lp-kv-row" style="flex-direction:column;align-items:stretch;gap:4px;">
+          <div style="display:flex;justify-content:space-between;">
+            <span class="k">${escHtml(r.record ?? r.type ?? 'Record')} (${escHtml(r.type ?? '')})</span>
+            <span class="k">${escHtml(r.status ?? '')}</span>
+          </div>
+          <div style="font-family:monospace;font-size:11px;background:var(--panel);border-radius:4px;padding:4px 6px;word-break:break-all;">
+            <strong>Name:</strong> ${escHtml(r.name ?? '')}<br>
+            <strong>Value:</strong> ${escHtml(r.value ?? '')}${r.priority != null ? ` (priority ${r.priority})` : ''}
+          </div>
+        </div>`).join('')}</div>`
+    : `<div style="font-size:12px;color:var(--text3);margin-top:8px;">No DNS records returned yet — try "Check verification".</div>`;
+
+  el.innerHTML = `<div style="${cardStyle}">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div>
+        <div style="font-weight:600;font-size:13px;">📧 Sending domain: ${escHtml(domain.domain)} <span class="pill pill-${statusClass}">${statusLabel}</span></div>
+        <div style="font-size:12px;color:var(--text2);margin-top:2px;">
+          Add these DNS records at your domain registrar, then check verification. Will send from <strong>${escHtml(fromAddr)}</strong> once verified.
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0;">
+        <button class="btn btn-ghost btn-sm" onclick="edCheckVerification()">Check verification</button>
+        <span class="row-action" onclick="edRemoveDomain()">Remove</span>
+      </div>
+    </div>
+    ${recordsHtml}
+  </div>`;
+}
+
+async function edCreateDomain() {
+  const domain = document.getElementById('edDomainInput')?.value.trim().toLowerCase();
+  const localPart = document.getElementById('edLocalPartInput')?.value.trim().toLowerCase() || 'hello';
+  const errEl = document.getElementById('edError');
+  if (errEl) errEl.textContent = '';
+  if (!domain) { if (errEl) errEl.textContent = 'Enter a domain.'; return; }
+
+  const d = await apiFetch('/email-domain', { method: 'POST', body: JSON.stringify({ domain, from_local_part: localPart }) });
+  if (!d) { if (errEl) errEl.textContent = 'Failed to add domain.'; return; }
+  if (d.error) { if (errEl) errEl.textContent = d.error; return; }
+  renderEmailDomainCard(d.domain, true);
+}
+
+async function edCheckVerification() {
+  const d = await apiFetch('/email-domain/verify', { method: 'POST' });
+  if (!d || d.error) return;
+  renderEmailDomainCard(d.domain, true);
+}
+
+async function edRemoveDomain() {
+  if (!confirm('Remove this sending domain? Emails will go back to the shared Highmark address until you add a new one.')) return;
+  await apiFetch('/email-domain', { method: 'DELETE' });
+  loadEmailDomainCard();
 }
 
 async function loadEmailCampaigns() {

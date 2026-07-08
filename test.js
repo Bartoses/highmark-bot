@@ -3259,6 +3259,7 @@ async function main() {
     await testOperationsDashboard(); // Phase 1 ops dashboard: read-only routes + auth guards
     await testVoiceAI();          // Voice AI Phase 1: TwiML builders, config merge, hours, call-log routes
     await testEmailCampaigns();   // Email Marketing (email creation phase): templates, merge fields, footer/render, CRUD + preview/send-test route guards
+    await testEmailDomains();     // Email Marketing Phase 2: per-client sending domain — resolveSendFrom, route guards, validation
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -18635,6 +18636,137 @@ async function testEmailCampaigns() {
     const res = makeRes();
     await adminEmailCampaigns.handlePortalSendTestEmailCampaign(makeReq({ test_email: "not-an-email" }, { id: "ec-1" }), res, supa);
     chk("email: POST :id/send-test rejects an invalid test_email with 400", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL DOMAINS — per-client Resend sending domain (Email Marketing Phase 2).
+//
+// CAUTION mirrors testEmailCampaigns' send-test coverage: this file's runner
+// process loads real .env credentials (dotenv/config) and is NOT TEST_MODE,
+// so any code path that reaches resendDomains.js's registerDomain/fetchDomain/
+// triggerVerify would hit the LIVE Resend API. Only validation/guard paths
+// that return before touching Resend are exercised via direct handler calls.
+// ─────────────────────────────────────────────────────────────────────────────
+async function testEmailDomains() {
+  const chk = (label, cond, detail = "") =>
+    cond ? pass(label) : fail(label, detail || "expected truthy");
+
+  const { default: fetch } = await import("node-fetch");
+  const resendDomains = await import("./resendDomains.js");
+  const emailDomains = await import("./emailDomains.js");
+  const adminEmailCampaigns = await import("./adminEmailCampaigns.js");
+
+  // ── Pure helpers: resendDomains.js ──────────────────────────────────────
+  chk("emaildomain: normalizeDomainStatus passes through a known status",
+    resendDomains.normalizeDomainStatus("verified") === "verified");
+  chk("emaildomain: normalizeDomainStatus defaults an unknown status to not_started",
+    resendDomains.normalizeDomainStatus("some_future_status") === "not_started");
+  chk("emaildomain: normalizeDomainStatus defaults undefined to not_started",
+    resendDomains.normalizeDomainStatus(undefined) === "not_started");
+
+  // ── Pure helpers: emailDomains.js resolveSendFrom ───────────────────────
+  chk("emaildomain: resolveSendFrom returns null when there's no domain row",
+    emailDomains.resolveSendFrom(null, "Colorado Sled Rentals") === null);
+
+  chk("emaildomain: resolveSendFrom returns null when status isn't verified",
+    emailDomains.resolveSendFrom({ domain: "coloradosledrentals.com", status: "pending", from_local_part: "hello" }, "CSR") === null);
+
+  chk("emaildomain: resolveSendFrom builds Name <local@domain> once verified",
+    emailDomains.resolveSendFrom({ domain: "coloradosledrentals.com", status: "verified", from_local_part: "news" }, "Colorado Sled Rentals")
+      === "Colorado Sled Rentals <news@coloradosledrentals.com>");
+
+  chk("emaildomain: resolveSendFrom defaults local part to hello when unset",
+    emailDomains.resolveSendFrom({ domain: "example.com", status: "verified", from_local_part: null }, "Example")
+      === "Example <hello@example.com>");
+
+  chk("emaildomain: resolveSendFrom falls back to the domain itself as display name",
+    emailDomains.resolveSendFrom({ domain: "example.com", status: "verified", from_local_part: "hi" }, null)
+      === "example.com <hi@example.com>");
+
+  // ── HTTP auth guards — every /portal/api/email-domain route requires auth ──
+  const domainRoutes = [
+    ["GET",    "/portal/api/email-domain"],
+    ["POST",   "/portal/api/email-domain"],
+    ["POST",   "/portal/api/email-domain/verify"],
+    ["DELETE", "/portal/api/email-domain"],
+  ];
+  let all401 = true;
+  for (const [method, route] of domainRoutes) {
+    const res = await fetch(`${BASE_URL}${route}`, {
+      method,
+      headers: method === "POST" ? { "Content-Type": "application/json" } : {},
+      body:    method === "POST" ? "{}" : undefined,
+    });
+    if (res.status !== 401) { all401 = false; console.log(`  Expected 401 on ${method} ${route}, got ${res.status}`); }
+  }
+  chk("emaildomain: all /portal/api/email-domain routes return 401 without token", all401);
+
+  // ── Direct handler-import tests — stubbed req/res/supabase, no live Resend ──
+  const makeReq = (body = {}, params = {}, query = {}, portalUser = { isClientAdmin: true, isAdmin: false, clientId: "csr_rea" }) =>
+    ({ body, params, query, portalUser });
+  const makeRes = () => {
+    const res = { statusCode: 200, jsonBody: null };
+    res.status = (c) => { res.statusCode = c; return res; };
+    res.json   = (b) => { res.jsonBody   = b; return res; };
+    return res;
+  };
+
+  // GET — no row yet (getClientDomain only touches the DB, never Resend)
+  {
+    const supa = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }) };
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalGetEmailDomain(makeReq(), res, supa);
+    chk("emaildomain: GET returns domain:null when nothing is configured yet",
+      res.jsonBody?.domain === null, JSON.stringify(res.jsonBody));
+  }
+
+  // POST create — blocked for non-admin (403, before any validation/DB/Resend call)
+  {
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalCreateEmailDomain(
+      makeReq({ domain: "example.com" }, {}, {}, { isClientAdmin: false, isAdmin: false, clientId: "csr_rea" }), res, {}
+    );
+    chk("emaildomain: POST create blocked for non-admin (client_user) with 403", res.statusCode === 403, JSON.stringify(res.jsonBody));
+  }
+
+  // POST create — rejects an invalid domain string (400, before reaching Resend)
+  {
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalCreateEmailDomain(makeReq({ domain: "not a domain!" }), res, {});
+    chk("emaildomain: POST create rejects a malformed domain with 400", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+  {
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalCreateEmailDomain(makeReq({}), res, {});
+    chk("emaildomain: POST create rejects a missing domain with 400", res.statusCode === 400, JSON.stringify(res.jsonBody));
+  }
+
+  // POST verify — 404 when no domain row exists yet (refreshClientDomain reads
+  // the DB, sees no row, and returns null WITHOUT calling Resend)
+  {
+    const supa = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }) };
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalVerifyEmailDomain(makeReq(), res, supa);
+    chk("emaildomain: POST verify returns 404 when no domain is configured", res.statusCode === 404, JSON.stringify(res.jsonBody));
+  }
+
+  // DELETE — blocked for non-admin (403)
+  {
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalDeleteEmailDomain(
+      makeReq({}, {}, {}, { isClientAdmin: false, isAdmin: false, clientId: "csr_rea" }), res, {}
+    );
+    chk("emaildomain: DELETE blocked for non-admin (client_user) with 403", res.statusCode === 403, JSON.stringify(res.jsonBody));
+  }
+
+  // DELETE — happy path (mocked supabase delete, no Resend call)
+  {
+    let deleteCalled = false;
+    const supa = { from: () => ({ delete: () => ({ eq: () => { deleteCalled = true; return Promise.resolve({ error: null }); } }) }) };
+    const res = makeRes();
+    await adminEmailCampaigns.handlePortalDeleteEmailDomain(makeReq(), res, supa);
+    chk("emaildomain: DELETE happy path returns { deleted: 1 }", res.jsonBody?.deleted === 1 && deleteCalled, JSON.stringify(res.jsonBody));
   }
 }
 

@@ -17,12 +17,15 @@
 //   DELETE /portal/api/email-campaigns/:id
 //   POST   /portal/api/email-campaigns/:id/preview
 //   POST   /portal/api/email-campaigns/:id/send-test
+//   GET    /portal/api/email-domain                (Phase 2 — per-client sending domain)
+//   POST   /portal/api/email-domain
+//   POST   /portal/api/email-domain/verify
+//   DELETE /portal/api/email-domain
 //   GET    /email/unsubscribe/:token           (public, no portal auth)
 //
 // Deliberately absent: a "send to full audience" route. Real sending is a
-// later build phase (per-client domain verification + bounce/complaint
-// handling need to land first) — this module only creates, previews, and
-// test-sends single emails.
+// later build phase (bounce/complaint handling needs to land first) — this
+// module only creates, previews, and test-sends single emails.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { resolvePortalClientId } from "./portalAuth.js";
@@ -34,6 +37,12 @@ import {
   previewEmailCampaign, sendTestEmail, isValidEmail,
 } from "./emailCampaigns.js";
 import { EMAIL_TEMPLATES, MERGE_FIELDS } from "./emailTemplates.js";
+import {
+  getClientDomain, createClientDomain, refreshClientDomain, deleteClientDomain,
+} from "./emailDomains.js";
+import { isResendConfigured } from "./resendDomains.js";
+
+const DOMAIN_REGEX = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i;
 
 function requireClientAdmin(req, res) {
   if (!req.portalUser?.isClientAdmin) {
@@ -216,7 +225,8 @@ export async function handlePortalSendTestEmailCampaign(req, res, supabase) {
 
   const client = getAllClients()[campaign.client_id] ?? null;
   try {
-    const result = await sendTestEmail(campaign, client, testEmail);
+    const domainRow = await getClientDomain(supabase, campaign.client_id);
+    const result = await sendTestEmail(campaign, client, testEmail, domainRow);
     if (!result.sent) {
       return res.status(502).json({ sent: false, reason: result.reason ?? "unknown" });
     }
@@ -224,6 +234,66 @@ export async function handlePortalSendTestEmailCampaign(req, res, supabase) {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+}
+
+// ── GET /portal/api/email-domain ───────────────────────────────────────────────
+export async function handlePortalGetEmailDomain(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const domain = await getClientDomain(supabase, clientId);
+  return res.json({ domain, resend_configured: isResendConfigured() });
+}
+
+// ── POST /portal/api/email-domain ──────────────────────────────────────────────
+// Body: { domain, from_local_part? } — registers a new sending domain with
+// Resend and returns the DNS records to add at the client's DNS provider.
+export async function handlePortalCreateEmailDomain(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const domain = String(req.body?.domain ?? "").trim().toLowerCase();
+  if (!domain || !DOMAIN_REGEX.test(domain)) {
+    return res.status(400).json({ error: "A valid domain (e.g. yourbusiness.com) is required" });
+  }
+  const fromLocalPart = String(req.body?.from_local_part ?? "hello").trim().toLowerCase() || "hello";
+
+  try {
+    const row = await createClientDomain(supabase, clientId, domain, fromLocalPart);
+    console.log(`[PORTAL] email domain registered: ${domain} for ${clientId} (by ${req.portalUser?.email ?? "?"})`);
+    return res.status(201).json({ domain: row });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+}
+
+// ── POST /portal/api/email-domain/verify ───────────────────────────────────────
+// Re-checks verification status against Resend (triggers an active re-check).
+export async function handlePortalVerifyEmailDomain(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  const row = await refreshClientDomain(supabase, clientId, { forceVerify: true });
+  if (!row) return res.status(404).json({ error: "No sending domain configured yet" });
+  return res.json({ domain: row });
+}
+
+// ── DELETE /portal/api/email-domain ────────────────────────────────────────────
+// Removes the stored row so the client can register a different domain.
+// Does not delete the domain from Resend itself (harmless to leave registered).
+export async function handlePortalDeleteEmailDomain(req, res, supabase) {
+  if (!supabase) return res.status(503).json({ error: "DB unavailable" });
+  if (!requireClientAdmin(req, res)) return;
+  const clientId = resolvePortalClientId(req);
+  if (!clientId) return res.status(400).json({ error: "client_id is required" });
+
+  await deleteClientDomain(supabase, clientId);
+  return res.json({ deleted: 1 });
 }
 
 // ── GET /email/unsubscribe/:token ─────────────────────────────────────────────

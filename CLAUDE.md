@@ -94,6 +94,8 @@ campaigns.js           — campaign engine: createCampaign, selectAudience, enqu
 adminCampaigns.js      — campaign admin routes: POST/GET/PATCH campaigns + POST :id/send
 emailTemplates.js      — Email Marketing: curated templates (newsletter/promo/season_announcement/thank_you), merge-field rendering, CAN-SPAM footer, HTML shell
 emailCampaigns.js      — Email Marketing: email_campaigns CRUD, selectEmailAudience (crm_contacts/custom_emails), previewEmailCampaign, sendTestEmail
+emailDomains.js         — Email Marketing Phase 2: per-client Resend sending domain — DB CRUD + resolveSendFrom() gate (verified-only)
+resendDomains.js        — thin Resend Domain API wrapper: registerDomain/fetchDomain/triggerVerify, degrades gracefully
 adminEmailCampaigns.js — Email Marketing portal routes: CRUD + templates + audience-preview + preview + send-test + public /email/unsubscribe/:token
 portalAuth.js          — portal JWT middleware factory: makePortalAuth(supabase) + resolvePortalClientId(req)
 adminPortal.js         — portal API handlers: dashboard, leads, campaigns, analytics, settings + admin user mgmt
@@ -131,7 +133,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — **NOT YET APPLIED**, run in DB1 before using the Email Marketing portal section), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — **NOT YET APPLIED**, run in DB2 before using crm_contacts audience selection)
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — applied to DB1), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — applied to DB2), `db1_email_domains.sql` (Email Marketing Phase 2: `client_email_domains` table — **NOT YET APPLIED**, run in DB1 before using the per-client sending domain card)
 
 ---
 
@@ -644,11 +646,43 @@ per-client domain verification + bounce/complaint handling).
   card list, template picker, subject/preview-text/from-name/reply-to fields, merge-field insert buttons,
   audience selector (CRM contacts / custom list), a live iframe preview, and **Send test** (to the logged-in
   portal user's own email by default) — no "send to audience" button yet, by design.
-- **Migrations needed before this is usable — NOT YET APPLIED:** `db1_email_campaigns.sql` (DB1,
-  `email_campaigns` table) and `db2_email_consent.sql` (DB2, consent/unsubscribe columns on `contacts`).
-  Existing `contacts.email` rows are grandfathered in as consented once the DB2 migration runs (2026-07-08
-  decision) — no re-opt-in campaign required, but CAN-SPAM unsubscribe still applies to every send.
-- +30 tests (`testEmailCampaigns` in test.js) — pure helpers + route guards/validation. 2908/2908 passing.
+- **Migrations for this phase (`db1_email_campaigns.sql`, `db2_email_consent.sql`) — APPLIED.**
+  Existing `contacts.email` rows are grandfathered in as consented (2026-07-08 decision) — no
+  re-opt-in campaign required, but CAN-SPAM unsubscribe still applies to every send.
+- +30 tests (`testEmailCampaigns` in test.js) — pure helpers + route guards/validation.
+
+### Email Marketing — Phase 2: per-client sending domain (2026-07-08)
+Each client can now verify their own domain in Resend (SPF/DKIM/DMARC) instead of sending
+marketing email from the shared `usehighmark.com` address — isolates deliverability/reputation
+per client, per the locked design decision in the Roadmap.
+- `resendDomains.js` — thin wrapper around the Resend Domain API (`registerDomain`, `fetchDomain`,
+  `triggerVerify`), same degrade-gracefully-never-throw shape as `emailService.js`. Guarded by
+  `TEST_MODE` so the test suite can never register/verify a real domain.
+- `emailDomains.js` — orchestrates `resendDomains.js` against the new `client_email_domains` DB1
+  table: `getClientDomain`, `createClientDomain` (registers with Resend + stores the DNS records
+  it returns), `refreshClientDomain` (re-checks verification, optional force re-verify),
+  `deleteClientDomain`. `resolveSendFrom(domainRow, displayName)` is the pure gate — returns a
+  full `Name <local@domain>` address ONLY when `status === "verified"`, else `null` — so a
+  half-configured domain can never silently start sending (the same failure class as the
+  `RESEND_FROM_EMAIL` invite-delivery incident, 2026-07-06 note above).
+- `emailService.js` `sendEmail()` gained `fromOverride` (a full from-address that wins over
+  `from`/`RESEND_FROM_EMAIL`); `emailCampaigns.js` `sendTestEmail()` now takes an optional
+  `domainRow` and resolves it through `resolveSendFrom` — falls back to the existing shared
+  address whenever a client has no verified domain (non-breaking).
+- Portal routes: `GET/POST/DELETE /portal/api/email-domain`, `POST /portal/api/email-domain/verify`
+  (`adminEmailCampaigns.js`, client_admin+ for mutations). Portal UI: a "📧 Sending domain" card
+  at the top of the Email Marketing section (`public/portal.html` `loadEmailDomainCard`) — empty
+  state to add a domain, DNS-records-to-add view while pending, and a green verified banner
+  showing the resolved from-address once done.
+- **Migration needed — NOT YET APPLIED:** `db1_email_domains.sql` (DB1, `client_email_domains`
+  table, one domain per client via `UNIQUE(client_id)`). Run before using this card.
+- +16 tests (`testEmailDomains` in test.js) — pure `resolveSendFrom`/`normalizeDomainStatus` +
+  route guards/validation only; deliberately does NOT exercise the live-Resend-call code paths
+  (`createClientDomain`'s happy path, `refreshClientDomain` against a real row) via direct handler
+  calls, since `test.js`'s runner process loads real `.env` credentials and is not itself
+  `TEST_MODE` — same caution already applied to `sendTestEmail`'s test coverage.
+- Still NOT built: Phase 4 (send-to-full-audience pipeline + bounce/complaint tracking) and
+  Phase 6 (analytics) — see Roadmap "PLANNED — Email Marketing".
 
 ---
 

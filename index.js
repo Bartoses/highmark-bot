@@ -90,6 +90,7 @@ import {
   handlePortalCreateEmailCampaign, handlePortalGetEmailCampaign, handlePortalUpdateEmailCampaign,
   handlePortalDeleteEmailCampaign, handlePortalPreviewEmailCampaign, handlePortalSendTestEmailCampaign,
   handleEmailUnsubscribe,
+  handlePortalGetEmailDomain, handlePortalCreateEmailDomain, handlePortalVerifyEmailDomain, handlePortalDeleteEmailDomain,
 } from "./adminEmailCampaigns.js";
 
 const app = express();
@@ -2000,6 +2001,10 @@ app.patch("/portal/api/email-campaigns/:id",               requirePortalAuth, (r
 app.delete("/portal/api/email-campaigns/:id",              requirePortalAuth, (req, res) => handlePortalDeleteEmailCampaign(req, res, supabase));
 app.post( "/portal/api/email-campaigns/:id/preview",       requirePortalAuth, (req, res) => handlePortalPreviewEmailCampaign(req, res, supabase));
 app.post( "/portal/api/email-campaigns/:id/send-test",     requirePortalAuth, (req, res) => handlePortalSendTestEmailCampaign(req, res, supabase));
+app.get(  "/portal/api/email-domain",                requirePortalAuth, (req, res) => handlePortalGetEmailDomain(req, res, supabase));
+app.post( "/portal/api/email-domain",                requirePortalAuth, (req, res) => handlePortalCreateEmailDomain(req, res, supabase));
+app.post( "/portal/api/email-domain/verify",         requirePortalAuth, (req, res) => handlePortalVerifyEmailDomain(req, res, supabase));
+app.delete("/portal/api/email-domain",               requirePortalAuth, (req, res) => handlePortalDeleteEmailDomain(req, res, supabase));
 app.get(  "/portal/api/analytics",           requirePortalAuth, (req, res) => handlePortalAnalytics(req, res, supabase));
 app.get(  "/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalSettings(req, res, supabase));
 app.patch("/portal/api/settings",            requirePortalAuth, (req, res) => handlePortalUpdateSettings(req, res, supabase));

@@ -903,14 +903,14 @@ marketing emails (newsletters/promos/announcements) to their DB2 CRM contacts �
 a Mailchimp-lite built on the existing Resend integration + campaign engine
 patterns, not a rebuild of either.
 
-**STATUS (2026-07-08): Phase 1 (compliance/data model) + Phase 3 (campaign creation UI)
-are BUILT** — see CLAUDE.md "Email Marketing — 'email creation' phase" for full detail.
-Create/edit/preview/test-send an email campaign works end-to-end once the two
-migrations below are run. **Still needed before this is live-usable:**
-1. Run `db1_email_campaigns.sql` in Supabase DB1 SQL editor.
-2. Run `db2_email_consent.sql` in Supabase DB2 (CRM) SQL editor.
-Phases 2 (per-client domain verification UI), 4 (send-to-full-audience pipeline +
-open/click/bounce tracking), 5 (already covered by Send Test), and 6 (portal
+**STATUS (2026-07-08): Phases 1 (compliance/data model), 2 (per-client domain
+verification), and 3 (campaign creation UI) are BUILT** — see CLAUDE.md "Email
+Marketing — 'email creation' phase" + "Phase 2: per-client sending domain" for full
+detail. Create/edit/preview/test-send an email campaign, and register/verify a
+client's own sending domain, both work end-to-end once migrations are run.
+`db1_email_campaigns.sql` and `db2_email_consent.sql` are applied. **Still needed:**
+run `db1_email_domains.sql` in Supabase DB1 SQL editor (creates `client_email_domains`).
+Phases 4 (send-to-full-audience pipeline + open/click/bounce tracking) and 6 (portal
 analytics) remain unbuilt — see the phase list below, now annotated with status.
 
 **Decisions locked in (2026-07-08):**
@@ -941,12 +941,13 @@ analytics) remain unbuilt — see the phase list below, now annotated with statu
    `email_unsubscribe_token` on DB2 `contacts` (`db2_email_consent.sql`, not yet applied),
    unsubscribe token + landing page (`GET /email/unsubscribe/:token`), physical-address
    footer baked into every render (`emailTemplates.buildEmailFooter`).
-2. **[NOT STARTED] Per-client domain config** — extend `emailService.js` beyond the single
-   global `RESEND_FROM_EMAIL` to a per-client from-address; portal UI (Settings
-   → Email, or a new "Email Marketing" section) showing DNS records to add +
-   verification status via Resend's domain API. A client's campaign UI stays
-   disabled/warned until verified. (`sendEmail()` already accepts a `from` display-name
-   override as of Phase 3, but the underlying address is still the single shared one.)
+2. **[DONE 2026-07-08] Per-client domain config** — `resendDomains.js` (Resend Domain
+   API wrapper) + `emailDomains.js` (`client_email_domains` DB1 table CRUD +
+   `resolveSendFrom` verified-only gate) + portal "📧 Sending domain" card (Email
+   Marketing section top) showing DNS records to add + live verification status.
+   `sendEmail()`'s `fromOverride` + `sendTestEmail()`'s `domainRow` param wire it in;
+   falls back to the shared `RESEND_FROM_EMAIL` for any client without a verified
+   domain (non-breaking). Migration `db1_email_domains.sql` — **NOT YET APPLIED**.
 3. **[DONE 2026-07-08] Campaign creation UI** — `email_campaigns` table + portal screens:
    template picker, subject/preview text, merge-field body editor, audience
    selection (`crm_contacts`/`custom_emails`; `past_guests`-style filters not built).
@@ -970,8 +971,8 @@ cost allocation once multiple clients are sending real volume.
 
 1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
 2. Sprint 3D — Campaigns v2 (send history, delivery stats)
-3. Email Marketing — Phase 1-2 (compliance + data model, per-client domain config)
-4. Email Marketing — Phase 3-6 (campaign UI, send pipeline/tracking, preview, analytics)
+3. Email Marketing — Phases 1-3, 5 DONE (compliance, per-client domain, campaign UI, test-send)
+4. Email Marketing — Phase 4 + 6 remaining (send-to-full-audience pipeline/tracking, analytics)
 5. Sprint 6 — Partner onboarding UX (bulk CSV import, auto-season from keywords)
 6. Analytics deep-dive (per-channel funnel, lead source attribution)
 7. Billing & plan enforcement (message limits, upgrade flow)
