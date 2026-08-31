@@ -112,13 +112,23 @@ async function fetchFreshToken() {
   const page = await context.newPage();
 
   try {
-    // Navigate to MPWR — lands on splash with a Login button
+    // Navigate to MPWR — normally lands on a splash page with a Login button
+    // that redirects to Auth0. Observed 2026-08-30: the run failed because
+    // page.click('button:has-text("Login")') matched a *disabled* type="submit"
+    // button belonging to the login form itself (MPWR sometimes lands directly
+    // on the Auth0 form, skipping the splash) — the click then hung waiting for
+    // that button to become enabled, which never happens until the form fields
+    // below are filled, so it timed out after 30s. Detect which case we're in
+    // before deciding whether to click.
     await page.goto('https://mpwr-hq.poladv.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(1500);
 
-    // Click the Login button — triggers Auth0 redirect to auth.polaris.com
-    await page.click('button:has-text("Login"), a:has-text("Login")');
-    await page.waitForURL('**/auth.polaris.com/**', { timeout: 15000 });
+    const alreadyOnLoginForm = await page.$('input[name="username"]');
+    if (!alreadyOnLoginForm) {
+      // Click the Login button — triggers Auth0 redirect to auth.polaris.com
+      await page.click('button:has-text("Login"), a:has-text("Login")');
+      await page.waitForURL('**/auth.polaris.com/**', { timeout: 15000 });
+    }
 
     // Auth0 Universal Login form
     await page.waitForSelector('input[name="username"]', { timeout: 10000 });

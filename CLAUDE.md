@@ -66,6 +66,22 @@ defense-in-depth — an MPWR-side failure now only degrades MPWR, never the whol
 This does **not** fix GitHub's scheduling reliability — if the daily refresh keeps
 getting silently skipped, add a second offset daily schedule as a cheap safety net.
 
+**Login-flow fix + repo-inactivity warning (2026-08-31).** Two issues surfaced together:
+(1) GitHub emailed "workflow will be disabled soon" for `mpwr-token-refresh` — this is
+GitHub's blanket 60-day-repo-inactivity auto-disable (any scheduled workflow in a repo
+with no pushes in 60 days gets disabled; unrelated to whether the workflow itself has
+been running/succeeding — this repo's last push before this fix was 2026-07-08, ~54
+days). Any push resets the clock; no code change required, but if a repo goes quiet for
+long stretches this will recur. (2) Run #60 (2026-08-30) genuinely failed — MPWR's
+login page apparently landed directly on the Auth0 form instead of the usual splash
+page, so `mpwrTokenRefresh.js`'s initial `page.click('button:has-text("Login")')`
+matched the login form's own (disabled, unfillable-yet) submit button and hung 30s
+waiting for it to become enabled. Fixed by detecting `input[name="username"]` before
+deciding whether to click through a splash page at all. Runs #1–59 had all succeeded,
+so this was a one-off site-side hiccup, not a long-standing break — but worth watching;
+if it recurs, the login page structure may have changed for real and the selectors
+need a proper update against the live site.
+
 ---
 
 ## File Structure
