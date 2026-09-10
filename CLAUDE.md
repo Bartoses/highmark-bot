@@ -66,6 +66,18 @@ defense-in-depth — an MPWR-side failure now only degrades MPWR, never the whol
 This does **not** fix GitHub's scheduling reliability — if the daily refresh keeps
 getting silently skipped, add a second offset daily schedule as a cheap safety net.
 
+**In-run retry + Node 24 (2026-09-10).** Run #71 (2026-09-09) failed with the
+same symptom as the 2026-08-30 incident (`page.click` timing out on a
+disabled Login button); run #72 (2026-09-10, next scheduled tick, unchanged
+code) succeeded — confirms it's an occasional MPWR-side hiccup, not a broken
+selector, but happening again means it's worth not waiting a full day to
+self-heal. `fetchFreshToken` now retries the whole login flow once (fresh
+page + full reload) before failing the run, so a one-off flake recovers
+within the same run instead of leaving `MPWR_TOKEN` stale until the next
+day's tick. Also bumped `actions/setup-node` to `node-version: 24` (GitHub
+force-runs Node 20 actions on 24 anyway now and warns on every run — see
+https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/).
+
 **Login-flow fix + repo-inactivity warning (2026-08-31).** Two issues surfaced together:
 (1) GitHub emailed "workflow will be disabled soon" for `mpwr-token-refresh` — this is
 GitHub's blanket 60-day-repo-inactivity auto-disable (any scheduled workflow in a repo

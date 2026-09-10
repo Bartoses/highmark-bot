@@ -109,57 +109,79 @@ async function fetchFreshToken() {
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   });
-  const page = await context.newPage();
 
+  // MPWR's login flow occasionally hiccups (run #60 2026-08-30, run #71
+  // 2026-09-09 — both a page.click timeout hitting a disabled/stale button on
+  // first load, gone on the very next scheduled run with no code change).
+  // Retry once with a fresh page + full reload before failing the whole run,
+  // so a one-off flake self-heals instead of leaving MPWR_TOKEN stale for a
+  // full day until the next cron tick.
+  const MAX_ATTEMPTS = 2;
   try {
-    // Navigate to MPWR — normally lands on a splash page with a Login button
-    // that redirects to Auth0. Observed 2026-08-30: the run failed because
-    // page.click('button:has-text("Login")') matched a *disabled* type="submit"
-    // button belonging to the login form itself (MPWR sometimes lands directly
-    // on the Auth0 form, skipping the splash) — the click then hung waiting for
-    // that button to become enabled, which never happens until the form fields
-    // below are filled, so it timed out after 30s. Detect which case we're in
-    // before deciding whether to click.
-    await page.goto('https://mpwr-hq.poladv.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(1500);
-
-    const alreadyOnLoginForm = await page.$('input[name="username"]');
-    if (!alreadyOnLoginForm) {
-      // Click the Login button — triggers Auth0 redirect to auth.polaris.com
-      await page.click('button:has-text("Login"), a:has-text("Login")');
-      await page.waitForURL('**/auth.polaris.com/**', { timeout: 15000 });
+    let lastErr;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const page = await context.newPage();
+      try {
+        return await attemptLogin(page, email, password);
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[refresh] Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message}`);
+      } finally {
+        await page.close();
+      }
     }
-
-    // Auth0 Universal Login form
-    await page.waitForSelector('input[name="username"]', { timeout: 10000 });
-    await page.fill('input[name="username"]', email);
-    await page.fill('input[name="password"]', password);
-
-    // Submit and wait for redirect back to MPWR
-    await Promise.all([
-      page.waitForURL('**/mpwr-hq.poladv.com/**', { timeout: 30000 }),
-      page.click('button[type="submit"]'),
-    ]);
-
-    // Give the app a moment to set cookies
-    await page.waitForTimeout(2000);
-
-    const cookies   = await context.cookies('https://mpwr-hq.poladv.com');
-    const authCookie = cookies.find(c => c.name === '__xauth');
-    if (!authCookie) throw new Error('__xauth cookie not found — login may have failed');
-
-    // Strip "Bearer " prefix — MPWR_TOKEN stores just the JWT
-    const jwt     = authCookie.value.replace(/^Bearer\s+/, '');
-    const payload = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString());
-    const exp     = new Date(payload.exp * 1000);
-
-    console.log(`[refresh] Fresh JWT obtained`);
-    console.log(`[refresh] Expires: ${exp.toISOString()} (${exp.toLocaleString('en-US', { timeZone: 'America/Denver' })} MT)`);
-
-    return jwt;
+    throw lastErr;
   } finally {
     await browser.close();
   }
+}
+
+async function attemptLogin(page, email, password) {
+  // Navigate to MPWR — normally lands on a splash page with a Login button
+  // that redirects to Auth0. Observed 2026-08-30: the run failed because
+  // page.click('button:has-text("Login")') matched a *disabled* type="submit"
+  // button belonging to the login form itself (MPWR sometimes lands directly
+  // on the Auth0 form, skipping the splash) — the click then hung waiting for
+  // that button to become enabled, which never happens until the form fields
+  // below are filled, so it timed out after 30s. Detect which case we're in
+  // before deciding whether to click.
+  await page.goto('https://mpwr-hq.poladv.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForTimeout(1500);
+
+  const alreadyOnLoginForm = await page.$('input[name="username"]');
+  if (!alreadyOnLoginForm) {
+    // Click the Login button — triggers Auth0 redirect to auth.polaris.com
+    await page.click('button:has-text("Login"), a:has-text("Login")');
+    await page.waitForURL('**/auth.polaris.com/**', { timeout: 15000 });
+  }
+
+  // Auth0 Universal Login form
+  await page.waitForSelector('input[name="username"]', { timeout: 10000 });
+  await page.fill('input[name="username"]', email);
+  await page.fill('input[name="password"]', password);
+
+  // Submit and wait for redirect back to MPWR
+  await Promise.all([
+    page.waitForURL('**/mpwr-hq.poladv.com/**', { timeout: 30000 }),
+    page.click('button[type="submit"]'),
+  ]);
+
+  // Give the app a moment to set cookies
+  await page.waitForTimeout(2000);
+
+  const cookies   = await page.context().cookies('https://mpwr-hq.poladv.com');
+  const authCookie = cookies.find(c => c.name === '__xauth');
+  if (!authCookie) throw new Error('__xauth cookie not found — login may have failed');
+
+  // Strip "Bearer " prefix — MPWR_TOKEN stores just the JWT
+  const jwt     = authCookie.value.replace(/^Bearer\s+/, '');
+  const payload = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString());
+  const exp     = new Date(payload.exp * 1000);
+
+  console.log(`[refresh] Fresh JWT obtained`);
+  console.log(`[refresh] Expires: ${exp.toISOString()} (${exp.toLocaleString('en-US', { timeZone: 'America/Denver' })} MT)`);
+
+  return jwt;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
