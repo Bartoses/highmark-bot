@@ -22,18 +22,23 @@ Gmail (as `info@coloradosledrentals.com`) is just the delivery truck.
 | Times out after ~6 min | Sends a small batch at a time, resumes by itself |
 
 ## One-time setup (~5 minutes)
-1. **Get the key:** Railway → `highmark-bot` service → **Variables** → click the eye on `OUTBOUND_API_KEY` → copy.
-2. **Apps Script** → Project Settings (gear) → **Script properties** → add
+1. **Get the key:** Railway -> `highmark-bot` service -> **Variables** -> click the eye on `OUTBOUND_API_KEY` -> copy.
+2. **Apps Script** -> Project Settings (gear) -> **Script properties** -> add two rows:
    `HIGHMARK_API_URL` = `https://highmark-bot-production.up.railway.app/api/v1` and `HIGHMARK_API_KEY` = the key.
-3. **Add the code:** Files **+** → Script → paste `Code.gs`. (Only one `onOpen()` is allowed per project — if you already have one,
-   merge the menu lines into it.)
-4. **Edit `index_3.html`:** delete the old hand-made unsubscribe link (the footer is added for you).
-5. Run **`checkConnection()`** and approve the permission prompts. It tells you: connected ✓, Gmail can send as info@ ✓, and how many
-   emails you can still send today.
+3. **Add the code:** Files **+** -> Script -> paste `Code.gs`. (Only one `onOpen()` is allowed per project - if you already have one,
+   merge the menu lines into it.) The script is plain ASCII on purpose, so pasting can't scramble it.
+4. Run **`checkConnection()`** and approve the permission prompts. It shows: connected, Gmail can send as info@, where tests go, and how
+   many emails you can still send today.
 
-## Sending a newsletter
-Menu **Highmark → Preview newsletter audience** → **Send me a test** → **Send newsletter…**
-Edit the `NEWSLETTER` block at the top of `Code.gs` first (change `id` for every new newsletter — it's the double-send guard).
+## Writing + sending a newsletter
+1. Open **https://highmark-bot-production.up.railway.app/newsletter**, click **Access key** once and paste the same key.
+2. Click **+ New newsletter**, fill in the name, subject and (optionally) preview text, and **paste your complete email HTML**.
+   A full HTML document (with its own `<html>`, `<head>` and `<style>`) is sent exactly as designed; only the footer is added.
+3. Choose **Who gets it** (everyone who opted in, or only certain tags), then **Preview** and **Check who receives it**. Warnings appear
+   if the HTML still has Mailchimp placeholders such as `*|UNSUB|*`.
+4. Click **Save**. Your newsletter is stored in the CSR CRM database (Supabase), next to your contacts.
+5. In the Google Sheet: **Highmark -> Send me a test** (goes to `sean@coloradosledrentals.com`), then **Highmark -> Send newsletter...**.
+   A newsletter can only be sent once; edit a sent one with "Save as a new newsletter".
 
 ## Safety rails
 - **Dry run first**, and a confirmation shows the exact count and how long it will take.
@@ -56,8 +61,9 @@ All requests: `Authorization: Bearer <OUTBOUND_API_KEY>`, JSON. Full docs in the
 |---|---|
 | `GET /api/v1/health` | connection + configuration check |
 | `POST /email/audience` `{segment}` | who would receive it, and why others are excluded |
-| `POST /email/send` `{subject, html, segment, transport:"gmail", dry_run:false, idempotency_key}` | queue a newsletter (transport `"resend"` sends from the server instead) |
-| `POST /email/preview` `{subject, html}` | the fully rendered message, for a test to yourself |
+| `POST /email/send` `{newsletter_id, transport:"gmail", dry_run:false}` (or `{subject, html, segment, idempotency_key}`) | queue a newsletter (transport `"resend"` sends from the server instead) |
+| `GET/POST /newsletters` | list / save newsletters (stored in the CSR CRM database); `/newsletter` is the paste page |
+| `POST /email/preview` `{newsletter_id}` (or `{subject, html}`) | the fully rendered message, for a test to yourself |
 | `POST /email/pull` `{campaign_id, limit}` | claim rendered messages to send with GmailApp |
 | `POST /email/report` `{results:[{send_id, ok, error?, deferred?}]}` | report what was sent |
 | `POST /email/bounces` `{emails:[…]}` | addresses that bounced → never emailed again |

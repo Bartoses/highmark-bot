@@ -155,16 +155,33 @@ export function wrapEmailShell({ previewText, bodyHtml, footerHtml }) {
 // Naive HTML→text fallback for the plain-text alternative part.
 export function htmlToPlainText(html) {
   return String(html ?? "")
+    .replace(/<head[\s\S]*?<\/head>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<div[^>]*display\s*:\s*none[^>]*>[\s\S]*?<\/div>/gi, "")     // hidden preheader
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|h[1-6])>/gi, "\n\n")
+    .replace(/<\/(p|div|h[1-6]|tr|li)>/gi, "\n\n")
     .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ").replace(/&middot;/g, "\u00b7").replace(/&#10003;/g, "\u2713")
+    .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+// A pasted design that is already a COMPLETE email document (own <!doctype>/<html>/<head><style>…) must be sent as-is:
+// wrapping it in another document nests <html> inside <html> and moves its <style> (its mobile layout) into the body,
+// where Gmail discards it. So for those we only inject the required footer just before </body>.
+export function isFullHtmlDocument(html) { return /^\s*(<!doctype\s+html|<html[\s>])/i.test(String(html ?? "")); }
+export function injectBeforeBodyEnd(html, block) {
+  const src = String(html ?? "");
+  const i = src.search(/<\/body\s*>/i);
+  return i === -1 ? src + block : src.slice(0, i) + block + src.slice(i);
+}
+const standaloneFooter = (footerHtml) =>
+  `<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:0 8px 28px;">` +
+  `<table role="presentation" width="580" border="0" cellspacing="0" cellpadding="0" style="width:580px;max-width:100%;"><tr><td style="padding:0 28px;">${footerHtml}</td></tr></table>` +
+  `</td></tr></table>`;
 
 export function buildUnsubscribeUrl(baseUrl, token) {
   const base = (baseUrl || "").replace(/\/$/, "");
@@ -185,7 +202,9 @@ export function renderEmailForRecipient({
   const renderedBody    = renderMergeFields(bodyHtml, vars);
   const unsubscribeUrl  = buildUnsubscribeUrl(baseUrl, unsubscribeToken);
   const footerHtml      = buildEmailFooter({ businessName, address, unsubscribeUrl });
-  const html            = wrapEmailShell({ previewText, bodyHtml: renderedBody, footerHtml });
+  const html            = isFullHtmlDocument(renderedBody)
+    ? injectBeforeBodyEnd(renderedBody, standaloneFooter(footerHtml))
+    : wrapEmailShell({ previewText, bodyHtml: renderedBody, footerHtml });
   const text            = `${htmlToPlainText(renderedBody)}\n\n${buildEmailFooterText({ businessName, address, unsubscribeUrl })}`;
   return { subject: renderedSubject, html, text };
 }

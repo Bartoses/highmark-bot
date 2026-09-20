@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Newsletter</title>
+<style>
+  :root { --ink:#111827; --mute:#6b7280; --line:#e5e7eb; --bg:#f6f7f9; --card:#fff; --accent:#0e76bd; --warn-bg:#fff7e6; --warn:#8a5a00; --ok:#0a7a3d; --err:#b42318; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color:var(--ink); background:var(--bg); line-height:1.5; }
+  header { background:#1d2430; color:#fff; padding:14px 20px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  main { max-width:1180px; margin:0 auto; padding:18px 16px 60px; display:grid; gap:16px; grid-template-columns: 250px 1fr; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  h2 { font-size:14px; margin:0 0 10px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); }
+  label { display:block; font-size:13px; font-weight:600; margin:12px 0 4px; }
+  input[type=text], input[type=password], textarea { width:100%; padding:9px 10px; border:1px solid #cfd4dc; border-radius:7px; font:inherit; background:#fff; }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; min-height:300px; resize:vertical; white-space:pre; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  button { font:inherit; font-weight:600; padding:9px 14px; border-radius:7px; border:1px solid #cfd4dc; background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  .list button { display:block; width:100%; text-align:left; margin-bottom:6px; font-weight:500; }
+  .list small { color:var(--mute); display:block; font-weight:400; }
+  .pill { display:inline-block; font-size:11px; padding:1px 7px; border-radius:20px; background:#eef2f7; color:#455; margin-left:6px; }
+  .pill.sent { background:#e3f6ea; color:var(--ok); }
+  .msg { padding:10px 12px; border-radius:8px; font-size:13px; margin-top:12px; white-space:pre-wrap; }
+  .msg.warn { background:var(--warn-bg); color:var(--warn); border:1px solid #f1d9a6; }
+  .msg.ok { background:#e9f8ef; color:var(--ok); border:1px solid #bfe6cd; }
+  .msg.err { background:#fdecea; color:var(--err); border:1px solid #f5c2be; }
+  .muted { color:var(--mute); font-size:13px; }
+  iframe { width:100%; height:640px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  .how { background:#eef6fc; border:1px solid #cfe3f3; border-radius:8px; padding:10px 12px; font-size:13px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Newsletter &mdash; paste, preview, save</h1>
+  <div class="row"><span class="muted" id="keyState" style="color:#c7d0dc"></span><button id="keyBtn">Access key</button></div>
+</header>
+
+<main>
+  <aside class="card">
+    <h2>Your newsletters</h2>
+    <button class="primary" id="newBtn" style="width:100%;margin-bottom:10px">+ New newsletter</button>
+    <div class="list" id="list"><span class="muted">Enter your access key to load them.</span></div>
+  </aside>
+
+  <section>
+    <div class="how card" style="margin-bottom:16px">
+      <b>How sending works:</b> paste your HTML below and <b>Save</b>. Then open your Google Sheet &rarr; <b>Highmark</b> menu &rarr;
+      <b>Send me a test</b> (goes to sean@coloradosledrentals.com) &rarr; <b>Send newsletter&hellip;</b>. Your address and a working
+      unsubscribe link are added to the bottom automatically.
+    </div>
+
+    <div class="card">
+      <h2 id="formTitle">New newsletter</h2>
+      <div id="sentNote" class="msg warn hidden"></div>
+
+      <label for="name">Name (just for you)</label>
+      <input type="text" id="name" placeholder="e.g. September snow report" maxlength="120">
+      <label for="subject">Subject line</label>
+      <input type="text" id="subject" placeholder="What people see in their inbox" maxlength="200">
+      <label for="preview">Preview text <span class="muted">(optional &mdash; the grey snippet next to the subject; ignored if your HTML has its own)</span></label>
+      <input type="text" id="preview" maxlength="200">
+
+      <label for="html">Email HTML &mdash; paste the whole thing</label>
+      <textarea id="html" spellcheck="false" placeholder="<!DOCTYPE html> ... paste your complete email HTML here ..."></textarea>
+      <div class="muted" style="margin-top:4px"><span id="htmlSize">0</span> characters. Use <code>{{first_name}}</code> for the person's first name.</div>
+
+      <label>Who gets it</label>
+      <div class="row" style="align-items:flex-start">
+        <div style="flex:1;min-width:230px">
+          <label style="margin:0 0 4px;font-weight:500"><input type="checkbox" id="onlyTags"> Only people with these tags <span class="muted">(comma-separated, e.g. waiver, booked)</span></label>
+          <input type="text" id="tags" placeholder="leave off to email everyone who opted in" disabled>
+        </div>
+        <label style="font-weight:500;margin-top:0"><input type="checkbox" id="gf"> Also include older contacts who never actively opted in</label>
+      </div>
+
+      <div id="warnings"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="saveBtn">Save</button>
+        <button id="saveNewBtn" class="hidden">Save as a new newsletter</button>
+        <button id="previewBtn">Preview</button>
+        <button id="audBtn">Check who receives it</button>
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px" id="prevCard">
+      <h2>Preview <span class="muted" style="text-transform:none;letter-spacing:0" id="prevSubject"></span></h2>
+      <iframe id="frame" sandbox="" title="Email preview"></iframe>
+      <div class="muted" style="margin-top:6px">Links in the preview don't open. The unsubscribe link is a placeholder here and works in the real send.</div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  var API = '/api/v1', KEY_NAME = 'hm_key';
+  var state = { id: null, sent: false, segmentExtra: {} };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function getKey() { try { return localStorage.getItem(KEY_NAME) || ''; } catch (e) { return window.__hmKey || ''; } }
+  function setKey(k) { try { if (k) localStorage.setItem(KEY_NAME, k); else localStorage.removeItem(KEY_NAME); } catch (e) { window.__hmKey = k; } paintKey(); }
+  function paintKey() { $('keyState').textContent = getKey() ? 'Key saved on this device' : 'No key yet'; }
+
+  function call(method, path, body) {
+    var key = getKey();
+    if (!key) { return Promise.reject(new Error('Enter your access key first (the button at the top right).')); }
+    return fetch(API + path, { method: method, headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status === 401) throw new Error('That access key was not accepted.');
+        if (!r.ok) { var e = new Error(j.error || ('Error ' + r.status)); e.data = j; throw e; }
+        return j; }); });
+  }
+  function say(kind, text) { var d = document.createElement('div'); d.className = 'msg ' + kind; d.textContent = text; var s = $('status'); s.innerHTML = ''; s.appendChild(d); }
+  function showWarnings(list) {
+    var w = $('warnings'); w.innerHTML = '';
+    (list || []).forEach(function (t) { var d = document.createElement('div'); d.className = 'msg warn'; d.textContent = '⚠ ' + t; w.appendChild(d); });
+  }
+
+  function segment() {
+    var seg = {}; for (var k in state.segmentExtra) seg[k] = state.segmentExtra[k];
+    delete seg.tags_any; delete seg.include_grandfathered;
+    if ($('onlyTags').checked) {
+      var tags = $('tags').value.split(',').map(function (t) { return t.trim().toLowerCase(); }).filter(Boolean);
+      if (tags.length) seg.tags_any = tags;
+    }
+    if ($('gf').checked) seg.include_grandfathered = true;
+    return seg;
+  }
+  function payload() { return { id: state.id || undefined, name: $('name').value, subject: $('subject').value, preview_text: $('preview').value, html: $('html').value, segment: segment() }; }
+
+  function setSent(sent) {
+    state.sent = sent;
+    ['name','subject','preview','html','tags'].forEach(function (i) { $(i).readOnly = sent; });
+    $('saveBtn').classList.toggle('hidden', sent); $('saveNewBtn').classList.toggle('hidden', !sent);
+    var n = $('sentNote'); n.classList.toggle('hidden', !sent);
+    if (sent) n.textContent = 'This newsletter has already been sent, so it can’t be changed. Edit the copy below and use “Save as a new newsletter”.';
+  }
+  function fill(nl) {
+    state.id = nl ? nl.id : null; state.segmentExtra = (nl && nl.segment) || {};
+    $('formTitle').textContent = nl ? nl.name : 'New newsletter';
+    $('name').value = nl ? nl.name : ''; $('subject').value = nl ? nl.subject : ''; $('preview').value = (nl && nl.preview_text) || '';
+    $('html').value = (nl && nl.html) || ''; $('htmlSize').textContent = $('html').value.length;
+    var tags = (state.segmentExtra.tags_any || []); $('onlyTags').checked = tags.length > 0; $('tags').disabled = !tags.length; $('tags').value = tags.join(', ');
+    $('gf').checked = !!state.segmentExtra.include_grandfathered;
+    setSent(!!(nl && nl.status === 'sent')); showWarnings([]); $('status').innerHTML = ''; $('frame').srcdoc = ''; $('prevSubject').textContent = '';
+  }
+
+  function loadList() {
+    call('GET', '/newsletters').then(function (r) {
+      var box = $('list'); box.innerHTML = '';
+      if (!r.newsletters.length) { box.innerHTML = '<span class="muted">Nothing saved yet.</span>'; return; }
+      r.newsletters.forEach(function (n) {
+        var b = document.createElement('button');
+        b.textContent = n.name;
+        var p = document.createElement('span'); p.className = 'pill' + (n.status === 'sent' ? ' sent' : ''); p.textContent = n.status; b.appendChild(p);
+        var s = document.createElement('small'); s.textContent = n.subject; b.appendChild(s);
+        b.onclick = function () { call('GET', '/newsletters/' + n.id).then(function (d) { fill(d.newsletter); showWarnings(d.warnings); }).catch(function (e) { say('err', e.message); }); };
+        box.appendChild(b);
+      });
+    }).catch(function (e) { $('list').innerHTML = ''; var s = document.createElement('span'); s.className = 'muted'; s.textContent = e.message; $('list').appendChild(s); });
+  }
+
+  function save(asNew) {
+    var p = payload(); if (asNew) delete p.id;
+    call('POST', '/newsletters', p).then(function (r) {
+      state.id = r.id; showWarnings(r.warnings); say('ok', asNew ? 'Saved as a new newsletter.' : 'Saved.'); if (asNew) setSent(false); loadList();
+    }).catch(function (e) { say('err', e.message); });
+  }
+
+  $('saveBtn').onclick = function () { save(false); };
+  $('saveNewBtn').onclick = function () { save(true); };
+  $('newBtn').onclick = function () { fill(null); };
+  $('html').oninput = function () { $('htmlSize').textContent = $('html').value.length; };
+  $('onlyTags').onchange = function () { $('tags').disabled = !$('onlyTags').checked; };
+  $('previewBtn').onclick = function () {
+    var p = payload();
+    call('POST', '/email/preview', { subject: p.subject, html: p.html, preview_text: p.preview_text }).then(function (r) {
+      $('frame').srcdoc = r.html; $('prevSubject').textContent = '— ' + r.subject; showWarnings(r.warnings); $('prevCard').scrollIntoView({ behavior: 'smooth' });
+    }).catch(function (e) { say('err', e.message); });
+  };
+  $('audBtn').onclick = function () {
+    call('POST', '/email/audience', { segment: segment() }).then(function (a) {
+      var x = a.excluded || {};
+      say('ok', a.eligible + ' people will receive it.\n\nNot receiving it: ' + (x.unsubscribed || 0) + ' unsubscribed, ' + (x.suppressed || 0) + ' bounced/complained, ' + (x.no_consent || 0) + ' never opted in, ' + (x.grandfathered || 0) + ' older contacts without an explicit opt-in, ' + (x.not_in_segment || 0) + ' outside this selection.');
+    }).catch(function (e) { say('err', e.message); });
+  };
+  $('keyBtn').onclick = function () {
+    var k = window.prompt('Paste your access key (from Railway → highmark-bot → Variables → OUTBOUND_API_KEY). Leave empty to forget it on this device.', '');
+    if (k === null) return; setKey(k.trim()); if (getKey()) loadList();
+  };
+
+  paintKey(); fill(null); if (getKey()) loadList();
+})();
+</script>
+</body>
+</html>

@@ -628,6 +628,24 @@ Gmail newsletters. When someone with DNS access adds those records (and/or the R
 becomes available with no cap. Also fixed here: booking-email merge fields (`{{trip_date}}` etc.) are now resolved at QUEUE time (they used to
 render blank at send time). Sender/reply-to precedence for the Resend path is `resolveFrom()` (see above).
 
+### Newsletter paste page + saved newsletters + full-document HTML (2026-09-20)
+Owner wanted to "create HTML for the email and paste it somewhere" with the **CSR CRM database (DB2) as the source of truth**.
+- **`newsletters` table (DB2, applied; RLS on):** id, client_id, name, subject, preview_text, html, segment jsonb, status `draft|sent`, campaign_id, sent_at.
+  Contacts, consent, suppression, waivers, the send log (`email_sends`) AND now the newsletter content all live in DB2. (`email_campaigns` in DB1 still
+  gets one row per send for portal history — a record, not the source of truth.)
+- **API:** `GET/POST /api/v1/newsletters`, `GET /newsletters/:id` (list omits html). `/email/send | preview | audience` accept `{newsletter_id}` and then take
+  subject/html/preview/segment FROM THE DATABASE (the caller can't override them); the default idempotency key is `newsletter-<id>`; a real send marks the
+  newsletter `sent` + stores its campaign id; a sent newsletter can't be edited (409 — "save as new") and re-sending is a no-op. Client-scoped. Saves surface
+  template warnings.
+- **Page:** `public/newsletter.html` served at `GET /newsletter` (public shell; every action needs `OUTBOUND_API_KEY`, kept in localStorage; preview iframe is
+  `sandbox=""`). Paste HTML → preview (footer included) → audience check → save. The Sheet menu then does Send me a test (→ `TEST_TO` sean@coloradosledrentals.com) / Send newsletter….
+- **Full-document HTML:** a pasted design that is already a complete document (`<!doctype>`/`<html>`) is sent AS-IS; only the footer (address + unsubscribe) is injected
+  before `</body>` (`isFullHtmlDocument`/`injectBeforeBodyEnd`). Wrapping it in our 600px card nested `<html>` in `<html>` and moved its `<style>` (mobile layout) into the
+  body where Gmail drops it. Fragments keep the old wrapper. Plain-text alt now ignores `<head>`, `<title>`, hidden preheaders and decodes entities.
+- **Apps Script (`docs/apps-script/Code.gs`) is pure ASCII** (enforced by a test): a clipboard once turned "…" into "Ä¶" and would have scrambled subject lines. It has a
+  run-time budget (270 s) + a 10-minute recurring `continueSending` trigger so a big send resumes itself (Apps Script kills a run at 6 min). Owner's Workspace quota is 1,500/day.
+- Owner's old template came from Mailchimp (`*|UNSUB|*` footer) — see the template-problem guard above.
+
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).
 

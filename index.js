@@ -2243,6 +2243,8 @@ for (const slug of VERTICAL_SLUGS) {
 
 // Sprint 7 — Self-serve signup
 app.get("/signup", (_req, res) => res.sendFile(path.join(__uiDir, "signup.html")));
+// Paste-and-preview page for newsletters. Public shell only — every action needs the OUTBOUND_API_KEY (entered in the page).
+app.get("/newsletter", (_req, res) => res.sendFile(path.join(__uiDir, "newsletter.html")));
 const signupRateLimit = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max:      10,             // 10 signups per IP per hour

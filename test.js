@@ -19183,6 +19183,26 @@ async function testOutboundMessaging() {
   chk("template: booking sends know {{trip_date}} etc.; a clean template has no warnings",
     TP.findTemplateProblems("Hi {{first_name}} {{trip_date}} {{activity}}", TP.BOOKING_FIELDS).warnings.length === 0 && TP.findTemplateProblems("<p>Hello {{first_name}}</p>").warnings.length === 0 && TP.findTemplateProblems("2 * 3 | 4").mailchimp.length === 0);
 
+  // ── full-document HTML (a complete pasted email design) ──
+  const cl0 = { name: "Colorado Sled Rentals", address: "1 Main St, Steamboat Springs, CO 80487", supportEmail: "info@csr.test" };
+  const fullDoc = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Summer RZR</title><style>@media screen and (max-width:600px){.container{width:100%!important}}</style></head>' +
+    '<body style="margin:0;background:#e8ecf0;"><div style="display:none;max-height:0;overflow:hidden;">Hidden preheader words</div><table class="container" width="580"><tr><td>Hello {{first_name}} <a href="https://x.test/?a=1&amp;b=2">Book</a> &middot; &#10003;</td></tr></table></body></html>';
+  const fd = TP.isFullHtmlDocument(fullDoc);
+  const fdr = S.renderCampaignEmail({ campaign: { subject: "s", body_html: fullDoc, preview_text: "ignored for full docs" }, client: cl0, recipient: { email: "a@x.com", first_name: "Ann", unsubscribe_token: "tok-fd" }, baseUrl: "https://app.test" });
+  chk("fulldoc: a complete HTML document is detected (doctype/html) and a fragment is not", fd === true && TP.isFullHtmlDocument("  <html><body>x</body></html>") === true && TP.isFullHtmlDocument("<p>Hello</p>") === false && TP.isFullHtmlDocument("<table><tr><td>x</td></tr></table>") === false);
+  chk("fulldoc: sent AS-IS — exactly ONE <html>/<head>/<body>, the <style> (mobile layout) stays in <head>, nothing is nested",
+    (fdr.html.match(/<html/gi) || []).length === 1 && (fdr.html.match(/<body/gi) || []).length === 1 && fdr.html.indexOf("<style>") < fdr.html.indexOf("</head>") && fdr.html.startsWith("<!DOCTYPE html>"), fdr.html.slice(0, 120));
+  chk("fulldoc: the footer (address + working unsubscribe link) is injected just BEFORE </body>, after the design",
+    fdr.html.indexOf("Hello Ann") < fdr.html.indexOf("1 Main St") && fdr.html.indexOf("1 Main St") < fdr.html.indexOf("</body>") && fdr.html.includes("https://app.test/email/unsubscribe/tok-fd") && fdr.html.trim().endsWith("</body></html>"), JSON.stringify({ h: fdr.html.indexOf("Hello Ann"), m: fdr.html.indexOf("1 Main St"), b: fdr.html.indexOf("</body>"), tail: fdr.html.slice(-60), hasUnsub: fdr.html.includes("https://app.test/email/unsubscribe/tok-fd") }));
+  chk("fulldoc: merge fields still work inside a full document", fdr.html.includes("Hello Ann"));
+  chk("fulldoc: the plain-text version ignores <head>/<title>/the hidden preheader and decodes entities", !/Summer RZR|Hidden preheader|@media/.test(fdr.text) && /Hello Ann Book \u00b7 \u2713/.test(fdr.text) && !/&amp;|&middot;|&#10003;/.test(fdr.text) && /Unsubscribe/.test(fdr.text), fdr.text.slice(0, 200));
+  chk("fulldoc: a document with no </body> still gets its footer", TP.injectBeforeBodyEnd("<html><p>x</p>", "<i>F</i>") === "<html><p>x</p><i>F</i>");
+  chk("fulldoc: a plain fragment is still wrapped in the standard shell (unchanged behaviour)", S.renderCampaignEmail({ campaign: { subject: "s", body_html: "<p>Hi</p>" }, client: cl0, recipient: { email: "a@x.com", unsubscribe_token: "t" }, baseUrl: "https://x" }).html.includes("max-width:600px"));
+  chk("fulldoc: booking emails also accept a full document", (() => { const t = S.renderTransactionalEmail({ row: { email: "a@x.com", subject: "s", body_html: fullDoc }, client: cl0, mergeVars: { first_name: "Ann" } }); return (t.html.match(/<html/gi) || []).length === 1 && t.html.includes("Colorado Sled Rentals") && !/unsubscribe/i.test(t.html); })());
+
+  // ── the Apps Script must stay plain ASCII (a clipboard once scrambled "..." into "A" + a paragraph mark) ──
+  chk("appsscript: Code.gs is pure ASCII so copy/paste can never scramble it", await (async () => { const fs = await import("fs"); const src = fs.readFileSync(new URL("./docs/apps-script/Code.gs", import.meta.url), "utf8"); return !/[^\x00-\x7F]/.test(src); })());
+
   // ── pure: sender helpers ──
   chk("send: List-Unsubscribe + one-click headers are built from the token", (() => { const h = S.buildListUnsubscribeHeaders("https://app.test/", "t1"); return h["List-Unsubscribe"] === "<https://app.test/email/unsubscribe/t1>" && h["List-Unsubscribe-Post"] === "List-Unsubscribe=One-Click"; })() && Object.keys(S.buildListUnsubscribeHeaders("x", null)).length === 0);
   chk("send: mailing address comes from the client, else MAILING_ADDRESS, else null", S.resolveMailingAddress({ address: "1 Main St" }) === "1 Main St" && S.resolveMailingAddress({}) === null);
@@ -19467,6 +19487,13 @@ async function testOutboundMessaging() {
     }
   }
 
+  if (typeof httpGet === "function") {
+    const pg = await httpGet("/newsletter"); const pgHtml = await pg.text();
+    chk("newsletter page: /newsletter is served (noindex, sandboxed preview, no key baked in)", pg.status === 200 && /noindex/.test(pgHtml) && /sandbox=""/.test(pgHtml) && !/OUTBOUND_API_KEY\s*=/.test(pgHtml) && /Paste/i.test(pgHtml));
+    const noKey = await httpGet("/api/v1/newsletters");
+    chk("newsletter page: the newsletters API is closed without a key (401, or 503 while no key is configured)", [401, 503].includes(noKey.status), `status=${noKey.status}`);
+  }
+
   // ── suppression + unsubscribe route ──
   {
     const db = makeFhMockCrm({ contacts: [ct({ id: "u1", phone: "+13035550311", email: "leave@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-leave" }), ct({ id: "u2", email: "LEAVE@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-2" }), ct({ id: "u3", email: "stay@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-stay" })] });
@@ -19649,6 +19676,44 @@ async function testOutboundMessaging() {
       b.db1.from = () => ({ select: () => Promise.resolve({ data: null, error: { message: "db1 down" } }), contains: () => ({ limit: () => Promise.resolve({ data: [] }) }) });
       const r = await call(b, "POST", "/sms/send", { body: "Big snow!", segment: {}, dry_run: false, idempotency_key: "idem-sms-closed1" });
       chk("api: sms FAILS CLOSED (503) when the opt-out list is unreadable", r.status === 503);
+    } finally { b.srv.close(); }
+
+    // Saved newsletters (CSR CRM database) over HTTP
+    b = await boot();
+    try {
+      chk("newsletters: endpoints need the API key", (await call(b, "GET", "/newsletters", null, null)).status === 401 && (await call(b, "POST", "/newsletters", {}, null)).status === 401);
+      chk("newsletters: name, subject and html are required", (await call(b, "POST", "/newsletters", { subject: "s", html: "<p>x</p>" })).status === 400 && (await call(b, "POST", "/newsletters", { name: "n", html: "<p>x</p>" })).status === 400 && (await call(b, "POST", "/newsletters", { name: "n", subject: "s" })).status === 400);
+      chk("newsletters: an unknown segment field is rejected on save too", (await call(b, "POST", "/newsletters", { name: "n", subject: "s", html: "<p>x</p>", segment: { tag_any: ["x"] } })).status === 400);
+      const nl = await call(b, "POST", "/newsletters", { name: "Summer launch", subject: "Summer RZR", preview_text: "Kremmling is open", html: "<!DOCTYPE html><html><body><p>Hello {{first_name}}</p></body></html>", segment: { tags_any: ["Waiver"] } });
+      const stored = b.crm.tables.newsletters[0];
+      chk("newsletters: save creates a DRAFT in the CSR CRM database (segment normalised)", nl.status === 201 && stored.status === "draft" && stored.client_id === "csr_rea" && stored.segment.tags_any[0] === "waiver" && stored.html.includes("Hello {{first_name}}"), JSON.stringify(nl.json));
+      const withMc = await call(b, "POST", "/newsletters", { name: "Bad", subject: "s", html: "<a href=\"*|UNSUB|*\">u</a>" });
+      chk("newsletters: saving surfaces Mailchimp-placeholder warnings", withMc.status === 201 && withMc.json.warnings.length === 1);
+      const list = await call(b, "GET", "/newsletters");
+      chk("newsletters: the list carries name/subject/status but NOT the (large) html", list.status === 200 && list.json.newsletters.length === 2 && list.json.newsletters.every(n => n.html === undefined && n.name && n.subject));
+      const one = await call(b, "GET", `/newsletters/${nl.json.id}`);
+      chk("newsletters: fetching one returns the html", one.status === 200 && one.json.newsletter.html.includes("Hello {{first_name}}"));
+      const upd = await call(b, "POST", "/newsletters", { id: nl.json.id, name: "Summer launch v2", subject: "Summer RZR!", html: "<p>Hi {{first_name}}</p>", segment: {} });
+      chk("newsletters: a draft can be edited in place", upd.status === 200 && upd.json.updated === true && b.crm.tables.newsletters.find(n => n.id === nl.json.id).subject === "Summer RZR!" && b.crm.tables.newsletters.length === 2);
+      chk("newsletters: unknown id → 404", (await call(b, "GET", "/newsletters/does-not-exist")).status === 404 && (await call(b, "POST", "/newsletters", { id: "nope", name: "n", subject: "s", html: "<p>x</p>" })).status === 404);
+      b.crm.tables.newsletters.push({ id: "other-client-nl", client_id: "someone_else", name: "Theirs", subject: "s", html: "<p>x</p>", segment: {}, status: "draft" });
+      chk("newsletters: another client's newsletter is invisible", (await call(b, "GET", "/newsletters/other-client-nl")).status === 404 && !(await call(b, "GET", "/newsletters")).json.newsletters.some(n => n.id === "other-client-nl"));
+
+      // send / preview / audience BY newsletter id
+      const id = nl.json.id;
+      const pv = await call(b, "POST", "/email/preview", { newsletter_id: id });
+      chk("newsletters: preview by id renders the SAVED subject/html with the footer", pv.status === 200 && pv.json.subject === "[TEST] Summer RZR!" && pv.json.html.includes("Hi Alex") && pv.json.html.includes("1 Main St"));
+      const aud = await call(b, "POST", "/email/audience", { newsletter_id: id });
+      chk("newsletters: audience by id uses the saved segment", aud.status === 200 && aud.json.eligible === 2, JSON.stringify(aud.json));
+      chk("newsletters: an unknown newsletter_id is a 404 on send, preview and audience", (await call(b, "POST", "/email/send", { newsletter_id: "nope" })).status === 404 && (await call(b, "POST", "/email/preview", { newsletter_id: "nope" })).status === 404 && (await call(b, "POST", "/email/audience", { newsletter_id: "nope" })).status === 404);
+      const dryNl = await call(b, "POST", "/email/send", { newsletter_id: id, transport: "gmail" });
+      chk("newsletters: send by id defaults to a dry run and queues nothing", dryNl.status === 200 && dryNl.json.dry_run === true && b.crm.tables.email_sends.length === 0 && b.crm.tables.newsletters.find(n => n.id === id).status === "draft");
+      const realNl = await call(b, "POST", "/email/send", { newsletter_id: id, transport: "gmail", dry_run: false, expected_recipients: dryNl.json.eligible });
+      chk("newsletters: a real send by id queues the audience and marks the newsletter SENT with its campaign", realNl.status === 202 && realNl.json.queued === 2 && b.crm.tables.newsletters.find(n => n.id === id).status === "sent" && b.crm.tables.newsletters.find(n => n.id === id).campaign_id === realNl.json.campaign_id, JSON.stringify(realNl.json));
+      chk("newsletters: the campaign used the newsletter's OWN subject (not anything the caller supplied)", b.db1.tables.email_campaigns[0].subject === "Summer RZR!" && b.db1.tables.email_campaigns[0].metadata.idempotency_key === `newsletter-${id}`);
+      const again = await call(b, "POST", "/email/send", { newsletter_id: id, transport: "gmail", dry_run: false });
+      chk("newsletters: sending the same newsletter again can never double-send", again.json.already_created === true && b.crm.tables.email_sends.length === 2 && b.db1.tables.email_campaigns.length === 1);
+      chk("newsletters: a SENT newsletter can't be edited (save a copy instead)", (await call(b, "POST", "/newsletters", { id, name: "x", subject: "y", html: "<p>z</p>" })).status === 409);
     } finally { b.srv.close(); }
 
     // Gmail transport over HTTP

@@ -9,6 +9,12 @@
 //   POST /api/v1/email/send            { subject, html, segment, idempotency_key, dry_run:false }
 //   GET  /api/v1/email/campaigns/:id                                       → delivery counts
 //   POST /api/v1/email/transactional   { booking_pk, subject, html, idempotency_key, dry_run:false }
+//   ── Saved newsletters (stored in the CSR CRM database, table `newsletters`) ──
+//   GET  /api/v1/newsletters                 → recent newsletters (no html)
+//   GET  /api/v1/newsletters/:id             → one, with its html
+//   POST /api/v1/newsletters                 { id?, name, subject, preview_text?, html, segment? }  → create / update a DRAFT
+//   …/email/send | preview | audience accept { newsletter_id } instead of subject/html/segment
+//   …a paste-and-preview page for all of this is served at /newsletter
 //   ── Gmail transport (send AS info@yourdomain with no DNS access; see emailSender.js) ──
 //   POST /api/v1/email/send|transactional  + { transport: "gmail" }   queue only; delivery is done by Apps Script
 //   POST /api/v1/email/preview         { subject, html }              → the fully rendered message (for a test to yourself)
@@ -106,6 +112,8 @@ export function isQuietHours(date = new Date(), tz = "America/Denver") {
   return h < 8 || h >= 21;
 }
 
+const NL_LIST_COLS = "id, name, subject, preview_text, segment, status, campaign_id, sent_at, created_at, updated_at";
+
 // ── router factory (deps injected → testable with mocks) ─────────────────────
 export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, drain = drainEmailQueue, kick = true, processDeps = () => ({}), now = () => new Date() }) {
   const router = express.Router();
@@ -113,6 +121,19 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
 
   const clientId = () => process.env.CLIENT_ID || "csr_rea";
   const client = async () => (await getClient?.(clientId())) ?? { name: "Your Business" };
+  const loadNewsletter = async (id) => {
+    if (typeof id !== "string" || !id) return null;
+    const { data, error } = await crm.from("newsletters").select("*").eq("id", id).eq("client_id", clientId()).maybeSingle();
+    return error ? null : data ?? null;
+  };
+  // A request naming a saved newsletter takes its subject / html / preview text / segment from the DATABASE.
+  const withNewsletter = async (b) => {
+    if (!b?.newsletter_id) return { b, newsletter: null };
+    const nl = await loadNewsletter(b.newsletter_id);
+    if (!nl) return { b, newsletter: null, missing: true };
+    return { newsletter: nl, b: { ...b, subject: nl.subject, html: nl.html, preview_text: nl.preview_text, name: nl.name,
+      segment: b.segment ?? nl.segment ?? {}, idempotency_key: b.idempotency_key ?? `newsletter-${nl.id}` } };
+  };
   const transportOf = (b) => (b?.transport === "gmail" ? "gmail" : "resend");
   const queueDeps = async () => { const c = await client();
     return { getCampaign: async (d, id) => (d ? (await d.from("email_campaigns").select("*").eq("id", id).maybeSingle()).data : null), ...processDeps(), resolveClient: () => c }; };
@@ -130,7 +151,9 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
   // ── email: audience preview ──
   router.post("/email/audience", async (req, res) => {
     try {
-      const a = await selectEmailRecipients(crm, { clientId: clientId(), segment: req.body?.segment });
+      const w = await withNewsletter(req.body);
+      if (w.missing) return bad(res, "newsletter not found", 404);
+      const a = await selectEmailRecipients(crm, { clientId: clientId(), segment: w.b?.segment });
       res.json({ eligible: a.stats.eligible, excluded: a.stats.excluded, segment: a.segment,
         by_consent_source: a.recipients.reduce((m, r) => (m[r.consent_source ?? "unknown"] = (m[r.consent_source ?? "unknown"] ?? 0) + 1, m), {}),
         sample: a.recipients.slice(0, 5).map(r => ({ email: maskEmail(r.email), first_name: r.first_name })) });
@@ -139,7 +162,9 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
 
   // ── email: marketing send ──
   router.post("/email/send", async (req, res) => {
-    const b = req.body ?? {};
+    const w0 = await withNewsletter(req.body ?? {});
+    if (w0.missing) return bad(res, "newsletter not found", 404);
+    const b = w0.b, newsletter = w0.newsletter;
     if (typeof b.subject !== "string" || !b.subject.trim() || b.subject.length > 200) return bad(res, "subject is required (max 200 chars)");
     if (typeof b.html !== "string" || !b.html.trim()) return bad(res, "html is required");
     if (b.html.length > MAX_HTML) return bad(res, `html too large (max ${MAX_HTML} chars)`);
@@ -184,6 +209,7 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
       });
       await db1.from("email_campaigns").update({ status: "sending", metadata: { idempotency_key: b.idempotency_key, via: "api", transport }, updated_at: new Date().toISOString() }).eq("id", campaign.id);
       const queued = await enqueueCampaignSends(crm, { campaignId: campaign.id, clientId: clientId(), recipients: a.recipients, transport });
+      if (newsletter) { const t = new Date().toISOString(); await crm.from("newsletters").update({ status: "sent", campaign_id: campaign.id, sent_at: t, updated_at: t }).eq("id", newsletter.id); }
       if (transport === "resend") afterResponse(() => drain(crm, db1, processDeps()));    // gmail rows wait for Apps Script to pull them
       return res.status(202).json({ campaign_id: campaign.id, queued, status: "sending", transport, ...summary });
     } catch (e) {
@@ -195,7 +221,9 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
 
   // ── Gmail transport endpoints ──
   router.post("/email/preview", async (req, res) => {
-    const b = req.body ?? {};
+    const w = await withNewsletter(req.body ?? {});
+    if (w.missing) return bad(res, "newsletter not found", 404);
+    const b = w.b;
     if (typeof b.subject !== "string" || !b.subject.trim() || typeof b.html !== "string" || !b.html.trim()) return bad(res, "subject and html are required");
     if (b.html.length > MAX_HTML) return bad(res, `html too large (max ${MAX_HTML} chars)`);
     const c = await client();
@@ -223,6 +251,40 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
     if (!Array.isArray(req.body?.emails) || req.body.emails.length > 500 || req.body.emails.some(e => typeof e !== "string")) return bad(res, "emails must be an array of strings (max 500)");
     try { res.json(await reportGmailBounces(crm, req.body.emails)); }
     catch (e) { console.error("[OUTBOUND] email/bounces error:", e.message); return bad(res, "report failed", 500); }
+  });
+
+  // ── saved newsletters ──
+  router.get("/newsletters", async (_req, res) => {
+    const { data, error } = await crm.from("newsletters").select(NL_LIST_COLS).eq("client_id", clientId()).order("updated_at", { ascending: false }).limit(30);
+    if (error) return bad(res, "could not list newsletters", 500);
+    res.json({ newsletters: (data ?? []).map(({ html, ...meta }) => meta) });   // the (large) html is fetched per newsletter, never in the list
+  });
+  router.get("/newsletters/:id", async (req, res) => {
+    const nl = await loadNewsletter(req.params.id);
+    return nl ? res.json({ newsletter: nl, warnings: findTemplateProblems(`${nl.subject}\n${nl.html}`).warnings }) : bad(res, "newsletter not found", 404);
+  });
+  router.post("/newsletters", async (req, res) => {
+    const b = req.body ?? {};
+    if (typeof b.name !== "string" || !b.name.trim() || b.name.length > 120) return bad(res, "name is required (max 120 chars)");
+    if (typeof b.subject !== "string" || !b.subject.trim() || b.subject.length > 200) return bad(res, "subject is required (max 200 chars)");
+    if (typeof b.html !== "string" || !b.html.trim()) return bad(res, "html is required");
+    if (b.html.length > MAX_HTML) return bad(res, `html too large (max ${MAX_HTML} chars)`);
+    let segment; try { segment = normalizeSegment(b.segment); } catch (e) { return e instanceof SegmentError ? bad(res, e.message) : bad(res, "invalid segment"); }
+    const row = { name: b.name.trim(), subject: b.subject.trim(), preview_text: (typeof b.preview_text === "string" && b.preview_text.trim()) || null, html: b.html, segment, updated_at: new Date().toISOString() };
+    const warnings = findTemplateProblems(`${row.subject}\n${row.html}`).warnings;
+    try {
+      if (b.id) {
+        const existing = await loadNewsletter(b.id);
+        if (!existing) return bad(res, "newsletter not found", 404);
+        if (existing.status === "sent") return bad(res, "This newsletter has already been sent and can't be edited — save it as a new newsletter instead.", 409);
+        const { error } = await crm.from("newsletters").update(row).eq("id", existing.id);
+        if (error) throw new Error(error.message);
+        return res.json({ id: existing.id, updated: true, warnings });
+      }
+      const { data, error } = await crm.from("newsletters").insert({ ...row, client_id: clientId(), status: "draft" }).select("id").single();
+      if (error || !data) throw new Error(error?.message ?? "insert failed");
+      return res.status(201).json({ id: data.id, updated: false, warnings });
+    } catch (e) { console.error("[OUTBOUND] newsletters save error:", e.message); return bad(res, "could not save the newsletter", 500); }
   });
 
   router.get("/email/campaigns/:id", async (req, res) => {

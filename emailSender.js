@@ -20,7 +20,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import crypto from "crypto";
 import { sendEmailBatch, fromAddress, RESEND_BATCH_MAX } from "./emailService.js";
-import { renderEmailForRecipient, renderMergeFields, wrapEmailShell, htmlToPlainText, buildUnsubscribeUrl, escapeHtml } from "./emailTemplates.js";
+import { renderEmailForRecipient, renderMergeFields, wrapEmailShell, htmlToPlainText, buildUnsubscribeUrl, escapeHtml, isFullHtmlDocument, injectBeforeBodyEnd } from "./emailTemplates.js";
 import { resolveSendFrom, getClientDomain } from "./emailDomains.js";
 import { resolveClientById } from "./clients.js";
 import { suppressEmail, loadSuppressionSets, normEmail } from "./emailSuppression.js";
@@ -101,7 +101,7 @@ export function renderTransactionalEmail({ row, client, mergeVars = {}, domainRo
     from: resolveFrom({ displayName: businessName, domainRow }),
     to: [row.email],
     subject: renderMergeFields(row.subject ?? "", vars),
-    html: wrapEmailShell({ previewText: null, bodyHtml: body, footerHtml: footer }),
+    html: isFullHtmlDocument(body) ? injectBeforeBodyEnd(body, footer) : wrapEmailShell({ previewText: null, bodyHtml: body, footerHtml: footer }),
     text: `${htmlToPlainText(body)}\n\n${businessName}${address ? ` · ${address}` : ""}`,
     ...(resolveReplyTo(replyTo, client) ? { reply_to: resolveReplyTo(replyTo, client) } : {}),
     tags: [{ name: "category", value: "transactional" }],
