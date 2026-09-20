@@ -3261,6 +3261,7 @@ async function main() {
     await testEmailCampaigns();   // Email Marketing (email creation phase): templates, merge fields, footer/render, CRUD + preview/send-test route guards
     await testEmailDomains();     // Email Marketing Phase 2: per-client sending domain — resolveSendFrom, route guards, validation
     await testFareHarborNormalizer(); // FareHarbor → DB2 bookings: customer/activity/total fill from raw_payload + bookings-by-create-date poller
+    await testFareHarborContacts();   // FareHarbor → CRM contacts mirror: consent comes ONLY from FH flags, opt-outs honored, existing consent never touched
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -18658,11 +18659,13 @@ function makeFhMockCrm(seed) {
     bookings:   seed.bookings.map(r => ({ ...r })),
     customers:  (seed.customers ?? []).map(r => ({ ...r })),
     activities: (seed.activities ?? []).map(r => ({ ...r })),
+    contacts:   (seed.contacts ?? []).map(r => ({ ...r })),
+    opt_outs:   (seed.opt_outs ?? []).map(r => ({ ...r })),
   };
-  const writes = { customerInserts: 0, bookingUpdates: [], customerUpdates: 0 };
+  const writes = { customerInserts: 0, bookingUpdates: [], customerUpdates: 0, contactInserts: 0, contactUpdates: [] };
   let idn = 1000;
   function builder(table) {
-    const st = { filters: [], order: null, range: null, patch: null, insert: null, cols: "*" };
+    const st = { filters: [], order: null, range: null, patch: null, insert: null, upsert: null, cols: "*" };
     const run = () => {
       let rows = tables[table].filter(r => st.filters.every(f => f(r)));
       if (st.order) rows = [...rows].sort((a, b) => (a[st.order] > b[st.order] ? 1 : a[st.order] < b[st.order] ? -1 : 0));
@@ -18684,6 +18687,7 @@ function makeFhMockCrm(seed) {
       order(col) { st.order = col; return api; },
       range(a, b) { st.range = [a, b]; return api; },
       insert(row) { st.insert = row; return api; },
+      upsert(rows, opts = {}) { st.upsert = { rows: Array.isArray(rows) ? rows : [rows], opts }; return api; },
       update(patch) { st.patch = patch; return api; },
       maybeSingle() { return Promise.resolve({ data: run()[0] ?? null, error: null }); },
       single() {
@@ -18698,10 +18702,20 @@ function makeFhMockCrm(seed) {
       },
       then(resolve, reject) {
         try {
+          if (st.upsert) {
+            const key = st.upsert.opts.onConflict;
+            for (const row of st.upsert.rows) {
+              const dupe = tables[table].find(r => r[key] === row[key]);
+              if (dupe && st.upsert.opts.ignoreDuplicates) continue;
+              if (dupe) Object.assign(dupe, row); else { tables[table].push({ ...row }); if (table === "contacts") writes.contactInserts++; }
+            }
+            return resolve({ data: null, error: null });
+          }
           if (st.patch) {
             const hit = run();
             hit.forEach(r => Object.assign(r, st.patch));
             if (table === "bookings") hit.forEach(r => writes.bookingUpdates.push({ pk: r.fareharbor_pk, patch: st.patch }));
+            else if (table === "contacts") hit.forEach(r => writes.contactUpdates.push({ phone: r.phone, patch: st.patch }));
             else writes.customerUpdates++;
             return resolve({ data: null, error: null });
           }
@@ -18840,6 +18854,124 @@ async function testFareHarborNormalizer() {
   chk("fhpoll: uses the documented bookings-by-create-date path (not the 404 /bookings/ path)",
     bc.fhCreateDateUrl("coloradosledrentals", "2026-09-19").endsWith("/companies/coloradosledrentals/minimal/bookings-by-create-date/2026-09-19/"));
   chk("fhpoll: detail URL is by booking uuid", bc.fhBookingDetailUrl("rabbitearsadventures", "abc-123").endsWith("/companies/rabbitearsadventures/bookings/abc-123/"));
+}
+
+async function testFareHarborContacts() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const C = await import("./fareharborContacts.js");
+
+  const mk = (pk, { phone = "+16305550101", name = "Ann Guest", email = "ann@example.com", sms = false, emailFlag = false, status = "booked", booked = "2026-09-01T12:00:00Z", company = "coloradosledrentals" } = {}) => ({
+    fareharbor_pk: pk, company, status, booked_at: booked, start_at: "2027-02-01", updated_at: new Date().toISOString(),
+    raw_payload: { booking: { pk: Number(String(pk).replace(/\D/g, "")) || 1, is_subscribed_for_sms_updates: sms,
+      contact: { name, email, normalized_phone: phone, phone, is_subscribed_for_email_updates: emailFlag } } },
+  });
+
+  // ── pure: extract ───────────────────────────────────────────────────────
+  const g1 = C.extractGuestFromBooking(mk("#1", { name: "MATT “ANDO” ANDERSON", email: "Matt@Example.COM", sms: true, emailFlag: true }));
+  chk("fhcontacts: extract splits name, lowercases email, reads BOTH consent flags",
+    g1.firstName === "MATT" && g1.lastName === "“ANDO” ANDERSON" && g1.email === "matt@example.com" && g1.smsYes === true && g1.emailYes === true);
+  chk("fhcontacts: no usable phone → not a contact", C.extractGuestFromBooking(mk("#2", { phone: null })) === null);
+  chk("fhcontacts: missing consent flags read as NO (never assumed yes)",
+    (() => { const r = mk("#3"); delete r.raw_payload.booking.is_subscribed_for_sms_updates; delete r.raw_payload.booking.contact.is_subscribed_for_email_updates;
+      const g = C.extractGuestFromBooking(r); return g.smsYes === false && g.emailYes === false; })());
+
+  // ── pure: aggregate ─────────────────────────────────────────────────────
+  const agg = C.aggregateGuests([
+    mk("#10", { sms: true, emailFlag: true, booked: "2026-01-01T00:00:00Z" }),
+    mk("#11", { sms: false, emailFlag: false, booked: "2026-08-01T00:00:00Z" }),           // newest: said NO
+    mk("#12", { status: "cancelled", booked: "2026-05-01T00:00:00Z" }),
+  ]).get("+16305550101");
+  chk("fhcontacts: the guest's LATEST booking decides consent (old yes, newest no → no)", agg.smsYes === false && agg.emailYes === false);
+  chk("fhcontacts: only status=booked bookings are counted", agg.bookings === 2, `bookings=${agg.bookings}`);
+  chk("fhcontacts: tags = fareharbor + booked + company", ["fareharbor", "booked", "csr"].every(t => agg.tags.has(t)));
+  const cancelledOnly = C.aggregateGuests([mk("#13", { status: "cancelled", phone: "+16305550202" })]).get("+16305550202");
+  chk("fhcontacts: a cancelled-only guest is NOT tagged 'booked'", !cancelledOnly.tags.has("booked") && cancelledOnly.bookings === 0);
+
+  // ── pure: planContact — NEW contacts ────────────────────────────────────
+  const yes = C.aggregateGuests([mk("#20", { sms: true, emailFlag: true })]).get("+16305550101");
+  const no  = C.aggregateGuests([mk("#21", { sms: false, emailFlag: false })]).get("+16305550101");
+  const pYes = C.planContact(yes, {}).row, pNo = C.planContact(no, {}).row;
+  chk("fhcontacts: NEW + FH said yes → opted_in and email consent true", pYes.opted_in === true && pYes.email_marketing_consent === true);
+  chk("fhcontacts: NEW + FH said no → EXPLICIT false (not left to the table's default TRUE)",
+    pNo.opted_in === false && pNo.email_marketing_consent === false && "opted_in" in pNo && "email_marketing_consent" in pNo);
+  const pBlocked = C.planContact(yes, { blocked: true }).row;
+  chk("fhcontacts: NEW + on an opt-out list → opted_in false even if FH said yes, opted_out_at set",
+    pBlocked.opted_in === false && !!pBlocked.opted_out_at);
+  const noEmailAddr = C.aggregateGuests([mk("#22", { sms: true, emailFlag: true, email: "" })]).get("+16305550101");
+  chk("fhcontacts: email consent requires an actual email address", C.planContact(noEmailAddr, {}).row.email_marketing_consent === false);
+
+  // ── pure: planContact — EXISTING contacts ───────────────────────────────
+  const optedOut = { phone: "+16305550101", first_name: null, last_name: null, email: null, tags: ["sms"], total_bookings: 0, last_activity: "2026-01-01T00:00:00Z", opted_in: false };
+  const pEx = C.planContact(yes, { existing: optedOut });
+  chk("fhcontacts: EXISTING contact — consent columns are NEVER in the patch (even when FH says yes)",
+    pEx.action === "update" && !("opted_in" in pEx.patch) && !("opted_out_at" in pEx.patch) && !("email_marketing_consent" in pEx.patch) && !("email_unsubscribed_at" in pEx.patch));
+  chk("fhcontacts: EXISTING — fills blanks, unions tags, raises total_bookings",
+    pEx.patch.first_name === "Ann" && pEx.patch.email === "ann@example.com" && pEx.patch.tags.includes("sms") && pEx.patch.tags.includes("booked") && pEx.patch.total_bookings === 1,
+    JSON.stringify(pEx.patch));
+  const full = { phone: "+16305550101", first_name: "Keep", last_name: "Me", email: "keep@me.com", tags: ["fareharbor", "booked", "csr"], total_bookings: 9, last_activity: "2099-01-01T00:00:00Z" };
+  chk("fhcontacts: EXISTING — never overwrites a name/email, never lowers total_bookings, no-op when nothing to add",
+    C.planContact(yes, { existing: full }).action === "none");
+
+  // ── end to end against the mock DB ──────────────────────────────────────
+  const seed = () => ({
+    bookings: [
+      mk("#100", { phone: "+16305550111", name: "Yes Guest", email: "yes@x.com", sms: true, emailFlag: true }),
+      mk("#101", { phone: "+16305550112", name: "No Guest", email: "no@x.com", sms: false }),
+      mk("#102", { phone: "+16305550113", name: "Stopped Guest", sms: true }),          // FH yes, but replied STOP before
+      mk("#103", { phone: "+16305550114", name: "Known Guest", sms: true, emailFlag: true }),   // already a contact who opted OUT
+      { fareharbor_pk: "CO-AAA-BBB", company: "coloradosledrentals", status: "booked", start_at: "2027-02-01", updated_at: new Date().toISOString(), raw_payload: null },
+      { ...mk("#104", { phone: "+16305550115" }), start_at: "2022-01-01" },              // before the cutoff
+    ],
+    contacts: [{ phone: "+16305550114", first_name: null, last_name: null, email: null, tags: [], total_bookings: 0, last_activity: null, opted_in: false, opted_out_at: "2026-02-02T00:00:00Z", email_marketing_consent: false }],
+    opt_outs: [{ phone: "+16305550113" }],
+  });
+  const db1Ok = (opt) => makeFhMockCrm({ bookings: [], opt_outs: opt });
+
+  let crm = makeFhMockCrm(seed());
+  let dry = await C.mirrorFareHarborContacts(crm, db1Ok(crm.tables.opt_outs), { mode: "full", dryRun: true });
+  chk("fhcontacts: dry run writes nothing", crm.writes.contactInserts === 0 && crm.writes.contactUpdates.length === 0);
+  chk("fhcontacts: dry run reports the plan (3 new, 1 existing; 1 opted in)", dry.newContacts === 3 && dry.existingUpdated === 1 && dry.newSmsOptedIn === 1,
+    JSON.stringify(dry));
+
+  crm = makeFhMockCrm(seed());
+  const db1 = db1Ok(crm.tables.opt_outs);
+  const res = await C.mirrorFareHarborContacts(crm, db1, { mode: "full" });
+  const by = Object.fromEntries(crm.tables.contacts.map(c => [c.phone, c]));
+  chk("fhcontacts: guest who ticked SMS + email → contact opted in for both", by["+16305550111"].opted_in === true && by["+16305550111"].email_marketing_consent === true);
+  chk("fhcontacts: guest who did NOT tick → recognized contact but opted_in=false / email consent=false",
+    by["+16305550112"] && by["+16305550112"].opted_in === false && by["+16305550112"].email_marketing_consent === false);
+  chk("fhcontacts: guest on the STOP list stays opted out even though FH said yes",
+    by["+16305550113"].opted_in === false && !!by["+16305550113"].opted_out_at && res.newBlockedByOptOut === 1);
+  chk("fhcontacts: an existing opted-out contact stays opted out (only blanks filled)",
+    by["+16305550114"].opted_in === false && by["+16305550114"].opted_out_at === "2026-02-02T00:00:00Z" && by["+16305550114"].email_marketing_consent === false && by["+16305550114"].first_name === "Known");
+  chk("fhcontacts: MPWR rows and pre-cutoff rows create no contacts", !by["+16305550115"] && crm.tables.contacts.length === 4);
+
+  const again = await C.mirrorFareHarborContacts(crm, db1, { mode: "full" });
+  chk("fhcontacts: second run creates nothing new (idempotent)", again.newContacts === 0 && crm.writes.contactInserts === 3, JSON.stringify(again));
+
+  // race: a contact appears between the lookup and the insert → theirs is kept, not overwritten
+  crm = makeFhMockCrm({ bookings: [mk("#200", { phone: "+16305550121", sms: true })], opt_outs: [] });
+  await crm.from("contacts").upsert({ phone: "+16305550121", opted_in: false, source: "sms_conversation" }, { onConflict: "phone" });
+  crm.tables.contacts.length = 0; // pretend we didn't see it at lookup time…
+  const origFrom = crm.from; let injected = false;
+  crm.from = (t) => { const b = origFrom(t);
+    if (t === "contacts" && !injected) { const u = b.upsert; b.upsert = (rows, o) => { if (!injected) { injected = true; crm.tables.contacts.push({ phone: "+16305550121", opted_in: false, source: "sms_conversation" }); } return u(rows, o); }; }
+    return b; };
+  await C.mirrorFareHarborContacts(crm, db1Ok([]), { mode: "full" });
+  chk("fhcontacts: a contact created mid-run (e.g. guest texts STOP) is never overwritten by the mirror",
+    crm.tables.contacts.find(c => c.phone === "+16305550121").opted_in === false && crm.tables.contacts.find(c => c.phone === "+16305550121").source === "sms_conversation");
+
+  // fail closed: opt-out list unreadable → nobody new is opted in
+  crm = makeFhMockCrm(seed());
+  const brokenDb1 = { from: () => ({ select: () => Promise.resolve({ data: null, error: { message: "db1 down" } }) }) };
+  const closed = await C.mirrorFareHarborContacts(crm, brokenDb1, { mode: "full" });
+  chk("fhcontacts: FAIL CLOSED — unreadable opt-out list → every new contact opted_in=false",
+    closed.optOutListKnown === false && closed.newSmsOptedIn === 0 && crm.tables.contacts.filter(c => c.source === "fareharbor_booking").every(c => c.opted_in === false));
+  const noDb1 = await C.mirrorFareHarborContacts(makeFhMockCrm(seed()), null, { mode: "full", dryRun: true });
+  chk("fhcontacts: FAIL CLOSED — no DB1 client at all → nobody new opted in", noDb1.newSmsOptedIn === 0 && noDb1.optOutListKnown === false);
+
+  const none = await C.mirrorFareHarborContacts(null, null, {});
+  chk("fhcontacts: null crm client is a safe no-op", none.guests === 0 && none.newContacts === 0);
 }
 
 async function testEmailDomains() {

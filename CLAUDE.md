@@ -111,6 +111,7 @@ livetruth.js           — live availability truth: isAvailabilitySensitive, res
 conversationEngine.js  — config-driven conversation: getConversationConfig, buildMainMenu, routeMenuSelection
 bookingConfirmations.js — FareHarbor webhook receiver + 30min bookings-by-create-date recovery poll + confirmation texts
 fareharborNormalizer.js — links FareHarbor rows in DB2 `bookings` (customer_id/activity_id/total_cents) from raw_payload so they appear in daily_manifest; cron "recent" every tick + daily "full"; CLI: `node --env-file=.env fareharborNormalizer.js [--apply]`
+fareharborContacts.js — mirrors FareHarbor guests into DB2 `contacts` with consent taken ONLY from FareHarbor's per-guest flags (never the table's default-TRUE); cron recent+daily full; CLI dry-runs by default
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging; opt_outs writes to DB1, contacts mirror to DB2
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
@@ -503,8 +504,8 @@ older unwrapped bulk-load shape): customer = find-or-create in `customers` by E.
 never renamed); activity = `activities.fareharbor_item_name` == payload `availability.item.name` **only when exactly
 one activity matches** (else reported as unresolved, never guessed); totals mirror `receipt_total`/`amount_paid`.
 **Only ever fills NULL columns — never overwrites** (~8% of older rows were hand-mapped differently). Scope:
-`start_at >= 2025-01-01` (2021–22 history was never linked; left alone). Does **not** mirror to CRM `contacts`
-(that table drives SMS campaigns and `upsertContact` opts new contacts in — a consent decision, kept separate).
+`start_at >= 2025-01-01` (2021–22 history was never linked; left alone). CRM `contacts` are handled separately by `fareharborContacts.js` (below) —
+the normalizer itself never touches `contacts`.
 Runs in `cron-worker.js`: `recent` mode (rows updated in last 7d) every tick — re-heals a row the writer re-upserts —
 and `full` sweep daily at 10:00 UTC, in its own try/catch. CLI dry-runs by default; `--apply` writes.
 **Poller fix.** `pollNewBookings` called `/companies/{sn}/bookings/`, which does not exist (404) — it silently did
@@ -515,6 +516,24 @@ the same idempotent `processBookingEvent`. Skips a company entirely when both co
 OFF in `messaging_config` (currently true for csr_rea), so it burns no API calls until messaging is enabled.
 It recovers *texts* (and the confirmation-time CRM contact upsert); it does **not** insert missing `bookings` rows.
 +28 tests (`testFareHarborNormalizer`, in-memory mock DB2, no network).
+
+### FareHarbor guests → CRM `contacts` (fareharborContacts.js, 2026-09-20)
+Makes FH guests known contacts so the bot recognizes them when they text in and they can be segmented (1,216
+distinct guests since 2025; only 22 were already in `contacts`). **Not `upsertContact()`** — `contacts.opted_in` and
+`email_marketing_consent` both DEFAULT TRUE and `upsertContact` opts every new contact in, but FareHarbor records each
+guest's own choice on the booking form and **88% of bookings have SMS updates OFF**. Rules (unit-tested):
+- **NEW contact:** `opted_in` = the guest's *latest* booking has `is_subscribed_for_sms_updates === true` AND the phone
+  isn't in DB1 `opt_outs` / DB2 `opt_outs` mirror / `customers.sms_opt_out`; `email_marketing_consent` =
+  `contact.is_subscribed_for_email_updates === true` AND an email exists. Both written **explicitly** (never the
+  default). No/false flag → still a recognized contact (tags `fareharbor`, `booked`, `csr`/`rea`), just not campaign-eligible.
+- **EXISTING contact:** consent is **never touched** (no upgrade, no downgrade — they may have opted in/out via
+  another channel). Only blanks filled (name, email), tags unioned, `total_bookings` only rises, `last_activity` only advances.
+- **Fail closed:** if DB1 `opt_outs` can't be read, every new contact is created `opted_in=false`. Inserts use
+  `ignoreDuplicates` so a contact created mid-run (e.g. a guest texting STOP) is never overwritten.
+Live dry-run (2026-09-20): 3,142 bookings → 1,216 guests → **1,194 new** contacts (163 SMS-opted-in, 140 email-consent)
++ 22 existing filled. **Deliberate deviation from the MPWR/FH-confirmation convention** (which opts every booked guest
+in): to reach the other ~1,000, get explicit opt-in (e.g. a "reply YES for winter deals" text) rather than flipping the flag.
+Cron: `recent` every tick + `full` daily 10:00 UTC (own try/catch). CLI: `node --env-file=.env fareharborContacts.js [--apply]`.
 
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).

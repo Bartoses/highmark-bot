@@ -975,7 +975,7 @@ dead FH recovery poller (now `bookings-by-create-date`). Code + tests done; **li
 `node --env-file=.env fareharborNormalizer.js` (dry) then `--apply`, or let the deployed cron's daily full sweep do it.
 Open: (1) durable fix in the external writer service so rows arrive linked; (2) FH-side check that the CSR "highmark"
 webhook also fires on New bookings; (3) poller does not insert missing `bookings` rows (only texts); (4) CRM
-`contacts` mirror for FH guests deliberately not automated (consent).
+`contacts` mirror for FH guests built as `fareharborContacts.js` (consent from FH's own flags only) — live apply pending.
 
 ## NEXT 5 BUILDS (STRICT ORDER)
 

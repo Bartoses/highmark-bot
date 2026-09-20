@@ -22,6 +22,7 @@ import { runWorkOrderSync } from "./mpwrWorkOrders.js";
 import { runScheduledKnowledgeJobs } from "./knowledgeBase.js";
 import { pollNewBookings, isFareHarborPollDue } from "./bookingConfirmations.js";
 import { normalizeFareHarborBookings } from "./fareharborNormalizer.js";
+import { mirrorFareHarborContacts } from "./fareharborContacts.js";
 import { loadDbClients } from "./clients.js";
 
 const required = [
@@ -116,6 +117,21 @@ try {
       }
     } catch (err) {
       console.error(`[CRON-WORKER] FH normalize failed (non-fatal): ${err.message}`);
+    }
+    // FareHarbor guests → CRM contacts. Consent comes ONLY from FareHarbor's own
+    // per-guest flags (new contacts opted in only if the guest ticked SMS/email
+    // updates; existing contacts' consent is never touched; opt-outs honored; fails
+    // closed if DB1 opt_outs is unreadable). See fareharborContacts.js.
+    try {
+      const fullSweep = new Date().getUTCHours() === 10 && new Date().getUTCMinutes() < 5;
+      const c = await mirrorFareHarborContacts(crmSupabase, supabase, { mode: fullSweep ? "full" : "recent" });
+      if (c.newContacts || c.existingUpdated) {
+        console.log(`[CRON-WORKER] FH contacts (${c.mode}): ${c.newContacts} new ` +
+          `(${c.newSmsOptedIn} SMS opted-in, ${c.newEmailConsent} email-consent), ${c.existingUpdated} existing filled` +
+          `${c.optOutListKnown === false ? " — OPT-OUT LIST UNREADABLE, all new contacts created opted-out" : ""}`);
+      }
+    } catch (err) {
+      console.error(`[CRON-WORKER] FH contacts mirror failed (non-fatal): ${err.message}`);
     }
   }
 
