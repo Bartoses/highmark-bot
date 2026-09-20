@@ -231,11 +231,16 @@ export async function importWaivers(crm, rawRecords, { dryRun = false } = {}) {
     noEmailByName.set(k, (noEmailByName.get(k) ?? 0) + 1);
   }
 
+  // An address unsubscribed/suppressed on ANY contact row is off-limits for consent, wherever else it appears.
+  const suppressedEmails = new Set(contacts.filter(c => c.email && (c.email_unsubscribed_at || c.email_suppressed_at)).map(c => c.email.toLowerCase()));
+  summary.suppressedAddresses = 0;
+
   const waiverContact = new Map();   // email → { contactId, customerId }
   const inserts = [];                // { g, row }
   const updates = [];                // { id, patch }
 
   for (const g of byEmail.values()) {
+    if (suppressedEmails.has(g.email) && g.emailEligible) { g.emailEligible = false; summary.suppressedAddresses++; }
     const cust = customersByEmail.get(g.email)?.[0] ?? null;
     let matched = contactsByEmail.get(g.email) ?? [];
 

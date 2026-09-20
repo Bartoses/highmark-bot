@@ -113,6 +113,13 @@ bookingConfirmations.js — FareHarbor webhook receiver + 30min bookings-by-crea
 fareharborNormalizer.js — links FareHarbor rows in DB2 `bookings` (customer_id/activity_id/total_cents) from raw_payload so they appear in daily_manifest; cron "recent" every tick + daily "full"; CLI: `node --env-file=.env fareharborNormalizer.js [--apply]`
 fareharborContacts.js — mirrors FareHarbor guests into DB2 `contacts` with consent taken ONLY from FareHarbor's per-guest flags (never the table's default-TRUE); cron recent+daily full; CLI dry-runs by default
 waiverImport.js — Smartwaiver CSV → DB2 `waivers` + `contacts` (email-match dedupe, email-only contacts, consent only from verified+ticked waivers, no DOB/licence stored); CLI dry-runs by default
+outboundApi.js — Bearer-key API (/api/v1) for Google Apps Script/automations: email + SMS audience preview, marketing send, booking-related (transactional) send; consent enforced server-side, dry-run by default, idempotent
+outboundAudience.js — the single definition of "who may be emailed/texted" (segment → recipients + exclusion reasons); explicit consent by default, unknown segment fields rejected
+emailSender.js — email queue → Resend batches → delivery tracking; claim-based (web + cron never double-send), consent re-checked at send time, Resend signed webhook → bounce/complaint suppression
+emailSuppression.js — address-level unsubscribe/suppress (every contact row carrying an email), do-not-email records
+importUnsubscribes.js — legacy Google-Sheet unsubscribe list → suppression; CLI dry-runs by default
+db2_email_sends.sql — DB2: per-recipient send queue + delivery log (APPLIED 2026-09-20)
+docs/apps-script/ — Code.gs (Apps Script client that replaces the GmailApp+Sheet flow) + README (setup, env vars, API reference)
 db2_contact_model.sql — DB2 migration: nullable contacts.phone, consent provenance/verification/suppression columns, CHECKs, `waivers` table (APPLIED 2026-09-20)
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging; opt_outs writes to DB1, contacts mirror to DB2
 chat.js                — interactive terminal chat simulator (no Twilio cost)
@@ -165,7 +172,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — applied to DB1), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — applied to DB2), `db1_email_domains.sql` (Email Marketing Phase 2: `client_email_domains` table — **NOT YET APPLIED**, run in DB1 before using the per-client sending domain card), `db2_contact_model.sql` (DB2 — clean contact model for email+SMS outreach; **applied 2026-09-20**, see "Contact model + waiver import")
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — applied to DB1), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — applied to DB2), `db1_email_domains.sql` (Email Marketing Phase 2: `client_email_domains` table — **NOT YET APPLIED**, run in DB1 before using the per-client sending domain card), `db2_email_sends.sql` (DB2 — email send queue + delivery log; **applied 2026-09-20**), `db2_contact_model.sql` (DB2 — clean contact model for email+SMS outreach; **applied 2026-09-20**, see "Contact model + waiver import")
 
 ---
 
@@ -567,6 +574,42 @@ and never when unsubscribed/suppressed; a contact whose phone has a *different* 
 **FareHarbor mirror** (`fareharborContacts.js`) now also records `sms/email_consent_source = fareharbor_flag` + timestamps.
 **Still to build (Roadmap):** the Apps-Script-callable outbound API + email send pipeline (Resend, bounce/complaint
 webhook, unsubscribe), explicit SMS opt-in capture, ongoing Smartwaiver ingestion (webhook/API instead of CSV).
+
+### Outbound messaging — email + text API, send pipeline, suppression (2026-09-20)
+Replaces the old Apps Script → GmailApp → Google Sheet flow (Gmail daily caps, no bounce handling, unsubscribes in a
+separate sheet nobody's code checked). The database is now the list; Apps Script is a thin client (`docs/apps-script/`).
+**API** (`outboundApi.js`, mounted at `/api/v1`, Bearer `OUTBOUND_API_KEY`, 503 if unset): `GET /health`, `POST /email/audience`,
+`POST /email/send`, `GET /email/campaigns/:id`, `POST /email/transactional`, `POST /sms/audience|send|transactional`.
+**Rails:** every send **defaults to dry run** (`dry_run` must be the literal `false`); real sends need an `idempotency_key`
+(retry ⇒ original result, never a second send); marketing email is **refused without a mailing address** (client `address`
+or `MAILING_ADDRESS` env — csr_rea has none configured! CAN-SPAM); explicit consent only unless the segment sets
+`include_grandfathered` (email) / `include_assumed_sms` (text); unknown segment fields → 400; `expected_recipients` tripwire
+(refuse if audience > max(+10%, +3)); per-send cap `OUTBOUND_MAX_RECIPIENTS` (5000); marketing texts refused 9pm–8am Mountain
+(TCPA) and get "Reply STOP" appended; SMS **fails closed** if the opt-out list is unreadable.
+**Transactional** (booking-related): recipient is looked up from the booking (`booking_pk`) — the caller can't supply an
+address; ignores a *marketing* unsubscribe (they still get mail about their own booking) but never a bounce/complaint
+suppression or a STOP; max 5 per booking per 24h.
+**Pipeline** (`emailSender.js`): `email_sends` (DB2) = queue + delivery log, unique `(campaign_id,email)`. The API enqueues and
+kicks `drainEmailQueue`; the cron worker drains it every tick (own try/catch). A row is **claimed** (conditional UPDATE
+queued→sending) so web + cron can never both send it; stuck `sending` rows recover after 10 min; each Resend batch (≤100) carries
+an Idempotency-Key; a bad address fails the whole batch so it's retried one-by-one, `failed` after 3 attempts; **consent is
+re-checked at send time**. Every marketing email has a per-recipient unsubscribe link + RFC 8058 one-click `List-Unsubscribe`
+headers + the CAN-SPAM footer. **Webhook** `POST /webhooks/resend` (raw body, registered BEFORE `express.json()`; Svix signature
+verified with `RESEND_WEBHOOK_SECRET`, 5-min replay window, 503 if unset): delivered / bounced / complained; a hard bounce or a
+complaint **suppresses the address**.
+**Suppression is per ADDRESS** (`emailSuppression.js`): unsubscribing/bouncing silences every contact row with that email
+(case-insensitive), and an address that isn't a contact gets a do-not-email record so an import can't re-add it with
+consent. `waiverImport.js` + `fareharborContacts.js` now refuse to consent an address suppressed anywhere.
+**Unsubscribe route:** `GET /email/unsubscribe/:token` now shows a confirm page (bare GET no longer unsubscribes — email
+security scanners "click" links); `POST` unsubscribes (the confirm button + Gmail/Yahoo one-click).
+**Legacy unsubscribes:** the old sheet's 182 addresses (7 were currently consented!) → `node --env-file=.env
+importUnsubscribes.js <csv> [--apply]`. **Must be applied before the first send.**
+**Env to set on Railway:** `OUTBOUND_API_KEY` (web), `RESEND_WEBHOOK_SECRET` (web), `MAILING_ADDRESS` (web+cron), and
+`RESEND_FROM_EMAIL` once coloradosledrentals.com is verified in Resend (else mail is from the shared usehighmark.com address).
+Unsubscribe links use `PUBLIC_BASE_URL` → `RAILWAY_PUBLIC_DOMAIN` → the Railway URL (never relative).
+**Not built:** portal "Send" button (the Email Marketing composer can still only draft/preview/test), open/click tracking,
+scheduled sends, ongoing Smartwaiver ingestion. Tests: `testOutboundMessaging` (~150 checks incl. a real in-process express
+server with mock DBs).
 
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).

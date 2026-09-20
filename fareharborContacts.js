@@ -34,6 +34,7 @@
 import { normalizePhone } from "./phoneUtils.js";
 import { unwrapFhPayload, FH_NORMALIZE_SINCE } from "./fareharborNormalizer.js";
 import { isLater } from "./waiverImport.js";
+import { loadSuppressionSets } from "./emailSuppression.js";
 
 const CLIENT_ID = process.env.CLIENT_ID || "csr_rea";
 const COMPANY_TAG = { coloradosledrentals: "csr", rabbitearsadventures: "rea" };
@@ -92,7 +93,7 @@ export function aggregateGuests(rows) {
 
 // What to write for one guest. `existing` = current contacts row or null;
 // `blocked` = phone is on an opt-out list (or the list is unknown → fail closed).
-export function planContact(guest, { existing = null, blocked = false, nowIso = new Date().toISOString() } = {}) {
+export function planContact(guest, { existing = null, blocked = false, emailBlocked = false, nowIso = new Date().toISOString() } = {}) {
   if (!existing) {
     return {
       action: "insert",
@@ -109,12 +110,12 @@ export function planContact(guest, { existing = null, blocked = false, nowIso = 
         // Explicit — the column defaults are TRUE.
         opted_in:                guest.smsYes && !blocked,
         opted_out_at:            blocked ? nowIso : null,
-        email_marketing_consent: guest.emailYes && !!guest.email,
+        email_marketing_consent: guest.emailYes && !!guest.email && !emailBlocked,   // address unsubscribed elsewhere → never re-consent
         // Provenance (db2_contact_model.sql): where + when each opt-in came from.
         sms_consent_source:   guest.smsYes && !blocked ? "fareharbor_flag" : null,
         sms_consent_at:       guest.smsYes && !blocked ? (guest.lastActivity ?? nowIso) : null,
-        email_consent_source: guest.emailYes && guest.email ? "fareharbor_flag" : null,
-        email_consent_at:     guest.emailYes && guest.email ? (guest.lastActivity ?? nowIso) : null,
+        email_consent_source: guest.emailYes && guest.email && !emailBlocked ? "fareharbor_flag" : null,
+        email_consent_at:     guest.emailYes && guest.email && !emailBlocked ? (guest.lastActivity ?? nowIso) : null,
       },
     };
   }
@@ -197,6 +198,7 @@ export async function mirrorFareHarborContacts(crm, db1, {
 
   const { blocked, known } = await loadBlockedPhones(crm, db1);
   summary.optOutListKnown = known;
+  const emailSup = await loadSuppressionSets(crm);
 
   const phones = [...guests.keys()];
   const existingByPhone = new Map();
@@ -213,7 +215,7 @@ export async function mirrorFareHarborContacts(crm, db1, {
   for (const g of guests.values()) {
     // Fail closed: opt-out list unreadable → nobody new is opted in.
     const isBlocked = blocked.has(g.phone) || !known;
-    const plan = planContact(g, { existing: existingByPhone.get(g.phone) ?? null, blocked: isBlocked });
+    const plan = planContact(g, { existing: existingByPhone.get(g.phone) ?? null, blocked: isBlocked, emailBlocked: !!g.email && emailSup.all.has(g.email) });
     if (plan.action === "insert") {
       inserts.push(plan.row);
       summary.newContacts++;

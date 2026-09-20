@@ -23,6 +23,7 @@ import { runScheduledKnowledgeJobs } from "./knowledgeBase.js";
 import { pollNewBookings, isFareHarborPollDue } from "./bookingConfirmations.js";
 import { normalizeFareHarborBookings } from "./fareharborNormalizer.js";
 import { mirrorFareHarborContacts } from "./fareharborContacts.js";
+import { drainEmailQueue, defaultQueueDeps } from "./emailSender.js";
 import { loadDbClients } from "./clients.js";
 
 const required = [
@@ -132,6 +133,17 @@ try {
       }
     } catch (err) {
       console.error(`[CRON-WORKER] FH contacts mirror failed (non-fatal): ${err.message}`);
+    }
+  }
+
+  // Email send queue — finishes any campaign/booking email queued by the outbound API (the API
+  // kicks it immediately; this catches restarts, retries and stuck rows). Own try/catch.
+  if (crmSupabase) {
+    try {
+      const q = await drainEmailQueue(crmSupabase, supabase, defaultQueueDeps(), { maxRuns: 20 });
+      if (q.claimed) console.log(`[CRON-WORKER] email queue: ${q.sent} sent, ${q.skipped} skipped, ${q.failed} failed, ${q.requeued} retrying${q.blocked ? ` (blocked: ${q.blocked})` : ""}`);
+    } catch (err) {
+      console.error(`[CRON-WORKER] email queue failed (non-fatal): ${err.message}`);
     }
   }
 

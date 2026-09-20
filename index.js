@@ -83,18 +83,24 @@ import { sendOperatorBriefing } from "./operatorBriefing.js";
 import { handleSmsRequest } from "./smsOrchestrator.js";
 import { smsRulesBlock, contactFailsafeBlock, handoffSection, businessInfoBlock, faqBlock as faqHelper, liveDataBlock, operatingStatusBlock, completenessBlock, formatHours } from "./promptParts.js";
 import { makeTwilioSignatureMiddleware } from "./twilioSignature.js";
+import { buildOutboundRouter } from "./outboundApi.js";
+import { handleResendWebhook, defaultQueueDeps } from "./emailSender.js";
 import { handleVoiceIncoming, handleVoiceRespond, handleVoiceStatus, handleVoiceRecording, handlePortalVoiceCalls, handlePortalVoiceConfig, handlePortalUpdateVoiceConfig, handlePortalVoiceSpam } from "./voice.js";
 import { incrWithTtl, storeMode, storeHealth } from "./sharedStore.js";
 import {
   handlePortalEmailTemplates, handlePortalEmailAudiencePreview, handlePortalEmailCampaigns,
   handlePortalCreateEmailCampaign, handlePortalGetEmailCampaign, handlePortalUpdateEmailCampaign,
   handlePortalDeleteEmailCampaign, handlePortalPreviewEmailCampaign, handlePortalSendTestEmailCampaign,
-  handleEmailUnsubscribe,
+  handleEmailUnsubscribe, handleEmailUnsubscribeConfirm,
   handlePortalGetEmailDomain, handlePortalCreateEmailDomain, handlePortalVerifyEmailDomain, handlePortalDeleteEmailDomain,
 } from "./adminEmailCampaigns.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
+// Resend delivery webhook — signature is computed over the RAW body, so this route must be
+// registered BEFORE express.json() (which would consume the stream). crmSupabase is defined
+// further down; the closure only reads it when a request arrives.
+app.post("/webhooks/resend", express.raw({ type: "application/json", limit: "1mb" }), (req, res) => handleResendWebhook(req, res, { crm: crmSupabase }));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -1626,7 +1632,17 @@ app.get("/embed.js", (_req, res) => {
 
 // ─── Email Marketing: one-click unsubscribe (CAN-SPAM) ──────────────────────
 // Public route — no portal auth. Linked from every marketing email footer.
-app.get("/email/unsubscribe/:token", (req, res) => handleEmailUnsubscribe(req, res, crmSupabase));
+// Outbound API (Google Apps Script etc.) — Bearer OUTBOUND_API_KEY; see outboundApi.js.
+if (crmSupabase) {
+  const outboundLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false, skip: () => process.env.TEST_MODE === "true" });
+  app.use("/api/v1", outboundLimiter, buildOutboundRouter({
+    crm: crmSupabase, db1: supabase,
+    getClient: async (id) => getRuntimeClientConfig(resolveClientById(id), supabase),
+    processDeps: defaultQueueDeps,
+  }));
+}
+app.get("/email/unsubscribe/:token", handleEmailUnsubscribeConfirm);
+app.post("/email/unsubscribe/:token", (req, res) => handleEmailUnsubscribe(req, res, crmSupabase));
 
 // ─── Sprint 5: partner activity click tracker ───────────────────────────────
 // 302 redirect to the partner's booking_url and fire-and-forget log to web_events.

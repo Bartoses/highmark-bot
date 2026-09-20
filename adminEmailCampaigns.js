@@ -28,6 +28,7 @@
 // module only creates, previews, and test-sends single emails.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { suppressEmail } from "./emailSuppression.js";
 import { resolvePortalClientId } from "./portalAuth.js";
 import { getAllClients } from "./clients.js";
 import { isEmailConfigured } from "./emailService.js";
@@ -296,28 +297,43 @@ export async function handlePortalDeleteEmailDomain(req, res, supabase) {
   return res.json({ deleted: 1 });
 }
 
-// ── GET /email/unsubscribe/:token ─────────────────────────────────────────────
-// Public route (no portal auth) — the one-click unsubscribe link embedded in
-// every marketing email footer (CAN-SPAM requirement). Always returns a
-// friendly confirmation page, even for an unknown/already-used token, so a
-// stale link never shows a broken/technical error to a customer.
+// ── /email/unsubscribe/:token ─────────────────────────────────────────────────
+// Public routes (no portal auth) — the unsubscribe link in every marketing email footer
+// (CAN-SPAM) and the RFC 8058 one-click target named in the List-Unsubscribe header.
+//
+//   GET  → a one-tap CONFIRM page. Deliberately does NOT unsubscribe: email security
+//          scanners and link-preview bots "click" every link in a message, which would
+//          silently unsubscribe people who never asked to leave.
+//   POST → performs the unsubscribe (the confirm button, or Gmail/Yahoo's one-click
+//          `List-Unsubscribe=One-Click` request). Suppression is by ADDRESS: every contact
+//          row carrying that email is silenced, not just the one the token belongs to.
+//
+// Both always return a friendly 200 page, even for an unknown/stale token.
+const unsubPage = (res, title, message, form = "") => res.status(200).type("html").send(
+  `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
+  `<body style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:80px auto;text-align:center;color:#111827;padding:0 20px;">` +
+  `<h2>${title}</h2><p>${message}</p>${form}</body></html>`
+);
+
+export function handleEmailUnsubscribeConfirm(req, res) {
+  const token = encodeURIComponent(req.params.token ?? "");
+  return unsubPage(res, "Unsubscribe from marketing emails?",
+    "Tap the button below and we'll stop sending you newsletters and promotions.",
+    `<form method="POST" action="/email/unsubscribe/${token}">` +
+    `<button type="submit" style="margin-top:12px;padding:12px 28px;font-size:16px;border:0;border-radius:6px;background:#111827;color:#fff;cursor:pointer;">Unsubscribe</button></form>`);
+}
+
 export async function handleEmailUnsubscribe(req, res, crmSupabase) {
   const { token } = req.params;
-  const page = (message) => res.status(200).type("html").send(
-    `<!doctype html><html><body style="font-family:Arial,Helvetica,sans-serif;` +
-    `max-width:480px;margin:80px auto;text-align:center;color:#111827;padding:0 20px;">` +
-    `<h2>Unsubscribed</h2><p>${message}</p></body></html>`
-  );
-
-  if (!crmSupabase || !token) return page("You've been unsubscribed from marketing emails.");
-
+  const done = () => unsubPage(res, "Unsubscribed",
+    "You've been unsubscribed from marketing emails. You won't receive any more newsletters or promotions from us.");
+  if (!crmSupabase || !token) return done();
   try {
-    await crmSupabase
-      .from("contacts")
-      .update({ email_marketing_consent: false, email_unsubscribed_at: new Date().toISOString() })
-      .eq("email_unsubscribe_token", token);
+    const { data } = await crmSupabase.from("contacts").select("email").eq("email_unsubscribe_token", token).limit(1);
+    const email = data?.[0]?.email;
+    if (email) await suppressEmail(crmSupabase, email, { reason: "unsubscribe", unsubscribe: true });
   } catch (err) {
-    console.error("[EMAIL UNSUBSCRIBE] error:", err.message);
+    console.error("[EMAIL UNSUBSCRIBE] error:", err.message);   // e.g. malformed token — still show the friendly page
   }
-  return page("You've been unsubscribed from marketing emails. You won't receive any more newsletters or promotions from us.");
+  return done();
 }

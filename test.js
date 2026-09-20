@@ -3263,6 +3263,7 @@ async function main() {
     await testFareHarborNormalizer(); // FareHarbor → DB2 bookings: customer/activity/total fill from raw_payload + bookings-by-create-date poller
     await testFareHarborContacts();   // FareHarbor → CRM contacts mirror: consent comes ONLY from FH flags, opt-outs honored, existing consent never touched
     await testWaiverImport();         // Smartwaiver → waivers + contacts: email-match dedupe, consent only from verified+ticked, never downgrade, no DOB/DL
+    await testOutboundMessaging();    // send API + queue + Resend webhook + suppression: consent enforced server-side, idempotent, fail-closed
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -18545,8 +18546,8 @@ async function testEmailCampaigns() {
   {
     const res = await httpGet("/email/unsubscribe/some-unknown-token");
     const body = await res.text();
-    chk("email: GET /email/unsubscribe/:token → 200 friendly page even for an unknown token",
-      res.status === 200 && body.includes("Unsubscribed"), `status=${res.status}`);
+    chk("email: GET /email/unsubscribe/:token → 200 CONFIRM page (does not unsubscribe on a bare GET — link scanners)",
+      res.status === 200 && body.includes("Unsubscribe") && body.includes('method="POST"') && !body.includes("Unsubscribed"), `status=${res.status}`);
   }
 
   // ── Direct handler-import tests — stubbed req/res/supabase, no live DB ──
@@ -18656,7 +18657,7 @@ async function testEmailCampaigns() {
 // In-memory mock DB2 — no network, no live writes.
 // ─────────────────────────────────────────────────────────────────────────────
 function makeFhMockCrm(seed) {
-  const tables = {
+  const base = {
     bookings:   (seed.bookings ?? []).map(r => ({ ...r })),
     customers:  (seed.customers ?? []).map(r => ({ ...r })),
     activities: (seed.activities ?? []).map(r => ({ ...r })),
@@ -18664,6 +18665,8 @@ function makeFhMockCrm(seed) {
     opt_outs:   (seed.opt_outs ?? []).map(r => ({ ...r })),
     waivers:    (seed.waivers ?? []).map(r => ({ ...r })),
   };
+  for (const [k, v] of Object.entries(seed)) if (!(k in base)) base[k] = v.map(r => ({ ...r }));   // any extra table (email_sends, email_campaigns, …)
+  const tables = new Proxy(base, { get: (t, k) => (k in t ? t[k] : typeof k === "string" ? (t[k] = []) : undefined) });
   const writes = { customerInserts: 0, bookingUpdates: [], customerUpdates: 0, contactInserts: 0, contactUpdates: [] };
   let idn = 1000;
   function builder(table) {
@@ -18675,9 +18678,11 @@ function makeFhMockCrm(seed) {
       return rows;
     };
     const api = {
-      select(cols) { st.cols = cols; return api; },
+      select(cols) { st.cols = cols; if (st.patch) st.returning = true; return api; },
       like(col, pat) { const pre = pat.replace(/%$/, ""); st.filters.push(r => String(r[col] ?? "").startsWith(pre)); return api; },
       gte(col, v) { st.filters.push(r => r[col] != null && r[col] >= v); return api; },
+      lt(col, v) { st.filters.push(r => r[col] != null && r[col] < v); return api; },
+      contains(col, obj) { st.filters.push(r => r[col] && Object.entries(obj).every(([k, v]) => r[col][k] === v)); return api; },
       eq(col, v) { st.filters.push(r => r[col] === v); return api; },
       is(col, v) { st.filters.push(r => (r[col] ?? null) === v); return api; },
       in(col, list) { st.filters.push(r => list.includes(r[col])); return api; },
@@ -18687,7 +18692,7 @@ function makeFhMockCrm(seed) {
         return api;
       },
       not(col, op, v) { if (op === "is") st.filters.push(r => (r[col] ?? null) !== v); return api; },
-      ilike(col, v) { st.filters.push(r => String(r[col] ?? "").toLowerCase() === String(v).toLowerCase()); return api; },
+      ilike(col, v) { const want = String(v).replace(/\\(.)/g, "$1").toLowerCase(); st.filters.push(r => String(r[col] ?? "").toLowerCase() === want); return api; },
       limit(n) { st.range = [0, n - 1]; return api; },
       order(col) { st.order = col; return api; },
       range(a, b) { st.range = [a, b]; return api; },
@@ -18699,6 +18704,10 @@ function makeFhMockCrm(seed) {
         if (st.insert) {
           if (table === "customers" && tables.customers.some(c => st.insert.normalized_phone && c.normalized_phone === st.insert.normalized_phone))
             return Promise.resolve({ data: null, error: { message: "duplicate key" } });
+          if (table === "email_sends" && st.insert.idempotency_key && tables.email_sends.some(r => r.idempotency_key === st.insert.idempotency_key))
+            return Promise.resolve({ data: null, error: { message: "duplicate key value violates unique constraint email_sends_idempotency_key" } });
+          if (table === "contacts" && !st.insert.phone && st.insert.email && tables.contacts.some(c => !c.phone && String(c.email).toLowerCase() === String(st.insert.email).toLowerCase()))
+            return Promise.resolve({ data: null, error: { message: "duplicate key value violates unique constraint contacts_email_only_key" } });
           if (table === "contacts" && !st.insert.phone && st.insert.opted_in !== false)
             return Promise.resolve({ data: null, error: { message: "violates check constraint contacts_sms_needs_phone_chk" } });
           const made = { id: `cust-${idn++}`, ...st.insert };
@@ -18733,7 +18742,7 @@ function makeFhMockCrm(seed) {
             if (table === "bookings") hit.forEach(r => writes.bookingUpdates.push({ pk: r.fareharbor_pk, patch: st.patch }));
             else if (table === "contacts") hit.forEach(r => writes.contactUpdates.push({ phone: r.phone, patch: st.patch }));
             else writes.customerUpdates++;
-            return resolve({ data: null, error: null });
+            return resolve({ data: st.returning ? hit.map(r => ({ ...r })) : null, error: null });
           }
           return resolve({ data: run().map(r => ({ ...r })), error: null });
         } catch (e) { return reject(e); }
@@ -19124,6 +19133,389 @@ async function testWaiverImport() {
   const noCrm = await W.importWaivers(null, records);
   const noRecs = await W.importWaivers(makeFhMockCrm(seed()), []);
   chk("waiver: null crm / empty file are safe no-ops", noCrm.distinctEmails === 0 && noCrm.newEmailOnlyContacts === 0 && noRecs.distinctEmails === 0);
+}
+
+async function testOutboundMessaging() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const A = await import("./outboundAudience.js");
+  const S = await import("./emailSender.js");
+  const Sup = await import("./emailSuppression.js");
+  const API = await import("./outboundApi.js");
+  const U = await import("./importUnsubscribes.js");
+  const EC = await import("./adminEmailCampaigns.js");
+  const W = await import("./waiverImport.js");
+  const FC = await import("./fareharborContacts.js");
+  const nodeCrypto = await import("crypto");
+  const { default: express } = await import("express");
+
+  const withEnv = async (vars, fn) => {
+    const prev = {}; for (const k of Object.keys(vars)) { prev[k] = process.env[k]; if (vars[k] === undefined) delete process.env[k]; else process.env[k] = vars[k]; }
+    try { return await fn(); } finally { for (const k of Object.keys(vars)) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; } }
+  };
+  let n = 0;
+  const ct = (o = {}) => { n++; return { id: `c-${n}`, phone: null, email: null, first_name: "Ann", last_name: "Guest", tags: [], source: "smartwaiver", total_bookings: 0,
+    last_activity: "2026-01-01T00:00:00Z", client_id: "csr_rea", opted_in: false, opted_out_at: null, email_marketing_consent: false, email_unsubscribed_at: null,
+    email_suppressed_at: null, email_consent_source: null, email_unsubscribe_token: `tok-${n}`, sms_consent_source: null, ...o }; };
+
+  // ── pure: segment / masking / explicit consent / quiet hours / keys ──
+  chk("outbound: normalizeSegment defaults are safe (no grandfathered, no assumed)", (() => { const s = A.normalizeSegment(undefined); return s.include_grandfathered === false && s.include_assumed_sms === false && s.tags_any.length === 0; })());
+  chk("outbound: an UNKNOWN segment field is rejected (a typo must not silently widen a send)", (() => { try { A.normalizeSegment({ tag_any: ["waiver"] }); return false; } catch (e) { return e instanceof A.SegmentError && /tag_any/.test(e.message); } })());
+  chk("outbound: segment values are validated", (() => { const bad = (s) => { try { A.normalizeSegment(s); return false; } catch (e) { return e instanceof A.SegmentError; } };
+    return bad({ min_bookings: -1 }) && bad({ active_since: "nope" }) && bad({ tags_any: "waiver" }) && bad({ include_grandfathered: "yes" }) && bad([]); })());
+  chk("outbound: tags are lowercased, deduped and capped", (() => { const s = A.normalizeSegment({ tags_any: ["Waiver", "waiver", " BOOKED "] }); return s.tags_any.length === 2 && s.tags_any[0] === "waiver"; })());
+  chk("outbound: matchesSegment honours any/all/exclude/source/min_bookings/active_since", (() => {
+    const c = { tags: ["waiver", "csr"], source: "smartwaiver", total_bookings: 2, last_activity: "2026-05-01T00:00:00Z" };
+    const m = (seg) => A.matchesSegment(c, A.normalizeSegment(seg));
+    return m({ tags_any: ["csr", "x"] }) && !m({ tags_any: ["x"] }) && m({ tags_all: ["waiver", "csr"] }) && !m({ tags_all: ["waiver", "x"] }) && !m({ exclude_tags: ["csr"] })
+      && m({ sources: ["smartwaiver"] }) && !m({ sources: ["fareharbor_booking"] }) && m({ min_bookings: 2 }) && !m({ min_bookings: 3 }) && m({ active_since: "2026-01-01" }) && !m({ active_since: "2026-09-01" }); })());
+  chk("outbound: masking hides addresses/numbers in previews", A.maskEmail("alex@example.com") === "a***@example.com" && !A.maskPhone("+13035550111").includes("30355501"));
+  chk("outbound: explicit-consent classification", A.isExplicitEmailConsent("smartwaiver") && !A.isExplicitEmailConsent("grandfathered") && !A.isExplicitEmailConsent(null)
+    && A.isExplicitSmsConsent("fareharbor_flag") && !A.isExplicitSmsConsent("assumed_on_booking") && !A.isExplicitSmsConsent(null));
+  chk("outbound: TCPA quiet hours = before 8am / from 9pm Mountain", API.isQuietHours(new Date("2026-01-15T14:00:00Z")) === true && API.isQuietHours(new Date("2026-01-15T17:00:00Z")) === false && API.isQuietHours(new Date("2026-01-16T05:00:00Z")) === true);
+  chk("outbound: API key compare is exact and never true for blanks", API.keysMatch("abc12345", "abc12345") && !API.keysMatch("abc12345", "abc12346") && !API.keysMatch("", "x") && !API.keysMatch(undefined, undefined));
+
+  // ── pure: sender helpers ──
+  chk("send: List-Unsubscribe + one-click headers are built from the token", (() => { const h = S.buildListUnsubscribeHeaders("https://app.test/", "t1"); return h["List-Unsubscribe"] === "<https://app.test/email/unsubscribe/t1>" && h["List-Unsubscribe-Post"] === "List-Unsubscribe=One-Click"; })() && Object.keys(S.buildListUnsubscribeHeaders("x", null)).length === 0);
+  chk("send: mailing address comes from the client, else MAILING_ADDRESS, else null", S.resolveMailingAddress({ address: "1 Main St" }) === "1 Main St" && S.resolveMailingAddress({}) === null);
+  await withEnv({ MAILING_ADDRESS: "PO Box 1, Steamboat" }, async () => chk("send: MAILING_ADDRESS env is the fallback", S.resolveMailingAddress({ address: null }) === "PO Box 1, Steamboat"));
+  await withEnv({ PUBLIC_BASE_URL: undefined, RAILWAY_PUBLIC_DOMAIN: undefined }, async () => chk("send: unsubscribe links are ALWAYS absolute (never a dead relative link)", /^https:\/\//.test(S.resolveBaseUrl())));
+  await withEnv({ PUBLIC_BASE_URL: "https://x.test/" }, async () => chk("send: PUBLIC_BASE_URL wins, trailing slash trimmed", S.resolveBaseUrl() === "https://x.test"));
+  chk("send: batch idempotency key is stable and order-insensitive", S.batchIdempotencyKey(["b", "a"]) === S.batchIdempotencyKey(["a", "b"]) && S.batchIdempotencyKey(["a"]) !== S.batchIdempotencyKey(["b"]));
+  const client = { name: "Colorado Sled Rentals", address: "1 Main St, Steamboat Springs, CO 80487", supportEmail: "info@csr.test" };
+  const camp = { id: "camp-1", subject: "Hi {{first_name}}", body_html: "<p>Hello {{first_name}}</p>", preview_text: null, from_name: null, reply_to: null };
+  const item = S.renderCampaignEmail({ campaign: camp, client, recipient: { email: "a@x.com", first_name: "Ann", unsubscribe_token: "tok-z" }, baseUrl: "https://app.test" });
+  chk("send: marketing render — merge fields, CAN-SPAM address + unsubscribe link, one-click headers, reply-to",
+    item.subject === "Hi Ann" && item.html.includes("Hello Ann") && item.html.includes("1 Main St") && item.html.includes("/email/unsubscribe/tok-z") && item.headers["List-Unsubscribe-Post"] && item.reply_to === "info@csr.test" && item.to[0] === "a@x.com", JSON.stringify(item).slice(0, 200));
+  const tx = S.renderTransactionalEmail({ row: { email: "a@x.com", subject: "Your trip {{trip_date}}", body_html: "<p>Hi {{first_name}}</p>" }, client, mergeVars: { first_name: "Ann", trip_date: "Monday" } });
+  chk("send: transactional render has NO unsubscribe link but names the business", tx.subject === "Your trip Monday" && !/unsubscribe/i.test(tx.html) && tx.html.includes("Colorado Sled Rentals") && !tx.headers);
+
+  // ── svix signature ──
+  const secret = "whsec_" + Buffer.from("secretkey1234567890secretkey1234").toString("base64");
+  const sign = (sec, id, ts, body) => "v1," + nodeCrypto.createHmac("sha256", Buffer.from(sec.replace(/^whsec_/, ""), "base64")).update(`${id}.${ts}.${body}`).digest("base64");
+  const nowS = Math.floor(Date.now() / 1000), bodyStr = '{"type":"email.delivered","data":{"email_id":"re_1"}}';
+  chk("webhook: a correctly signed payload verifies", S.verifySvixSignature({ secret, id: "msg_1", timestamp: String(nowS), signature: sign(secret, "msg_1", nowS, bodyStr), body: bodyStr }));
+  chk("webhook: verifies when the header carries several signatures (key rotation)", S.verifySvixSignature({ secret, id: "msg_1", timestamp: String(nowS), signature: `v1,AAAA ${sign(secret, "msg_1", nowS, bodyStr)}`, body: bodyStr }));
+  chk("webhook: a tampered body is rejected", !S.verifySvixSignature({ secret, id: "msg_1", timestamp: String(nowS), signature: sign(secret, "msg_1", nowS, bodyStr), body: bodyStr + " " }));
+  chk("webhook: the wrong secret is rejected", !S.verifySvixSignature({ secret: "whsec_" + Buffer.from("another-secret-another-secret-12").toString("base64"), id: "msg_1", timestamp: String(nowS), signature: sign(secret, "msg_1", nowS, bodyStr), body: bodyStr }));
+  chk("webhook: a stale timestamp is rejected (replay protection)", !S.verifySvixSignature({ secret, id: "msg_1", timestamp: String(nowS - 3600), signature: sign(secret, "msg_1", nowS - 3600, bodyStr), body: bodyStr }));
+  chk("webhook: missing headers are rejected", !S.verifySvixSignature({ secret, id: null, timestamp: String(nowS), signature: "v1,x", body: bodyStr }));
+
+  // ── audience selection (mock DB2) ──
+  const e1 = ct({ email: "explicit@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver", tags: ["waiver"] });
+  const e2 = ct({ email: "old@x.com", email_marketing_consent: true, email_consent_source: "grandfathered" });
+  const e3 = ct({ email: "no@x.com" });
+  const e4 = ct({ email: "unsub@x.com", email_unsubscribed_at: "2026-02-01T00:00:00Z" });
+  const e5 = ct({ email: "bounce@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver", email_suppressed_at: "2026-02-01T00:00:00Z" });
+  const e6 = ct({ phone: "+13035550106", email: "UNSUB@x.com", email_marketing_consent: true, email_consent_source: "fareharbor_flag" });   // same ADDRESS as e4
+  const e7 = ct({ phone: "+13035550107", email: "Explicit@X.com", email_marketing_consent: true, email_consent_source: "fareharbor_flag", total_bookings: 3 });   // same address as e1
+  const e8 = ct({ email: "not-an-email", email_marketing_consent: true, email_consent_source: "smartwaiver" });
+  const e9 = ct({ email: "boat@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver", tags: ["boater"] });
+  const seedAud = () => makeFhMockCrm({ contacts: [e1, e2, e3, e4, e5, e6, e7, e8, e9] });
+  const aud = await A.selectEmailRecipients(seedAud(), { clientId: "csr_rea", segment: {} });
+  const addrs = aud.recipients.map(r => r.email).sort();
+  chk("audience: default = explicit consent only, one per address", JSON.stringify(addrs) === JSON.stringify(["boat@x.com", "explicit@x.com"]), JSON.stringify(addrs));
+  chk("audience: grandfathered consent is EXCLUDED unless the send opts in", aud.stats.excluded.grandfathered === 1 && !addrs.includes("old@x.com"));
+  chk("audience: unsubscribe is per ADDRESS — a second contact row with the same email is also excluded", aud.stats.excluded.unsubscribed === 2 && !addrs.includes("unsub@x.com"));
+  chk("audience: bounced/complained (suppressed) addresses are excluded", aud.stats.excluded.suppressed === 1 && !addrs.includes("bounce@x.com"));
+  chk("audience: no-consent, invalid and duplicate rows are counted and excluded", aud.stats.excluded.no_consent === 1 && aud.stats.excluded.invalid_email === 1 && aud.stats.excluded.duplicate_address === 1, JSON.stringify(aud.stats.excluded));
+  chk("audience: the duplicate address keeps the most-engaged row (3 bookings)", aud.recipients.find(r => r.email === "explicit@x.com").contact_id === e7.id);
+  const aud2 = await A.selectEmailRecipients(seedAud(), { clientId: "csr_rea", segment: { include_grandfathered: true } });
+  chk("audience: include_grandfathered adds the grandfathered contact", aud2.recipients.some(r => r.email === "old@x.com") && aud2.stats.eligible === 3);
+  const aud3 = await A.selectEmailRecipients(seedAud(), { clientId: "csr_rea", segment: { tags_any: ["waiver"] } });
+  chk("audience: a tag segment narrows the send", aud3.stats.eligible === 0 || aud3.recipients.every(r => ["explicit@x.com"].includes(r.email)), JSON.stringify(aud3.recipients.map(r => r.email)));
+  chk("audience: contacts of another client are never included", (await A.selectEmailRecipients(seedAud(), { clientId: "other_client", segment: {} })).stats.eligible === 0);
+
+  const s1 = ct({ phone: "+13035550201", opted_in: true, sms_consent_source: "fareharbor_flag" });
+  const s2 = ct({ phone: "+13035550202", opted_in: true, sms_consent_source: "assumed_on_booking" });
+  const s3 = ct({ phone: "+13035550203", opted_in: true, sms_consent_source: "fareharbor_flag", opted_out_at: "2026-01-01T00:00:00Z" });
+  const s4 = ct({ phone: "+13035550204", opted_in: true, sms_consent_source: "fareharbor_flag" });
+  const s5 = ct({ phone: "+13035550205", opted_in: false });
+  const s6 = ct({ email: "emailonly@x.com" });
+  const smsCrm = () => makeFhMockCrm({ contacts: [s1, s2, s3, s4, s5, s6] });
+  const db1Stop = () => makeFhMockCrm({ opt_outs: [{ phone: "+13035550204" }] });
+  const sa = await A.selectSmsRecipients(smsCrm(), db1Stop(), { clientId: "csr_rea", segment: {} });
+  chk("sms audience: explicit consent only; STOP-list, opted-out, phone-less and assumed are excluded",
+    sa.recipients.length === 1 && sa.recipients[0].phone === "+13035550201" && sa.stats.excluded.opted_out === 2 && sa.stats.excluded.assumed_consent === 1 && sa.stats.excluded.no_phone === 1, JSON.stringify(sa.stats));
+  chk("sms audience: include_assumed_sms adds the assumed-consent contact", (await A.selectSmsRecipients(smsCrm(), db1Stop(), { clientId: "csr_rea", segment: { include_assumed_sms: true } })).recipients.length === 2);
+  const brokenDb1 = { from: () => ({ select: () => Promise.resolve({ data: null, error: { message: "down" } }) }) };
+  chk("sms audience: FAILS CLOSED when the opt-out list is unreadable", await (async () => { try { await A.selectSmsRecipients(smsCrm(), brokenDb1, { clientId: "csr_rea", segment: {} }); return false; } catch (e) { return /opt-out/.test(e.message); } })());
+
+  // ── queue processing ──
+  const mkSendBatch = (calls, behaviour) => async (items, opts) => { calls.push({ items, opts }); return behaviour ? behaviour(items, opts) : { sent: true, ids: items.map((_, i) => `re_${calls.length}_${i}`) }; };
+  const qDb = (contacts, sends) => ({ crm: makeFhMockCrm({ contacts, email_sends: sends ?? [] }),
+    db1: makeFhMockCrm({ email_campaigns: [{ id: "camp-1", ...camp, status: "sending" }] }) });
+  const deps = (calls, behaviour) => ({ resolveClient: () => client, getCampaign: async (d, id) => d.tables.email_campaigns.find(r => r.id === id) ?? null, getDomain: async () => null,
+    baseUrl: "https://app.test", sendBatch: mkSendBatch(calls, behaviour) });
+  const q1 = ct({ email: "q1@x.com", first_name: "Ann", email_marketing_consent: true, email_consent_source: "smartwaiver" });
+  const q2 = ct({ email: "q2@x.com", first_name: "Bo", email_marketing_consent: true, email_consent_source: "smartwaiver" });
+
+  {
+    const { crm, db1 } = qDb([{ ...q1 }, { ...q2 }]);
+    const inserted = await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: [{ contact_id: q1.id, email: "Q1@x.com" }, { contact_id: q2.id, email: "q2@x.com" }] });
+    await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: [{ contact_id: q1.id, email: "q1@x.com" }] });
+    chk("queue: enqueue stores lowercase addresses and re-queueing never creates a second send", inserted === 2 && crm.tables.email_sends.length === 2 && crm.tables.email_sends[0].email === "q1@x.com");
+    const calls = []; const r = await S.processEmailQueue(crm, db1, deps(calls));
+    chk("queue: both recipients sent in ONE batch with per-recipient merge + unsubscribe headers",
+      r.sent === 2 && calls.length === 1 && calls[0].items.length === 2 && calls[0].items[0].subject === "Hi Ann" && calls[0].items[1].subject === "Hi Bo" && !!calls[0].items[0].headers["List-Unsubscribe"], JSON.stringify(r));
+    chk("queue: rows recorded as sent with the provider id + timestamp", crm.tables.email_sends.every(x => x.status === "sent" && /^re_/.test(x.provider_id) && x.sent_at));
+    chk("queue: the batch carries a deterministic Idempotency-Key", /^eq-[0-9a-f]{40}$/.test(calls[0].opts.idempotencyKey));
+    chk("queue: the campaign is marked sent with its total once nothing is left", db1.tables.email_campaigns[0].status === "sent" && db1.tables.email_campaigns[0].total_sent === 2, JSON.stringify(db1.tables.email_campaigns[0]));
+    const again = await S.processEmailQueue(crm, db1, deps([]));
+    chk("queue: a second run finds nothing to send (no double-send)", again.claimed === 0 && again.sent === 0);
+  }
+  {
+    // consent is RE-CHECKED at send time
+    const { crm, db1 } = qDb([{ ...q1 }, { ...q2, email_marketing_consent: false }, ]);
+    await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: [{ contact_id: q1.id, email: "q1@x.com" }, { contact_id: q2.id, email: "q2@x.com" }] });
+    const calls = []; const r = await S.processEmailQueue(crm, db1, deps(calls));
+    chk("queue: consent withdrawn AFTER queueing is honoured — that row is skipped, not sent", r.sent === 1 && r.skipped === 1 && calls[0].items.length === 1 && crm.tables.email_sends.find(x => x.email === "q2@x.com").status === "skipped");
+  }
+  {
+    // address-level suppression appearing on a DIFFERENT row still blocks the send
+    const { crm, db1 } = qDb([{ ...q1 }, ct({ email: "Q1@X.com", email_unsubscribed_at: "2026-03-01T00:00:00Z" })]);
+    await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: [{ contact_id: q1.id, email: "q1@x.com" }] });
+    const calls = []; const r = await S.processEmailQueue(crm, db1, deps(calls));
+    chk("queue: an address unsubscribed on another contact row is not sent to", r.sent === 0 && r.skipped === 1 && calls.length === 0);
+  }
+  {
+    // a bad address fails the whole Resend batch → isolate it; good ones still go
+    const good = ct({ email: "good@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver" });
+    const badc = ct({ email: "bad@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver" });
+    const { crm, db1 } = qDb([{ ...good }, { ...badc }]);
+    await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: [{ contact_id: good.id, email: "good@x.com" }, { contact_id: badc.id, email: "bad@x.com" }] });
+    const calls = []; const beh = (items) => items.some(i => i.to[0].startsWith("bad@")) ? { sent: false, reason: "provider_error", status: 422, detail: "invalid address" } : { sent: true, ids: items.map((_, i) => `re_${calls.length}_${i}`) };
+    const r1 = await S.processEmailQueue(crm, db1, deps(calls, beh));
+    chk("queue: one bad address doesn't stop the good ones (batch retried one-by-one)", r1.sent === 1 && r1.requeued === 1 && crm.tables.email_sends.find(x => x.email === "good@x.com").status === "sent", JSON.stringify(r1));
+    await S.processEmailQueue(crm, db1, deps(calls, beh)); const r3 = await S.processEmailQueue(crm, db1, deps(calls, beh));
+    const badRow = crm.tables.email_sends.find(x => x.email === "bad@x.com");
+    chk("queue: a permanently failing address ends as 'failed' after 3 attempts with the reason", badRow.status === "failed" && badRow.attempts === 3 && /invalid/.test(badRow.error) && r3.failed === 1, JSON.stringify(badRow));
+  }
+  {
+    const { crm, db1 } = qDb([{ ...q1 }]);
+    await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: [{ contact_id: q1.id, email: "q1@x.com" }] });
+    const r = await S.processEmailQueue(crm, db1, deps([], () => ({ sent: false, reason: "test_mode" })));
+    chk("queue: TEST_MODE / unconfigured provider leaves rows queued (nothing lost, nothing failed)", r.blocked === "test_mode" && crm.tables.email_sends[0].status === "queued" && (crm.tables.email_sends[0].attempts ?? 0) === 0);
+  }
+  {
+    const { crm, db1 } = qDb([{ ...q1 }]);
+    crm.tables.email_sends.push({ id: "stuck", campaign_id: "camp-1", client_id: "csr_rea", contact_id: q1.id, email: "q1@x.com", category: "marketing", status: "sending", attempts: 0, queued_at: "2026-01-01T00:00:00Z", updated_at: new Date(Date.now() - 30 * 60000).toISOString() });
+    const r = await S.processEmailQueue(crm, db1, deps([]));
+    chk("queue: a row stuck in 'sending' (crashed worker) is recovered and sent", r.sent === 1 && crm.tables.email_sends[0].status === "sent");
+  }
+  {
+    const cs = [ct({ email: "p1@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver" }), ct({ email: "p2@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver" }), ct({ email: "p3@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver" })];
+    const { crm, db1 } = qDb(cs.map(c => ({ ...c })));
+    await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: cs.map(c => ({ contact_id: c.id, email: c.email })) });
+    const calls = []; await Promise.all([S.processEmailQueue(crm, db1, deps(calls)), S.processEmailQueue(crm, db1, deps(calls))]);
+    const sentTo = calls.flatMap(c => c.items.map(i => i.to[0]));
+    chk("queue: two workers racing (web + cron) send every recipient exactly once", sentTo.length === 3 && new Set(sentTo).size === 3, JSON.stringify(sentTo));
+  }
+
+  // ── delivery events ──
+  const evDb = () => makeFhMockCrm({
+    contacts: [ct({ id: "k-a", email: "hard@x.com", email_marketing_consent: true }), ct({ id: "k-b", email: "soft@x.com", email_marketing_consent: true }), ct({ id: "k-c", email: "spam@x.com", email_marketing_consent: true })],
+    email_sends: [{ id: "s1", email: "hard@x.com", provider_id: "re_h", status: "sent", category: "marketing" }, { id: "s2", email: "soft@x.com", provider_id: "re_s", status: "sent", category: "marketing" },
+      { id: "s3", email: "spam@x.com", provider_id: "re_c", status: "sent", category: "marketing" }, { id: "s4", email: "ok@x.com", provider_id: "re_ok", status: "sent", category: "marketing" }] });
+  {
+    const db = evDb();
+    await S.applyResendEvent(db, { type: "email.delivered", data: { email_id: "re_ok" } });
+    chk("events: delivered updates the send", db.tables.email_sends.find(x => x.id === "s4").status === "delivered");
+    await S.applyResendEvent(db, { type: "email.bounced", data: { email_id: "re_h", bounce: { type: "Permanent" } } });
+    const hard = db.tables.contacts.find(c => c.id === "k-a");
+    chk("events: a HARD bounce suppresses the address (never emailed again)", db.tables.email_sends.find(x => x.id === "s1").status === "bounced" && !!hard.email_suppressed_at && hard.email_suppressed_reason === "bounce" && hard.email_marketing_consent === false);
+    await S.applyResendEvent(db, { type: "email.bounced", data: { email_id: "re_s", bounce: { type: "Transient" } } });
+    chk("events: a transient bounce is recorded but does NOT suppress", db.tables.email_sends.find(x => x.id === "s2").status === "bounced" && !db.tables.contacts.find(c => c.id === "k-b").email_suppressed_at);
+    await S.applyResendEvent(db, { type: "email.complained", data: { email_id: "re_c" } });
+    const spam = db.tables.contacts.find(c => c.id === "k-c");
+    chk("events: a spam complaint suppresses AND unsubscribes the address", !!spam.email_suppressed_at && !!spam.email_unsubscribed_at && spam.email_marketing_consent === false);
+    await S.applyResendEvent(db, { type: "email.delivered", data: { email_id: "re_h" } });
+    chk("events: a late 'delivered' never downgrades a bounce", db.tables.email_sends.find(x => x.id === "s1").status === "bounced");
+    const dup = await S.applyResendEvent(db, { type: "email.complained", data: { email_id: "re_c" } });
+    chk("events: replaying an event is harmless", dup.handled === true && db.tables.email_sends.find(x => x.id === "s3").status === "complained");
+    chk("events: an unknown email id is ignored, not an error", (await S.applyResendEvent(db, { type: "email.delivered", data: { email_id: "re_nope" } })).handled === false);
+  }
+  {
+    const mkR = () => { const r = { code: null, body: null, status(c) { r.code = c; return r; }, json(b) { r.body = b; return r; } }; return r; };
+    const mkQ = (rawBody, headers) => ({ body: Buffer.from(rawBody), get: (h) => headers[h.toLowerCase()] });
+    const db = evDb(); const payload = JSON.stringify({ type: "email.delivered", data: { email_id: "re_ok" } }); const ts = String(Math.floor(Date.now() / 1000));
+    let r = mkR(); await S.handleResendWebhook(mkQ(payload, {}), r, { crm: db, secret: undefined });
+    chk("webhook route: 503 (never open) when RESEND_WEBHOOK_SECRET is unset", r.code === 503);
+    r = mkR(); await S.handleResendWebhook(mkQ(payload, { "svix-id": "m1", "svix-timestamp": ts, "svix-signature": "v1,wrong" }), r, { crm: db, secret });
+    chk("webhook route: 400 on a bad signature, nothing applied", r.code === 400 && db.tables.email_sends.find(x => x.id === "s4").status === "sent");
+    r = mkR(); await S.handleResendWebhook(mkQ(payload, { "svix-id": "m1", "svix-timestamp": ts, "svix-signature": sign(secret, "m1", ts, payload) }), r, { crm: db, secret });
+    chk("webhook route: 200 and the event is applied on a valid signature", r.code === 200 && db.tables.email_sends.find(x => x.id === "s4").status === "delivered");
+  }
+
+  // ── suppression + unsubscribe route ──
+  {
+    const db = makeFhMockCrm({ contacts: [ct({ id: "u1", phone: "+13035550311", email: "leave@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-leave" }), ct({ id: "u2", email: "LEAVE@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-2" }), ct({ id: "u3", email: "stay@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-stay" })] });
+    const mkRes = () => { const r = { code: null, html: "", status(c) { r.code = c; return r; }, type() { return r; }, send(h) { r.html = h; return r; } }; return r; };
+    let r = mkRes(); EC.handleEmailUnsubscribeConfirm({ params: { token: "tok-leave" } }, r);
+    chk("unsubscribe: GET shows a confirm page and changes NOTHING (link scanners)", r.code === 200 && /method="POST"/.test(r.html) && db.tables.contacts.every(c => c.email_marketing_consent === true && !c.email_unsubscribed_at));
+    r = mkRes(); await EC.handleEmailUnsubscribe({ params: { token: "tok-leave" } }, r, db);
+    chk("unsubscribe: POST unsubscribes EVERY contact row with that address (case-insensitive), no one else",
+      /Unsubscribed/.test(r.html) && db.tables.contacts.filter(c => c.email.toLowerCase() === "leave@x.com").every(c => !!c.email_unsubscribed_at && c.email_marketing_consent === false) && db.tables.contacts.find(c => c.id === "u3").email_marketing_consent === true);
+    r = mkRes(); await EC.handleEmailUnsubscribe({ params: { token: "unknown" } }, r, db);
+    chk("unsubscribe: an unknown token still gets a friendly 200 page", r.code === 200 && /Unsubscribed/.test(r.html));
+    const sup = await Sup.loadSuppressionSets(db);
+    chk("suppression: address-level sets are built lowercase", sup.all.has("leave@x.com") && !sup.all.has("stay@x.com") && sup.hard.size === 0);
+    const made = await Sup.suppressEmail(db, "brand-new@x.com", { reason: "legacy_unsubscribe", unsubscribe: true });
+    const rec = db.tables.contacts.find(c => c.email === "brand-new@x.com");
+    chk("suppression: an address that isn't a contact gets a 'do not email' record (passes the phone-less CHECK)", made.created === true && rec.phone === null && rec.opted_in === false && rec.email_marketing_consent === false && !!rec.email_unsubscribed_at);
+    chk("suppression: a bare underscore in an address is not a wildcard", (await Sup.suppressEmail(makeFhMockCrm({ contacts: [ct({ email: "john_smith@x.com", email_marketing_consent: true }), ct({ email: "johnXsmith@x.com", email_marketing_consent: true })] }), "john_smith@x.com", { reason: "manual", unsubscribe: true })).updated === 1);
+  }
+
+  // ── legacy unsubscribe import ──
+  {
+    const p = U.parseUnsubscribeCsv('Email Address,Column 2\r\nA@x.com,\r\nb@x.com\r\na@x.com\r\nnot-an-email\r\n"c@x.com",\r\n');
+    chk("unsub import: parses the sheet export (header skipped, lowercased, deduped, junk ignored)", JSON.stringify(p.emails) === JSON.stringify(["a@x.com", "b@x.com", "c@x.com"]) && p.duplicates === 1, JSON.stringify(p));
+    const seed = () => makeFhMockCrm({ contacts: [ct({ email: "a@x.com", email_marketing_consent: true }), ct({ email: "b@x.com", email_unsubscribed_at: "2026-01-01T00:00:00Z" })] });
+    const db = seed(); const dry = await U.importUnsubscribes(db, p.emails, { dryRun: true });
+    chk("unsub import: dry run reports and writes nothing", dry.wereConsentedUntilNow === 1 && dry.alreadySuppressed === 1 && dry.doNotEmailRecordsCreated === 1 && db.tables.contacts.length === 2 && !db.tables.contacts[0].email_unsubscribed_at);
+    await U.importUnsubscribes(db, p.emails, {});
+    chk("unsub import: existing contact silenced + unknown address recorded as do-not-email", !!db.tables.contacts[0].email_unsubscribed_at && db.tables.contacts[0].email_marketing_consent === false && db.tables.contacts.some(c => c.email === "c@x.com" && c.source === "legacy_unsubscribe"));
+    const n0 = db.tables.contacts.length; await U.importUnsubscribes(db, p.emails, {});
+    chk("unsub import: re-running is idempotent", db.tables.contacts.length === n0);
+  }
+
+  // ── importers respect address-level suppression ──
+  {
+    const rec = { waiverId: "w1", email: "leave@x.com", firstName: "L", lastName: "V", phone: null, signedAt: "2026-02-01T00:00:00.000Z", status: "completed", verified: true, documentTitle: null, marketing: true };
+    const db = makeFhMockCrm({ contacts: [ct({ phone: "+13035550411", email: "leave@x.com", email_unsubscribed_at: "2026-01-01T00:00:00Z" })], customers: [] });
+    const res = await W.importWaivers(db, [rec], {});
+    chk("waiver import: an address unsubscribed elsewhere is NEVER re-consented by a waiver", db.tables.contacts.every(c => c.email_marketing_consent !== true) && res.suppressedAddresses === 1);
+    const g = FC.aggregateGuests([{ fareharbor_pk: "#1", company: "coloradosledrentals", status: "booked", booked_at: "2026-01-01T00:00:00Z", raw_payload: { booking: { pk: 1, is_subscribed_for_sms_updates: false, contact: { name: "A B", email: "leave@x.com", normalized_phone: "+13035550412", is_subscribed_for_email_updates: true } } } }]).get("+13035550412");
+    chk("FareHarbor mirror: a new contact whose address is suppressed gets NO email consent", FC.planContact(g, { emailBlocked: true }).row.email_marketing_consent === false && FC.planContact(g, {}).row.email_marketing_consent === true);
+  }
+
+  // ── the HTTP API (real express server, mock databases, fake sender) ──
+  const KEY = "k-test-key-123";
+  const seedApi = () => ({
+    contacts: [ct({ email: "explicit@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver" }), ct({ email: "two@x.com", email_marketing_consent: true, email_consent_source: "smartwaiver" }),
+      ct({ email: "old@x.com", email_marketing_consent: true, email_consent_source: "grandfathered" }),
+      ct({ phone: "+13035550501", email: "tx-unsub@x.com", email_unsubscribed_at: "2026-01-01T00:00:00Z", email_marketing_consent: false }),
+      ct({ email: "hard@x.com", email_suppressed_at: "2026-01-01T00:00:00Z", email_marketing_consent: false }),
+      ct({ phone: "+13035550601", opted_in: true, sms_consent_source: "fareharbor_flag", first_name: "Sam" }), ct({ phone: "+13035550602", opted_in: true, sms_consent_source: "assumed_on_booking" })],
+    customers: [{ id: "cu1", name: "Ando Anderson", email: "Ando@Example.com", normalized_phone: "+13035550301" }, { id: "cu2", name: "Tx Unsub", email: "tx-unsub@x.com", normalized_phone: "+13035550501" },
+      { id: "cu3", name: "Hard Bounce", email: "hard@x.com", normalized_phone: "+13035550303" }, { id: "cu4", name: "Stopped", email: "stopped@x.com", normalized_phone: "+13035550304" }],
+    activities: [{ id: "ac1", display_name: "S4 Voyageur 146" }],
+    bookings: [{ fareharbor_pk: "#900", status: "booked", start_at: "2027-02-08T15:00:00Z", customer_id: "cu1", activity_id: "ac1", company: "coloradosledrentals", raw_payload: null },
+      { fareharbor_pk: "#901", status: "booked", start_at: "2027-02-08T15:00:00Z", customer_id: "cu2", activity_id: "ac1", company: "coloradosledrentals", raw_payload: null },
+      { fareharbor_pk: "#902", status: "booked", start_at: "2027-02-08T15:00:00Z", customer_id: "cu3", activity_id: "ac1", company: "coloradosledrentals", raw_payload: null },
+      { fareharbor_pk: "#903", status: "booked", start_at: "2027-02-08T15:00:00Z", customer_id: "cu4", activity_id: "ac1", company: "coloradosledrentals", raw_payload: null }],
+    email_sends: [],
+  });
+  const clientObj = { name: "Colorado Sled Rentals", address: "1 Main St, Steamboat Springs, CO 80487", supportEmail: "info@csr.test" };
+  const sentTests = [];
+  const boot = async (over = {}) => {
+    const crm = makeFhMockCrm(seedApi()); const db1 = makeFhMockCrm({ email_campaigns: [], scheduled_messages: [], opt_outs: [{ phone: "+13035550304" }] });
+    const app = express(); app.use(express.json());
+    app.use("/api/v1", API.buildOutboundRouter({ crm, db1, getClient: async () => over.client ?? clientObj, sendOne: async (m) => { sentTests.push(m); return { sent: true }; }, drain: async () => ({}), kick: false, now: over.now }));
+    const srv = await new Promise(r => { const s = app.listen(0, () => r(s)); });
+    return { crm, db1, srv, url: `http://127.0.0.1:${srv.address().port}/api/v1` };
+  };
+  const call = async (b, method, path, body, key = KEY) => { const r = await fetch(b.url + path, { method, headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, json: await r.json().catch(() => null) }; };
+
+  await withEnv({ OUTBOUND_API_KEY: KEY, RESEND_API_KEY: "re_test_fake", TWILIO_PHONE_NUMBER: "+15550000000", MAILING_ADDRESS: undefined, TEST_MODE: undefined, CLIENT_ID: "csr_rea", OUTBOUND_MAX_RECIPIENTS: undefined }, async () => {
+    let b = await boot();
+    try {
+      chk("api: 401 without a key, 401 with the wrong key", (await call(b, "GET", "/health", null, null)).status === 401 && (await call(b, "GET", "/health", null, "wrong-key")).status === 401);
+      const h = await call(b, "GET", "/health");
+      chk("api: /health reports configuration", h.status === 200 && h.json.email_configured === true && h.json.mailing_address_configured === true && h.json.business === "Colorado Sled Rentals");
+      await withEnv({ OUTBOUND_API_KEY: undefined }, async () => chk("api: 503 (never open) when OUTBOUND_API_KEY is not configured", (await call(b, "GET", "/health")).status === 503));
+
+      const pa = await call(b, "POST", "/email/audience", { segment: {} });
+      chk("api: audience preview — counts, breakdown, MASKED sample", pa.status === 200 && pa.json.eligible === 2 && pa.json.excluded.grandfathered === 1 && pa.json.sample.every(s => s.email.includes("***")), JSON.stringify(pa.json));
+      chk("api: an unknown segment field is a 400, not a silent widening", (await call(b, "POST", "/email/audience", { segment: { tag_any: ["x"] } })).status === 400);
+
+      const html = "<p>Hello {{first_name}}</p>";
+      const dry = await call(b, "POST", "/email/send", { subject: "Snow!", html, segment: {} });
+      chk("api: email send DEFAULTS to dry run — nothing queued", dry.status === 200 && dry.json.dry_run === true && dry.json.eligible === 2 && b.crm.tables.email_sends.length === 0 && b.db1.tables.email_campaigns.length === 0);
+      chk("api: dry_run must be the literal false — the string 'false' is still a dry run", (await call(b, "POST", "/email/send", { subject: "Snow!", html, dry_run: "false" })).json.dry_run === true);
+      chk("api: a real send without an idempotency_key is refused", (await call(b, "POST", "/email/send", { subject: "Snow!", html, dry_run: false })).status === 400);
+      chk("api: bad input is refused (no subject / no html)", (await call(b, "POST", "/email/send", { html })).status === 400 && (await call(b, "POST", "/email/send", { subject: "x" })).status === 400);
+
+      chk("api: overExpected tripwire maths (10% or +3, whichever is larger)", API.overExpected(8, 1) === true && API.overExpected(4, 1) === false && API.overExpected(110, 100) === false && API.overExpected(120, 100) === true && API.overExpected(5, null) === false);
+      const extra = Array.from({ length: 6 }, (_, i) => ct({ id: `extra-${i}`, email: `extra${i}@x.com`, email_marketing_consent: true, email_consent_source: "smartwaiver" }));
+      b.crm.tables.contacts.push(...extra);                                       // audience is now 8, the caller expected 1
+      const tripwire = await call(b, "POST", "/email/send", { subject: "Snow!", html, dry_run: false, idempotency_key: "idem-trip-0001", expected_recipients: 1 });
+      chk("api: expected_recipients tripwire refuses an audience far larger than expected (409)", tripwire.status === 409 && b.crm.tables.email_sends.length === 0 && b.db1.tables.email_campaigns.length === 0);
+      b.crm.tables.contacts.splice(b.crm.tables.contacts.length - extra.length, extra.length);
+      await withEnv({ OUTBOUND_MAX_RECIPIENTS: "1" }, async () => chk("api: per-send recipient cap is enforced (422)", (await call(b, "POST", "/email/send", { subject: "Snow!", html, dry_run: false, idempotency_key: "idem-cap-00001" })).status === 422));
+
+      const real = await call(b, "POST", "/email/send", { subject: "Snow!", html, name: "Sept newsletter", dry_run: false, idempotency_key: "idem-real-0001", segment: {}, expected_recipients: 2 });
+      chk("api: a real send creates a campaign, queues ONLY eligible people, returns 202", real.status === 202 && real.json.queued === 2 && b.crm.tables.email_sends.length === 2
+        && b.db1.tables.email_campaigns.length === 1 && b.db1.tables.email_campaigns[0].status === "sending" && b.db1.tables.email_campaigns[0].metadata.idempotency_key === "idem-real-0001", JSON.stringify(real.json));
+      chk("api: queued recipients exclude grandfathered / unsubscribed / suppressed / no-consent", b.crm.tables.email_sends.every(x => ["explicit@x.com", "two@x.com"].includes(x.email)));
+      const replay = await call(b, "POST", "/email/send", { subject: "Snow!", html, dry_run: false, idempotency_key: "idem-real-0001", segment: {} });
+      chk("api: RETRY with the same idempotency_key sends nothing new (Apps Script re-runs are safe)", replay.status === 200 && replay.json.already_created === true && b.crm.tables.email_sends.length === 2 && b.db1.tables.email_campaigns.length === 1);
+      const st = await call(b, "GET", `/email/campaigns/${real.json.campaign_id}`);
+      chk("api: campaign status shows delivery counts", st.status === 200 && st.json.total === 2 && st.json.counts.queued === 2);
+
+      const withGf = await call(b, "POST", "/email/audience", { segment: { include_grandfathered: true } });
+      chk("api: the grandfathered audience is only reachable by explicitly opting in per send", withGf.json.eligible === 3);
+
+      const t = await call(b, "POST", "/email/send", { subject: "Snow!", html, test_to: "me@example.com" });
+      chk("api: test_to sends ONE [TEST] email to that address and touches no audience", t.status === 200 && t.json.sent === true && sentTests.at(-1).to === "me@example.com" && /^\[TEST\]/.test(sentTests.at(-1).subject) && b.crm.tables.email_sends.length === 2);
+
+      // transactional email
+      const tdry = await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Your {{activity}} trip on {{trip_date}}", html: "<p>Hi {{first_name}}, see you at {{trip_time}}.</p>" });
+      chk("api: transactional defaults to dry run and previews merge fields (Mountain time)", tdry.status === 200 && tdry.json.dry_run === true && tdry.json.subject === "Your S4 Voyageur 146 trip on Monday, February 8, 2027" && tdry.json.to.includes("***"), JSON.stringify(tdry.json));
+      const tx = await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Reminder", html: "<p>Hi {{first_name}}</p>", dry_run: false, idempotency_key: "idem-tx-000001", to: "attacker@evil.com" });
+      const txRow = b.crm.tables.email_sends.find(x => x.category === "transactional");
+      chk("api: transactional goes ONLY to the booking's own guest — a supplied address is ignored", tx.status === 202 && txRow.email === "ando@example.com" && txRow.reference === "#900" && !b.crm.tables.email_sends.some(x => x.email === "attacker@evil.com"));
+      const tx2 = await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Reminder", html: "<p>Hi</p>", dry_run: false, idempotency_key: "idem-tx-000001" });
+      chk("api: transactional retry is a no-op (duplicate)", tx2.status === 202 && tx2.json.duplicate === true && b.crm.tables.email_sends.filter(x => x.category === "transactional").length === 1);
+      chk("api: a guest who unsubscribed from marketing STILL gets their booking email", (await call(b, "POST", "/email/transactional", { booking_pk: "#901", subject: "Reminder", html: "<p>Hi</p>", dry_run: false, idempotency_key: "idem-tx-000002" })).status === 202);
+      chk("api: a bounced/complained address is refused even for booking email (422)", (await call(b, "POST", "/email/transactional", { booking_pk: "#902", subject: "Reminder", html: "<p>Hi</p>", dry_run: false, idempotency_key: "idem-tx-000003" })).status === 422);
+      chk("api: unknown booking → 404", (await call(b, "POST", "/email/transactional", { booking_pk: "#nope", subject: "x", html: "<p>x</p>" })).status === 404);
+      for (let i = 0; i < 5; i++) b.crm.tables.email_sends.push({ id: `flood-${i}`, email: "ando@example.com", category: "transactional", reference: "#900", status: "sent", queued_at: new Date().toISOString() });
+      chk("api: more than 5 emails per booking per 24h is refused (429)", (await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Again", html: "<p>x</p>", dry_run: false, idempotency_key: "idem-tx-000009" })).status === 429);
+    } finally { b.srv.close(); }
+
+    // mailing address (CAN-SPAM)
+    b = await boot({ client: { name: "No Address Co" } });
+    try {
+      const r = await call(b, "POST", "/email/send", { subject: "Snow!", html: "<p>x</p>", dry_run: false, idempotency_key: "idem-noaddr-01" });
+      chk("api: marketing email is REFUSED without a physical mailing address (CAN-SPAM)", r.status === 422 && /mailing address/i.test(r.json.error) && b.crm.tables.email_sends.length === 0);
+      await withEnv({ MAILING_ADDRESS: "PO Box 1, Steamboat Springs, CO" }, async () =>
+        chk("api: MAILING_ADDRESS env satisfies the address requirement", (await call(b, "POST", "/email/send", { subject: "Snow!", html: "<p>x</p>", dry_run: false, idempotency_key: "idem-noaddr-02" })).status === 202));
+    } finally { b.srv.close(); }
+
+    // SMS
+    b = await boot({ now: () => new Date("2026-06-10T18:00:00Z") });   // noon Mountain
+    try {
+      const sa2 = await call(b, "POST", "/sms/audience", { segment: {} });
+      chk("api: sms audience — explicit consent only, from-number shown, masked sample", sa2.status === 200 && sa2.json.eligible === 1 && sa2.json.excluded.assumed_consent === 1 && sa2.json.from_number === "+15550000000" && sa2.json.sample[0].phone.includes("***"), JSON.stringify(sa2.json));
+      const sd = await call(b, "POST", "/sms/send", { body: "Big snow coming, {{first_name}}!", segment: {} });
+      chk("api: sms send DEFAULTS to dry run, appends the STOP line, personalises nothing yet", sd.status === 200 && sd.json.dry_run === true && /Reply STOP to opt out\.$/.test(sd.json.message) && b.db1.tables.scheduled_messages.length === 0, JSON.stringify(sd.json));
+      chk("api: a message that already says STOP is not double-tagged", (await call(b, "POST", "/sms/send", { body: "Sale! Text STOP to end.", segment: {} })).json.message === "Sale! Text STOP to end.");
+      chk("api: sms too long → 400", (await call(b, "POST", "/sms/send", { body: "x".repeat(400), segment: {} })).status === 400);
+      const ss = await call(b, "POST", "/sms/send", { body: "Big snow coming, {{first_name}}!", segment: {}, dry_run: false, idempotency_key: "idem-sms-00001" });
+      const sm = b.db1.tables.scheduled_messages;
+      chk("api: sms real send queues one durable message per eligible person via the scheduler, from the right number",
+        ss.status === 202 && sm.length === 1 && sm[0].phone === "+13035550601" && sm[0].body.startsWith("Big snow coming, Sam!") && sm[0].metadata.from_phone === "+15550000000" && sm[0].message_type === "api_broadcast", JSON.stringify(ss.json));
+      const ss2 = await call(b, "POST", "/sms/send", { body: "Big snow coming, {{first_name}}!", segment: {}, dry_run: false, idempotency_key: "idem-sms-00001" });
+      chk("api: sms retry with the same key sends nothing new", ss2.json.already_created === true && b.db1.tables.scheduled_messages.length === 1);
+      const stx = await call(b, "POST", "/sms/transactional", { booking_pk: "#903", body: "Hi {{first_name}}", dry_run: false, idempotency_key: "idem-smstx-001" });
+      chk("api: a STOP'd number cannot be texted even for a booking message (422)", stx.status === 422 && b.db1.tables.scheduled_messages.length === 1);
+      const stx2 = await call(b, "POST", "/sms/transactional", { booking_pk: "#900", body: "Hi {{first_name}}, your {{activity}} trip is {{trip_date}}.", dry_run: false, idempotency_key: "idem-smstx-002" });
+      chk("api: sms transactional goes to the booking's guest with merge fields", stx2.status === 202 && b.db1.tables.scheduled_messages.some(m => m.phone === "+13035550301" && m.body.includes("Ando") && m.body.includes("S4 Voyageur 146")) && !b.db1.tables.scheduled_messages.at(-1).body.includes("Reply STOP"));
+    } finally { b.srv.close(); }
+
+    b = await boot({ now: () => new Date("2026-06-10T09:00:00Z") });   // 3am Mountain
+    try {
+      const q = await call(b, "POST", "/sms/send", { body: "Big snow!", segment: {}, dry_run: false, idempotency_key: "idem-sms-quiet1" });
+      chk("api: marketing texts are refused during TCPA quiet hours (409)", q.status === 409 && /8am and 9pm/.test(q.json.error) && b.db1.tables.scheduled_messages.length === 0);
+    } finally { b.srv.close(); }
+
+    b = await boot({ now: () => new Date("2026-06-10T18:00:00Z") });
+    try {
+      b.db1.from = () => ({ select: () => Promise.resolve({ data: null, error: { message: "db1 down" } }), contains: () => ({ limit: () => Promise.resolve({ data: [] }) }) });
+      const r = await call(b, "POST", "/sms/send", { body: "Big snow!", segment: {}, dry_run: false, idempotency_key: "idem-sms-closed1" });
+      chk("api: sms FAILS CLOSED (503) when the opt-out list is unreadable", r.status === 503);
+    } finally { b.srv.close(); }
+  });
 }
 
 async function testEmailDomains() {

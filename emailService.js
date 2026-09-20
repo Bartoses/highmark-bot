@@ -27,7 +27,7 @@ export function isEmailConfigured() {
 // via RESEND_FROM_EMAIL. fromOverride (a full "Name <local@domain>" string)
 // takes precedence over both — used once a client's own domain is verified
 // in Resend (emailDomains.js resolveSendFrom(), Email Marketing Phase 2).
-function fromAddress(displayName, fromOverride) {
+export function fromAddress(displayName, fromOverride) {
   if (fromOverride) return fromOverride;
   const configured = process.env.RESEND_FROM_EMAIL || "Highmark <onboarding@resend.dev>";
   if (!displayName) return configured;
@@ -43,7 +43,7 @@ function fromAddress(displayName, fromOverride) {
  * `replyTo` (optional) — Reply-To address; lets a client's replies land in their real inbox.
  * `fromOverride` (optional) — full "Name <local@domain>" address; wins over `from`/RESEND_FROM_EMAIL.
  */
-export async function sendEmail({ to, subject, html, text, from, replyTo, fromOverride }) {
+export async function sendEmail({ to, subject, html, text, from, replyTo, fromOverride, headers }) {
   if (process.env.TEST_MODE === "true") return { sent: false, reason: "test_mode" };
   if (!process.env.RESEND_API_KEY)      return { sent: false, reason: "not_configured" };
 
@@ -59,6 +59,7 @@ export async function sendEmail({ to, subject, html, text, from, replyTo, fromOv
         to: [to],
         subject, html, text,
         ...(replyTo ? { reply_to: replyTo } : {}),
+        ...(headers ? { headers } : {}),
       }),
     });
 
@@ -72,6 +73,48 @@ export async function sendEmail({ to, subject, html, text, from, replyTo, fromOv
     return { sent: true, id: data.id ?? null };
   } catch (err) {
     console.error("[EMAIL] Resend send error:", err.message);
+    return { sent: false, reason: "network_error" };
+  }
+}
+
+const RESEND_BATCH_URL = "https://api.resend.com/emails/batch";
+export const RESEND_BATCH_MAX = 100;
+
+/**
+ * Sends up to 100 emails in ONE Resend call (POST /emails/batch). Each item is
+ * { from, to: [addr], subject, html, text, reply_to?, headers?, tags? }.
+ * `idempotencyKey` makes a retry of the same batch a no-op on Resend's side (valid 24h),
+ * which is what stops a crash-and-retry from double-emailing people.
+ * Returns { sent:true, ids:[…same order as items] } or { sent:false, reason, status?, detail? }.
+ * Never throws. Note: Resend validates a batch atomically — one bad item fails the whole
+ * call (status 4xx), so callers fall back to one-by-one to isolate the bad address.
+ */
+export async function sendEmailBatch(items, { idempotencyKey } = {}) {
+  if (process.env.TEST_MODE === "true") return { sent: false, reason: "test_mode" };
+  if (!process.env.RESEND_API_KEY)      return { sent: false, reason: "not_configured" };
+  if (!Array.isArray(items) || items.length === 0) return { sent: true, ids: [] };
+  if (items.length > RESEND_BATCH_MAX) return { sent: false, reason: "batch_too_large" };
+  try {
+    const res = await fetch(RESEND_BATCH_URL, {
+      method: "POST",
+      headers: {
+        Authorization:  `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+        ...(idempotencyKey ? { "Idempotency-Key": String(idempotencyKey).slice(0, 256) } : {}),
+      },
+      body: JSON.stringify(items),
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 300);
+      console.error(`[EMAIL] Resend batch failed (${res.status}):`, detail);
+      return { sent: false, reason: "provider_error", status: res.status, detail };
+    }
+    const data = await res.json().catch(() => ({}));
+    const ids = (data.data ?? []).map(x => x?.id ?? null);
+    if (ids.length !== items.length) return { sent: false, reason: "provider_mismatch", detail: `sent ${items.length}, got ${ids.length} ids` };
+    return { sent: true, ids };
+  } catch (err) {
+    console.error("[EMAIL] Resend batch error:", err.message);
     return { sent: false, reason: "network_error" };
   }
 }
