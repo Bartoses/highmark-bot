@@ -604,8 +604,7 @@ consent. `waiverImport.js` + `fareharborContacts.js` now refuse to consent an ad
 security scanners "click" links); `POST` unsubscribes (the confirm button + Gmail/Yahoo one-click).
 **Legacy unsubscribes:** the old sheet's 182 addresses (7 were currently consented!) → `node --env-file=.env
 importUnsubscribes.js <csv> [--apply]`. **Must be applied before the first send.**
-**Env to set on Railway:** `OUTBOUND_API_KEY` (web), `RESEND_WEBHOOK_SECRET` (web), `MAILING_ADDRESS` (web+cron), and
-`RESEND_FROM_EMAIL` once coloradosledrentals.com is verified in Resend (else mail is from the shared usehighmark.com address).
+**Env (SET 2026-09-20 on Railway):** web ← `OUTBOUND_API_KEY` (random, retrievable from the Railway Variables tab), `RESEND_WEBHOOK_SECRET`, `MAILING_ADDRESS` (2151 Downhill Drive, Steamboat Springs, CO 80487), `PUBLIC_BASE_URL`; cron ← `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `MAILING_ADDRESS`, `PUBLIC_BASE_URL` (the cron previously had NO Resend vars and it drains the queue too). Resend webhook → `/webhooks/resend` created (delivered/bounced/complained/failed). `coloradosledrentals.com` registered in Resend — **DNS records still to be added by the owner**; then set `RESEND_FROM_EMAIL` on BOTH services to `Colorado Sled Rentals <info@coloradosledrentals.com>` (currently `Highmark <invites@usehighmark.com>`). The queue worker also HOLDS marketing rows when no mailing address is configured on that service.
 Unsubscribe links use `PUBLIC_BASE_URL` → `RAILWAY_PUBLIC_DOMAIN` → the Railway URL (never relative).
 **Not built:** portal "Send" button (the Email Marketing composer can still only draft/preview/test), open/click tracking,
 scheduled sends, ongoing Smartwaiver ingestion. Tests: `testOutboundMessaging` (~150 checks incl. a real in-process express
