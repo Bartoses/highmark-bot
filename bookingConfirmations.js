@@ -388,7 +388,27 @@ async function processBookingEvent(booking, source, twilioClient, supabase, crmS
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POLLING — fallback if webhooks miss bookings
+//
+// Uses FareHarbor's documented "Bookings By Create Date" endpoint (built for
+// recovering bookings after a webhook outage). The old poller called
+// /companies/{shortname}/bookings/, which does not exist (404) — it silently did
+// nothing, `if (!res.ok) continue`. That endpoint returns only pk/uuid/status, so
+// each booking that still needs work is fetched in full by uuid before it goes
+// through processBookingEvent (idempotent: confirmations_sent UNIQUE claim).
+// Window = today + yesterday (UTC create date); overlap is harmless.
 // ─────────────────────────────────────────────────────────────────────────────
+export function pollCreateDates(now = new Date()) {
+  const day = (n) => new Date(now.getTime() - n * 864e5).toISOString().slice(0, 10);
+  return [day(0), day(1)];
+}
+export const fhCreateDateUrl = (shortname, date) =>
+  `${FAREHARBOR_BASE}/companies/${shortname}/minimal/bookings-by-create-date/${date}/`;
+export const fhBookingDetailUrl = (shortname, uuid) =>
+  `${FAREHARBOR_BASE}/companies/${shortname}/bookings/${uuid}/`;
+
+// Cap on full-booking fetches per company per poll (FareHarbor rate-limits per IP).
+const POLL_MAX_DETAIL_FETCHES = 25;
+
 // P0-3: true when the current worker tick falls in a FareHarbor poll window.
 // Original schedule was node-cron "*/30 * * * *" (top + half of each hour);
 // the worker ticks every 5 min, so match the :00 and :30 ticks (UTC).
@@ -405,68 +425,60 @@ export async function pollNewBookings(twilioClient, supabase, crmSupabase) {
     { shortname: "rabbitearsadventures", userKeyEnv: "FAREHARBOR_USER_KEY_REA" },
   ];
 
-  try {
-    const { data: pollRow } = await supabase
-      .from("settings")
-      .select("value")
-      .eq("key", "last_booking_poll")
-      .single();
+  for (const company of companies) {
+    try {
+      const headers = {
+        "X-FareHarbor-API-App":  process.env.FAREHARBOR_APP_KEY,
+        "X-FareHarbor-API-User": process.env[company.userKeyEnv],
+      };
 
-    const lastPoll = pollRow?.value ?? "1970-01-01T00:00:00Z";
+      // Nothing the poll can do if this client has both booking texts switched off
+      // (processBookingEvent would skip every booking) — don't burn API calls.
+      const fhClient  = resolveClientByFHCompany(company.shortname);
+      const msgConfig = await getMessagingConfig(fhClient?.id, supabase);
+      if (msgConfig && !msgConfig.enable_confirmation_texts && !msgConfig.enable_cancellations) continue;
 
-    for (const company of companies) {
-      try {
-        const url = `${FAREHARBOR_BASE}/companies/${company.shortname}/bookings/`;
-        const res = await fetch(url, {
-          headers: {
-            "X-FareHarbor-API-App":  process.env.FAREHARBOR_APP_KEY,
-            "X-FareHarbor-API-User": process.env[company.userKeyEnv],
-          },
-        });
-        if (!res.ok) continue;
-
+      // 1) Bookings created today / yesterday (UTC).
+      const listed = [];
+      for (const date of pollCreateDates()) {
+        const res = await fetch(fhCreateDateUrl(company.shortname, date), { headers });
+        if (!res.ok) {
+          console.warn(`[CONFIRM] Poll ${company.shortname} ${date}: HTTP ${res.status}`);
+          continue;
+        }
         const { bookings } = await res.json();
-        const allBookings = bookings ?? [];
-
-        // New confirmed bookings since last poll
-        const newBookings = allBookings.filter(
-          (b) => new Date(b.created_at ?? 0) > new Date(lastPoll)
-        );
-        for (const b of newBookings) {
-          await processBookingEvent(b, "poll", twilioClient, supabase, crmSupabase);
-        }
-
-        // Missed cancellations — find confirmed bookings that are now cancelled
-        // but haven't had a cancellation text sent yet
-        const cancelledPks = allBookings
-          .filter((b) => b.status === "cancelled")
-          .map((b) => String(b.pk));
-
-        if (cancelledPks.length > 0) {
-          const { data: pendingCancels } = await supabase
-            .from("confirmations_sent")
-            .select("booking_pk")
-            .in("booking_pk", cancelledPks)
-            .eq("cancellation_sent", false);
-
-          for (const row of pendingCancels ?? []) {
-            const booking = allBookings.find((b) => String(b.pk) === row.booking_pk);
-            if (booking) {
-              await processBookingEvent(booking, "poll", twilioClient, supabase, crmSupabase);
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`[CONFIRM] Poll failed for ${company.shortname}:`, err.message);
+        listed.push(...(bookings ?? []));
       }
-    }
+      if (!listed.length) continue;
 
-    // Update last_booking_poll
-    await supabase
-      .from("settings")
-      .upsert({ key: "last_booking_poll", value: new Date().toISOString() });
-  } catch (err) {
-    console.error("[CONFIRM] Polling error:", err.message);
+      // 2) Keep only what still needs a text: booked + never confirmed, or
+      //    cancelled + previously confirmed + cancellation text not yet sent.
+      const { data: sent } = await supabase
+        .from("confirmations_sent")
+        .select("booking_pk, cancellation_sent")
+        .in("booking_pk", listed.map((b) => String(b.pk)));
+      const sentByPk = new Map((sent ?? []).map((r) => [r.booking_pk, r]));
+      const todo = listed.filter((b) => {
+        const row = sentByPk.get(String(b.pk));
+        if (b.status === "booked")    return !row;
+        if (b.status === "cancelled") return !!row && !row.cancellation_sent;
+        return false;
+      });
+
+      // 3) Full booking by uuid → same handler the webhook uses.
+      for (const b of todo.slice(0, POLL_MAX_DETAIL_FETCHES)) {
+        if (!b.uuid) continue;
+        const res = await fetch(fhBookingDetailUrl(company.shortname, b.uuid), { headers });
+        if (!res.ok) {
+          console.warn(`[CONFIRM] Poll detail ${company.shortname} #${b.pk}: HTTP ${res.status}`);
+          continue;
+        }
+        const { booking } = await res.json();
+        if (booking) await processBookingEvent(booking, "poll", twilioClient, supabase, crmSupabase);
+      }
+    } catch (err) {
+      console.error(`[CONFIRM] Poll failed for ${company.shortname}:`, err.message);
+    }
   }
 }
 

@@ -109,7 +109,8 @@ clientConfig.js        — getRuntimeClientConfig(): merges DB settings into sta
 phoneUtils.js          — phone normalization: normalizePhone, isValidPhone, formatPhoneForDisplay
 livetruth.js           — live availability truth: isAvailabilitySensitive, resolveLiveTruth, buildTruthInstruction
 conversationEngine.js  — config-driven conversation: getConversationConfig, buildMainMenu, routeMenuSelection
-bookingConfirmations.js — FareHarbor webhook receiver + 30min polling + confirmation texts
+bookingConfirmations.js — FareHarbor webhook receiver + 30min bookings-by-create-date recovery poll + confirmation texts
+fareharborNormalizer.js — links FareHarbor rows in DB2 `bookings` (customer_id/activity_id/total_cents) from raw_payload so they appear in daily_manifest; cron "recent" every tick + daily "full"; CLI: `node --env-file=.env fareharborNormalizer.js [--apply]`
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging; opt_outs writes to DB1, contacts mirror to DB2
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
@@ -475,13 +476,45 @@ Outbound SMS to filtered audience (`all_leads`, `engaged_leads`, `new_leads`). T
 `scheduleMessage()` inserts row; `processScheduledMessages()` worker: claim → opt-out check → send → update status. Retry: 5 min, 15 min, then `failed`. Stale lock recovery after 5 min. Railway cron service (`highmark-cron`) runs every 5 min.
 
 ### Booking Confirmations (bookingConfirmations.js)
-FH webhook (authenticated — see Webhook Security/P0-2) + 30-min poller (runs in the cron
-worker). Confirmation link: `fareharbor.com/embeds/book/{shortname}/items/{pk}/booking/{uuid}/`.
+FH webhook (authenticated — see Webhook Security/P0-2) + 30-min recovery poller (runs in the cron
+worker; see the 2026-09-20 note below — it was a silent no-op before that). Confirmation link: `fareharbor.com/embeds/book/{shortname}/items/{pk}/booking/{uuid}/`.
 **Idempotency (P0-2):** the "booked" path now does an atomic CLAIM — inserts the
 `confirmations_sent` row (UNIQUE `booking_pk`) BEFORE sending; only the winning caller
 texts, so webhook + poll can't double-send. On Twilio send failure the claim is rolled
 back (deleted) so the poll retries. Cancellations idempotent via `cancellation_sent`
 column. Rebooking: cancel old + confirm new.
+
+### FareHarbor → DB2 `bookings` pipeline + normalizer (2026-09-20)
+**How FH bookings reach DB2.** NOT via this repo. FareHarbor's dashboard has a "Supabase" webhook
+(both CSR + REA, New + Updated bookings) → a **separate Railway service** (`web-production-59303`,
+`/webhook/fareharbor`) that stores the raw payload in `bookings` (pk `#NNNNNNNNN`, `raw_payload` =
+`{booking:{…}}`). MPWR/Polaris rows (pk `CO-XXX-XXX`) come from `mpwrSync.js`. Verified 2026-09-20 against
+FareHarbor's `bookings-by-create-date` API: 19/19 FH bookings created since 2026-03-20 are in DB2 — coverage is
+complete; FH volume is just low in the off-season. The other webhook on each account, "highmark", feeds this bot's
+confirmation texts only (it does not write `bookings`); note the **CSR "highmark" webhook triggers on Updated
+bookings only** (REA has New + Updated) — check in the FH dashboard.
+**The gap that mattered.** The external writer leaves `customer_id` + `activity_id` NULL, and the
+`daily_manifest` view INNER JOINs `customers` and `activities` (and filters `status='booked'`) — so those bookings
+were **invisible** to the ops board, briefings, revenue and the Mission Control widgets (5 Feb-2027 bookings ≈ $5.5k
++ ~115 booked 2025-26 rows). Money columns the view reads (`receipt_total_cents`, `amount_paid_cents`) were already
+correct; `total_cents`/`total_paid_cents` (read by the portal bookings list) were NULL.
+**`fareharborNormalizer.js`** fills the NULLs from `raw_payload` (handles both the wrapped webhook shape and the
+older unwrapped bulk-load shape): customer = find-or-create in `customers` by E.164 phone (existing rows reused,
+never renamed); activity = `activities.fareharbor_item_name` == payload `availability.item.name` **only when exactly
+one activity matches** (else reported as unresolved, never guessed); totals mirror `receipt_total`/`amount_paid`.
+**Only ever fills NULL columns — never overwrites** (~8% of older rows were hand-mapped differently). Scope:
+`start_at >= 2025-01-01` (2021–22 history was never linked; left alone). Does **not** mirror to CRM `contacts`
+(that table drives SMS campaigns and `upsertContact` opts new contacts in — a consent decision, kept separate).
+Runs in `cron-worker.js`: `recent` mode (rows updated in last 7d) every tick — re-heals a row the writer re-upserts —
+and `full` sweep daily at 10:00 UTC, in its own try/catch. CLI dry-runs by default; `--apply` writes.
+**Poller fix.** `pollNewBookings` called `/companies/{sn}/bookings/`, which does not exist (404) — it silently did
+nothing (`if (!res.ok) continue`). It now uses FareHarbor's documented **`/minimal/bookings-by-create-date/{date}/`**
+(built for webhook-outage recovery; UTC create date, window = today + yesterday), filters to bookings still needing
+a text via `confirmations_sent`, fetches the full booking by uuid (`/bookings/{uuid}/`, cap 25/company/poll) and runs
+the same idempotent `processBookingEvent`. Skips a company entirely when both confirmation + cancellation texts are
+OFF in `messaging_config` (currently true for csr_rea), so it burns no API calls until messaging is enabled.
+It recovers *texts* (and the confirmation-time CRM contact upsert); it does **not** insert missing `bookings` rows.
++28 tests (`testFareHarborNormalizer`, in-memory mock DB2, no network).
 
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).

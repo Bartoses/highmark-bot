@@ -3260,6 +3260,7 @@ async function main() {
     await testVoiceAI();          // Voice AI Phase 1: TwiML builders, config merge, hours, call-log routes
     await testEmailCampaigns();   // Email Marketing (email creation phase): templates, merge fields, footer/render, CRUD + preview/send-test route guards
     await testEmailDomains();     // Email Marketing Phase 2: per-client sending domain — resolveSendFrom, route guards, validation
+    await testFareHarborNormalizer(); // FareHarbor → DB2 bookings: customer/activity/total fill from raw_payload + bookings-by-create-date poller
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -18648,6 +18649,199 @@ async function testEmailCampaigns() {
 // triggerVerify would hit the LIVE Resend API. Only validation/guard paths
 // that return before touching Resend are exercised via direct handler calls.
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// FAREHARBOR NORMALIZER + create-date poller (fareharborNormalizer.js / bookingConfirmations.js)
+// In-memory mock DB2 — no network, no live writes.
+// ─────────────────────────────────────────────────────────────────────────────
+function makeFhMockCrm(seed) {
+  const tables = {
+    bookings:   seed.bookings.map(r => ({ ...r })),
+    customers:  (seed.customers ?? []).map(r => ({ ...r })),
+    activities: (seed.activities ?? []).map(r => ({ ...r })),
+  };
+  const writes = { customerInserts: 0, bookingUpdates: [], customerUpdates: 0 };
+  let idn = 1000;
+  function builder(table) {
+    const st = { filters: [], order: null, range: null, patch: null, insert: null, cols: "*" };
+    const run = () => {
+      let rows = tables[table].filter(r => st.filters.every(f => f(r)));
+      if (st.order) rows = [...rows].sort((a, b) => (a[st.order] > b[st.order] ? 1 : a[st.order] < b[st.order] ? -1 : 0));
+      if (st.range) rows = rows.slice(st.range[0], st.range[1] + 1);
+      return rows;
+    };
+    const api = {
+      select(cols) { st.cols = cols; return api; },
+      like(col, pat) { const pre = pat.replace(/%$/, ""); st.filters.push(r => String(r[col] ?? "").startsWith(pre)); return api; },
+      gte(col, v) { st.filters.push(r => r[col] != null && r[col] >= v); return api; },
+      eq(col, v) { st.filters.push(r => r[col] === v); return api; },
+      is(col, v) { st.filters.push(r => (r[col] ?? null) === v); return api; },
+      in(col, list) { st.filters.push(r => list.includes(r[col])); return api; },
+      or(expr) {
+        const conds = expr.split(",").map(c => c.split("."));
+        st.filters.push(r => conds.some(([col, op]) => op === "is" && (r[col] ?? null) === null));
+        return api;
+      },
+      order(col) { st.order = col; return api; },
+      range(a, b) { st.range = [a, b]; return api; },
+      insert(row) { st.insert = row; return api; },
+      update(patch) { st.patch = patch; return api; },
+      maybeSingle() { return Promise.resolve({ data: run()[0] ?? null, error: null }); },
+      single() {
+        if (st.insert) {
+          if (table === "customers" && tables.customers.some(c => st.insert.normalized_phone && c.normalized_phone === st.insert.normalized_phone))
+            return Promise.resolve({ data: null, error: { message: "duplicate key" } });
+          const made = { id: `cust-${idn++}`, ...st.insert };
+          tables[table].push(made); writes.customerInserts++;
+          return Promise.resolve({ data: { id: made.id }, error: null });
+        }
+        return Promise.resolve({ data: run()[0] ?? null, error: null });
+      },
+      then(resolve, reject) {
+        try {
+          if (st.patch) {
+            const hit = run();
+            hit.forEach(r => Object.assign(r, st.patch));
+            if (table === "bookings") hit.forEach(r => writes.bookingUpdates.push({ pk: r.fareharbor_pk, patch: st.patch }));
+            else writes.customerUpdates++;
+            return resolve({ data: null, error: null });
+          }
+          return resolve({ data: run().map(r => ({ ...r })), error: null });
+        } catch (e) { return reject(e); }
+      },
+    };
+    return api;
+  }
+  return { from: builder, tables, writes };
+}
+
+async function testFareHarborNormalizer() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const N = await import("./fareharborNormalizer.js");
+  const bc = await import("./bookingConfirmations.js");
+
+  // ── pure helpers ──────────────────────────────────────────────────────────
+  const booking = {
+    pk: 380089285,
+    contact: { name: "  Ando Anderson ", phone: "(970) 555-0142", email: " ando@example.com " },
+    availability: { item: { name: "Tree Line - 2 Hour Afternoon Tour" } },
+    receipt_total: 20731, amount_paid: 0,
+  };
+  chk("fhnorm: unwrapFhPayload unwraps webhook {booking:{…}} shape", N.unwrapFhPayload({ booking }) === booking);
+  chk("fhnorm: unwrapFhPayload accepts the bulk-load (unwrapped) shape", N.unwrapFhPayload(booking) === booking);
+  chk("fhnorm: unwrapFhPayload rejects null / non-booking objects",
+    N.unwrapFhPayload(null) === null && N.unwrapFhPayload({ foo: 1 }) === null);
+
+  const f = N.extractFhBookingFields({ booking });
+  chk("fhnorm: extract trims name/email + normalizes phone to E.164",
+    f.contactName === "Ando Anderson" && f.contactEmail === "ando@example.com" && f.contactPhone === "+19705550142");
+  chk("fhnorm: extract reads item name + cents", f.itemName === "Tree Line - 2 Hour Afternoon Tour" && f.receiptTotalCents === 20731 && f.amountPaidCents === 0);
+  chk("fhnorm: amount_paid 0 is a real value, not 'missing'", f.amountPaidCents === 0);
+  const f2 = N.extractFhBookingFields({ booking: { pk: 1, contact: { name: "", phone: "nope" } } });
+  chk("fhnorm: blank name / junk phone → null (no bogus customer)", f2.contactName === null && f2.contactPhone === null);
+
+  const idx = N.buildActivityIndex([
+    { id: "a1", fareharbor_item_name: "Solo" },
+    { id: "a2", fareharbor_item_name: "Dupe", is_archived: true },
+    { id: "a3", fareharbor_item_name: "Dupe", is_archived: false },
+    { id: "a4", fareharbor_item_name: "Ambig", is_archived: false },
+    { id: "a5", fareharbor_item_name: "Ambig", is_archived: false },
+  ]);
+  chk("fhnorm: activity index maps a unique item name", idx.get("Solo") === "a1");
+  chk("fhnorm: duplicate name resolves to the single non-archived activity", idx.get("Dupe") === "a3");
+  chk("fhnorm: ambiguous name (2 live activities) is NOT guessed", !idx.has("Ambig"));
+
+  const rowNulls = { customer_id: null, activity_id: null, total_cents: null, total_paid_cents: null };
+  const p1 = N.planBookingPatch(rowNulls, f, { customerId: "c1", activityId: "a1" });
+  chk("fhnorm: patch fills every NULL column", p1.customer_id === "c1" && p1.activity_id === "a1" && p1.total_cents === 20731 && p1.total_paid_cents === 0);
+  const p2 = N.planBookingPatch({ customer_id: "keep", activity_id: "keep", total_cents: 5, total_paid_cents: 5 }, f, { customerId: "c1", activityId: "a1" });
+  chk("fhnorm: patch NEVER overwrites existing values", Object.keys(p2).length === 0, JSON.stringify(p2));
+
+  // ── end-to-end against the mock DB ───────────────────────────────────────
+  const payload = (pk, name, phone, item, total = 10000, paid = 10000) => ({
+    booking: { pk, contact: { name, phone, email: null }, availability: { item: { name: item } }, receipt_total: total, amount_paid: paid },
+  });
+  const seed = () => ({
+    activities: [
+      { id: "act-tl", fareharbor_item_name: "Tree Line - 2 Hour Afternoon Tour" },
+      { id: "act-ft", fareharbor_item_name: "First Tracks - 2 Hour Morning Tour" },
+    ],
+    customers: [{ id: "cust-existing", name: "Rick Streitz", normalized_phone: "+19705550111", company: "coloradosledrentals" }],
+    bookings: [
+      // new webhook row, brand-new guest → creates a customer + links activity
+      { fareharbor_pk: "#1", company: "coloradosledrentals", start_at: "2027-02-08", updated_at: new Date().toISOString(),
+        customer_id: null, activity_id: null, total_cents: null, total_paid_cents: null,
+        raw_payload: payload(1, "New Guest", "+19705550199", "Tree Line - 2 Hour Afternoon Tour") },
+      // existing customer (matched by phone), second booking by the SAME new guest → one customer only
+      { fareharbor_pk: "#2", company: "coloradosledrentals", start_at: "2027-02-09", updated_at: new Date().toISOString(),
+        customer_id: null, activity_id: null, total_cents: null, total_paid_cents: null,
+        raw_payload: payload(2, "Rick Streitz", "+19705550111", "First Tracks - 2 Hour Morning Tour") },
+      { fareharbor_pk: "#3", company: "coloradosledrentals", start_at: "2027-02-10", updated_at: new Date().toISOString(),
+        customer_id: null, activity_id: null, total_cents: null, total_paid_cents: null,
+        raw_payload: payload(3, "New Guest", "+19705550199", "Tree Line - 2 Hour Afternoon Tour") },
+      // already fully linked → must be untouched (even though the item name would map elsewhere)
+      { fareharbor_pk: "#4", company: "coloradosledrentals", start_at: "2026-12-01", updated_at: "2026-03-22T00:00:00Z",
+        customer_id: "cust-existing", activity_id: "hand-mapped", total_cents: 1, total_paid_cents: 1,
+        raw_payload: payload(4, "Rick Streitz", "+19705550111", "First Tracks - 2 Hour Morning Tour") },
+      // unknown item + no contact → reported, not guessed
+      { fareharbor_pk: "#5", company: "rabbitearsadventures", start_at: "2027-01-05", updated_at: new Date().toISOString(),
+        customer_id: null, activity_id: null, total_cents: 7, total_paid_cents: 7,
+        raw_payload: { booking: { pk: 5, contact: { name: "", phone: null }, availability: { item: { name: "Brand New Tour" } } } } },
+      // pre-cutoff history → out of window
+      { fareharbor_pk: "#6", company: "coloradosledrentals", start_at: "2022-01-05", updated_at: "2026-03-22T00:00:00Z",
+        customer_id: null, activity_id: null, total_cents: null, total_paid_cents: null,
+        raw_payload: payload(6, "Old Guest", "+19705550222", "Tree Line - 2 Hour Afternoon Tour") },
+      // MPWR row must never be touched by the FareHarbor normalizer
+      { fareharbor_pk: "CO-AAA-BBB", company: "coloradosledrentals", start_at: "2027-02-11", updated_at: new Date().toISOString(),
+        customer_id: null, activity_id: null, total_cents: null, total_paid_cents: null, raw_payload: null },
+    ],
+  });
+
+  // dry run: reports the plan, writes nothing
+  let db = makeFhMockCrm(seed());
+  let dry = await N.normalizeFareHarborBookings(db, { mode: "full", dryRun: true });
+  chk("fhnorm: dry run writes nothing", db.writes.customerInserts === 0 && db.writes.bookingUpdates.length === 0, JSON.stringify(db.writes));
+  chk("fhnorm: dry run still reports the plan (3 rows to fix)", dry.updated === 3 && dry.customersCreated === 1, JSON.stringify({ u: dry.updated, c: dry.customersCreated }));
+
+  // apply
+  db = makeFhMockCrm(seed());
+  const res = await N.normalizeFareHarborBookings(db, { mode: "full" });
+  const byPk = Object.fromEntries(db.tables.bookings.map(r => [r.fareharbor_pk, r]));
+  chk("fhnorm: links a new guest's booking to a created customer + activity",
+    byPk["#1"].customer_id?.startsWith("cust-") && byPk["#1"].activity_id === "act-tl");
+  chk("fhnorm: two bookings by the same new guest share ONE customer row",
+    byPk["#1"].customer_id === byPk["#3"].customer_id && db.writes.customerInserts === 1, `inserts=${db.writes.customerInserts}`);
+  chk("fhnorm: reuses an existing customer matched by phone (no duplicate)", byPk["#2"].customer_id === "cust-existing");
+  chk("fhnorm: fills total_cents / total_paid_cents from the payload", byPk["#1"].total_cents === 10000 && byPk["#1"].total_paid_cents === 10000);
+  chk("fhnorm: leaves already-linked rows completely untouched",
+    byPk["#4"].activity_id === "hand-mapped" && byPk["#4"].total_cents === 1 && !db.writes.bookingUpdates.some(w => w.pk === "#4"));
+  chk("fhnorm: unknown item + no contact is reported as unresolved, not guessed",
+    byPk["#5"].customer_id === null && byPk["#5"].activity_id === null &&
+    res.unresolved.some(u => u.pk === "#5" && u.reason === "no_contact") &&
+    res.unresolved.some(u => u.pk === "#5" && u.reason.startsWith("no_activity_match")));
+  chk("fhnorm: rows before the `since` cutoff are ignored", byPk["#6"].customer_id === null && !db.writes.bookingUpdates.some(w => w.pk === "#6"));
+  chk("fhnorm: non-FareHarbor (MPWR CO-) rows are never touched", !db.writes.bookingUpdates.some(w => w.pk === "CO-AAA-BBB"));
+
+  // idempotent: a second pass has nothing left to do for the resolvable rows
+  const res2 = await N.normalizeFareHarborBookings(db, { mode: "full" });
+  chk("fhnorm: second run is a no-op for resolved rows (idempotent)", res2.updated === 0 && db.writes.customerInserts === 1, JSON.stringify({ u: res2.updated }));
+
+  // recent mode only looks at recently-updated rows
+  db = makeFhMockCrm(seed());
+  const rec = await N.normalizeFareHarborBookings(db, { mode: "recent" });
+  chk("fhnorm: recent mode scans only rows updated in the last 7 days", rec.scanned === 4, `scanned=${rec.scanned}`);
+
+  // null crm (DB2 unconfigured) degrades quietly
+  const none = await N.normalizeFareHarborBookings(null, {});
+  chk("fhnorm: null crm client is a safe no-op", none.scanned === 0 && none.updated === 0);
+
+  // ── create-date poller helpers ────────────────────────────────────────────
+  const days = bc.pollCreateDates(new Date("2026-09-20T03:30:00Z"));
+  chk("fhpoll: poll window is today + yesterday in UTC", JSON.stringify(days) === JSON.stringify(["2026-09-20", "2026-09-19"]), JSON.stringify(days));
+  chk("fhpoll: uses the documented bookings-by-create-date path (not the 404 /bookings/ path)",
+    bc.fhCreateDateUrl("coloradosledrentals", "2026-09-19").endsWith("/companies/coloradosledrentals/minimal/bookings-by-create-date/2026-09-19/"));
+  chk("fhpoll: detail URL is by booking uuid", bc.fhBookingDetailUrl("rabbitearsadventures", "abc-123").endsWith("/companies/rabbitearsadventures/bookings/abc-123/"));
+}
+
 async function testEmailDomains() {
   const chk = (label, cond, detail = "") =>
     cond ? pass(label) : fail(label, detail || "expected truthy");

@@ -21,6 +21,7 @@ import { runMpwrSync } from "./mpwrSync.js";
 import { runWorkOrderSync } from "./mpwrWorkOrders.js";
 import { runScheduledKnowledgeJobs } from "./knowledgeBase.js";
 import { pollNewBookings, isFareHarborPollDue } from "./bookingConfirmations.js";
+import { normalizeFareHarborBookings } from "./fareharborNormalizer.js";
 import { loadDbClients } from "./clients.js";
 
 const required = [
@@ -95,6 +96,26 @@ try {
       await runWorkOrderSync(crmSupabase);
     } catch (err) {
       console.error(`[CRON-WORKER] MPWR sync window failed (non-fatal): ${err.message}`);
+    }
+  }
+
+  // FareHarbor → DB2 normalizer. The external webhook writer inserts FH bookings
+  // with customer_id / activity_id NULL, and daily_manifest INNER JOINs both, so
+  // those bookings are invisible until linked. "recent" (rows updated in the last
+  // 7 days) runs every tick — cheap, and re-heals a row the writer re-upserts;
+  // "full" sweeps everything since 2025 once a day (10:00 UTC tick). Own try/catch:
+  // a DB2 hiccup here must never take down the rest of the worker.
+  if (crmSupabase) {
+    try {
+      const fullSweep = new Date().getUTCHours() === 10 && new Date().getUTCMinutes() < 5;
+      const r = await normalizeFareHarborBookings(crmSupabase, { mode: fullSweep ? "full" : "recent" });
+      if (r.updated || r.unresolved.length) {
+        console.log(`[CRON-WORKER] FH normalize (${r.mode}): ${r.updated} updated ` +
+          `(${r.customersLinked} customer links, ${r.customersCreated} new customers, ${r.activitiesLinked} activities), ` +
+          `${r.unresolved.length} unresolved${r.unresolved.length ? " e.g. " + JSON.stringify(r.unresolved.slice(0, 3)) : ""}`);
+      }
+    } catch (err) {
+      console.error(`[CRON-WORKER] FH normalize failed (non-fatal): ${err.message}`);
     }
   }
 

@@ -967,6 +967,16 @@ cost allocation once multiple clients are sending real volume.
 
 ---
 
+## FareHarbor → DB2 visibility fix (2026-09-20)
+FH bookings written by the external webhook (separate Railway service) had NULL customer_id/activity_id, so
+`daily_manifest` (INNER JOINs) hid them. Built `fareharborNormalizer.js` (cron recent + daily full; CLI) + fixed the
+dead FH recovery poller (now `bookings-by-create-date`). Code + tests done; **live backfill of ~2,961 rows
+(205 customer links / 62 new customers / 52 activities / totals) NOT yet applied** — run
+`node --env-file=.env fareharborNormalizer.js` (dry) then `--apply`, or let the deployed cron's daily full sweep do it.
+Open: (1) durable fix in the external writer service so rows arrive linked; (2) FH-side check that the CSR "highmark"
+webhook also fires on New bookings; (3) poller does not insert missing `bookings` rows (only texts); (4) CRM
+`contacts` mirror for FH guests deliberately not automated (consent).
+
 ## NEXT 5 BUILDS (STRICT ORDER)
 
 1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
