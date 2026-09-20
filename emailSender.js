@@ -49,8 +49,23 @@ export function resolveBaseUrl() {
 // CAN-SPAM requires a physical postal address in every commercial email.
 export const resolveMailingAddress = (client) => (client?.address || process.env.MAILING_ADDRESS || "").trim() || null;
 
+// Where replies go. With a shared sender address (news@usehighmark.com) nobody reads that inbox, so an outbound email
+// must ALWAYS carry a real Reply-To: explicit → the client's support email → OUTBOUND_REPLY_TO.
+export const resolveReplyTo = (explicit, client) => explicit || client?.supportEmail || (process.env.OUTBOUND_REPLY_TO || "").trim() || null;
+
+// Precedence: the client's OWN verified domain (client_email_domains) → OUTBOUND_FROM_EMAIL (the sender address for
+// campaigns + booking emails on a verified shared domain, e.g. news@usehighmark.com) → RESEND_FROM_EMAIL (which the
+// portal-invite emails also use, so it is left alone). The display name is always the client's/campaign's.
 export function resolveFrom({ displayName, domainRow = null }) {
-  return resolveSendFrom(domainRow, displayName) ?? fromAddress(displayName);
+  const own = resolveSendFrom(domainRow, displayName);
+  if (own) return own;
+  const shared = (process.env.OUTBOUND_FROM_EMAIL || "").trim();
+  if (shared) {
+    const m = shared.match(/<(.+)>/);
+    const address = m ? m[1] : shared;
+    return displayName ? `${displayName} <${address}>` : address;
+  }
+  return fromAddress(displayName);
 }
 
 export function renderCampaignEmail({ campaign, client, recipient, baseUrl, domainRow = null }) {
@@ -66,7 +81,7 @@ export function renderCampaignEmail({ campaign, client, recipient, baseUrl, doma
     from: resolveFrom({ displayName, domainRow }),
     to: [recipient.email],
     subject: rendered.subject, html: rendered.html, text: rendered.text,
-    ...((campaign.reply_to || client?.supportEmail) ? { reply_to: campaign.reply_to || client.supportEmail } : {}),
+    ...(resolveReplyTo(campaign.reply_to, client) ? { reply_to: resolveReplyTo(campaign.reply_to, client) } : {}),
     headers: buildListUnsubscribeHeaders(baseUrl, recipient.unsubscribe_token),
     tags: [{ name: "category", value: "marketing" }, ...(campaign.id ? [{ name: "campaign", value: String(campaign.id).replace(/[^A-Za-z0-9_-]/g, "_") }] : [])],
   };
@@ -88,7 +103,7 @@ export function renderTransactionalEmail({ row, client, mergeVars = {}, domainRo
     subject: renderMergeFields(row.subject ?? "", vars),
     html: wrapEmailShell({ previewText: null, bodyHtml: body, footerHtml: footer }),
     text: `${htmlToPlainText(body)}\n\n${businessName}${address ? ` · ${address}` : ""}`,
-    ...((replyTo || client?.supportEmail) ? { reply_to: replyTo || client.supportEmail } : {}),
+    ...(resolveReplyTo(replyTo, client) ? { reply_to: resolveReplyTo(replyTo, client) } : {}),
     tags: [{ name: "category", value: "transactional" }],
   };
 }

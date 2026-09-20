@@ -30,7 +30,7 @@
 import crypto from "crypto";
 import express from "express";
 import { normalizeSegment, SegmentError, selectEmailRecipients, selectSmsRecipients, loadSmsOptOuts, maskEmail, maskPhone } from "./outboundAudience.js";
-import { enqueueCampaignSends, enqueueTransactional, drainEmailQueue, resolveMailingAddress } from "./emailSender.js";
+import { enqueueCampaignSends, enqueueTransactional, drainEmailQueue, resolveMailingAddress, resolveReplyTo, resolveFrom } from "./emailSender.js";
 import { createEmailCampaign } from "./emailCampaigns.js";
 import { isEmailConfigured, sendEmail } from "./emailService.js";
 import { renderMergeFields } from "./emailTemplates.js";
@@ -114,7 +114,7 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
     res.json({
       ok: true, client_id: clientId(), business: c.name ?? null,
       email_configured: isEmailConfigured(), webhook_secret_configured: !!process.env.RESEND_WEBHOOK_SECRET,
-      mailing_address_configured: !!resolveMailingAddress(c), sms_from_number: c.outboundPhone || process.env.TWILIO_PHONE_NUMBER || null,
+      mailing_address_configured: !!resolveMailingAddress(c), email_from: resolveFrom({ displayName: c.name }), reply_to: resolveReplyTo(null, c), sms_from_number: c.outboundPhone || process.env.TWILIO_PHONE_NUMBER || null,
     });
   });
 
@@ -142,7 +142,7 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
         if (!isEmailAddress(b.test_to)) return bad(res, "test_to must be a valid email");
         if (!isEmailConfigured()) return bad(res, "email is not configured", 503);
         const r = await sendOne({ to: normEmail(b.test_to), subject: `[TEST] ${renderMergeFields(b.subject, { first_name: "Alex", business_name: c.name })}`,
-          html: renderMergeFields(b.html, { first_name: "Alex", last_name: "Guest", business_name: c.name }), from: b.from_name || c.name, replyTo: b.reply_to || c.supportEmail });
+          html: renderMergeFields(b.html, { first_name: "Alex", last_name: "Guest", business_name: c.name }), from: b.from_name || c.name, replyTo: resolveReplyTo(b.reply_to, c) ?? undefined });
         return res.status(r.sent ? 200 : 502).json({ test: true, sent: r.sent, reason: r.reason ?? null });
       }
 

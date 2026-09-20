@@ -29,6 +29,7 @@ var NEWSLETTER = {
   previewText: 'Fresh snow is headed to Steamboat.',
   htmlFile: 'index_3',                             // the HTML file in this project (without .html)
   fromName: 'Colorado Sled Rentals',
+  replyTo: 'info@coloradosledrentals.com',         // replies from customers land here (your real inbox)
   // Who gets it. Everything is optional; {} = everyone with explicit email consent.
   //   tags_any / tags_all / exclude_tags : e.g. ['waiver'], ['trailer_rental'], ['booked'], ['rzr']
   //   min_bookings, active_since ('2025-01-01'), sources
@@ -76,7 +77,8 @@ function hmDescribe_(a) {
 function checkConnection() {
   var h = hmApi_('GET', '/health');
   hmSay_('Connected to ' + h.business + '.\nEmail configured: ' + h.email_configured + '\nMailing address set: ' + h.mailing_address_configured +
-       '\nBounce/complaint webhook set: ' + h.webhook_secret_configured);
+       '\nBounce/complaint webhook set: ' + h.webhook_secret_configured +
+       '\nEmails send from: ' + h.email_from + '\nReplies go to: ' + h.reply_to);
 }
 
 function previewNewsletter() {
@@ -85,7 +87,7 @@ function previewNewsletter() {
 
 function sendNewsletterTest() {
   var me = Session.getActiveUser().getEmail();
-  hmApi_('POST', '/email/send', { subject: NEWSLETTER.subject, html: hmHtml_(), test_to: me, from_name: NEWSLETTER.fromName });
+  hmApi_('POST', '/email/send', { subject: NEWSLETTER.subject, html: hmHtml_(), test_to: me, from_name: NEWSLETTER.fromName, reply_to: NEWSLETTER.replyTo });
   hmSay_('Test sent to ' + me + '. Check your inbox (and spam).');
 }
 
@@ -99,7 +101,7 @@ function sendNewsletter() {
   if (!ok) return;
   var r = hmApi_('POST', '/email/send', {
     name: NEWSLETTER.id, subject: NEWSLETTER.subject, preview_text: NEWSLETTER.previewText,
-    html: hmHtml_(), from_name: NEWSLETTER.fromName, segment: NEWSLETTER.segment,
+    html: hmHtml_(), from_name: NEWSLETTER.fromName, reply_to: NEWSLETTER.replyTo, segment: NEWSLETTER.segment,
     dry_run: false, idempotency_key: 'newsletter-' + NEWSLETTER.id,
     expected_recipients: dry.eligible                                   // refuses if the audience changed a lot between preview and send
   });

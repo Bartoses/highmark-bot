@@ -19180,6 +19180,22 @@ async function testOutboundMessaging() {
   await withEnv({ MAILING_ADDRESS: "PO Box 1, Steamboat" }, async () => chk("send: MAILING_ADDRESS env is the fallback", S.resolveMailingAddress({ address: null }) === "PO Box 1, Steamboat"));
   await withEnv({ PUBLIC_BASE_URL: undefined, RAILWAY_PUBLIC_DOMAIN: undefined }, async () => chk("send: unsubscribe links are ALWAYS absolute (never a dead relative link)", /^https:\/\//.test(S.resolveBaseUrl())));
   await withEnv({ PUBLIC_BASE_URL: "https://x.test/" }, async () => chk("send: PUBLIC_BASE_URL wins, trailing slash trimmed", S.resolveBaseUrl() === "https://x.test"));
+  await withEnv({ OUTBOUND_FROM_EMAIL: "news@usehighmark.com", RESEND_FROM_EMAIL: "Highmark <invites@usehighmark.com>" }, async () => {
+    chk("send: OUTBOUND_FROM_EMAIL is the sender for campaigns, with the client's display name (invite emails keep RESEND_FROM_EMAIL)",
+      S.resolveFrom({ displayName: "Colorado Sled Rentals" }) === "Colorado Sled Rentals <news@usehighmark.com>");
+    chk("send: a client's own VERIFIED domain wins over the shared sender",
+      S.resolveFrom({ displayName: "CSR", domainRow: { domain: "coloradosledrentals.com", status: "verified", from_local_part: "info" } }) === "CSR <info@coloradosledrentals.com>");
+    chk("send: an UNVERIFIED client domain is never used", S.resolveFrom({ displayName: "CSR", domainRow: { domain: "coloradosledrentals.com", status: "pending", from_local_part: "info" } }) === "CSR <news@usehighmark.com>");
+  });
+  await withEnv({ OUTBOUND_FROM_EMAIL: "Someone <hello@usehighmark.com>" }, async () => chk("send: OUTBOUND_FROM_EMAIL may be a full 'Name <addr>' string (address is extracted)", S.resolveFrom({ displayName: "CSR" }) === "CSR <hello@usehighmark.com>"));
+  await withEnv({ OUTBOUND_FROM_EMAIL: undefined, RESEND_FROM_EMAIL: "Highmark <invites@usehighmark.com>" }, async () => chk("send: falls back to RESEND_FROM_EMAIL when OUTBOUND_FROM_EMAIL is unset", S.resolveFrom({ displayName: "CSR" }) === "CSR <invites@usehighmark.com>"));
+  await withEnv({ OUTBOUND_REPLY_TO: "info@csr.test" }, async () => {
+    chk("send: reply-to precedence = explicit → client support email → OUTBOUND_REPLY_TO", S.resolveReplyTo("a@x.com", { supportEmail: "b@x.com" }) === "a@x.com" && S.resolveReplyTo(null, { supportEmail: "b@x.com" }) === "b@x.com" && S.resolveReplyTo(null, {}) === "info@csr.test");
+    const noSupport = { name: "No Support Co", address: "1 Main St" };
+    chk("send: EVERY outbound email carries a real Reply-To even when the client has no support email (replies never vanish)",
+      S.renderCampaignEmail({ campaign: { subject: "s", body_html: "<p>x</p>" }, client: noSupport, recipient: { email: "a@x.com", unsubscribe_token: "t" }, baseUrl: "https://x" }).reply_to === "info@csr.test"
+      && S.renderTransactionalEmail({ row: { email: "a@x.com", subject: "s", body_html: "<p>x</p>" }, client: noSupport }).reply_to === "info@csr.test");
+  });
   chk("send: batch idempotency key is stable and order-insensitive", S.batchIdempotencyKey(["b", "a"]) === S.batchIdempotencyKey(["a", "b"]) && S.batchIdempotencyKey(["a"]) !== S.batchIdempotencyKey(["b"]));
   const client = { name: "Colorado Sled Rentals", address: "1 Main St, Steamboat Springs, CO 80487", supportEmail: "info@csr.test" };
   const camp = { id: "camp-1", subject: "Hi {{first_name}}", body_html: "<p>Hello {{first_name}}</p>", preview_text: null, from_name: null, reply_to: null };
@@ -19438,6 +19454,7 @@ async function testOutboundMessaging() {
     try {
       chk("api: 401 without a key, 401 with the wrong key", (await call(b, "GET", "/health", null, null)).status === 401 && (await call(b, "GET", "/health", null, "wrong-key")).status === 401);
       const h = await call(b, "GET", "/health");
+      chk("api: /health also reports the sender + reply-to recipients will see", /@/.test(h.json.email_from) && h.json.email_from.includes("Colorado Sled Rentals"));
       chk("api: /health reports configuration", h.status === 200 && h.json.email_configured === true && h.json.mailing_address_configured === true && h.json.business === "Colorado Sled Rentals");
       await withEnv({ OUTBOUND_API_KEY: undefined }, async () => chk("api: 503 (never open) when OUTBOUND_API_KEY is not configured", (await call(b, "GET", "/health")).status === 503));
 
