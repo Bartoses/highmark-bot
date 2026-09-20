@@ -610,6 +610,24 @@ Unsubscribe links use `PUBLIC_BASE_URL` → `RAILWAY_PUBLIC_DOMAIN` → the Rail
 scheduled sends, ongoing Smartwaiver ingestion. Tests: `testOutboundMessaging` (~150 checks incl. a real in-process express
 server with mock DBs).
 
+### Gmail transport — send AS info@<domain> with no DNS access (2026-09-20)
+**Why:** csr_rea's DNS is at Cloudflare under FareHarbor's web team (owner has no access; registrar is Tucows/SiteGround), so Resend can't
+verify coloradosledrentals.com, and the owner needs the sender to be `info@coloradosledrentals.com`, free, easy, and independent of FareHarbor.
+He already has info@ as a verified Gmail "Send mail as" alias. **Design:** the SYSTEM stays the brain (audience, consent re-check, suppression,
+CAN-SPAM footer + unsubscribe link, tracking); **delivery** is done by the owner's Gmail via Apps Script. `email_sends.transport` = `resend` |
+`gmail` (the Resend worker filters `transport != 'gmail'`). Flow: `POST /email/send {transport:"gmail"}` queues rows → Apps Script `POST /email/pull
+{campaign_id, limit}` claims rendered messages (limit = today's `MailApp.getRemainingDailyQuota()` − reserve) → `GmailApp.sendEmail(..., {from: info@})` →
+`POST /email/report {results}` (`ok` / `error` / `deferred` — quota exhaustion never burns a retry attempt). Both transports share ONE
+`prepareRows()` (eligibility re-check + render), so rules cannot drift. A campaign larger than the daily quota finishes automatically via a daily
+Apps Script time trigger (`continueSending`). Bounces: `checkBounces()` reads Gmail's delivery-failure notices → `POST /email/bounces` → address
+suppressed (only addresses WE emailed via Gmail are acted on). `POST /email/preview` returns a rendered [TEST] copy; booking email with
+`transport:"gmail"` returns the rendered message in the response. Stuck `sending` gmail rows recover after 30 min.
+**Limits/honesty:** Gmail caps recipients/day (~100 free, ~1,500 Workspace); no open/click tracking; **Google isn't DKIM-signing the domain
+(no `google._domainkey`, SPF lacks `_spf.google.com`, no DMARC)** so inbox placement is weaker than it could be — same as the owner's old
+Gmail newsletters. When someone with DNS access adds those records (and/or the Resend records), placement improves and `transport:"resend"`
+becomes available with no cap. Also fixed here: booking-email merge fields (`{{trip_date}}` etc.) are now resolved at QUEUE time (they used to
+render blank at send time). Sender/reply-to precedence for the Resend path is `resolveFrom()` (see above).
+
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).
 

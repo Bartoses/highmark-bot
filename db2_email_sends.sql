@@ -47,3 +47,13 @@ CREATE INDEX IF NOT EXISTS email_sends_campaign_idx ON public.email_sends (campa
 CREATE INDEX IF NOT EXISTS email_sends_email_idx    ON public.email_sends (email);
 
 ALTER TABLE public.email_sends ENABLE ROW LEVEL SECURITY;   -- service role bypasses; no public policies
+
+-- ── Gmail transport (added 2026-09-20; APPLIED) ──────────────────────────────
+-- Delivery channel per row. 'resend' rows are sent by the server (Resend worker); 'gmail' rows are handed to the owner's Apps Script
+-- (/email/pull → GmailApp → /email/report) so mail can go out AS info@<their domain> without any DNS access. The Resend worker
+-- never touches transport='gmail' rows.
+ALTER TABLE public.email_sends
+  ADD COLUMN IF NOT EXISTS transport text NOT NULL DEFAULT 'resend' CHECK (transport IN ('resend', 'gmail'));
+CREATE INDEX IF NOT EXISTS email_sends_gmail_queue_idx
+  ON public.email_sends (queued_at) WHERE transport = 'gmail' AND status IN ('queued', 'sending');
+

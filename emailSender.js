@@ -128,12 +128,12 @@ export function verifySvixSignature({ secret, id, timestamp, signature, body, to
 }
 
 // ── queueing ─────────────────────────────────────────────────────────────────
-export async function enqueueCampaignSends(crm, { campaignId, clientId, recipients }) {
+export async function enqueueCampaignSends(crm, { campaignId, clientId, recipients, transport = "resend" }) {
   let queued = 0;
   for (let i = 0; i < recipients.length; i += CHUNK) {
     const rows = recipients.slice(i, i + CHUNK).map(r => ({
       campaign_id: campaignId, client_id: clientId, contact_id: r.contact_id ?? null,
-      email: normEmail(r.email), category: "marketing", status: "queued",
+      email: normEmail(r.email), category: "marketing", status: "queued", transport,
     }));
     // ignoreDuplicates: re-queueing the same campaign can never create a second send for an address
     const { error } = await crm.from("email_sends").upsert(rows, { onConflict: "campaign_id,email", ignoreDuplicates: true });
@@ -144,10 +144,10 @@ export async function enqueueCampaignSends(crm, { campaignId, clientId, recipien
 }
 
 // One-off booking email. Returns { row, duplicate } — a repeated idempotencyKey is a no-op.
-export async function enqueueTransactional(crm, { clientId, contactId = null, email, subject, bodyHtml, reference, idempotencyKey }) {
+export async function enqueueTransactional(crm, { clientId, contactId = null, email, subject, bodyHtml, reference, idempotencyKey, transport = "resend" }) {
   const row = {
     campaign_id: null, client_id: clientId, contact_id: contactId, email: normEmail(email), category: "transactional",
-    status: "queued", subject, body_html: bodyHtml, reference: reference ?? null, idempotency_key: idempotencyKey,
+    status: "queued", transport, subject, body_html: bodyHtml, reference: reference ?? null, idempotency_key: idempotencyKey,
   };
   const { data, error } = await crm.from("email_sends").insert(row).select("id").single();
   if (!error && data) return { row: data, duplicate: false };
@@ -167,31 +167,10 @@ export function defaultQueueDeps() {
 }
 
 // ── processing ───────────────────────────────────────────────────────────────
-export async function processEmailQueue(crm, db1, {
-  limit = RESEND_BATCH_MAX, sendBatch = sendEmailBatch, resolveClient = () => null, getCampaign = null,
-  getDomain = async () => null, baseUrl = resolveBaseUrl(), nowMs = Date.now(),
-} = {}) {
-  const out = { claimed: 0, sent: 0, skipped: 0, failed: 0, requeued: 0, blocked: null };
-  if (!crm) return out;
-  const iso = () => new Date(nowMs).toISOString();
-
-  // 0. crashed-worker recovery
-  await crm.from("email_sends").update({ status: "queued", updated_at: iso() })
-    .eq("status", "sending").lt("updated_at", new Date(nowMs - STUCK_MINUTES * 60000).toISOString());
-
-  // 1. candidates → 2. atomic claim (only rows still 'queued' flip to 'sending' for us)
-  const { data: cand, error: cErr } = await crm.from("email_sends").select("id").eq("status", "queued").order("queued_at", { ascending: true }).limit(limit);
-  if (cErr) throw new Error(`queue read failed: ${cErr.message}`);
-  if (!cand?.length) return out;
-  const { data: claimed, error: clErr } = await crm.from("email_sends").update({ status: "sending", updated_at: iso() })
-    .in("id", cand.map(c => c.id)).eq("status", "queued").select();
-  if (clErr) throw new Error(`queue claim failed: ${clErr.message}`);
-  if (!claimed?.length) return out;
-  out.claimed = claimed.length;
-
-  const setRow = (id, patch) => crm.from("email_sends").update({ ...patch, updated_at: iso() }).eq("id", id);
-  const release = async (rows, patch = {}) => { for (const r of rows) await setRow(r.id, { status: "queued", ...patch }); };
-
+// Shared by BOTH transports (Resend worker + Gmail pull): given rows already claimed ('sending'), re-check
+// eligibility against the CURRENT database state (consent may have changed since queueing; an address may have been
+// unsubscribed on another row), then render — or skip/hold. One code path ⇒ the rules cannot drift between transports.
+async function prepareRows(crm, db1, claimed, { resolveClient, getCampaign, getDomain, baseUrl, setRow, release, out }) {
   // 3. current facts about each recipient + address-level suppression
   const contactIds = [...new Set(claimed.map(r => r.contact_id).filter(Boolean))];
   const contacts = new Map();
@@ -239,6 +218,49 @@ export async function processEmailQueue(crm, db1, {
     if (skipReason) { await setRow(row.id, { status: "skipped", error: skipReason }); out.skipped++; }
     else ready.push({ row, item });
   }
+  return { ready, campaigns };
+}
+
+async function finishCampaigns(crm, db1, campaignIds, getCampaign, iso) {
+  if (!getCampaign || !db1) return;
+  for (const campaignId of campaignIds) {
+    if (!campaignId) continue;
+    const { data: rows } = await crm.from("email_sends").select("status").eq("campaign_id", campaignId);
+    const st = (rows ?? []).map(r => r.status);
+    if (st.length && !st.some(x => x === "queued" || x === "sending")) {
+      const total = st.filter(x => ["sent", "delivered", "bounced", "complained"].includes(x)).length;
+      await db1.from("email_campaigns").update({ status: "sent", sent_at: iso, total_sent: total, updated_at: iso }).eq("id", campaignId);
+    }
+  }
+}
+
+
+export async function processEmailQueue(crm, db1, {
+  limit = RESEND_BATCH_MAX, sendBatch = sendEmailBatch, resolveClient = () => null, getCampaign = null,
+  getDomain = async () => null, baseUrl = resolveBaseUrl(), nowMs = Date.now(),
+} = {}) {
+  const out = { claimed: 0, sent: 0, skipped: 0, failed: 0, requeued: 0, blocked: null };
+  if (!crm) return out;
+  const iso = () => new Date(nowMs).toISOString();
+
+  // 0. crashed-worker recovery
+  await crm.from("email_sends").update({ status: "queued", updated_at: iso() })
+    .eq("status", "sending").neq("transport", "gmail").lt("updated_at", new Date(nowMs - STUCK_MINUTES * 60000).toISOString());
+
+  // 1. candidates → 2. atomic claim (only rows still 'queued' flip to 'sending' for us)
+  const { data: cand, error: cErr } = await crm.from("email_sends").select("id").eq("status", "queued").neq("transport", "gmail").order("queued_at", { ascending: true }).limit(limit);
+  if (cErr) throw new Error(`queue read failed: ${cErr.message}`);
+  if (!cand?.length) return out;
+  const { data: claimed, error: clErr } = await crm.from("email_sends").update({ status: "sending", updated_at: iso() })
+    .in("id", cand.map(c => c.id)).eq("status", "queued").neq("transport", "gmail").select();
+  if (clErr) throw new Error(`queue claim failed: ${clErr.message}`);
+  if (!claimed?.length) return out;
+  out.claimed = claimed.length;
+
+  const setRow = (id, patch) => crm.from("email_sends").update({ ...patch, updated_at: iso() }).eq("id", id);
+  const release = async (rows, patch = {}) => { for (const r of rows) await setRow(r.id, { status: "queued", ...patch }); };
+
+  const { ready, campaigns } = await prepareRows(crm, db1, claimed, { resolveClient, getCampaign, getDomain, baseUrl, setRow, release, out });
 
   // 5. send in batches; on a whole-batch validation failure retry one-by-one to isolate the bad address
   const settle = async (entries, result) => {
@@ -276,16 +298,104 @@ export async function processEmailQueue(crm, db1, {
   }
 
   // 6. finish any campaign with nothing left to send
-  if (getCampaign && db1) {
-    for (const campaignId of campaigns.keys()) {
-      if (!campaignId) continue;
-      const { data: rows } = await crm.from("email_sends").select("status").eq("campaign_id", campaignId);
-      const st = (rows ?? []).map(r => r.status);
-      if (st.length && !st.some(s => s === "queued" || s === "sending")) {
-        const total = st.filter(s => ["sent", "delivered", "bounced", "complained"].includes(s)).length;
-        await db1.from("email_campaigns").update({ status: "sent", sent_at: iso(), total_sent: total, updated_at: iso() }).eq("id", campaignId);
+  await finishCampaigns(crm, db1, [...campaigns.keys()], getCampaign, iso());
+  return out;
+}
+
+// ── Gmail transport ──────────────────────────────────────────────────────────
+// For a client that can't authenticate its own domain with Resend (no DNS access), the SYSTEM still decides who may be
+// emailed and renders every message (consent re-check, suppression, CAN-SPAM footer, unsubscribe link) — but DELIVERY is done
+// by the owner's Gmail via Apps Script, which is the only thing that can send "as" info@<their domain> without DNS:
+//   POST /email/send {transport:"gmail"}  → rows queue with transport='gmail' (the Resend worker never touches them)
+//   POST /email/pull                       → Apps Script claims up to N rendered messages
+//   (Apps Script sends each with GmailApp, from the info@ alias)
+//   POST /email/report                     → Apps Script reports sent / failed per message
+//   POST /email/bounces                    → Apps Script reports addresses that bounced → suppressed
+// Gmail caps recipients per day (≈100 free, ≈1,500 Workspace) so a big send spans days: pull only what today's quota allows.
+const GMAIL_STUCK_MINUTES = 30;
+const PERMANENT_FAILURE = /invalid|not a valid|no recipient|couldn'?t be found|does not exist|no such|unknown user/i;
+
+export async function pullGmailMessages(crm, db1, {
+  campaignId = null, sendIds = null, limit = 90, resolveClient = () => null, getCampaign = null,
+  baseUrl = resolveBaseUrl(), nowMs = Date.now(),
+} = {}) {
+  const out = { claimed: 0, skipped: 0, blocked: null, messages: [], remaining: 0 };
+  if (!crm) return out;
+  const iso = new Date(nowMs).toISOString();
+  const setRow = (id, patch) => crm.from("email_sends").update({ ...patch, updated_at: iso }).eq("id", id);
+  const release = async (rows) => { for (const r of rows) await setRow(r.id, { status: "queued" }); };
+  const cap = Math.max(0, Math.min(Number(limit) || 0, 500));
+
+  // recover rows a crashed/aborted script run left in 'sending'
+  await crm.from("email_sends").update({ status: "queued", updated_at: iso })
+    .eq("transport", "gmail").eq("status", "sending").lt("updated_at", new Date(nowMs - GMAIL_STUCK_MINUTES * 60000).toISOString());
+
+  if (cap > 0) {
+    let q = crm.from("email_sends").select("id").eq("transport", "gmail").eq("status", "queued").order("queued_at", { ascending: true }).limit(cap);
+    if (campaignId) q = q.eq("campaign_id", campaignId);
+    if (sendIds?.length) q = q.in("id", sendIds);
+    const { data: cand, error } = await q;
+    if (error) throw new Error(`gmail queue read failed: ${error.message}`);
+    if (cand?.length) {
+      const { data: claimed, error: clErr } = await crm.from("email_sends").update({ status: "sending", updated_at: iso })
+        .in("id", cand.map(c => c.id)).eq("status", "queued").eq("transport", "gmail").select();
+      if (clErr) throw new Error(`gmail queue claim failed: ${clErr.message}`);
+      out.claimed = claimed?.length ?? 0;
+      if (out.claimed) {
+        const { ready } = await prepareRows(crm, db1, claimed, { resolveClient, getCampaign, getDomain: async () => null, baseUrl, setRow, release, out });
+        out.messages = ready.map(({ row, item }) => ({
+          send_id: row.id, campaign_id: row.campaign_id, category: row.category,
+          to: item.to[0], subject: item.subject, html: item.html, text: item.text, reply_to: item.reply_to ?? null,
+        }));
       }
     }
+  }
+  let rq = crm.from("email_sends").select("id").eq("transport", "gmail").eq("status", "queued");
+  if (campaignId) rq = rq.eq("campaign_id", campaignId);
+  out.remaining = ((await rq).data ?? []).length;
+  await finishCampaigns(crm, db1, campaignId ? [campaignId] : [], getCampaign, iso);
+  return out;
+}
+
+// results: [{ send_id, ok, error? }]. Only rows currently 'sending' are touched, so a repeated report is a harmless no-op.
+export async function reportGmailResults(crm, db1, results, { getCampaign = null, nowMs = Date.now() } = {}) {
+  const out = { sent: 0, failed: 0, requeued: 0, ignored: 0 };
+  if (!crm || !Array.isArray(results)) return out;
+  const iso = new Date(nowMs).toISOString(); const touched = new Set();
+  for (const r of results) {
+    if (!r?.send_id) { out.ignored++; continue; }
+    const { data } = await crm.from("email_sends").select("id, status, attempts, campaign_id").eq("id", r.send_id).eq("transport", "gmail").limit(1);
+    const row = data?.[0];
+    if (!row || row.status !== "sending") { out.ignored++; continue; }
+    if (row.campaign_id) touched.add(row.campaign_id);
+    if (r.deferred === true) {   // the caller ran out of daily quota before reaching this one: back in line, no attempt burned
+      await crm.from("email_sends").update({ status: "queued", updated_at: iso }).eq("id", row.id); out.deferred = (out.deferred ?? 0) + 1; continue;
+    }
+    const attempts = (row.attempts ?? 0) + 1;
+    if (r.ok === true) {
+      await crm.from("email_sends").update({ status: "sent", provider_id: "gmail", sent_at: iso, error: null, attempts, updated_at: iso }).eq("id", row.id); out.sent++;
+    } else {
+      const err = String(r.error ?? "send failed").slice(0, 300);
+      if (PERMANENT_FAILURE.test(err) || attempts >= MAX_ATTEMPTS) { await crm.from("email_sends").update({ status: "failed", error: err, attempts, updated_at: iso }).eq("id", row.id); out.failed++; }
+      else { await crm.from("email_sends").update({ status: "queued", error: err, attempts, updated_at: iso }).eq("id", row.id); out.requeued++; }
+    }
+  }
+  await finishCampaigns(crm, db1, [...touched], getCampaign, iso);
+  return out;
+}
+
+// Addresses that bounced (found by scanning the Gmail inbox for delivery failures). Only addresses WE emailed through Gmail are
+// acted on, and a bounce suppresses the address everywhere.
+export async function reportGmailBounces(crm, emails, { nowMs = Date.now() } = {}) {
+  const out = { suppressed: 0, unknown: 0 };
+  if (!crm || !Array.isArray(emails)) return out;
+  const at = new Date(nowMs).toISOString();
+  for (const raw of [...new Set(emails.map(normEmail))]) {
+    const { data } = await crm.from("email_sends").select("id, status").eq("email", raw).eq("transport", "gmail").in("status", ["sent", "delivered"]);
+    if (!data?.length) { out.unknown++; continue; }
+    for (const row of data) await crm.from("email_sends").update({ status: "bounced", bounced_at: at, bounce_type: "Permanent", updated_at: at }).eq("id", row.id);
+    await suppressEmail(crm, raw, { reason: "bounce", suppress: true, at });
+    out.suppressed++;
   }
   return out;
 }

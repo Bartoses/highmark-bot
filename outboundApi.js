@@ -9,6 +9,12 @@
 //   POST /api/v1/email/send            { subject, html, segment, idempotency_key, dry_run:false }
 //   GET  /api/v1/email/campaigns/:id                                       → delivery counts
 //   POST /api/v1/email/transactional   { booking_pk, subject, html, idempotency_key, dry_run:false }
+//   ── Gmail transport (send AS info@yourdomain with no DNS access; see emailSender.js) ──
+//   POST /api/v1/email/send|transactional  + { transport: "gmail" }   queue only; delivery is done by Apps Script
+//   POST /api/v1/email/preview         { subject, html }              → the fully rendered message (for a test to yourself)
+//   POST /api/v1/email/pull            { campaign_id?, limit }        → claim rendered messages to send with GmailApp
+//   POST /api/v1/email/report          { results:[{send_id, ok, error?}] }
+//   POST /api/v1/email/bounces         { emails:[...] }               → addresses that bounced → suppressed
 //   POST /api/v1/sms/audience          { segment }
 //   POST /api/v1/sms/send              { body, segment, idempotency_key, dry_run:false }
 //   POST /api/v1/sms/transactional     { booking_pk, body, idempotency_key, dry_run:false }
@@ -30,7 +36,7 @@
 import crypto from "crypto";
 import express from "express";
 import { normalizeSegment, SegmentError, selectEmailRecipients, selectSmsRecipients, loadSmsOptOuts, maskEmail, maskPhone } from "./outboundAudience.js";
-import { enqueueCampaignSends, enqueueTransactional, drainEmailQueue, resolveMailingAddress, resolveReplyTo, resolveFrom } from "./emailSender.js";
+import { enqueueCampaignSends, enqueueTransactional, drainEmailQueue, resolveMailingAddress, resolveReplyTo, resolveFrom, resolveBaseUrl, renderCampaignEmail, pullGmailMessages, reportGmailResults, reportGmailBounces } from "./emailSender.js";
 import { createEmailCampaign } from "./emailCampaigns.js";
 import { isEmailConfigured, sendEmail } from "./emailService.js";
 import { renderMergeFields } from "./emailTemplates.js";
@@ -107,6 +113,9 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
 
   const clientId = () => process.env.CLIENT_ID || "csr_rea";
   const client = async () => (await getClient?.(clientId())) ?? { name: "Your Business" };
+  const transportOf = (b) => (b?.transport === "gmail" ? "gmail" : "resend");
+  const queueDeps = async () => { const c = await client();
+    return { getCampaign: async (d, id) => (d ? (await d.from("email_campaigns").select("*").eq("id", id).maybeSingle()).data : null), ...processDeps(), resolveClient: () => c }; };
   const afterResponse = (fn) => { if (kick) setImmediate(() => fn().catch(e => console.error("[OUTBOUND] background send error:", e.message))); };
 
   router.get("/health", async (_req, res) => {
@@ -114,7 +123,7 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
     res.json({
       ok: true, client_id: clientId(), business: c.name ?? null,
       email_configured: isEmailConfigured(), webhook_secret_configured: !!process.env.RESEND_WEBHOOK_SECRET,
-      mailing_address_configured: !!resolveMailingAddress(c), email_from: resolveFrom({ displayName: c.name }), reply_to: resolveReplyTo(null, c), sms_from_number: c.outboundPhone || process.env.TWILIO_PHONE_NUMBER || null,
+      mailing_address_configured: !!resolveMailingAddress(c), gmail_transport: true, email_from: resolveFrom({ displayName: c.name }), reply_to: resolveReplyTo(null, c), sms_from_number: c.outboundPhone || process.env.TWILIO_PHONE_NUMBER || null,
     });
   });
 
@@ -134,6 +143,8 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
     if (typeof b.subject !== "string" || !b.subject.trim() || b.subject.length > 200) return bad(res, "subject is required (max 200 chars)");
     if (typeof b.html !== "string" || !b.html.trim()) return bad(res, "html is required");
     if (b.html.length > MAX_HTML) return bad(res, `html too large (max ${MAX_HTML} chars)`);
+    if (b.transport != null && !["resend", "gmail"].includes(b.transport)) return bad(res, 'transport must be "resend" or "gmail"');
+    const transport = transportOf(b);
     try {
       const c = await client();
 
@@ -153,7 +164,7 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
 
       // ── real send: guards ──
       if (!validKey(b.idempotency_key)) return bad(res, "idempotency_key (8-100 chars) is required for a real send");
-      if (!isEmailConfigured()) return bad(res, "email is not configured (RESEND_API_KEY)", 503);
+      if (transport === "resend" && !isEmailConfigured()) return bad(res, "email is not configured (RESEND_API_KEY)", 503);
       if (!resolveMailingAddress(c)) return bad(res, "Marketing email requires a physical mailing address (CAN-SPAM). Set the client address or MAILING_ADDRESS.", 422);
 
       const { data: prior } = await db1.from("email_campaigns").select("id, status, total_sent, created_at").contains("metadata", { idempotency_key: b.idempotency_key }).limit(1);
@@ -169,15 +180,46 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
         previewText: b.preview_text ?? null, bodyHtml: b.html, fromName: b.from_name ?? null, replyTo: b.reply_to ?? null,
         audienceType: "crm_contacts", audienceFilter: a.segment,
       });
-      await db1.from("email_campaigns").update({ status: "sending", metadata: { idempotency_key: b.idempotency_key, via: "api" }, updated_at: new Date().toISOString() }).eq("id", campaign.id);
-      const queued = await enqueueCampaignSends(crm, { campaignId: campaign.id, clientId: clientId(), recipients: a.recipients });
-      afterResponse(() => drain(crm, db1, processDeps()));
-      return res.status(202).json({ campaign_id: campaign.id, queued, status: "sending", ...summary });
+      await db1.from("email_campaigns").update({ status: "sending", metadata: { idempotency_key: b.idempotency_key, via: "api", transport }, updated_at: new Date().toISOString() }).eq("id", campaign.id);
+      const queued = await enqueueCampaignSends(crm, { campaignId: campaign.id, clientId: clientId(), recipients: a.recipients, transport });
+      if (transport === "resend") afterResponse(() => drain(crm, db1, processDeps()));    // gmail rows wait for Apps Script to pull them
+      return res.status(202).json({ campaign_id: campaign.id, queued, status: "sending", transport, ...summary });
     } catch (e) {
       if (e instanceof SegmentError) return bad(res, e.message);
       console.error("[OUTBOUND] email/send error:", e.message);
       return bad(res, "send failed", 500);
     }
+  });
+
+  // ── Gmail transport endpoints ──
+  router.post("/email/preview", async (req, res) => {
+    const b = req.body ?? {};
+    if (typeof b.subject !== "string" || !b.subject.trim() || typeof b.html !== "string" || !b.html.trim()) return bad(res, "subject and html are required");
+    if (b.html.length > MAX_HTML) return bad(res, `html too large (max ${MAX_HTML} chars)`);
+    const c = await client();
+    const m = renderCampaignEmail({ campaign: { subject: b.subject, preview_text: b.preview_text ?? null, body_html: b.html, from_name: b.from_name ?? null, reply_to: b.reply_to ?? null },
+      client: c, recipient: { email: "preview@example.com", first_name: "Alex", last_name: "Guest", unsubscribe_token: "preview" }, baseUrl: resolveBaseUrl() });
+    res.json({ subject: `[TEST] ${m.subject}`, html: m.html, text: m.text, reply_to: m.reply_to ?? null, mailing_address_configured: !!resolveMailingAddress(c) });
+  });
+
+  router.post("/email/pull", async (req, res) => {
+    try {
+      const limit = Math.min(Math.max(parseInt(req.body?.limit ?? 90, 10) || 0, 0), 500);
+      const r = await pullGmailMessages(crm, db1, { campaignId: req.body?.campaign_id ?? null, limit, ...(await queueDeps()) });
+      res.json({ messages: r.messages, claimed: r.claimed, skipped: r.skipped, remaining: r.remaining, blocked: r.blocked });
+    } catch (e) { console.error("[OUTBOUND] email/pull error:", e.message); return bad(res, "pull failed", 500); }
+  });
+
+  router.post("/email/report", async (req, res) => {
+    if (!Array.isArray(req.body?.results) || req.body.results.length > 500) return bad(res, "results must be an array (max 500)");
+    try { res.json(await reportGmailResults(crm, db1, req.body.results, await queueDeps())); }
+    catch (e) { console.error("[OUTBOUND] email/report error:", e.message); return bad(res, "report failed", 500); }
+  });
+
+  router.post("/email/bounces", async (req, res) => {
+    if (!Array.isArray(req.body?.emails) || req.body.emails.length > 500 || req.body.emails.some(e => typeof e !== "string")) return bad(res, "emails must be an array of strings (max 500)");
+    try { res.json(await reportGmailBounces(crm, req.body.emails)); }
+    catch (e) { console.error("[OUTBOUND] email/bounces error:", e.message); return bad(res, "report failed", 500); }
   });
 
   router.get("/email/campaigns/:id", async (req, res) => {
@@ -196,6 +238,8 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
     if (typeof b.booking_pk !== "string" || !b.booking_pk) return bad(res, "booking_pk is required");
     if (typeof b.subject !== "string" || !b.subject.trim() || b.subject.length > 200) return bad(res, "subject is required (max 200 chars)");
     if (typeof b.html !== "string" || !b.html.trim() || b.html.length > MAX_HTML) return bad(res, "html is required");
+    if (b.transport != null && !["resend", "gmail"].includes(b.transport)) return bad(res, 'transport must be "resend" or "gmail"');
+    const transport = transportOf(b);
     try {
       const found = await loadBooking(crm, b.booking_pk);
       if (!found) return bad(res, "booking not found", 404);
@@ -208,16 +252,23 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
       if (isDryRun(b)) return res.json({ dry_run: true, ...preview, note: 'Nothing sent. Pass "dry_run": false to send.' });
 
       if (!validKey(b.idempotency_key)) return bad(res, "idempotency_key (8-100 chars) is required for a real send");
-      if (!isEmailConfigured()) return bad(res, "email is not configured (RESEND_API_KEY)", 503);
+      if (transport === "resend" && !isEmailConfigured()) return bad(res, "email is not configured (RESEND_API_KEY)", 503);
       const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
       const { data: recent } = await crm.from("email_sends").select("id").eq("reference", b.booking_pk).eq("category", "transactional").gte("queued_at", since);
       if ((recent?.length ?? 0) >= 5) return bad(res, "too many emails for this booking in 24h (limit 5)", 429);
 
       const { data: contact } = await crm.from("contacts").select("id").ilike("email", found.email.replace(/[\\_%]/g, m => "\\" + m)).limit(1);
+      // Merge the booking's own fields (trip date, activity, …) NOW: the sender only knows the guest's first name later,
+      // so leaving {{trip_date}} for send time would render it blank.
       const { row, duplicate } = await enqueueTransactional(crm, {
-        clientId: clientId(), contactId: contact?.[0]?.id ?? null, email: found.email, subject: b.subject, bodyHtml: b.html,
-        reference: b.booking_pk, idempotencyKey: b.idempotency_key,
+        clientId: clientId(), contactId: contact?.[0]?.id ?? null, email: found.email, subject: renderMergeFields(b.subject, vars), bodyHtml: renderMergeFields(b.html, vars),
+        reference: b.booking_pk, idempotencyKey: b.idempotency_key, transport,
       });
+      if (transport === "gmail") {
+        // Delivery is done by the caller's Gmail: hand back the rendered message (claimed now) to send + report.
+        const pulled = duplicate ? { messages: [] } : await pullGmailMessages(crm, db1, { sendIds: [row.id], limit: 1, ...(await queueDeps()) });
+        return res.status(202).json({ send_id: row.id, duplicate, transport, messages: pulled.messages, ...preview });
+      }
       if (!duplicate) afterResponse(() => drain(crm, db1, processDeps()));
       return res.status(202).json({ send_id: row.id, duplicate, ...preview });
     } catch (e) { console.error("[OUTBOUND] email/transactional error:", e.message); return bad(res, "send failed", 500); }

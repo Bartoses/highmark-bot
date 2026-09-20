@@ -18681,6 +18681,7 @@ function makeFhMockCrm(seed) {
       select(cols) { st.cols = cols; if (st.patch) st.returning = true; return api; },
       like(col, pat) { const pre = pat.replace(/%$/, ""); st.filters.push(r => String(r[col] ?? "").startsWith(pre)); return api; },
       gte(col, v) { st.filters.push(r => r[col] != null && r[col] >= v); return api; },
+      neq(col, v) { st.filters.push(r => r[col] !== v); return api; },
       lt(col, v) { st.filters.push(r => r[col] != null && r[col] < v); return api; },
       contains(col, obj) { st.filters.push(r => r[col] && Object.entries(obj).every(([k, v]) => r[col][k] === v)); return api; },
       eq(col, v) { st.filters.push(r => r[col] === v); return api; },
@@ -19379,6 +19380,85 @@ async function testOutboundMessaging() {
     chk("webhook route: 200 and the event is applied on a valid signature", r.code === 200 && db.tables.email_sends.find(x => x.id === "s4").status === "delivered");
   }
 
+  // ── Gmail transport (queue level) ──
+  {
+    const g1 = ct({ email: "g1@x.com", first_name: "Gia", email_marketing_consent: true, email_consent_source: "smartwaiver", email_unsubscribe_token: "tok-g1" });
+    const g2 = ct({ email: "g2@x.com", first_name: "Gus", email_marketing_consent: true, email_consent_source: "smartwaiver" });
+    const g3 = ct({ email: "g3@x.com", first_name: "Gil", email_marketing_consent: true, email_consent_source: "smartwaiver" });
+    const gDeps = () => ({ resolveClient: () => client, getCampaign: async (d, id) => d.tables.email_campaigns.find(r => r.id === id) ?? null, baseUrl: "https://app.test" });
+    const gSetup = async (contacts = [g1, g2, g3]) => {
+      const { crm, db1 } = qDb(contacts.map(c => ({ ...c })));
+      await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", transport: "gmail", recipients: contacts.map(c => ({ contact_id: c.id, email: c.email })) });
+      return { crm, db1 };
+    };
+    {
+      const { crm, db1 } = await gSetup(); const calls = [];
+      const r = await S.processEmailQueue(crm, db1, deps(calls));
+      chk("gmail: the Resend worker NEVER touches transport='gmail' rows", r.claimed === 0 && calls.length === 0 && crm.tables.email_sends.every(x => x.status === "queued" && x.transport === "gmail"));
+    }
+    {
+      const { crm, db1 } = await gSetup();
+      const p1 = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 2, ...gDeps() });
+      chk("gmail: pull hands back rendered messages up to the limit (daily quota) and reports what remains", p1.messages.length === 2 && p1.remaining === 1 && p1.claimed === 2, JSON.stringify({ n: p1.messages.length, r: p1.remaining }));
+      const m = p1.messages.find(x => x.to === "g1@x.com");
+      chk("gmail: each message is fully rendered — merge fields, CAN-SPAM address, working unsubscribe link, reply-to",
+        m.subject === "Hi Gia" && m.html.includes("Hello Gia") && m.html.includes("1 Main St") && m.html.includes("https://app.test/email/unsubscribe/tok-g1") && m.reply_to === "info@csr.test" && !!m.send_id, JSON.stringify(m).slice(0, 160));
+      chk("gmail: pulled rows are claimed ('sending') so a second pull never returns them again", crm.tables.email_sends.filter(x => x.status === "sending").length === 2);
+      const p2 = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 5, ...gDeps() });
+      chk("gmail: the next pull returns only what is left", p2.messages.length === 1 && p2.remaining === 0 && !p1.messages.some(x => x.send_id === p2.messages[0].send_id));
+      chk("gmail: limit 0 (quota used up) pulls nothing", (await S.pullGmailMessages(crm, db1, { limit: 0, ...gDeps() })).messages.length === 0);
+    }
+    {
+      // eligibility is re-checked at PULL time, exactly like the Resend worker
+      const { crm, db1 } = await gSetup();
+      crm.tables.contacts.find(c => c.id === g2.id).email_marketing_consent = false;                       // withdrew consent after queueing
+      crm.tables.contacts.push(ct({ email: "G3@X.com", email_unsubscribed_at: "2026-03-01T00:00:00Z" }));    // unsubscribed on ANOTHER row
+      const r = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 10, ...gDeps() });
+      chk("gmail: consent withdrawn or address unsubscribed after queueing → skipped, never handed to Gmail", r.messages.length === 1 && r.messages[0].to === "g1@x.com" && r.skipped === 2, JSON.stringify({ n: r.messages.length, s: r.skipped }));
+    }
+    {
+      const { crm, db1 } = await gSetup();
+      await withEnv({ MAILING_ADDRESS: undefined }, async () => {
+        const r = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 10, ...gDeps(), resolveClient: () => ({ ...client, address: null }) });
+        chk("gmail: no mailing address configured → HELD (nothing rendered, nothing lost)", r.blocked === "no_mailing_address" && r.messages.length === 0 && crm.tables.email_sends.every(x => x.status === "queued"), JSON.stringify(r));
+      });
+    }
+    {
+      const { crm, db1 } = await gSetup([g1]);
+      crm.tables.email_sends[0].status = "sending"; crm.tables.email_sends[0].updated_at = new Date(Date.now() - 45 * 60000).toISOString();
+      const r = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 10, ...gDeps() });
+      chk("gmail: a row stuck in 'sending' (script run aborted) is recovered on the next pull", r.messages.length === 1);
+    }
+    {
+      const { crm, db1 } = await gSetup();
+      const p = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 10, ...gDeps() });
+      const [a, b, c] = p.messages;
+      const rep = await S.reportGmailResults(crm, db1, [{ send_id: a.send_id, ok: true }, { send_id: b.send_id, ok: false, error: "Invalid argument: recipient" }, { send_id: c.send_id, ok: false, error: "Service invoked too many times" }, { send_id: "nope", ok: true }], gDeps());
+      chk("gmail: report — ok → sent (provider 'gmail'); a permanent error → failed; a transient error → requeued; unknown id ignored",
+        rep.sent === 1 && rep.failed === 1 && rep.requeued === 1 && rep.ignored === 1 && crm.tables.email_sends.find(x => x.id === a.send_id).provider_id === "gmail"
+        && crm.tables.email_sends.find(x => x.id === b.send_id).status === "failed" && crm.tables.email_sends.find(x => x.id === c.send_id).status === "queued", JSON.stringify(rep));
+      const dq = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 10, ...gDeps() });   // picks up the requeued one
+      const defRes = await S.reportGmailResults(crm, db1, dq.messages.map(x => ({ send_id: x.send_id, deferred: true })), gDeps());
+      const defRow = crm.tables.email_sends.find(x => x.id === c.send_id);
+      chk("gmail: 'deferred' (daily quota ran out) returns the message to the queue WITHOUT burning an attempt", defRes.deferred === 1 && defRow.status === "queued" && defRow.attempts === 1, JSON.stringify(defRow));
+      const again = await S.reportGmailResults(crm, db1, [{ send_id: a.send_id, ok: true }], gDeps());
+      chk("gmail: reporting the same message twice is a harmless no-op (no double count)", again.sent === 0 && again.ignored === 1);
+      chk("gmail: campaign not finished while a message is still queued", db1.tables.email_campaigns[0].status === "sending");
+      // retry the requeued one until it fails for good
+      for (let i = 0; i < 2; i++) { const pp = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 10, ...gDeps() }); await S.reportGmailResults(crm, db1, pp.messages.map(x => ({ send_id: x.send_id, ok: false, error: "Service invoked too many times" })), gDeps()); }
+      chk("gmail: a message failing 3 times ends as 'failed', and the campaign then completes", crm.tables.email_sends.find(x => x.id === c.send_id).status === "failed" && db1.tables.email_campaigns[0].status === "sent" && db1.tables.email_campaigns[0].total_sent === 1, JSON.stringify(db1.tables.email_campaigns[0]));
+    }
+    {
+      const { crm, db1 } = await gSetup([g1, g2]);
+      const p = await S.pullGmailMessages(crm, db1, { campaignId: "camp-1", limit: 10, ...gDeps() });
+      await S.reportGmailResults(crm, db1, p.messages.map(x => ({ send_id: x.send_id, ok: true })), gDeps());
+      const b = await S.reportGmailBounces(crm, ["G1@x.com", "never-emailed@x.com"]);
+      const c1 = crm.tables.contacts.find(c => c.id === g1.id);
+      chk("gmail: a bounce marks the send bounced and SUPPRESSES the address (case-insensitive); an address we never emailed is ignored",
+        b.suppressed === 1 && b.unknown === 1 && crm.tables.email_sends.find(x => x.email === "g1@x.com").status === "bounced" && !!c1.email_suppressed_at && c1.email_suppressed_reason === "bounce" && !crm.tables.contacts.find(c => c.id === g2.id).email_suppressed_at);
+    }
+  }
+
   // ── suppression + unsubscribe route ──
   {
     const db = makeFhMockCrm({ contacts: [ct({ id: "u1", phone: "+13035550311", email: "leave@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-leave" }), ct({ id: "u2", email: "LEAVE@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-2" }), ct({ id: "u3", email: "stay@x.com", email_marketing_consent: true, email_unsubscribe_token: "tok-stay" })] });
@@ -19500,6 +19580,10 @@ async function testOutboundMessaging() {
       chk("api: transactional goes ONLY to the booking's own guest — a supplied address is ignored", tx.status === 202 && txRow.email === "ando@example.com" && txRow.reference === "#900" && !b.crm.tables.email_sends.some(x => x.email === "attacker@evil.com"));
       const tx2 = await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Reminder", html: "<p>Hi</p>", dry_run: false, idempotency_key: "idem-tx-000001" });
       chk("api: transactional retry is a no-op (duplicate)", tx2.status === 202 && tx2.json.duplicate === true && b.crm.tables.email_sends.filter(x => x.category === "transactional").length === 1);
+      const txm = await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Trip {{trip_date}} — {{activity}}", html: "<p>{{first_name}}: {{trip_time}}, ref {{booking_pk}}</p>", dry_run: false, idempotency_key: "idem-tx-000010" });
+      const txmRow = b.crm.tables.email_sends.find(x => x.idempotency_key === "idem-tx-000010");
+      chk("api: REGRESSION — booking merge fields ({{trip_date}} {{activity}} {{trip_time}} {{booking_pk}}) are resolved when queued, never left blank for send time",
+        txm.status === 202 && txmRow.subject === "Trip Monday, February 8, 2027 — S4 Voyageur 146" && txmRow.body_html.includes("8:00 AM") && txmRow.body_html.includes("#900") && !/\{\{/.test(txmRow.subject + txmRow.body_html), JSON.stringify(txmRow).slice(0, 200));
       chk("api: a guest who unsubscribed from marketing STILL gets their booking email", (await call(b, "POST", "/email/transactional", { booking_pk: "#901", subject: "Reminder", html: "<p>Hi</p>", dry_run: false, idempotency_key: "idem-tx-000002" })).status === 202);
       chk("api: a bounced/complained address is refused even for booking email (422)", (await call(b, "POST", "/email/transactional", { booking_pk: "#902", subject: "Reminder", html: "<p>Hi</p>", dry_run: false, idempotency_key: "idem-tx-000003" })).status === 422);
       chk("api: unknown booking → 404", (await call(b, "POST", "/email/transactional", { booking_pk: "#nope", subject: "x", html: "<p>x</p>" })).status === 404);
@@ -19549,6 +19633,37 @@ async function testOutboundMessaging() {
       const r = await call(b, "POST", "/sms/send", { body: "Big snow!", segment: {}, dry_run: false, idempotency_key: "idem-sms-closed1" });
       chk("api: sms FAILS CLOSED (503) when the opt-out list is unreadable", r.status === 503);
     } finally { b.srv.close(); }
+
+    // Gmail transport over HTTP
+    await withEnv({ RESEND_API_KEY: undefined }, async () => {
+      let drains = 0;
+      b = await boot();
+      const routerOnly = b;   // (drain is faked inside boot; count sends through the queue instead)
+      try {
+        chk("api: new Gmail endpoints require the API key too", (await call(b, "POST", "/email/pull", {}, null)).status === 401 && (await call(b, "POST", "/email/report", { results: [] }, null)).status === 401 && (await call(b, "POST", "/email/bounces", { emails: [] }, null)).status === 401 && (await call(b, "POST", "/email/preview", {}, null)).status === 401);
+        chk("api: an unknown transport is rejected", (await call(b, "POST", "/email/send", { subject: "S", html: "<p>x</p>", transport: "carrier-pigeon" })).status === 400);
+        const gs = await call(b, "POST", "/email/send", { subject: "Snow {{first_name}}", html: "<p>Hello {{first_name}}</p>", name: "Gmail newsletter", segment: {}, dry_run: false, idempotency_key: "idem-gmail-0001", transport: "gmail" });
+        chk("api: transport=gmail queues WITHOUT any Resend key, and nothing is sent by the server", gs.status === 202 && gs.json.transport === "gmail" && gs.json.queued === 2 && b.crm.tables.email_sends.length === 2 && b.crm.tables.email_sends.every(x => x.transport === "gmail" && x.status === "queued"), JSON.stringify(gs.json));
+        chk("api: the campaign records its transport", b.db1.tables.email_campaigns[0].metadata.transport === "gmail");
+        const replay = await call(b, "POST", "/email/send", { subject: "Snow", html: "<p>x</p>", segment: {}, dry_run: false, idempotency_key: "idem-gmail-0001", transport: "gmail" });
+        chk("api: gmail send retry with the same key queues nothing new", replay.json.already_created === true && b.crm.tables.email_sends.length === 2);
+        const pull = await call(b, "POST", "/email/pull", { campaign_id: gs.json.campaign_id, limit: 1 });
+        chk("api: /email/pull returns rendered messages, honours the limit and reports remaining", pull.status === 200 && pull.json.messages.length === 1 && pull.json.remaining === 1 && /Hello /.test(pull.json.messages[0].html) && pull.json.messages[0].html.includes("Steamboat") && pull.json.messages[0].html.includes("/email/unsubscribe/"), JSON.stringify(pull.json).slice(0, 200));
+        const rep = await call(b, "POST", "/email/report", { results: [{ send_id: pull.json.messages[0].send_id, ok: true }] });
+        chk("api: /email/report marks it sent", rep.status === 200 && rep.json.sent === 1 && b.crm.tables.email_sends.filter(x => x.status === "sent").length === 1);
+        chk("api: /email/report and /email/bounces validate their input", (await call(b, "POST", "/email/report", { results: "x" })).status === 400 && (await call(b, "POST", "/email/bounces", { emails: [1] })).status === 400);
+        const bounce = await call(b, "POST", "/email/bounces", { emails: [b.crm.tables.email_sends.find(x => x.status === "sent").email] });
+        chk("api: /email/bounces suppresses the address", bounce.json.suppressed === 1 && b.crm.tables.contacts.some(c => c.email_suppressed_at));
+        const pv = await call(b, "POST", "/email/preview", { subject: "Snow", html: "<p>Hi {{first_name}}</p>" });
+        chk("api: /email/preview renders a [TEST] copy with the footer + address for a test to yourself", pv.status === 200 && pv.json.subject === "[TEST] Snow" && pv.json.html.includes("Hi Alex") && pv.json.html.includes("1 Main St") && pv.json.mailing_address_configured === true);
+        const tg = await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Trip {{trip_date}}", html: "<p>Hi {{first_name}}</p>", dry_run: false, idempotency_key: "idem-gtx-000001", transport: "gmail", to: "attacker@evil.com" });
+        chk("api: transactional + gmail returns the rendered message for the booking's OWN guest only", tg.status === 202 && tg.json.messages.length === 1 && tg.json.messages[0].to === "ando@example.com" && tg.json.messages[0].subject === "Trip Monday, February 8, 2027" && tg.json.messages[0].category === "transactional", JSON.stringify(tg.json).slice(0, 200));
+        const tg2 = await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Trip", html: "<p>Hi</p>", dry_run: false, idempotency_key: "idem-gtx-000001", transport: "gmail" });
+        chk("api: transactional + gmail retry returns no message (already handled)", tg2.status === 202 && tg2.json.duplicate === true && tg2.json.messages.length === 0);
+        chk("api: transactional + gmail still refuses a bounced/complained address", (await call(b, "POST", "/email/transactional", { booking_pk: "#902", subject: "x", html: "<p>x</p>", dry_run: false, idempotency_key: "idem-gtx-000002", transport: "gmail" })).status === 422);
+        chk("api: /health advertises the gmail transport", (await call(b, "GET", "/health")).json.gmail_transport === true);
+      } finally { b.srv.close(); }
+    });
   });
 }
 
