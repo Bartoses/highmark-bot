@@ -153,7 +153,7 @@ export async function selectEmailAudience(crmSupabase, { clientId, audienceType,
     .eq("client_id", clientId)
     .not("email", "is", null);
 
-  let { data, error } = await query.eq("email_marketing_consent", true).is("email_unsubscribed_at", null);
+  let { data, error } = await query.eq("email_marketing_consent", true).is("email_unsubscribed_at", null).is("email_suppressed_at", null);
 
   // db2_email_consent.sql not yet applied — degrade to "all contacts with an
   // email on file" rather than erroring the whole campaign feature.

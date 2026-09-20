@@ -109,6 +109,11 @@ export function planContact(guest, { existing = null, blocked = false, nowIso = 
         opted_in:                guest.smsYes && !blocked,
         opted_out_at:            blocked ? nowIso : null,
         email_marketing_consent: guest.emailYes && !!guest.email,
+        // Provenance (db2_contact_model.sql): where + when each opt-in came from.
+        sms_consent_source:   guest.smsYes && !blocked ? "fareharbor_flag" : null,
+        sms_consent_at:       guest.smsYes && !blocked ? (guest.lastActivity ?? nowIso) : null,
+        email_consent_source: guest.emailYes && guest.email ? "fareharbor_flag" : null,
+        email_consent_at:     guest.emailYes && guest.email ? (guest.lastActivity ?? nowIso) : null,
       },
     };
   }

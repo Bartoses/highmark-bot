@@ -112,6 +112,8 @@ conversationEngine.js  — config-driven conversation: getConversationConfig, bu
 bookingConfirmations.js — FareHarbor webhook receiver + 30min bookings-by-create-date recovery poll + confirmation texts
 fareharborNormalizer.js — links FareHarbor rows in DB2 `bookings` (customer_id/activity_id/total_cents) from raw_payload so they appear in daily_manifest; cron "recent" every tick + daily "full"; CLI: `node --env-file=.env fareharborNormalizer.js [--apply]`
 fareharborContacts.js — mirrors FareHarbor guests into DB2 `contacts` with consent taken ONLY from FareHarbor's per-guest flags (never the table's default-TRUE); cron recent+daily full; CLI dry-runs by default
+waiverImport.js — Smartwaiver CSV → DB2 `waivers` + `contacts` (email-match dedupe, email-only contacts, consent only from verified+ticked waivers, no DOB/licence stored); CLI dry-runs by default
+db2_contact_model.sql — DB2 migration: nullable contacts.phone, consent provenance/verification/suppression columns, CHECKs, `waivers` table (APPLIED 2026-09-20)
 crm.js                 — contacts, campaigns, opt-out/opt-in (TCPA), auto-tagging; opt_outs writes to DB1, contacts mirror to DB2
 chat.js                — interactive terminal chat simulator (no Twilio cost)
 scheduler.js           — durable scheduled SMS: scheduleMessage() + processScheduledMessages()
@@ -163,7 +165,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — applied to DB1), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — applied to DB2), `db1_email_domains.sql` (Email Marketing Phase 2: `client_email_domains` table — **NOT YET APPLIED**, run in DB1 before using the per-client sending domain card)
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — applied to DB1), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — applied to DB2), `db1_email_domains.sql` (Email Marketing Phase 2: `client_email_domains` table — **NOT YET APPLIED**, run in DB1 before using the per-client sending domain card), `db2_contact_model.sql` (DB2 — clean contact model for email+SMS outreach; **applied 2026-09-20**, see "Contact model + waiver import")
 
 ---
 
@@ -494,7 +496,11 @@ FareHarbor's `bookings-by-create-date` API: 19/19 FH bookings created since 2026
 complete; FH volume is just low in the off-season. The other webhook on each account, "highmark", feeds this bot's
 confirmation texts only (it does not write `bookings`); note the **CSR "highmark" webhook triggers on Updated
 bookings only** (REA has New + Updated) — check in the FH dashboard.
-**The gap that mattered.** The external writer leaves `customer_id` + `activity_id` NULL, and the
+**The external writer is `Bartoses/csr-webhook`** (Python/FastAPI). Root cause of the unlinked rows: its original
+webhook called the Postgres function `upsert_fareharbor_booking()` (links customer + activity); commit `008bd93`
+("direct upsert") dropped that; the "DB trigger" its comments mention does not exist. Fix = `linking.py` in that repo
+(fill-NULL-only, unique-match activity, best-effort). ALSO: its 15-min `fh_sync` calls a FareHarbor path that 404s, so
+it has never fetched anything (documented there). **The gap that mattered.** The external writer leaves `customer_id` + `activity_id` NULL, and the
 `daily_manifest` view INNER JOINs `customers` and `activities` (and filters `status='booked'`) — so those bookings
 were **invisible** to the ops board, briefings, revenue and the Mission Control widgets (5 Feb-2027 bookings ≈ $5.5k
 + ~115 booked 2025-26 rows). Money columns the view reads (`receipt_total_cents`, `amount_paid_cents`) were already
@@ -534,6 +540,33 @@ Live dry-run (2026-09-20): 3,142 bookings → 1,216 guests → **1,194 new** con
 + 22 existing filled. **Deliberate deviation from the MPWR/FH-confirmation convention** (which opts every booked guest
 in): to reach the other ~1,000, get explicit opt-in (e.g. a "reply YES for winter deals" text) rather than flipping the flag.
 Cron: `recent` every tick + `full` daily 10:00 UTC (own try/catch). CLI: `node --env-file=.env fareharborContacts.js [--apply]`.
+
+### Contact model + Smartwaiver import (db2_contact_model.sql + waiverImport.js, 2026-09-20)
+Goal: be able to email/text past + present customers who have consented. **`contacts` = the messaging profile and
+the consent authority; `customers` = booking identity; `waivers` = per-rider records.**
+**Schema (DB2, applied):** `contacts.phone` is now NULLABLE (email-only people; the export has no phones) with
+`contacts_reachable_chk` (phone OR email) and **`contacts_sms_needs_phone_chk` (`opted_in IS NOT TRUE OR phone IS NOT NULL`)**
+— `opted_in` DEFAULTs TRUE, so forgetting to set it on a phone-less contact now FAILS LOUDLY instead of silently opting
+them in. Partial unique index `contacts_email_only_key` (lower(email) WHERE phone IS NULL) — phone contacts may share an
+email (families). New columns: `email_consent_source/_at`, `email_verified_at`, `email_suppressed_at/_reason` (set by the
+future bounce/complaint webhook; `selectEmailAudience` already excludes suppressed), `sms_consent_source/_at`. New table
+`waivers` (`unique(provider, waiver_id)`, RLS on, **deliberately no DOB/driver's-licence columns**).
+**Provenance backfill tells the truth:** email consent = 349 `grandfathered` + 140 `fareharbor_flag`; SMS opt-in = 163
+`fareharbor_flag` but **347 are "assumed"** (321 `assumed_on_booking`, 26 `assumed_on_inbound_sms`) — i.e. set by the
+column default/convention, NOT an explicit choice. Only explicit-consent rows should get marketing TEXTS; see "Next".
+**`waiverImport.js`:** matches by EMAIL (case-insensitive), never by name alone. Existing contact with that email →
+enrich (fill blanks, union tags `waiver`/`smartwaiver`/`trailer_rental`/`avalanche_gear`, advance last_activity).
+Customer with that email + a phone but no contact → phone+email contact (`opted_in` stays FALSE — a waiver says nothing
+about SMS). Nobody found → email-only contact. **Email consent = the person's LATEST waiver ticked "Marketing Emails
+Allowed" AND the address is VERIFIED** (some waiver "Completed Online"); unverified ("Pending Email Verification")
+addresses are imported WITHOUT consent (typo'd/other-person addresses cause bounces + complaints) and upgrade on a
+later import once verified. Existing contacts may be UPGRADED false→true by an eligible waiver but never downgraded,
+and never when unsubscribed/suppressed; a contact whose phone has a *different* email is left alone. Live dry-run
+(630 rows, 581 emails): 383 new email-only + 109 phone-linked + 88 enriched; 173 new email-consent + 32 upgrades;
+199 pending-verification imported without consent. `node --env-file=.env waiverImport.js <csv> [--apply]`.
+**FareHarbor mirror** (`fareharborContacts.js`) now also records `sms/email_consent_source = fareharbor_flag` + timestamps.
+**Still to build (Roadmap):** the Apps-Script-callable outbound API + email send pipeline (Resend, bounce/complaint
+webhook, unsubscribe), explicit SMS opt-in capture, ongoing Smartwaiver ingestion (webhook/API instead of CSV).
 
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).

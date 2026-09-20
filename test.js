@@ -3262,6 +3262,7 @@ async function main() {
     await testEmailDomains();     // Email Marketing Phase 2: per-client sending domain — resolveSendFrom, route guards, validation
     await testFareHarborNormalizer(); // FareHarbor → DB2 bookings: customer/activity/total fill from raw_payload + bookings-by-create-date poller
     await testFareHarborContacts();   // FareHarbor → CRM contacts mirror: consent comes ONLY from FH flags, opt-outs honored, existing consent never touched
+    await testWaiverImport();         // Smartwaiver → waivers + contacts: email-match dedupe, consent only from verified+ticked, never downgrade, no DOB/DL
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -18656,11 +18657,12 @@ async function testEmailCampaigns() {
 // ─────────────────────────────────────────────────────────────────────────────
 function makeFhMockCrm(seed) {
   const tables = {
-    bookings:   seed.bookings.map(r => ({ ...r })),
+    bookings:   (seed.bookings ?? []).map(r => ({ ...r })),
     customers:  (seed.customers ?? []).map(r => ({ ...r })),
     activities: (seed.activities ?? []).map(r => ({ ...r })),
     contacts:   (seed.contacts ?? []).map(r => ({ ...r })),
     opt_outs:   (seed.opt_outs ?? []).map(r => ({ ...r })),
+    waivers:    (seed.waivers ?? []).map(r => ({ ...r })),
   };
   const writes = { customerInserts: 0, bookingUpdates: [], customerUpdates: 0, contactInserts: 0, contactUpdates: [] };
   let idn = 1000;
@@ -18684,6 +18686,9 @@ function makeFhMockCrm(seed) {
         st.filters.push(r => conds.some(([col, op]) => op === "is" && (r[col] ?? null) === null));
         return api;
       },
+      not(col, op, v) { if (op === "is") st.filters.push(r => (r[col] ?? null) !== v); return api; },
+      ilike(col, v) { st.filters.push(r => String(r[col] ?? "").toLowerCase() === String(v).toLowerCase()); return api; },
+      limit(n) { st.range = [0, n - 1]; return api; },
       order(col) { st.order = col; return api; },
       range(a, b) { st.range = [a, b]; return api; },
       insert(row) { st.insert = row; return api; },
@@ -18694,6 +18699,8 @@ function makeFhMockCrm(seed) {
         if (st.insert) {
           if (table === "customers" && tables.customers.some(c => st.insert.normalized_phone && c.normalized_phone === st.insert.normalized_phone))
             return Promise.resolve({ data: null, error: { message: "duplicate key" } });
+          if (table === "contacts" && !st.insert.phone && st.insert.opted_in !== false)
+            return Promise.resolve({ data: null, error: { message: "violates check constraint contacts_sms_needs_phone_chk" } });
           const made = { id: `cust-${idn++}`, ...st.insert };
           tables[table].push(made); writes.customerInserts++;
           return Promise.resolve({ data: { id: made.id }, error: null });
@@ -18703,11 +18710,11 @@ function makeFhMockCrm(seed) {
       then(resolve, reject) {
         try {
           if (st.upsert) {
-            const key = st.upsert.opts.onConflict;
+            const keys = String(st.upsert.opts.onConflict).split(",");
             for (const row of st.upsert.rows) {
-              const dupe = tables[table].find(r => r[key] === row[key]);
+              const dupe = tables[table].find(r => keys.every(k => r[k] === row[k]));
               if (dupe && st.upsert.opts.ignoreDuplicates) continue;
-              if (dupe) Object.assign(dupe, row); else { tables[table].push({ ...row }); if (table === "contacts") writes.contactInserts++; }
+              if (dupe) Object.assign(dupe, row); else { tables[table].push({ id: `row-${idn++}`, ...row }); if (table === "contacts") writes.contactInserts++; }
             }
             return resolve({ data: null, error: null });
           }
@@ -18938,6 +18945,11 @@ async function testFareHarborContacts() {
   const res = await C.mirrorFareHarborContacts(crm, db1, { mode: "full" });
   const by = Object.fromEntries(crm.tables.contacts.map(c => [c.phone, c]));
   chk("fhcontacts: guest who ticked SMS + email → contact opted in for both", by["+16305550111"].opted_in === true && by["+16305550111"].email_marketing_consent === true);
+  chk("fhcontacts: consent provenance recorded (source + timestamp) for what FH said yes to",
+    by["+16305550111"].sms_consent_source === "fareharbor_flag" && !!by["+16305550111"].sms_consent_at &&
+    by["+16305550111"].email_consent_source === "fareharbor_flag" && !!by["+16305550111"].email_consent_at);
+  chk("fhcontacts: no provenance is written where there is no consent",
+    by["+16305550112"].sms_consent_source === null && by["+16305550112"].email_consent_source === null);
   chk("fhcontacts: guest who did NOT tick → recognized contact but opted_in=false / email consent=false",
     by["+16305550112"] && by["+16305550112"].opted_in === false && by["+16305550112"].email_marketing_consent === false);
   chk("fhcontacts: guest on the STOP list stays opted out even though FH said yes",
@@ -18972,6 +18984,110 @@ async function testFareHarborContacts() {
 
   const none = await C.mirrorFareHarborContacts(null, null, {});
   chk("fhcontacts: null crm client is a safe no-op", none.guests === 0 && none.newContacts === 0);
+}
+
+async function testWaiverImport() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const W = await import("./waiverImport.js");
+
+  // ── CSV parser ──
+  const rows = W.parseCsv('﻿a,b,c\r\n1,"x, y","say ""hi"""\r\n2,"multi\nline",z\r\n');
+  chk("waiver: parseCsv handles BOM, CRLF, quoted commas, escaped quotes, embedded newlines",
+    rows.length === 3 && rows[1][1] === "x, y" && rows[1][2] === 'say "hi"' && rows[2][1] === "multi\nline", JSON.stringify(rows));
+
+  // ── names / tags ──
+  chk("waiver: tidyName fixes ALL-CAPS / all-lower, leaves mixed case alone",
+    W.tidyName("JOHN SMITH") === "John Smith" && W.tidyName("o'brien") === "O'Brien" && W.tidyName("McDonald") === "McDonald" && W.tidyName("  ") === null);
+  chk("waiver: docTag maps the two agreements", W.docTag("TRAILER RENTAL AGREEMENT TERMS AND CONDITIONS") === "trailer_rental" && W.docTag("AVALANCHE GEAR LEASE AGREEMENT") === "avalanche_gear" && W.docTag("other") === null);
+
+  // ── row normalisation (privacy + validity) ──
+  const cols = ["First", "Last", "Date of Birth", "Date Completed (UTC)", "Waiver ID", "Status", "Phone", "Drivers License Number", "Drivers License State", "Marketing Emails Allowed", "Email", "Title of Document"];
+  const cell = (o) => cols.map(c => o[c] ?? "");
+  const base = { First: "ANN", Last: "guest", "Date of Birth": "1980-01-02", "Date Completed (UTC)": "2026-01-05 10:00:00", "Waiver ID": "W1", Status: "Completed Online", "Drivers License Number": "D1234567", "Drivers License State": "CO", "Marketing Emails Allowed": "Yes", Email: " Ann@Example.COM ", "Title of Document": "TRAILER RENTAL AGREEMENT" };
+  const r1 = W.normalizeWaiverRow(cols, cell(base));
+  chk("waiver: row → lowercased email, tidy names, UTC ISO date, verified + marketing",
+    r1.email === "ann@example.com" && r1.firstName === "Ann" && r1.lastName === "Guest" && r1.signedAt === "2026-01-05T10:00:00.000Z" && r1.verified === true && r1.marketing === true);
+  chk("waiver: PRIVACY — date of birth / licence data never appear in a normalised record",
+    !JSON.stringify(r1).includes("1980") && !JSON.stringify(r1).includes("D1234567") && !("dob" in r1) && !("driversLicense" in r1));
+  chk("waiver: pending verification → not verified; blank marketing → false",
+    (() => { const r = W.normalizeWaiverRow(cols, cell({ ...base, Status: "Pending Email Verification", "Marketing Emails Allowed": "" })); return r.verified === false && r.marketing === false && r.status === "pending_email_verification"; })());
+  chk("waiver: invalid email or missing waiver id → row skipped",
+    W.normalizeWaiverRow(cols, cell({ ...base, Email: "nope" })) === null && W.normalizeWaiverRow(cols, cell({ ...base, "Waiver ID": "" })) === null);
+
+  // ── aggregate / consent decision ──
+  const mkW = (o) => ({ waiverId: "x", email: "a@x.com", firstName: "A", lastName: "B", phone: null, signedAt: "2026-01-01T00:00:00.000Z", status: "completed", verified: true, documentTitle: null, marketing: true, ...o });
+  const agg1 = W.aggregateByEmail([mkW({ waiverId: "1", signedAt: "2025-01-01T00:00:00.000Z", marketing: true }), mkW({ waiverId: "2", signedAt: "2026-01-01T00:00:00.000Z", marketing: false })]).get("a@x.com");
+  chk("waiver: the LATEST waiver's marketing choice wins (old yes, newest blank → no consent)", agg1.marketing === false && agg1.emailEligible === false);
+  const agg2 = W.aggregateByEmail([mkW({ verified: false, status: "pending_email_verification", marketing: true })]).get("a@x.com");
+  chk("waiver: ticked but UNVERIFIED address is not consent-eligible", agg2.marketing === true && agg2.emailEligible === false);
+  const agg3 = W.aggregateByEmail([mkW({ waiverId: "1", verified: false, marketing: true, signedAt: "2025-01-01T00:00:00.000Z" }), mkW({ waiverId: "2", verified: true, marketing: true, signedAt: "2026-01-01T00:00:00.000Z" })]).get("a@x.com");
+  chk("waiver: an address verified on ANY of its waivers counts as verified", agg3.verified === true && agg3.emailEligible === true);
+
+  // ── new contact ──
+  const gYes = W.aggregateByEmail([mkW({})]).get("a@x.com");
+  const nc = W.buildNewContact(gYes);
+  chk("waiver: new email-only contact — phone null, opted_in EXPLICIT false, consent w/ provenance",
+    nc.phone === null && nc.opted_in === false && nc.email_marketing_consent === true && nc.email_consent_source === "smartwaiver" && !!nc.email_verified_at);
+  const ncNo = W.buildNewContact(W.aggregateByEmail([mkW({ verified: false, marketing: true })]).get("a@x.com"));
+  chk("waiver: new UNVERIFIED contact — consent explicitly false, no provenance", ncNo.email_marketing_consent === false && ncNo.email_consent_source === null && ncNo.email_verified_at === null);
+
+  // ── enrichment of existing contacts ──
+  const ex = { id: "c1", first_name: null, last_name: "Keep", email: null, tags: ["sms"], last_activity: "2020-01-01T00:00:00.000Z", email_marketing_consent: false, email_unsubscribed_at: null, email_suppressed_at: null, email_verified_at: null };
+  const pe = W.planContactEnrichment(gYes, ex);
+  chk("waiver: enrich fills blanks, never overwrites an existing name", pe.first_name === "A" && !("last_name" in pe) && pe.email === "a@x.com");
+  chk("waiver: eligible waiver UPGRADES an existing false → true (with provenance)", pe.email_marketing_consent === true && pe.email_consent_source === "smartwaiver" && pe._consentUpgrade === true);
+  chk("waiver: an UNSUBSCRIBED contact is never re-consented", !("email_marketing_consent" in W.planContactEnrichment(gYes, { ...ex, email_unsubscribed_at: "2026-01-01T00:00:00Z" })));
+  chk("waiver: a SUPPRESSED (bounced/complaint) contact is never re-consented", !("email_marketing_consent" in W.planContactEnrichment(gYes, { ...ex, email_suppressed_at: "2026-01-01T00:00:00Z" })));
+  chk("waiver: consent is NEVER downgraded (existing true stays true even if waiver unticked)",
+    !("email_marketing_consent" in W.planContactEnrichment(W.aggregateByEmail([mkW({ marketing: false })]).get("a@x.com"), { ...ex, email_marketing_consent: true })));
+  chk("waiver: never verifies/consents a DIFFERENT email already on the contact",
+    (() => { const p = W.planContactEnrichment(gYes, { ...ex, email: "other@x.com" }); return !("email_marketing_consent" in p) && !("email_verified_at" in p) && !("email" in p); })());
+
+  // ── end to end (mock DB) ──
+  const rec = (id, email, o = {}) => ({ waiverId: id, email, firstName: "N" + id, lastName: "L" + id, phone: null, signedAt: "2026-02-01T00:00:00.000Z", status: "completed", verified: true, documentTitle: "TRAILER RENTAL AGREEMENT", marketing: true, ...o });
+  const seed = () => ({
+    contacts: [
+      { id: "k1", phone: "+13035550001", email: "existing@x.com", first_name: null, last_name: null, tags: [], last_activity: null, email_marketing_consent: false, email_unsubscribed_at: null, email_suppressed_at: null, email_verified_at: null },
+      { id: "k2", phone: "+13035550002", email: "unsub@x.com", first_name: "U", last_name: "S", tags: [], last_activity: null, email_marketing_consent: false, email_unsubscribed_at: "2026-01-01T00:00:00Z", email_suppressed_at: null, email_verified_at: null },
+      { id: "k3", phone: "+13035550003", email: "different@x.com", first_name: "D", last_name: "F", tags: [], last_activity: null, email_marketing_consent: true, email_unsubscribed_at: null, email_suppressed_at: null, email_verified_at: null },
+    ],
+    customers: [
+      { id: "u1", name: "Cust One", email: "viacust@x.com", normalized_phone: "+13035550009" },        // customer w/ phone, NO contact yet
+      { id: "u2", name: "Cust Two", email: "conflict@x.com", normalized_phone: "+13035550003" },       // its phone's contact has a DIFFERENT email
+    ],
+  });
+  const records = [
+    rec("1", "newverified@x.com"), rec("2", "newpending@x.com", { verified: false, status: "pending_email_verification" }),
+    rec("3", "existing@x.com"), rec("4", "unsub@x.com"), rec("5", "viacust@x.com"), rec("6", "conflict@x.com"),
+    rec("7", "newverified@x.com", { waiverId: "7", signedAt: "2026-03-01T00:00:00.000Z" }),   // 2nd waiver, same person
+  ];
+
+  let crm = makeFhMockCrm(seed());
+  const dry = await W.importWaivers(crm, records, { dryRun: true });
+  chk("waiver: dry run writes nothing", crm.tables.waivers.length === 0 && crm.tables.contacts.length === 3 && crm.writes.contactUpdates.length === 0);
+  chk("waiver: dry run plan — 2 email-only, 1 phone-via-customer, 2 enriched (only 1 consent upgrade: the unsubscribed one is skipped), 1 conflict",
+    dry.newEmailOnlyContacts === 2 && dry.newPhoneContactsViaCustomer === 1 && dry.enrichedContacts === 2 && dry.consentUpgrades === 1 && dry.emailConflicts === 1, JSON.stringify(dry));
+
+  crm = makeFhMockCrm(seed());
+  const res = await W.importWaivers(crm, records, {});
+  const byEmail = Object.fromEntries(crm.tables.contacts.filter(c => c.email).map(c => [c.email, c]));
+  chk("waiver: verified+ticked new person → email-only contact WITH consent", byEmail["newverified@x.com"].phone === null && byEmail["newverified@x.com"].email_marketing_consent === true && byEmail["newverified@x.com"].opted_in === false);
+  chk("waiver: unverified new person → contact exists but NO consent", byEmail["newpending@x.com"] && byEmail["newpending@x.com"].email_marketing_consent === false);
+  chk("waiver: existing contact enriched + consent upgraded", byEmail["existing@x.com"].first_name === "N3" && byEmail["existing@x.com"].email_marketing_consent === true && byEmail["existing@x.com"].email_consent_source === "smartwaiver");
+  chk("waiver: unsubscribed contact NOT re-consented", byEmail["unsub@x.com"].email_marketing_consent === false);
+  chk("waiver: customer-with-phone → phone+email contact, SMS still opted OUT",
+    byEmail["viacust@x.com"].phone === "+13035550009" && byEmail["viacust@x.com"].opted_in === false && byEmail["viacust@x.com"].email_marketing_consent === true);
+  chk("waiver: contact whose phone has a different email is left untouched", crm.tables.contacts.find(c => c.id === "k3").email === "different@x.com" && !byEmail["conflict@x.com"]);
+  chk("waiver: every waiver row saved (7) and linked to a contact", crm.tables.waivers.length === 7 && crm.tables.waivers.filter(w => w.contact_id).length === 6, `waivers=${crm.tables.waivers.length}`);
+  chk("waiver: two waivers by one person → ONE contact", crm.tables.contacts.filter(c => c.email === "newverified@x.com").length === 1);
+  chk("waiver: no phone-less contact is ever opted in for SMS", crm.tables.contacts.filter(c => !c.phone).every(c => c.opted_in === false));
+
+  const before = { contacts: crm.tables.contacts.length, waivers: crm.tables.waivers.length };
+  await W.importWaivers(crm, records, {});
+  chk("waiver: re-import is idempotent (no new contacts, no duplicate waivers)", crm.tables.contacts.length === before.contacts && crm.tables.waivers.length === before.waivers, JSON.stringify({ c: crm.tables.contacts.length, w: crm.tables.waivers.length }));
+  const noCrm = await W.importWaivers(null, records);
+  const noRecs = await W.importWaivers(makeFhMockCrm(seed()), []);
+  chk("waiver: null crm / empty file are safe no-ops", noCrm.distinctEmails === 0 && noCrm.newEmailOnlyContacts === 0 && noRecs.distinctEmails === 0);
 }
 
 async function testEmailDomains() {

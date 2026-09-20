@@ -977,6 +977,20 @@ Open: (1) durable fix in the external writer service so rows arrive linked; (2) 
 webhook also fires on New bookings; (3) poller does not insert missing `bookings` rows (only texts); (4) CRM
 `contacts` mirror for FH guests built as `fareharborContacts.js` (consent from FH's own flags only) — live apply pending.
 
+## Outbound messaging — "email/text past + present customers" (2026-09-20)
+DONE: contact model (email-only contacts, consent provenance, suppression, CHECKs), `waivers` table + Smartwaiver
+importer (dry-run ready; live apply pending), FH→contacts mirror with consent provenance, FH linking fix in
+`csr-webhook` (committed locally, push pending). NEXT, in order:
+1. **Outbound API for Google Apps Script** — `POST /api/v1/messages/send` + `GET /api/v1/audience` behind a per-client
+   API key; consent + opt-out + suppression enforced SERVER-side (the caller can never bypass them); idempotency key so
+   Apps Script retries don't double-send; `category: marketing | transactional` (transactional only to a booking's own guest).
+2. **Email send pipeline (Email Phase 4)** — send-to-audience via Resend, `email_sends` per-recipient log, Resend
+   bounce/complaint webhook → `contacts.email_suppressed_at`, one-click unsubscribe, verified sending domain.
+3. **Explicit SMS opt-in** — 347 of 511 SMS opt-ins are *assumed* (booking/inbound-text default); get real opt-in
+   (reply-YES text to FH guests, a phone+SMS checkbox on the waiver, web form) before marketing texts to them.
+4. **Ongoing Smartwaiver ingestion** (webhook/API → `waiverImport.importWaivers`) so waivers stop being a manual CSV.
+5. Fix `csr-webhook` `fh_sync` (dead endpoint) to use `bookings-by-create-date` + fetch-by-uuid.
+
 ## NEXT 5 BUILDS (STRICT ORDER)
 
 1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)
