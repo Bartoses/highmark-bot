@@ -39,7 +39,7 @@ import { normalizeSegment, SegmentError, selectEmailRecipients, selectSmsRecipie
 import { enqueueCampaignSends, enqueueTransactional, drainEmailQueue, resolveMailingAddress, resolveReplyTo, resolveFrom, resolveBaseUrl, renderCampaignEmail, pullGmailMessages, reportGmailResults, reportGmailBounces } from "./emailSender.js";
 import { createEmailCampaign } from "./emailCampaigns.js";
 import { isEmailConfigured, sendEmail } from "./emailService.js";
-import { renderMergeFields } from "./emailTemplates.js";
+import { renderMergeFields, findTemplateProblems, BOOKING_FIELDS } from "./emailTemplates.js";
 import { normEmail, isEmailAddress, loadSuppressionSets } from "./emailSuppression.js";
 import { scheduleMessage } from "./scheduler.js";
 import { normalizePhone } from "./phoneUtils.js";
@@ -145,6 +145,7 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
     if (b.html.length > MAX_HTML) return bad(res, `html too large (max ${MAX_HTML} chars)`);
     if (b.transport != null && !["resend", "gmail"].includes(b.transport)) return bad(res, 'transport must be "resend" or "gmail"');
     const transport = transportOf(b);
+    const problems = findTemplateProblems(`${b.subject}\n${b.html}`);
     try {
       const c = await client();
 
@@ -154,15 +155,16 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
         if (!isEmailConfigured()) return bad(res, "email is not configured", 503);
         const r = await sendOne({ to: normEmail(b.test_to), subject: `[TEST] ${renderMergeFields(b.subject, { first_name: "Alex", business_name: c.name })}`,
           html: renderMergeFields(b.html, { first_name: "Alex", last_name: "Guest", business_name: c.name }), from: b.from_name || c.name, replyTo: resolveReplyTo(b.reply_to, c) ?? undefined });
-        return res.status(r.sent ? 200 : 502).json({ test: true, sent: r.sent, reason: r.reason ?? null });
+        return res.status(r.sent ? 200 : 502).json({ test: true, sent: r.sent, reason: r.reason ?? null, warnings: problems.warnings });
       }
 
       const a = await selectEmailRecipients(crm, { clientId: clientId(), segment: b.segment });
-      const summary = { eligible: a.stats.eligible, excluded: a.stats.excluded, segment: a.segment,
+      const summary = { eligible: a.stats.eligible, excluded: a.stats.excluded, segment: a.segment, warnings: problems.warnings,
         sample: a.recipients.slice(0, 5).map(r => ({ email: maskEmail(r.email), first_name: r.first_name })) };
       if (isDryRun(b)) return res.json({ dry_run: true, ...summary, note: 'Nothing sent. Pass "dry_run": false to send.' });
 
       // ── real send: guards ──
+      if (problems.mailchimp.length) return bad(res, problems.warnings[0], 422, summary);
       if (!validKey(b.idempotency_key)) return bad(res, "idempotency_key (8-100 chars) is required for a real send");
       if (transport === "resend" && !isEmailConfigured()) return bad(res, "email is not configured (RESEND_API_KEY)", 503);
       if (!resolveMailingAddress(c)) return bad(res, "Marketing email requires a physical mailing address (CAN-SPAM). Set the client address or MAILING_ADDRESS.", 422);
@@ -199,7 +201,8 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
     const c = await client();
     const m = renderCampaignEmail({ campaign: { subject: b.subject, preview_text: b.preview_text ?? null, body_html: b.html, from_name: b.from_name ?? null, reply_to: b.reply_to ?? null },
       client: c, recipient: { email: "preview@example.com", first_name: "Alex", last_name: "Guest", unsubscribe_token: "preview" }, baseUrl: resolveBaseUrl() });
-    res.json({ subject: `[TEST] ${m.subject}`, html: m.html, text: m.text, reply_to: m.reply_to ?? null, mailing_address_configured: !!resolveMailingAddress(c) });
+    res.json({ subject: `[TEST] ${m.subject}`, html: m.html, text: m.text, reply_to: m.reply_to ?? null, mailing_address_configured: !!resolveMailingAddress(c),
+      warnings: findTemplateProblems(`${b.subject}\n${b.html}`).warnings });
   });
 
   router.post("/email/pull", async (req, res) => {
@@ -248,7 +251,9 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
       if (sup.hard.has(found.email)) return bad(res, "this address bounced or filed a complaint and can no longer be emailed", 422);
 
       const vars = tripMergeVars(found.booking, found.name, found.activity);
-      const preview = { to: maskEmail(found.email), subject: renderMergeFields(b.subject, vars) };
+      const txProblems = findTemplateProblems(`${b.subject}\n${b.html}`, BOOKING_FIELDS);
+      const preview = { to: maskEmail(found.email), subject: renderMergeFields(b.subject, vars), warnings: txProblems.warnings };
+      if (!isDryRun(b) && txProblems.mailchimp.length) return bad(res, txProblems.warnings[0], 422);
       if (isDryRun(b)) return res.json({ dry_run: true, ...preview, note: 'Nothing sent. Pass "dry_run": false to send.' });
 
       if (!validKey(b.idempotency_key)) return bad(res, "idempotency_key (8-100 chars) is required for a real send");

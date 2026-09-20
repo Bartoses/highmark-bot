@@ -19175,6 +19175,14 @@ async function testOutboundMessaging() {
   chk("outbound: TCPA quiet hours = before 8am / from 9pm Mountain", API.isQuietHours(new Date("2026-01-15T14:00:00Z")) === true && API.isQuietHours(new Date("2026-01-15T17:00:00Z")) === false && API.isQuietHours(new Date("2026-01-16T05:00:00Z")) === true);
   chk("outbound: API key compare is exact and never true for blanks", API.keysMatch("abc12345", "abc12345") && !API.keysMatch("abc12345", "abc12346") && !API.keysMatch("", "x") && !API.keysMatch(undefined, undefined));
 
+  // ── template problems (Mailchimp placeholders / unknown fields) ──
+  const TP = await import("./emailTemplates.js");
+  const tp = TP.findTemplateProblems('<a href="*|UNSUB|*">Unsubscribe</a> Hi *|FNAME|*, {{first_name}} {{firstname}} *|MC:SUBJECT|*');
+  chk("template: Mailchimp placeholders (*|UNSUB|*, *|FNAME|*, *|MC:SUBJECT|*) are detected", tp.mailchimp.length === 3 && tp.mailchimp.includes("*|UNSUB|*") && /UNSUB/.test(tp.warnings[0]) && /dead link/.test(tp.warnings[0]), JSON.stringify(tp));
+  chk("template: an unknown {{field}} is flagged, a known one is not", tp.unknownFields.length === 1 && tp.unknownFields[0] === "firstname" && !tp.unknownFields.includes("first_name"));
+  chk("template: booking sends know {{trip_date}} etc.; a clean template has no warnings",
+    TP.findTemplateProblems("Hi {{first_name}} {{trip_date}} {{activity}}", TP.BOOKING_FIELDS).warnings.length === 0 && TP.findTemplateProblems("<p>Hello {{first_name}}</p>").warnings.length === 0 && TP.findTemplateProblems("2 * 3 | 4").mailchimp.length === 0);
+
   // ── pure: sender helpers ──
   chk("send: List-Unsubscribe + one-click headers are built from the token", (() => { const h = S.buildListUnsubscribeHeaders("https://app.test/", "t1"); return h["List-Unsubscribe"] === "<https://app.test/email/unsubscribe/t1>" && h["List-Unsubscribe-Post"] === "List-Unsubscribe=One-Click"; })() && Object.keys(S.buildListUnsubscribeHeaders("x", null)).length === 0);
   chk("send: mailing address comes from the client, else MAILING_ADDRESS, else null", S.resolveMailingAddress({ address: "1 Main St" }) === "1 Main St" && S.resolveMailingAddress({}) === null);
@@ -19543,6 +19551,15 @@ async function testOutboundMessaging() {
       chk("api: an unknown segment field is a 400, not a silent widening", (await call(b, "POST", "/email/audience", { segment: { tag_any: ["x"] } })).status === 400);
 
       const html = "<p>Hello {{first_name}}</p>";
+      const mc = "<p>Hi *|FNAME|*</p><a href=\"*|UNSUB|*\">Unsubscribe</a> {{firstname}}";
+      const mcDry = await call(b, "POST", "/email/send", { subject: "Snow!", html: mc, segment: {} });
+      chk("api: a DRY RUN warns about Mailchimp placeholders + unknown merge fields", mcDry.status === 200 && mcDry.json.warnings.length === 2 && /Mailchimp/.test(mcDry.json.warnings[0]), JSON.stringify(mcDry.json.warnings));
+      const mcReal = await call(b, "POST", "/email/send", { subject: "Snow!", html: mc, segment: {}, dry_run: false, idempotency_key: "idem-mc-000001" });
+      chk("api: a REAL send containing Mailchimp placeholders is REFUSED (422) — nobody gets a literal *|UNSUB|*", mcReal.status === 422 && /Mailchimp/.test(mcReal.json.error) && b.crm.tables.email_sends.length === 0 && b.db1.tables.email_campaigns.length === 0);
+      const mcPrev = await call(b, "POST", "/email/preview", { subject: "Snow", html: mc });
+      chk("api: preview also carries the warnings", mcPrev.status === 200 && mcPrev.json.warnings.length === 2);
+      const mcTx = await call(b, "POST", "/email/transactional", { booking_pk: "#900", subject: "Trip", html: "<a href=\"*|UNSUB|*\">x</a>", dry_run: false, idempotency_key: "idem-mc-000002" });
+      chk("api: a booking email with Mailchimp placeholders is refused too", mcTx.status === 422 && b.crm.tables.email_sends.length === 0);
       const dry = await call(b, "POST", "/email/send", { subject: "Snow!", html, segment: {} });
       chk("api: email send DEFAULTS to dry run — nothing queued", dry.status === 200 && dry.json.dry_run === true && dry.json.eligible === 2 && b.crm.tables.email_sends.length === 0 && b.db1.tables.email_campaigns.length === 0);
       chk("api: dry_run must be the literal false — the string 'false' is still a dry run", (await call(b, "POST", "/email/send", { subject: "Snow!", html, dry_run: "false" })).json.dry_run === true);

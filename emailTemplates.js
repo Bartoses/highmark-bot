@@ -38,6 +38,20 @@ export function renderMergeFields(text, vars = {}) {
   });
 }
 
+// Things in a template that will NOT do what the author expects. Mailchimp placeholders (*|UNSUB|*, *|FNAME|*, …) are only
+// replaced by Mailchimp — anywhere else they go out as literal text (and a dead "unsubscribe" link). Unknown {{fields}} render blank.
+export const KNOWN_FIELDS = ["first_name", "last_name", "business_name"];
+export const BOOKING_FIELDS = [...KNOWN_FIELDS, "activity", "trip_date", "trip_time", "booking_pk"];
+export function findTemplateProblems(text, known = KNOWN_FIELDS) {
+  const src = String(text ?? "");
+  const mailchimp = [...new Set(src.match(/\*\|[A-Za-z0-9_:\-]{1,40}\|\*/g) ?? [])];
+  const unknownFields = [...new Set([...src.matchAll(/\{\{\s*([a-zA-Z_]+)\s*\}\}/g)].map(m => m[1]).filter(t => !known.includes(t)))];
+  const warnings = [];
+  if (mailchimp.length) warnings.push(`This email still contains Mailchimp placeholder(s) ${mailchimp.join(", ")} — they are NOT replaced here and would be sent as literal text (a dead link, for *|UNSUB|*). Delete them; the unsubscribe link + address are added automatically. For a first name use {{first_name}}.`);
+  if (unknownFields.length) warnings.push(`Unknown merge field(s) ${unknownFields.map(t => `{{${t}}}`).join(", ")} will be blank. Available: ${known.map(t => `{{${t}}}`).join(", ")}.`);
+  return { mailchimp, unknownFields, warnings };
+}
+
 export const VALID_TEMPLATE_KEYS = ["newsletter", "promo", "season_announcement", "thank_you"];
 
 // Curated templates — label/description drive the picker UI; defaultSubject/

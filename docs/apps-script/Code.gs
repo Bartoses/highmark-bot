@@ -80,7 +80,8 @@ function hmDescribe_(a) {
   return a.eligible + ' people will receive it.\n\nNot receiving it: ' +
     (x.unsubscribed || 0) + ' unsubscribed, ' + (x.suppressed || 0) + ' bounced/complained, ' +
     (x.no_consent || 0) + ' never opted in, ' + (x.grandfathered || 0) + ' older contacts without explicit opt-in, ' +
-    (x.not_in_segment || 0) + ' outside this segment.';
+    (x.not_in_segment || 0) + ' outside this segment.' +
+    (a.warnings && a.warnings.length ? '\n\n⚠ ' + a.warnings.join('\n⚠ ') : '');
 }
 
 // Refuse to send if the sender isn't a verified Gmail "Send mail as" address (otherwise Gmail would send as someone else).
@@ -154,7 +155,8 @@ function sendNewsletterTest() {
   var p = hmApi_('POST', '/email/preview', { subject: NEWSLETTER.subject, html: hmHtml_(), preview_text: NEWSLETTER.previewText });
   var me = hmMe_();
   GmailApp.sendEmail(me, p.subject, p.text || '', { htmlBody: p.html, from: SEND_AS, name: SENDER_NAME, replyTo: REPLY_TO });
-  hmSay_('Test sent to ' + me + '. Check your inbox (and spam). The unsubscribe link in a test is a placeholder.');
+  hmSay_('Test sent to ' + me + '. Check your inbox (and spam). The unsubscribe link in a test is a placeholder.' +
+         (p.warnings && p.warnings.length ? '\n\n⚠ ' + p.warnings.join('\n⚠ ') : ''));
 }
 
 function sendNewsletter() {
