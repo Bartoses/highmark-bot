@@ -204,6 +204,12 @@ export async function processEmailQueue(crm, db1, {
       if (!campaigns.has(row.campaign_id)) campaigns.set(row.campaign_id, getCampaign ? await getCampaign(db1, row.campaign_id) : null);
       const campaign = campaigns.get(row.campaign_id);
       if (!campaign) skipReason = "campaign_missing";
+      else if (!resolveMailingAddress(client)) {
+        // Defence in depth (the API also refuses up front): a marketing email without a postal address breaks
+        // CAN-SPAM. The worker that drains the queue may be a different service from the one that queued it,
+        // so check here too. Hold the row — nothing is lost — and surface it.
+        out.blocked = "no_mailing_address"; await release([row]); continue;
+      }
       else if (sup.all.has(email)) skipReason = "no_longer_eligible";
       else if (!contact || contact.email_marketing_consent !== true) skipReason = "no_longer_eligible";
       else {

@@ -19264,6 +19264,23 @@ async function testOutboundMessaging() {
     chk("queue: a second run finds nothing to send (no double-send)", again.claimed === 0 && again.sent === 0);
   }
   {
+    // CAN-SPAM guard in the worker itself (the cron service may lack the address the web service has)
+    const noAddr = { ...client, address: null };
+    const { crm, db1 } = qDb([{ ...q1 }]);
+    await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: [{ contact_id: q1.id, email: "q1@x.com" }] });
+    const calls = [];
+    await withEnv({ MAILING_ADDRESS: undefined }, async () => {
+      const r = await S.processEmailQueue(crm, db1, { ...deps(calls), resolveClient: () => noAddr });
+      chk("queue: a marketing email is HELD (not sent, not failed) when no mailing address is configured on this service",
+        r.blocked === "no_mailing_address" && r.sent === 0 && calls.length === 0 && crm.tables.email_sends[0].status === "queued" && (crm.tables.email_sends[0].attempts ?? 0) === 0, JSON.stringify(r));
+    });
+    await withEnv({ MAILING_ADDRESS: "2151 Downhill Drive, Steamboat Springs, CO 80487" }, async () => {
+      const r = await S.processEmailQueue(crm, db1, { ...deps(calls), resolveClient: () => noAddr });
+      chk("queue: the MAILING_ADDRESS env var releases it, and the footer carries that address",
+        r.sent === 1 && calls[0].items[0].html.includes("2151 Downhill Drive"), JSON.stringify(r));
+    });
+  }
+  {
     // consent is RE-CHECKED at send time
     const { crm, db1 } = qDb([{ ...q1 }, { ...q2, email_marketing_consent: false }, ]);
     await S.enqueueCampaignSends(crm, { campaignId: "camp-1", clientId: "csr_rea", recipients: [{ contact_id: q1.id, email: "q1@x.com" }, { contact_id: q2.id, email: "q2@x.com" }] });
