@@ -56,6 +56,14 @@ export function parseCsv(text) {
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
+// Compare instants numerically. The DB returns "…+00:00" while JS writes "…000Z"; comparing
+// those as STRINGS says the same moment is "newer" every time (=> a pointless UPDATE per row
+// on every run). Unparseable/blank counts as "not later".
+export const isLater = (a, b) => {
+  const x = Date.parse(a), y = Date.parse(b);
+  return Number.isFinite(x) && (!Number.isFinite(y) || x > y);
+};
+
 // ALL-CAPS or all-lowercase names → Title Case; mixed-case ("McDonald") left alone.
 export function tidyName(s) {
   const v = String(s ?? "").trim().replace(/\s+/g, " ");
@@ -99,7 +107,8 @@ export function normalizeWaiverRow(cols, cells) {
 
 // Many waivers → one aggregate per email. Latest waiver decides name + marketing flag.
 export function aggregateByEmail(waivers) {
-  const sorted = [...waivers].sort((a, b) => String(a.signedAt ?? "").localeCompare(String(b.signedAt ?? "")));
+  const ms = (w) => { const t = Date.parse(w.signedAt); return Number.isFinite(t) ? t : -Infinity; };
+  const sorted = [...waivers].sort((a, b) => ms(a) - ms(b));
   const byEmail = new Map();
   for (const w of sorted) {
     const g = byEmail.get(w.email) ?? {
@@ -118,6 +127,22 @@ export function aggregateByEmail(waivers) {
   }
   for (const g of byEmail.values()) g.emailEligible = g.marketing && g.verified;
   return byEmail;
+}
+
+// Smartwaiver exports can contain the same waiver more than once (3 of 630 rows in the
+// first real file). Postgres rejects an upsert batch that hits one key twice ("ON CONFLICT
+// DO UPDATE command cannot affect row a second time"), so collapse by waiver id first.
+// Prefer the verified copy, then the latest signature.
+export function dedupeWaivers(records) {
+  const byId = new Map();
+  for (const w of records) {
+    const cur = byId.get(w.waiverId);
+    if (!cur) { byId.set(w.waiverId, w); continue; }
+    const better = (w.verified && !cur.verified) ||
+      (w.verified === cur.verified && isLater(w.signedAt, cur.signedAt));
+    if (better) byId.set(w.waiverId, w);
+  }
+  return [...byId.values()];
 }
 
 // Insert row for a brand-new contact. opted_in is ALWAYS explicit (the column
@@ -144,7 +169,7 @@ export function planContactEnrichment(g, c) {
   const tags = c.tags ?? [];
   const merged = [...new Set([...tags, ...g.tags])];
   if (merged.length !== tags.length) patch.tags = merged;
-  if (g.lastSignedAt && (!c.last_activity || g.lastSignedAt > c.last_activity)) patch.last_activity = g.lastSignedAt;
+  if (g.lastSignedAt && isLater(g.lastSignedAt, c.last_activity)) patch.last_activity = g.lastSignedAt;
   const sameEmail = !c.email || c.email.toLowerCase() === g.email;   // never verify/consent someone else's address
   if (sameEmail && g.verified && !c.email_verified_at) patch.email_verified_at = g.verifiedAt;
   const blocked = !!c.email_unsubscribed_at || !!c.email_suppressed_at;
@@ -171,9 +196,11 @@ async function fetchAll(crm, table, cols, filter) {
   return out;
 }
 
-export async function importWaivers(crm, records, { dryRun = false } = {}) {
+export async function importWaivers(crm, rawRecords, { dryRun = false } = {}) {
+  const records = dedupeWaivers(rawRecords ?? []);
   const summary = {
-    dryRun, waiverRows: records.length, distinctEmails: 0, waiversToUpsert: 0,
+    dryRun, waiverRows: (rawRecords ?? []).length, duplicateWaiverRows: (rawRecords ?? []).length - records.length,
+    distinctEmails: 0, waiversToUpsert: 0,
     newEmailOnlyContacts: 0, newPhoneContactsViaCustomer: 0, enrichedContacts: 0, consentUpgrades: 0,
     newEmailConsent: 0, newPendingVerificationNoConsent: 0, unchanged: 0, emailConflicts: 0,
     nameOnlyCandidates: 0, insertErrors: 0,

@@ -18711,6 +18711,15 @@ function makeFhMockCrm(seed) {
         try {
           if (st.upsert) {
             const keys = String(st.upsert.opts.onConflict).split(",");
+            if (!st.upsert.opts.ignoreDuplicates) {
+              // Real Postgres: one INSERT..ON CONFLICT DO UPDATE cannot touch the same row twice.
+              const seen = new Set();
+              for (const row of st.upsert.rows) {
+                const k = keys.map(c => row[c]).join("|");
+                if (seen.has(k)) return resolve({ data: null, error: { message: "ON CONFLICT DO UPDATE command cannot affect row a second time" } });
+                seen.add(k);
+              }
+            }
             for (const row of st.upsert.rows) {
               const dupe = tables[table].find(r => keys.every(k => r[k] === row[k]));
               if (dupe && st.upsert.opts.ignoreDuplicates) continue;
@@ -19085,6 +19094,33 @@ async function testWaiverImport() {
   const before = { contacts: crm.tables.contacts.length, waivers: crm.tables.waivers.length };
   await W.importWaivers(crm, records, {});
   chk("waiver: re-import is idempotent (no new contacts, no duplicate waivers)", crm.tables.contacts.length === before.contacts && crm.tables.waivers.length === before.waivers, JSON.stringify({ c: crm.tables.contacts.length, w: crm.tables.waivers.length }));
+  // REGRESSION (live dry-run preview): "…000Z" vs the DB's "…+00:00" is the SAME instant; string compare called it newer
+  const same = { ...ex, first_name: "Set", last_name: "Set", email: "a@x.com", tags: ["waiver", "smartwaiver"], email_verified_at: "2026-01-01T00:00:00+00:00",
+    email_marketing_consent: true, last_activity: "2026-01-01T00:00:00+00:00" };
+  chk("waiver: an identical instant in DB format is NOT 'newer' (no pointless UPDATE each run)",
+    Object.keys(W.planContactEnrichment(gYes, same)).length === 0, JSON.stringify(W.planContactEnrichment(gYes, same)));
+  chk("waiver: isLater compares instants, not strings",
+    W.isLater("2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00+00:00") === false && W.isLater("2026-01-02T00:00:00.000Z", "2026-01-01T00:00:00+00:00") === true && W.isLater(null, "2026-01-01T00:00:00Z") === false && W.isLater("2026-01-01T00:00:00Z", null) === true);
+
+  // REGRESSION (first live run): the export contained the same Waiver ID twice → Postgres rejected the batch.
+  const dupes = [rec("50", "dupe@x.com"), rec("50", "dupe@x.com"), rec("51", "dupe@x.com", { verified: false, status: "pending_email_verification" }), rec("51", "dupe@x.com")];
+  const dd = W.dedupeWaivers(dupes);
+  chk("waiver: dedupeWaivers collapses repeated waiver ids (prefers the verified copy)",
+    dd.length === 2 && dd.find(w => w.waiverId === "51").verified === true, JSON.stringify(dd.map(w => [w.waiverId, w.verified])));
+  crm = makeFhMockCrm({ contacts: [], customers: [] });
+  let dupeRes, dupeErr = null;
+  try { dupeRes = await W.importWaivers(crm, dupes, {}); } catch (e) { dupeErr = e; }
+  chk("waiver: an export with duplicate Waiver IDs imports cleanly (no ON CONFLICT error)", !dupeErr && crm.tables.waivers.length === 2, dupeErr?.message);
+  chk("waiver: duplicates are reported, and produce ONE contact", dupeRes?.duplicateWaiverRows === 2 && crm.tables.contacts.filter(c => c.email === "dupe@x.com").length === 1);
+  // REGRESSION: contacts written but waivers failed → re-running must finish the job, not duplicate anything
+  const partial = makeFhMockCrm(seed());
+  await W.importWaivers(partial, records, {});
+  partial.tables.waivers.length = 0;                         // simulate the failed waivers step
+  const nContacts = partial.tables.contacts.length;
+  await W.importWaivers(partial, records, {});
+  chk("waiver: re-run after a partial failure restores the waivers without duplicating contacts",
+    partial.tables.waivers.length === 7 && partial.tables.contacts.length === nContacts, JSON.stringify({ w: partial.tables.waivers.length, c: partial.tables.contacts.length, nContacts }));
+
   const noCrm = await W.importWaivers(null, records);
   const noRecs = await W.importWaivers(makeFhMockCrm(seed()), []);
   chk("waiver: null crm / empty file are safe no-ops", noCrm.distinctEmails === 0 && noCrm.newEmailOnlyContacts === 0 && noRecs.distinctEmails === 0);

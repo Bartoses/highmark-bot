@@ -33,6 +33,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { normalizePhone } from "./phoneUtils.js";
 import { unwrapFhPayload, FH_NORMALIZE_SINCE } from "./fareharborNormalizer.js";
+import { isLater } from "./waiverImport.js";
 
 const CLIENT_ID = process.env.CLIENT_ID || "csr_rea";
 const COMPANY_TAG = { coloradosledrentals: "csr", rabbitearsadventures: "rea" };
@@ -69,7 +70,7 @@ export function extractGuestFromBooking(row) {
 // the guest's LATEST booking decides consent flags, name and email.
 export function aggregateGuests(rows) {
   const facts = rows.map(extractGuestFromBooking).filter(Boolean)
-    .sort((a, b) => String(a.bookedAt ?? "").localeCompare(String(b.bookedAt ?? "")));
+    .sort((a, b) => (Date.parse(a.bookedAt) || 0) - (Date.parse(b.bookedAt) || 0));
   const guests = new Map();
   for (const f of facts) {
     const g = guests.get(f.phone) ?? {
@@ -83,7 +84,7 @@ export function aggregateGuests(rows) {
     g.emailYes  = f.emailYes;
     if (f.isBooked) { g.bookings++; g.tags.add("booked"); }
     if (f.tag) g.tags.add(f.tag);
-    if (f.bookedAt && (!g.lastActivity || f.bookedAt > g.lastActivity)) g.lastActivity = f.bookedAt;
+    if (f.bookedAt && (!g.lastActivity || isLater(f.bookedAt, g.lastActivity))) g.lastActivity = f.bookedAt;
     guests.set(f.phone, g);
   }
   return guests;
@@ -126,7 +127,7 @@ export function planContact(guest, { existing = null, blocked = false, nowIso = 
   const merged = [...new Set([...tags, ...guest.tags])];
   if (merged.length !== tags.length) patch.tags = merged;
   if (guest.bookings > (existing.total_bookings ?? 0)) patch.total_bookings = guest.bookings;
-  if (guest.lastActivity && (!existing.last_activity || guest.lastActivity > existing.last_activity)) patch.last_activity = guest.lastActivity;
+  if (guest.lastActivity && isLater(guest.lastActivity, existing.last_activity)) patch.last_activity = guest.lastActivity;
   return Object.keys(patch).length ? { action: "update", patch } : { action: "none" };
 }
 
