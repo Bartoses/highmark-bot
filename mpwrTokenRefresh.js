@@ -59,18 +59,37 @@ async function railwayGql(query, variables = {}) {
   throw lastErr;
 }
 
-async function pushToRailway(newToken) {
-  const data = await railwayGql(`
-    query($id: String!) {
-      project(id: $id) {
-        environments { edges { node { id name } } }
-        services      { edges { node { id name } } }
-      }
-    }
-  `, { id: PROJECT_ID });
+// Known IDs for the production environment + the two services that read
+// MPWR_TOKEN. Used when the token (e.g. a project token) isn't allowed to run
+// the project lookup query but can still write variables.
+const FALLBACK_ENV_ID   = 'a52fd6c4-ccc5-4d4c-9742-3c3c49fb59ba';
+const FALLBACK_SERVICES = [
+  { id: '4fa2a047-aef1-4631-a19a-90cb9621dd68', name: 'highmark-cron' },
+  { id: 'f19d84b0-8f97-4f8c-9391-616386560329', name: 'highmark-bot' },
+];
 
-  const envId    = data.project.environments.edges.find(e => e.node.name === 'production')?.node.id;
-  const services = data.project.services.edges.map(e => e.node);
+async function lookupRailwayTargets() {
+  try {
+    const data = await railwayGql(`
+      query($id: String!) {
+        project(id: $id) {
+          environments { edges { node { id name } } }
+          services      { edges { node { id name } } }
+        }
+      }
+    `, { id: PROJECT_ID });
+    return {
+      envId:    data.project.environments.edges.find(e => e.node.name === 'production')?.node.id,
+      services: data.project.services.edges.map(e => e.node),
+    };
+  } catch (err) {
+    console.warn(`[refresh] Railway project lookup failed (${err.message}) — using known env/service IDs`);
+    return { envId: FALLBACK_ENV_ID, services: FALLBACK_SERVICES };
+  }
+}
+
+async function pushToRailway(newToken) {
+  const { envId, services } = await lookupRailwayTargets();
 
   if (!envId) throw new Error('Railway: production environment not found');
 
