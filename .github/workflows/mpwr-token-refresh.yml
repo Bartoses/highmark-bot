@@ -26,7 +26,10 @@ on:
 
 jobs:
   refresh:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest began migrating to Ubuntu 26.04 (Oct 2026), which
+    # Playwright's chromium install doesn't support yet ("does not support
+    # chromium on ubuntu26.04-x64") — runs 2026-10-22/23 failed on it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       MPWR_EMAIL:        ${{ secrets.MPWR_EMAIL }}

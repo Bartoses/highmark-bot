@@ -78,6 +78,13 @@ day's tick. Also bumped `actions/setup-node` to `node-version: 24` (GitHub
 force-runs Node 20 actions on 24 anyway now and warns on every run — see
 https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/).
 
+**Runner pinned to ubuntu-24.04 (2026-10-24).** `ubuntu-latest` began migrating to
+Ubuntu 26.04 (Oct 19, 2026); Playwright's `install --with-deps chromium` errors with
+"does not support chromium on ubuntu26.04-x64", so the 2026-10-22 + 10-23 scheduled runs
+failed in ~15s before ever logging in (the 10-21 run was a separate one-off Railway
+"Not Authorized" after a successful login — local `RAILWAY_API_TOKEN` still validates, so
+treated as transient). Fix: `runs-on: ubuntu-24.04`. Revisit once Playwright supports 26.04.
+
 **Login-flow fix + repo-inactivity warning (2026-08-31).** Two issues surfaced together:
 (1) GitHub emailed "workflow will be disabled soon" for `mpwr-token-refresh` — this is
 GitHub's blanket 60-day-repo-inactivity auto-disable (any scheduled workflow in a repo
