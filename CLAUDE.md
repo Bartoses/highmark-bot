@@ -84,6 +84,11 @@ Ubuntu 26.04 (Oct 19, 2026); Playwright's `install --with-deps chromium` errors 
 failed in ~15s before ever logging in (the 10-21 run was a separate one-off Railway
 "Not Authorized" after a successful login — local `RAILWAY_API_TOKEN` still validates, so
 treated as transient). Fix: `runs-on: ubuntu-24.04`. Revisit once Playwright supports 26.04.
+Follow-up: the `RAILWAY_API_TOKEN` secret was a project token (`highmark-refresh`) that Railway marked
+"Token invalid" — reissued 2026-10-24. Project tokens can't run the `project(id)` lookup, so
+`mpwrTokenRefresh.js` now (a) tries `Authorization: Bearer` then `Project-Access-Token`, and (b) falls
+back to hardcoded production env + service IDs (`highmark-cron`, `highmark-bot`) if the lookup is
+refused. If a service is ever recreated, update `FALLBACK_SERVICES`. Verified green (run 40104935051).
 
 **Login-flow fix + repo-inactivity warning (2026-08-31).** Two issues surfaced together:
 (1) GitHub emailed "workflow will be disabled soon" for `mpwr-token-refresh` — this is
