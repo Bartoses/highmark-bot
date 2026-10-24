@@ -35,18 +35,28 @@ const RAILWAY_API = 'https://backboard.railway.app/graphql/v2';
 
 // ── Railway API ───────────────────────────────────────────────────────────────
 
+// Account/workspace tokens authenticate via `Authorization: Bearer`; project
+// tokens (Project Settings → Tokens) via `Project-Access-Token`. Try Bearer
+// first, then fall back so either kind works in RAILWAY_API_TOKEN.
 async function railwayGql(query, variables = {}) {
-  const res = await fetch(RAILWAY_API, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.RAILWAY_API_TOKEN}`,
-      'Content-Type':  'application/json',
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-  const json = await res.json();
-  if (json.errors) throw new Error(json.errors[0].message);
-  return json.data;
+  const token = process.env.RAILWAY_API_TOKEN;
+  const authHeaders = [
+    { 'Authorization': `Bearer ${token}` },
+    { 'Project-Access-Token': token },
+  ];
+  let lastErr;
+  for (const auth of authHeaders) {
+    const res = await fetch(RAILWAY_API, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables }),
+    });
+    const json = await res.json();
+    if (!json.errors) return json.data;
+    lastErr = new Error(json.errors[0].message);
+    if (!/not authorized|unauthorized/i.test(lastErr.message)) break;
+  }
+  throw lastErr;
 }
 
 async function pushToRailway(newToken) {
