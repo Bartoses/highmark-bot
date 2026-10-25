@@ -3262,6 +3262,7 @@ async function main() {
     await testEmailDomains();     // Email Marketing Phase 2: per-client sending domain — resolveSendFrom, route guards, validation
     await testFareHarborNormalizer(); // FareHarbor → DB2 bookings: customer/activity/total fill from raw_payload + bookings-by-create-date poller
     await testFareHarborContacts();   // FareHarbor → CRM contacts mirror: consent comes ONLY from FH flags, opt-outs honored, existing consent never touched
+    await testCustomerFileImport();   // Polaris/MPWR all-riders file → contacts: dedupe within file + vs CRM, grandfathered consent, no DOB/address, SMS never opted in
     await testWaiverImport();         // Smartwaiver → waivers + contacts: email-match dedupe, consent only from verified+ticked, never downgrade, no DOB/DL
     await testOutboundMessaging();    // send API + queue + Resend webhook + suppression: consent enforced server-side, idempotent, fail-closed
   } catch (e) {
@@ -18703,6 +18704,7 @@ function makeFhMockCrm(seed) {
       maybeSingle() { return Promise.resolve({ data: run()[0] ?? null, error: null }); },
       single() {
         if (st.insert) {
+          st.returningSingle = true;
           if (table === "customers" && tables.customers.some(c => st.insert.normalized_phone && c.normalized_phone === st.insert.normalized_phone))
             return Promise.resolve({ data: null, error: { message: "duplicate key" } });
           if (table === "email_sends" && st.insert.idempotency_key && tables.email_sends.some(r => r.idempotency_key === st.insert.idempotency_key))
@@ -18735,6 +18737,20 @@ function makeFhMockCrm(seed) {
               if (dupe && st.upsert.opts.ignoreDuplicates) continue;
               if (dupe) Object.assign(dupe, row); else { tables[table].push({ id: `row-${idn++}`, ...row }); if (table === "contacts") writes.contactInserts++; }
             }
+            return resolve({ data: null, error: null });
+          }
+          if (st.insert && !st.returningSingle && table === "contacts") {          // awaited insert (single row or batch) — all-or-nothing like Postgres
+            const rows = Array.isArray(st.insert) ? st.insert : [st.insert];
+            if (table === "contacts") {
+              const phones = new Set(tables.contacts.map(c => c.phone).filter(Boolean)), emailOnly = new Set(tables.contacts.filter(c => !c.phone && c.email).map(c => c.email.toLowerCase()));
+              for (const r of rows) {
+                if (r.phone && phones.has(r.phone)) return resolve({ data: null, error: { message: "duplicate key value violates unique constraint contacts_phone_key" } });
+                if (!r.phone && r.email && emailOnly.has(r.email.toLowerCase())) return resolve({ data: null, error: { message: "duplicate key value violates unique constraint contacts_email_only_key" } });
+                if (!r.phone && r.opted_in !== false) return resolve({ data: null, error: { message: "violates check constraint contacts_sms_needs_phone_chk" } });
+                if (r.phone) phones.add(r.phone); else if (r.email) emailOnly.add(r.email.toLowerCase());
+              }
+            }
+            for (const r of rows) { tables[table].push({ id: `row-${idn++}`, ...r }); if (table === "contacts") writes.contactInserts++; }
             return resolve({ data: null, error: null });
           }
           if (st.patch) {
@@ -19003,6 +19019,116 @@ async function testFareHarborContacts() {
 
   const none = await C.mirrorFareHarborContacts(null, null, {});
   chk("fhcontacts: null crm client is a safe no-op", none.guests === 0 && none.newContacts === 0);
+}
+
+async function testCustomerFileImport() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const C = await import("./customerFileImport.js");
+
+  // ── cleaning ──
+  chk("custimp: cleanEmail lowercases/trims valid; drops invalid, placeholders, internal domains, typo domains",
+    C.cleanEmail("  Ann@Example.COM ").email === "ann@example.com" && C.cleanEmail("nope").dropped === "invalid" && C.cleanEmail("noemail@gmail.com").dropped === "junk"
+    && C.cleanEmail("jarrod@coloradosledrentals.com").dropped === "internal" && C.cleanEmail("bob@gmial.com").dropped === "typo_domain" && C.cleanEmail("").dropped === null);
+  chk("custimp: cleanPhone handles Excel numbers, drops fakes/test numbers",
+    C.cleanPhone(5419685982) === "+15419685982" && C.cleanPhone("5419685982.0") === "+15419685982"
+    && C.cleanPhone("0000000000") === null && C.cleanPhone("1234567890") === null && C.cleanPhone("") === null && C.cleanPhone("+15550009999") === null);
+
+  // ── row normalisation + privacy ──
+  const cols = ["Store", "High Risk Customer?", "guestType", "firstName", "lastName", "DOB", "Email", "Phone", "Address1", "City", "State", "Postal Code", "Country", "Program", "Vehicle Type", "Last Activity"];
+  const row = (o) => cols.map(c => o[c] ?? "");
+  const base = { Store: "Colorado Sled Rentals - Kremmling", guestType: "Primary", firstName: "DEVLIN", lastName: "FEHLY", DOB: "1995", Email: "Devlin@Gmail.com", Phone: "5419685982",
+    Address1: "69 building brook road", City: "HAMDEN", State: "CT", "Postal Code": "06514-3213", Country: "United States", Program: "mpwr", "Vehicle Type": "SXS", "Last Activity": "2026-10-19" };
+  const { rec } = C.normalizeCustomerRow(cols, row(base));
+  chk("custimp: row → tidy names, lowercased email, E.164 phone, ISO activity", rec.firstName === "Devlin" && rec.lastName === "Fehly" && rec.email === "devlin@gmail.com" && rec.phone === "+15419685982" && rec.lastActivity === "2026-10-19T12:00:00.000Z", JSON.stringify(rec));
+  chk("custimp: tags — customer, source, brand, location, program, vehicle (SXS→rzr), state",
+    ["customer", "polaris_customer_file", "csr", "kremmling", "mpwr", "rzr", "state_ct"].every(t => rec.tags.includes(t)), JSON.stringify(rec.tags));
+  chk("custimp: PRIVACY — DOB and street address / postal code never appear in a record",
+    !JSON.stringify(rec).includes("1995") && !JSON.stringify(rec).toLowerCase().includes("building brook") && !JSON.stringify(rec).includes("06514") && !("dob" in rec) && !("address" in rec));
+  chk("custimp: no usable email AND no usable phone → row skipped (and the reason is reported)",
+    (() => { const r = C.normalizeCustomerRow(cols, row({ ...base, Email: "bob@gmial.com", Phone: "" })); return r.rec === null && r.dropped === "typo_domain"; })());
+  chk("custimp: junk email but valid phone → person kept as phone-only", (() => { const r = C.normalizeCustomerRow(cols, row({ ...base, Email: "none@x.com" })); return r.rec && r.rec.email === null && r.rec.phone === "+15419685982" && r.dropped === "junk"; })());
+  chk("custimp: high-risk flag becomes a tag (so a segment can exclude it)", C.normalizeCustomerRow(cols, row({ ...base, "High Risk Customer?": "Y" })).rec.tags.includes("high_risk"));
+
+  // ── aggregation / dedupe within the file ──
+  const R = (o) => ({ email: null, phone: null, firstName: "A", lastName: "B", lastActivity: "2026-01-01T12:00:00.000Z", tags: ["customer"], ...o });
+  const a1 = C.aggregateCustomers([
+    R({ email: "a@x.com", phone: "+13035550001", firstName: "Old", lastActivity: "2024-01-01T12:00:00.000Z", tags: ["snowmobile"] }),
+    R({ email: "a@x.com", phone: "+13035550002", firstName: "New", lastActivity: "2026-01-01T12:00:00.000Z", tags: ["rzr"] }),   // same person, newer ride
+    R({ email: null, phone: "+13035550002", firstName: "PhoneOnly" }),                                                            // folds into the email group (same phone)
+    R({ email: null, phone: "+13035550077", firstName: "Lone" }),                                                                  // genuinely phone-only
+  ]);
+  const ga = a1.groups.find(g => g.email === "a@x.com");
+  chk("custimp: same email on many rides → ONE person; newest ride wins name+phone, tags unioned, latest activity kept",
+    a1.groups.length === 2 && ga.firstName === "New" && ga.phone === "+13035550002" && ga.tags.has("snowmobile") && ga.tags.has("rzr") && ga.rows === 3, JSON.stringify([...a1.groups].map(g => [g.email, g.phone, g.rows])));
+  chk("custimp: a phone-only row with the same number is folded in, a different number stays its own person", a1.stats.phoneOnlyFolded === 1 && a1.groups.some(g => g.phone === "+13035550077" && !g.email));
+  const a2 = C.aggregateCustomers([R({ email: "p@x.com", phone: "+13035550009", lastActivity: "2025-01-01T12:00:00.000Z" }), R({ email: "q@x.com", phone: "+13035550009", lastActivity: "2026-01-01T12:00:00.000Z" })]);
+  chk("custimp: two emails sharing a phone → the NEWEST keeps the phone, the other becomes email-only (a phone belongs to one contact)",
+    a2.groups.length === 2 && a2.groups.find(g => g.email === "q@x.com").phone === "+13035550009" && a2.groups.find(g => g.email === "p@x.com").phone === null && a2.stats.phoneReassigned === 1);
+
+  // ── new contact: consent + SMS safety ──
+  const g1 = a1.groups.find(g => g.email === "a@x.com");
+  const nc = C.buildNewContact(g1);
+  chk("custimp: new contact — email 'grandfathered' (NOT explicit), SMS opted_in EXPLICIT false, no sms provenance",
+    nc.email_marketing_consent === true && nc.email_consent_source === "grandfathered" && nc.opted_in === false && nc.sms_consent_source === null && nc.source === "polaris_customer_file" && nc.total_bookings === 0);
+  chk("custimp: grandfathered is excluded from marketing by default (reuses the audience rule)", !(await import("./outboundAudience.js")).isExplicitEmailConsent(nc.email_consent_source));
+  const phoneOnly = C.buildNewContact(a1.groups.find(g => !g.email));
+  chk("custimp: phone-only contact — no email consent claimed, never SMS opted in", phoneOnly.email === null && phoneOnly.email_marketing_consent === false && phoneOnly.email_consent_source === null && phoneOnly.opted_in === false);
+  const sup = C.buildNewContact(g1, { suppressed: true });
+  chk("custimp: an address already unsubscribed/suppressed is imported WITHOUT consent", sup.email_marketing_consent === false && sup.email_consent_source === null);
+
+  // ── enrichment never touches consent / names ──
+  const existing = { id: "c1", phone: null, email: "a@x.com", first_name: "Keep", last_name: null, tags: ["waiver"], last_activity: "2020-01-01T00:00:00.000Z", email_marketing_consent: true, email_consent_source: "smartwaiver" };
+  const pe = C.planEnrichment(g1, existing, { phoneFree: true });
+  chk("custimp: enrich fills blanks only (last name, phone), unions tags, advances last_activity — never renames, never touches consent",
+    pe.last_name === "B" && pe.phone === "+13035550002" && !("first_name" in pe) && pe.tags.includes("waiver") && pe.tags.includes("rzr") && !("opted_in" in pe) && !Object.keys(pe).some(k => k.startsWith("email_") || k.startsWith("sms_")), JSON.stringify(pe));
+  chk("custimp: phone is not copied onto a contact when it's already used elsewhere", !("phone" in C.planEnrichment(g1, existing, { phoneFree: false })));
+
+  // ── end to end (mock DB) ──
+  const seed = () => ({ contacts: [
+    { id: "k1", phone: "+13035550101", email: "existing@x.com", first_name: null, last_name: null, tags: [], last_activity: null, email_unsubscribed_at: null, email_suppressed_at: null },
+    { id: "k2", phone: null, email: "emailonly@x.com", first_name: "E", last_name: "O", tags: ["waiver"], last_activity: null, email_unsubscribed_at: null, email_suppressed_at: null },
+    { id: "k3", phone: "+13035550103", email: "unsub@x.com", first_name: "U", last_name: "S", tags: [], last_activity: null, email_unsubscribed_at: "2026-01-01T00:00:00Z", email_suppressed_at: null },
+    { id: "k4", phone: "+13035550104", email: "different@x.com", first_name: "D", last_name: "F", tags: [], last_activity: null, email_unsubscribed_at: null, email_suppressed_at: null },
+  ] });
+  const recs = [
+    R({ email: "brandnew@x.com", phone: "+13035550201", firstName: "Brand" }), R({ email: "brandnew@x.com", phone: "+13035550201", firstName: "Brand", lastActivity: "2026-05-01T12:00:00.000Z" }),   // 2 rides, 1 person
+    R({ email: "EXISTING@x.com".toLowerCase(), phone: "+13035550101", firstName: "Ex", lastName: "Isting" }),
+    R({ email: "emailonly@x.com", phone: "+13035550301", firstName: "E" }),                    // gives the email-only contact a phone
+    R({ email: "unsub@x.com", phone: "+13035550103" }),                                       // already unsubscribed → nothing consented
+    R({ email: "newaddr@x.com", phone: "+13035550104" }),                                     // phone belongs to a contact with a DIFFERENT email → left alone
+    R({ email: "noPhone@x.com", phone: null, firstName: "NP" }),                             // email-only new
+    R({ email: null, phone: "+13035550401", firstName: "PO" }),                              // phone-only new
+  ].map(r => ({ ...r, email: r.email?.toLowerCase() ?? null }));
+  let crm = makeFhMockCrm(seed());
+  const dry = await C.importCustomers(crm, recs, { dryRun: true });
+  chk("custimp: dry run writes nothing", crm.tables.contacts.length === 4 && crm.writes.contactUpdates.length === 0 && crm.writes.contactInserts === 0);
+  chk("custimp: dry-run plan — 7 people from 8 rows; 3 new (1 w/ email+phone, 1 email-only, 1 phone-only); 3 enriched…",
+    dry.fileRows === 8 && dry.distinctPeople === 7 && dry.duplicateRowsCollapsed === 1 && dry.newContacts === 3 && dry.newWithEmail === 1 && dry.newEmailOnly === 1 && dry.newPhoneOnly === 1 && dry.phoneMatchedDifferentEmail === 1, JSON.stringify(dry));
+  crm = makeFhMockCrm(seed());
+  const res = await C.importCustomers(crm, recs, {});
+  const by = (e) => crm.tables.contacts.filter(c => c.email === e);
+  chk("custimp: a person with 2 rides → exactly ONE contact", by("brandnew@x.com").length === 1);
+  chk("custimp: brand-new contact is grandfathered-consent, SMS NOT opted in", by("brandnew@x.com")[0].email_marketing_consent === true && by("brandnew@x.com")[0].email_consent_source === "grandfathered" && by("brandnew@x.com")[0].opted_in === false);
+  chk("custimp: existing contact enriched, not duplicated", by("existing@x.com").length === 1 && by("existing@x.com")[0].first_name === "Ex" && by("existing@x.com")[0].tags.includes("customer"));
+  chk("custimp: email-only contact gains the phone, stays SMS opted out", by("emailonly@x.com")[0].phone === "+13035550301" && by("emailonly@x.com")[0].first_name === "E" && !by("emailonly@x.com")[0].opted_in);
+  chk("custimp: unsubscribed contact keeps its unsubscribe and gets no consent", by("unsub@x.com")[0].email_unsubscribed_at === "2026-01-01T00:00:00Z" && by("unsub@x.com")[0].email_marketing_consent === undefined);
+  chk("custimp: phone-collision with a different email → untouched, no duplicate person created", !crm.tables.contacts.some(c => c.email === "newaddr@x.com") && crm.tables.contacts.find(c => c.id === "k4").email === "different@x.com");
+  chk("custimp: email-only + phone-only new contacts created; none phone-less is SMS-opted-in", by("nophone@x.com").length === 1 && crm.tables.contacts.some(c => c.phone === "+13035550401" && !c.email) && crm.tables.contacts.filter(c => !c.phone).every(c => !c.opted_in));
+  chk("custimp: no phone or email appears on two contacts after the import", (() => { const ph = crm.tables.contacts.map(c => c.phone).filter(Boolean), em = crm.tables.contacts.filter(c => !c.phone && c.email).map(c => c.email); return new Set(ph).size === ph.length && new Set(em).size === em.length; })());
+  const snap = JSON.stringify(crm.tables.contacts);
+  const again = await C.importCustomers(crm, recs, {});
+  chk("custimp: re-running the same file is a no-op (idempotent — no new contacts, no changes)", again.newContacts === 0 && again.enrichedContacts === 0 && JSON.stringify(crm.tables.contacts) === snap, JSON.stringify(again));
+  chk("custimp: a bad row inside a batch only skips that row (batch retried row-by-row)", await (async () => {
+    const c2 = makeFhMockCrm({ contacts: [] });
+    const real = c2.from; let first = true;
+    c2.from = (t) => { const b = real(t); if (t === "contacts" && first) { first = false; const ins = b.insert; b.insert = (rows) => { const api = ins(Array.isArray(rows) ? rows.concat([{ ...rows[0] }]) : rows); return api; }; } return b; };   // first batch contains a duplicate → rejected
+    const r = await C.importCustomers(c2, [R({ email: "z1@x.com", phone: "+13035550901" }), R({ email: "z2@x.com", phone: "+13035550902" })], {});
+    return c2.tables.contacts.length === 2 && r.insertErrors === 0;
+  })());
+  const none = await C.importCustomers(null, recs); const empty = await C.importCustomers(makeFhMockCrm(seed()), []);
+  chk("custimp: null crm / empty file are safe no-ops", none.distinctPeople === 0 && empty.distinctPeople === 0);
+  const csv = C.recordsFromCsv("Store,firstName,lastName,DOB,Email,Phone,Program,Last Activity\nColorado Sled Rentals - Kremmling,ANN,LEE,1980,ann@x.com,3035550150,mpwr,2026-01-02\n,BOB,ROE,1970,none@x.com,,mpwr,2026-01-03\n");
+  chk("custimp: recordsFromCsv — usable rows kept, unusable skipped + reason counted", csv.records.length === 1 && csv.skippedRows === 1 && csv.droppedEmails.junk === 1 && csv.rawRows === 2 && !JSON.stringify(csv).includes("1980"));
 }
 
 async function testWaiverImport() {

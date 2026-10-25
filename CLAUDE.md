@@ -125,6 +125,7 @@ bookingConfirmations.js — FareHarbor webhook receiver + 30min bookings-by-crea
 fareharborNormalizer.js — links FareHarbor rows in DB2 `bookings` (customer_id/activity_id/total_cents) from raw_payload so they appear in daily_manifest; cron "recent" every tick + daily "full"; CLI: `node --env-file=.env fareharborNormalizer.js [--apply]`
 fareharborContacts.js — mirrors FareHarbor guests into DB2 `contacts` with consent taken ONLY from FareHarbor's per-guest flags (never the table's default-TRUE); cron recent+daily full; CLI dry-runs by default
 waiverImport.js — Smartwaiver CSV → DB2 `waivers` + `contacts` (email-match dedupe, email-only contacts, consent only from verified+ticked waivers, no DOB/licence stored); CLI dry-runs by default
+customerFileImport.js — Polaris/MPWR "all riders" export (.xlsx/.csv) → DB2 `contacts`: dedupe within file (by email, phone-only rows folded) + against the CRM, consent `grandfathered` (never explicit), SMS never opted in, no DOB/address stored; CLI dry-runs by default
 outboundApi.js — Bearer-key API (/api/v1) for Google Apps Script/automations: email + SMS audience preview, marketing send, booking-related (transactional) send; consent enforced server-side, dry-run by default, idempotent
 outboundAudience.js — the single definition of "who may be emailed/texted" (segment → recipients + exclusion reasons); explicit consent by default, unknown segment fields rejected
 emailSender.js — email queue → Resend batches → delivery tracking; claim-based (web + cron never double-send), consent re-checked at send time, Resend signed webhook → bounce/complaint suppression
@@ -657,6 +658,19 @@ Owner wanted to "create HTML for the email and paste it somewhere" with the **CS
 - **Apps Script (`docs/apps-script/Code.gs`) is pure ASCII** (enforced by a test): a clipboard once turned "…" into "Ä¶" and would have scrambled subject lines. It has a
   run-time budget (270 s) + a 10-minute recurring `continueSending` trigger so a big send resumes itself (Apps Script kills a run at 6 min). Owner's Workspace quota is 1,500/day.
 - Owner's old template came from Mailchimp (`*|UNSUB|*` footer) — see the template-problem guard above.
+
+### Polaris customer-file import (customerFileImport.js, 2026-10-25)
+Polaris (Mike Keehn, 2026-10-22) sent every passenger/driver since the beginning (~7,600 rows, 18 cols incl. DOB + licence-scan
+address). `node --env-file=.env customerFileImport.js <file.xlsx|csv> [--apply]` (dry-run default) loads them into DB2 `contacts`.
+**Dedupe:** within the file by lowercased email (newest ride wins name/phone; phone-only rows fold into an email group with the
+same number; a phone belongs to ONE contact — newest keeps it); against the CRM by email, then phone — matches are only enriched
+(blanks, tags, recency), never duplicated/renamed; a phone whose contact has a DIFFERENT email is left alone + counted. Re-running is a no-op.
+**Consent:** new contacts get `email_consent_source='grandfathered'` (excluded from sends unless `segment.include_grandfathered`) —
+these people never ticked a box with us; `opted_in` is always false (no TCPA consent); addresses already unsubscribed/suppressed
+get NO consent; junk/internal/typo-domain addresses are dropped. **Privacy:** DOB, street address, postal code are never stored; the
+.xlsx path converts via python/openpyxl emitting only the needed columns. Tags: `customer`, `polaris_customer_file`, `csr`/`rea`,
+location, `mpwr`/`arrival`, `rzr`/vehicle, `state_xx`, `high_risk`. Tests: `testCustomerFileImport` (31 checks, mock DB).
+**Status:** APPLIED 2026-10-25 — 7,600 rows → 7,281 people: 5,972 new contacts (contacts 2,179 → 8,151), 1,193 enriched, 116 skipped (phone already on a contact with a different email). Verified: no duplicate phones/email-only addresses, 0 new contacts opted in for SMS, re-run is a no-op. 54 email pairs shared a phone (newest kept it; the other is email-only — may be one person with 2 addresses). Live runs from this laptop need `NODE_EXTRA_CA_CERTS` pointing at a bundle that includes the Zscaler intermediate (Node can't verify it otherwise).
 
 ### Activity Distribution Network (partnerActivities.js — Sprint 5)
 Partners listed in `partner_activities` (DB1) surface as **Source 5** inside `resolveBookingLink()` with confidence `0.60` — only when no config (1.0/0.75), api (0.85), or crawl (0.70) match. Never overrides the client's own booking links. Context (≤12 partners, season-filtered) is appended to the `KNOWLEDGE_BASE` block in `getKnowledgeContext()`. All outbound URLs are rewritten to `/track/partner?id=<uuid>` which 302-redirects to `booking_url` and fire-and-forget logs `partner_link_clicked` to `web_events`. SMS sends that pick Source 5 log `partner_link_sent`. Portal → Partners page: CRUD + per-partner CTR analytics (`GET /portal/api/partners/analytics?days=30`). Categories: tour / rental / lodging / dining / transport / other. Seasons: all / winter / summer / shoulder (shoulder includes winter + summer partners).
