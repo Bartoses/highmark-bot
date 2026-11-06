@@ -24,6 +24,7 @@ import { renderEmailForRecipient, renderMergeFields, wrapEmailShell, htmlToPlain
 import { resolveSendFrom, getClientDomain } from "./emailDomains.js";
 import { resolveClientById } from "./clients.js";
 import { suppressEmail, loadSuppressionSets, normEmail } from "./emailSuppression.js";
+import { resolveTrackingSecret, rewriteLinks, buildClickUrl, buildOpenUrl, openPixelHtml } from "./emailTracking.js";
 
 const STUCK_MINUTES = 10;
 const MAX_ATTEMPTS = 3;
@@ -68,13 +69,24 @@ export function resolveFrom({ displayName, domainRow = null }) {
   return fromAddress(displayName);
 }
 
-export function renderCampaignEmail({ campaign, client, recipient, baseUrl, domainRow = null }) {
+// recipient.send_id (the email_sends row) turns on open/click tracking when EMAIL_TRACKING_SECRET is set; previews
+// and test sends have no send row, so they render untracked.
+export function buildTracking({ baseUrl, sendId, secret = resolveTrackingSecret() }) {
+  if (!secret || !sendId) return null;
+  return {
+    rewriteBody: (html) => rewriteLinks(html, (url) => buildClickUrl({ baseUrl, secret, sendId, url })),
+    pixelHtml: openPixelHtml(buildOpenUrl({ baseUrl, secret, sendId })),
+  };
+}
+
+export function renderCampaignEmail({ campaign, client, recipient, baseUrl, domainRow = null, trackingSecret }) {
   const businessName = client?.name ?? "Your Business";
   const rendered = renderEmailForRecipient({
     subject: campaign.subject, previewText: campaign.preview_text, bodyHtml: campaign.body_html,
     businessName, address: resolveMailingAddress(client), baseUrl,
     mergeVars: { first_name: recipient.first_name ?? "there", last_name: recipient.last_name ?? "" },
     unsubscribeToken: recipient.unsubscribe_token ?? "preview",
+    tracking: buildTracking({ baseUrl, sendId: recipient.send_id, ...(trackingSecret !== undefined ? { secret: trackingSecret } : {}) }),
   });
   const displayName = campaign.from_name || businessName;
   return {
@@ -211,7 +223,7 @@ async function prepareRows(crm, db1, claimed, { resolveClient, getCampaign, getD
         item = renderCampaignEmail({
           campaign, client, baseUrl, domainRow: domains.get(row.client_id),
           // NB: the contacts column is email_unsubscribe_token; the renderer reads unsubscribe_token.
-          recipient: { email, first_name: contact.first_name, last_name: contact.last_name, unsubscribe_token: contact.email_unsubscribe_token },
+          recipient: { email, first_name: contact.first_name, last_name: contact.last_name, unsubscribe_token: contact.email_unsubscribe_token, send_id: row.id },
         });
       }
     }

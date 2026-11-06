@@ -34,6 +34,15 @@
   iframe { width:100%; height:640px; border:1px solid var(--line); border-radius:8px; background:#fff; }
   .how { background:#eef6fc; border:1px solid #cfe3f3; border-radius:8px; padding:10px 12px; font-size:13px; }
   .hidden { display:none; }
+  .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:10px; }
+  .tile { border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .tile b { display:block; font-size:22px; font-variant-numeric: tabular-nums; }
+  .tile span { font-size:12px; color:var(--mute); }
+  table.stats { width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
+  table.stats th, table.stats td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table.stats td.n, table.stats th.n { text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; }
+  table.stats td.u { word-break:break-all; }
+  h3 { font-size:13px; margin:16px 0 4px; }
 </style>
 </head>
 <body>
@@ -54,6 +63,11 @@
       <b>How sending works:</b> paste your HTML below and <b>Save</b>. Then open your Google Sheet &rarr; <b>Highmark</b> menu &rarr;
       <b>Send me a test</b> (goes to sean@coloradosledrentals.com) &rarr; <b>Send newsletter&hellip;</b>. Your address and a working
       unsubscribe link are added to the bottom automatically.
+    </div>
+
+    <div class="card hidden" id="resultsCard" style="margin-bottom:16px">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">Results</h2><button id="refreshResults">Refresh</button></div>
+      <div id="results" style="margin-top:10px"></div>
     </div>
 
     <div class="card">
@@ -150,6 +164,62 @@
     var tags = (state.segmentExtra.tags_any || []); $('onlyTags').checked = tags.length > 0; $('tags').disabled = !tags.length; $('tags').value = tags.join(', ');
     $('gf').checked = !!state.segmentExtra.include_grandfathered;
     setSent(!!(nl && nl.status === 'sent')); showWarnings([]); $('status').innerHTML = ''; $('frame').srcdoc = ''; $('prevSubject').textContent = '';
+    state.campaignId = (nl && nl.campaign_id) || null; loadResults();
+  }
+
+  // ── results (delivery + opens + clicks for the selected, already-sent newsletter) ──
+  function el(tag, text, cls) { var e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; }
+  function tile(value, label) { var t = el('div', null, 'tile'); t.appendChild(el('b', value)); t.appendChild(el('span', label)); return t; }
+  function shortUrl(u) {
+    try { var x = new URL(u); var c = x.searchParams.get('utm_content'); return x.host.replace(/^www\./, '') + x.pathname + (c ? '  (' + c + ')' : ''); } catch (e) { return u; }
+  }
+  function when(iso) { return iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''; }
+  function loadResults() {
+    var card = $('resultsCard'), box = $('results');
+    card.classList.toggle('hidden', !state.campaignId); box.innerHTML = '';
+    if (!state.campaignId) return;
+    box.appendChild(el('span', 'Loading…', 'muted'));
+    call('GET', '/email/campaigns/' + encodeURIComponent(state.campaignId) + '?engagement=1').then(function (r) {
+      box.innerHTML = '';
+      var c = r.counts || {}, g = r.engagement || {};
+      var waiting = (c.queued || 0) + (c.sending || 0);
+      var tiles = el('div', null, 'tiles');
+      tiles.appendChild(tile(String((c.sent || 0) + (c.delivered || 0)), 'delivered' + (waiting ? ' · ' + waiting + ' still sending' : '')));
+      if (!g.error) {
+        tiles.appendChild(tile(g.open_rate + '%', g.opened + ' opened (approx.)'));
+        tiles.appendChild(tile(g.click_rate + '%', g.clicked + ' clicked a link'));
+        tiles.appendChild(tile(String(g.unsubscribed), 'unsubscribed since'));
+      }
+      tiles.appendChild(tile(String((c.bounced || 0) + (c.complained || 0)), 'bounced'));
+      box.appendChild(tiles);
+      if (g.error) { box.appendChild(el('div', 'Opens and clicks are unavailable right now (' + g.error + ').', 'msg warn')); return; }
+      if (!g.opened && !g.clicked) {
+        box.appendChild(el('div', 'No opens or clicks recorded yet. Newsletters sent before tracking was switched on (before Nov 2026) can’t show them.', 'muted'));
+        return;
+      }
+      if (g.links.length) {
+        box.appendChild(el('h3', 'Links clicked'));
+        var t = el('table', null, 'stats'), hr = el('tr');
+        hr.appendChild(el('th', 'Link')); hr.appendChild(el('th', 'People', 'n')); hr.appendChild(el('th', 'Clicks', 'n')); t.appendChild(hr);
+        g.links.forEach(function (l) {
+          var tr = el('tr'), td = el('td', null, 'u'), a = el('a', shortUrl(l.url)); a.href = l.url; a.target = '_blank'; a.rel = 'noopener'; td.appendChild(a);
+          tr.appendChild(td); tr.appendChild(el('td', String(l.people), 'n')); tr.appendChild(el('td', String(l.clicks), 'n')); t.appendChild(tr);
+        });
+        box.appendChild(t);
+      }
+      if (g.clickers.length) {
+        var h = el('div', null, 'row'); h.style.justifyContent = 'space-between'; h.style.marginTop = '16px';
+        h.appendChild(el('h3', 'Who clicked (' + g.clickers.length + ')')); var copy = el('button', 'Copy emails');
+        copy.onclick = function () { var list = g.clickers.map(function (x) { return x.email; }).join('\n');
+          (navigator.clipboard ? navigator.clipboard.writeText(list) : Promise.reject()).then(function () { copy.textContent = 'Copied'; }, function () { window.prompt('Copy these addresses:', list); }); };
+        h.appendChild(copy); box.appendChild(h);
+        var t2 = el('table', null, 'stats'), hr2 = el('tr');
+        hr2.appendChild(el('th', 'Email')); hr2.appendChild(el('th', 'Clicks', 'n')); hr2.appendChild(el('th', 'First click', 'n')); t2.appendChild(hr2);
+        g.clickers.forEach(function (x) { var tr = el('tr'); tr.appendChild(el('td', x.email, 'u')); tr.appendChild(el('td', String(x.clicks), 'n')); tr.appendChild(el('td', when(x.first_clicked_at), 'n')); t2.appendChild(tr); });
+        box.appendChild(t2);
+      }
+      box.appendChild(el('div', 'Opens are approximate: Apple Mail loads images for every email it receives, and some apps block them. Clicks are reliable.' + (g.bot_hits ? ' ' + g.bot_hits + ' automated link-scanner hits were left out.' : ''), 'muted'));
+    }).catch(function (e) { box.innerHTML = ''; box.appendChild(el('div', e.message, 'msg err')); });
   }
 
   function loadList() {
@@ -177,6 +247,7 @@
   $('saveBtn').onclick = function () { save(false); };
   $('saveNewBtn').onclick = function () { save(true); };
   $('newBtn').onclick = function () { fill(null); };
+  $('refreshResults').onclick = loadResults;
   $('html').oninput = function () { $('htmlSize').textContent = $('html').value.length; };
   $('onlyTags').onchange = function () { $('tags').disabled = !$('onlyTags').checked; };
   $('previewBtn').onclick = function () {
