@@ -3265,6 +3265,7 @@ async function main() {
     await testCustomerFileImport();   // Polaris/MPWR all-riders file → contacts: dedupe within file + vs CRM, grandfathered consent, no DOB/address, SMS never opted in
     await testWaiverImport();         // Smartwaiver → waivers + contacts: email-match dedupe, consent only from verified+ticked, never downgrade, no DOB/DL
     await testOutboundMessaging();    // send API + queue + Resend webhook + suppression: consent enforced server-side, idempotent, fail-closed
+    await testEmailTracking();        // opens + clicks: signed links (no open redirect), footer/unsubscribe untouched, bot filter, stats, public routes
   } catch (e) {
     fail("Test server", e.message);
   } finally {
@@ -19873,6 +19874,151 @@ async function testOutboundMessaging() {
       } finally { b.srv.close(); }
     });
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL TRACKING (emailTracking.js + render wiring) — in-memory DB2, no network
+// ─────────────────────────────────────────────────────────────────────────────
+function makeTrackMockCrm(seed = {}) {
+  const tables = { email_sends: [], email_events: [], contacts: [], ...Object.fromEntries(Object.entries(seed).map(([k, v]) => [k, v.map(r => ({ ...r }))])) };
+  let idn = 1;
+  const query = (name) => {
+    const filters = []; let range = null; let patch = null;
+    const rows = () => tables[name].filter(r => filters.every(f => f(r)));
+    const q = {
+      select: () => q, order: () => q,
+      eq: (c, v) => (filters.push(r => r[c] === v), q),
+      in: (c, vs) => (filters.push(r => vs.includes(r[c])), q),
+      is: (c, v) => (filters.push(r => (r[c] ?? null) === v), q),
+      range: (a, b) => (range = [a, b], q),
+      maybeSingle: async () => ({ data: rows()[0] ?? null, error: null }),
+      insert: async (row) => { tables[name].push({ id: idn++, created_at: new Date().toISOString(), ...row }); return { error: null }; },
+      update: (p) => (patch = p, q),
+      then: (res, rej) => {
+        if (patch) { for (const r of rows()) Object.assign(r, patch); return Promise.resolve({ error: null }).then(res, rej); }
+        const all = rows(); return Promise.resolve({ data: range ? all.slice(range[0], range[1] + 1) : all, error: null }).then(res, rej);
+      },
+    };
+    return q;
+  };
+  return { tables, from: query };
+}
+
+async function testEmailTracking() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const T = await import("./emailTracking.js");
+  const S = await import("./emailSender.js");
+  const secret = "test-secret-0123456789abcdef";
+  const sid = "11111111-2222-4333-8444-555555555555";
+  const base = "https://app.test";
+  const dest = "https://coloradosledrentals.com/winter-snowmobile-rentals/?utm_source=email&utm_medium=newsletter&utm_content=discount_cta";
+
+  // ── signing ──
+  const click = T.buildClickUrl({ baseUrl: base, secret, sendId: sid, url: dest });
+  const cu = new URL(click); const [, , , cSend, cSig] = cu.pathname.split("/");
+  chk("track: click URL carries the destination intact (UTMs included) and verifies", cu.searchParams.get("u") === dest && cSend === sid && T.verifyClick(secret, sid, dest, cSig));
+  chk("track: a click signature can't be re-pointed at another site (no open redirect)", !T.verifyClick(secret, sid, "https://evil.test/", cSig));
+  chk("track: a click signature is bound to its send (can't forge another person's click)", !T.verifyClick(secret, "11111111-2222-4333-8444-666666666666", dest, cSig));
+  chk("track: wrong secret / no secret / non-http destination all fail", !T.verifyClick("other-secret-0123456789", sid, dest, cSig) && !T.verifyClick(null, sid, dest, cSig) && !T.verifyClick(secret, sid, "javascript:alert(1)", cSig));
+  const openSig = T.buildOpenUrl({ baseUrl: base, secret, sendId: sid }).split("/").pop().replace(/\.gif$/, "");
+  chk("track: open pixel URL verifies only for its own send", T.verifyOpen(secret, sid, openSig) && !T.verifyOpen(secret, "not-a-uuid", openSig));
+  chk("track: secret under 16 chars disables tracking", await (async () => { const p = process.env.EMAIL_TRACKING_SECRET; process.env.EMAIL_TRACKING_SECRET = "short"; const r = T.resolveTrackingSecret(); if (p === undefined) delete process.env.EMAIL_TRACKING_SECRET; else process.env.EMAIL_TRACKING_SECRET = p; return r === null; })());
+
+  // ── link rewriting ──
+  const body = `<p><a class="btn" href="https://x.test/a?b=1&amp;c=2" style="color:red">Book</a> <a href='mailto:info@x.test'>Mail</a> <a href="#top">Top</a>` +
+    ` <a href="tel:+19705551234">Call</a> <a data-notrack href="https://x.test/raw">Raw</a> <a href="https://app.test/email/unsubscribe/tok">Unsub</a></p>`;
+  const seen = [];
+  const out = T.rewriteLinks(body, (u) => (seen.push(u), `https://t.test/?u=${encodeURIComponent(u)}&k=1`));
+  chk("track: only http(s) links are rewritten; &amp; in an href is decoded before signing", seen.length === 1 && seen[0] === "https://x.test/a?b=1&c=2", JSON.stringify(seen));
+  chk("track: the rewritten tag keeps its other attributes and is attribute-escaped", out.includes('<a class="btn" href="https://t.test/?u=') && out.includes('&amp;k=1" style="color:red">Book</a>'));
+  chk("track: mailto / tel / #anchor / data-notrack / unsubscribe links are left alone", out.includes("href='mailto:info@x.test'") && out.includes('href="#top"') && out.includes('href="tel:+19705551234"') && out.includes('href="https://x.test/raw"') && out.includes('href="https://app.test/email/unsubscribe/tok"'));
+
+  // ── render wiring ──
+  const client = { name: "Colorado Sled Rentals", address: "1 Main St, Steamboat Springs, CO 80487" };
+  const camp = { id: "camp-t", subject: "s", body_html: `<p>Hi {{first_name}} <a href="${dest.replace(/&/g, "&amp;")}">Ride</a></p>` };
+  const tracked = S.renderCampaignEmail({ campaign: camp, client, recipient: { email: "a@x.com", first_name: "Ann", unsubscribe_token: "tok-a", send_id: sid }, baseUrl: base, trackingSecret: secret });
+  chk("render: with a send id + secret, body links go through /e/c/ and the open pixel is added", tracked.html.includes(`${base}/e/c/${sid}/`) && tracked.html.includes(`${base}/e/o/${sid}/`) && !tracked.html.includes(`href="${dest.replace(/&/g, "&amp;")}"`));
+  chk("render: the footer unsubscribe link stays direct (never tracked)", tracked.html.includes(`href="${base}/email/unsubscribe/tok-a"`));
+  chk("render: the plain-text part keeps the real destination", tracked.text.includes("Ride") && !tracked.text.includes("/e/c/"));
+  const fullDoc = `<!DOCTYPE html><html><head></head><body><a href="https://x.test/">Go</a></body></html>`;
+  const trackedDoc = S.renderCampaignEmail({ campaign: { subject: "s", body_html: fullDoc }, client, recipient: { email: "a@x.com", unsubscribe_token: "t", send_id: sid }, baseUrl: base, trackingSecret: secret });
+  chk("render: a full pasted HTML document is tracked too, pixel inside <body>", trackedDoc.html.includes("/e/c/") && trackedDoc.html.indexOf("/e/o/") < trackedDoc.html.search(/<\/body>/i));
+  const preview = S.renderCampaignEmail({ campaign: camp, client, recipient: { email: "a@x.com", unsubscribe_token: "preview" }, baseUrl: base, trackingSecret: secret });
+  const off = S.renderCampaignEmail({ campaign: camp, client, recipient: { email: "a@x.com", unsubscribe_token: "t", send_id: sid }, baseUrl: base, trackingSecret: null });
+  chk("render: previews/test sends (no send id) and a missing secret render untracked", !preview.html.includes("/e/c/") && !preview.html.includes("/e/o/") && !off.html.includes("/e/c/") && !off.html.includes("/e/o/"));
+
+  // ── bot heuristic ──
+  chk("track: scanners/prefetchers are flagged; Gmail image proxy + phones are people",
+    T.isLikelyBot("") && T.isLikelyBot("Mozilla/5.0 (compatible; Barracuda Sentinel)") && T.isLikelyBot("python-requests/2.31") && T.isLikelyBot("Microsoft Office SafeLinks")
+    && !T.isLikelyBot("Mozilla/5.0 (Windows NT 5.1; rv:11.0) Gecko Firefox/11.0 (via ggpht.com GoogleImageProxy)") && !T.isLikelyBot("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"));
+
+  // ── recording ──
+  const human = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15";
+  {
+    const db = makeTrackMockCrm({ email_sends: [{ id: sid, campaign_id: "camp-t", client_id: "csr_rea", email: "a@x.com", status: "sent", opened_at: null, clicked_at: null }] });
+    await T.recordEmailEvent(db, { sendId: sid, type: "click", url: dest, userAgent: "Barracuda scanner" });
+    const s = db.tables.email_sends[0];
+    chk("record: a scanner click is stored (is_bot) but never counts as an open or click", db.tables.email_events.length === 1 && db.tables.email_events[0].is_bot === true && !s.opened_at && !s.clicked_at);
+    await T.recordEmailEvent(db, { sendId: sid, type: "click", url: dest, userAgent: human, nowMs: Date.parse("2026-11-06T18:00:00Z") });
+    chk("record: a human click sets clicked_at AND opened_at (a click proves an open)", s.clicked_at === "2026-11-06T18:00:00.000Z" && s.opened_at === "2026-11-06T18:00:00.000Z");
+    await T.recordEmailEvent(db, { sendId: sid, type: "click", url: dest, userAgent: human, nowMs: Date.parse("2026-11-07T18:00:00Z") });
+    chk("record: a second click keeps the FIRST click time and adds an event", s.clicked_at === "2026-11-06T18:00:00.000Z" && db.tables.email_events.length === 3);
+    chk("record: an unknown send id records nothing", (await T.recordEmailEvent(db, { sendId: "11111111-2222-4333-8444-999999999999", type: "open", userAgent: human })).recorded === false && db.tables.email_events.length === 3);
+    chk("record: no IP address is stored", !Object.keys(db.tables.email_events[0]).some(k => /ip/i.test(k)));
+  }
+
+  // ── public routes ──
+  const mkRes = () => { const r = { code: 200, headers: {}, body: null, location: null,
+    set(h, v) { if (typeof h === "object") Object.assign(r.headers, h); else r.headers[h] = v; return r; }, status(c) { r.code = c; return r; }, type() { return r; },
+    send(b) { r.body = b; return r; }, redirect(c, u) { r.code = c; r.location = u; return r; } }; return r; };
+  const mkReq = (params, query = {}, ua = human) => ({ params, query, get: (h) => (h.toLowerCase() === "user-agent" ? ua : undefined) });
+  {
+    const db = makeTrackMockCrm({ email_sends: [{ id: sid, campaign_id: "camp-t", client_id: "csr_rea", email: "a@x.com", status: "sent" }] });
+    let r = mkRes(); await T.handleTrackClick(mkReq({ sendId: sid, sig: cSig }, { u: dest }), r, { crm: db, secret });
+    await new Promise(res => setTimeout(res, 20));
+    chk("route: a valid click 302s to the exact destination and logs the click", r.code === 302 && r.location === dest && db.tables.email_events.length === 1 && db.tables.email_events[0].url === dest);
+    r = mkRes(); await T.handleTrackClick(mkReq({ sendId: sid, sig: cSig }, { u: "https://evil.test/" }), r, { crm: db, secret });
+    chk("route: a tampered destination is refused (404, no redirect, nothing logged)", r.code === 404 && !r.location && db.tables.email_events.length === 1);
+    r = mkRes(); await T.handleTrackClick(mkReq({ sendId: sid, sig: cSig }, { u: dest }), r, { crm: db, secret: null });
+    chk("route: with tracking unconfigured a click link is refused, never an open redirect", r.code === 404 && !r.location);
+    r = mkRes(); await T.handleTrackOpen(mkReq({ sendId: sid, sig: openSig + ".gif" }), r, { crm: db, secret });
+    await new Promise(res => setTimeout(res, 20));
+    chk("route: the open pixel returns an uncached GIF and logs an open", r.headers["Content-Type"] === "image/gif" && /no-store/.test(r.headers["Cache-Control"]) && Buffer.isBuffer(r.body) && db.tables.email_events.some(e => e.type === "open"));
+    const before = db.tables.email_events.length;
+    r = mkRes(); await T.handleTrackOpen(mkReq({ sendId: sid, sig: "forged" }), r, { crm: db, secret });
+    await new Promise(res => setTimeout(res, 20));
+    chk("route: a forged pixel still gets an image back but logs nothing", r.headers["Content-Type"] === "image/gif" && db.tables.email_events.length === before);
+  }
+
+  // ── stats ──
+  {
+    const ids = ["a", "b", "c", "d", "e"].map((x, i) => `11111111-2222-4333-8444-00000000000${i}`);
+    const db = makeTrackMockCrm({
+      email_sends: [
+        { id: ids[0], campaign_id: "camp-s", email: "a@x.com", status: "sent", contact_id: "c0", sent_at: "2026-11-05T20:00:00Z", opened_at: "2026-11-05T21:00:00Z", clicked_at: "2026-11-05T21:01:00Z" },
+        { id: ids[1], campaign_id: "camp-s", email: "b@x.com", status: "sent", contact_id: "c1", sent_at: "2026-11-05T20:00:00Z", opened_at: "2026-11-05T22:00:00Z", clicked_at: null },
+        { id: ids[2], campaign_id: "camp-s", email: "c@x.com", status: "delivered", contact_id: "c2", sent_at: "2026-11-05T20:00:00Z", opened_at: null, clicked_at: null },
+        { id: ids[3], campaign_id: "camp-s", email: "d@x.com", status: "bounced", contact_id: "c3", sent_at: "2026-11-05T20:00:00Z" },
+        { id: ids[4], campaign_id: "other", email: "e@x.com", status: "sent", clicked_at: "2026-11-05T21:00:00Z", opened_at: "2026-11-05T21:00:00Z" },
+      ],
+      email_events: [
+        { send_id: ids[0], campaign_id: "camp-s", type: "click", url: "https://x.test/a", is_bot: false },
+        { send_id: ids[0], campaign_id: "camp-s", type: "click", url: "https://x.test/a", is_bot: false },
+        { send_id: ids[0], campaign_id: "camp-s", type: "click", url: "https://x.test/b", is_bot: false },
+        { send_id: ids[2], campaign_id: "camp-s", type: "click", url: "https://x.test/a", is_bot: true },
+        { send_id: ids[1], campaign_id: "camp-s", type: "open", url: null, is_bot: false },
+        { send_id: ids[4], campaign_id: "other", type: "click", url: "https://x.test/a", is_bot: false },
+      ],
+      contacts: [{ id: "c1", email_unsubscribed_at: "2026-11-06T01:00:00Z" }, { id: "c2", email_unsubscribed_at: "2026-10-01T00:00:00Z" }],
+    });
+    const g = await T.computeCampaignEngagement(db, "camp-s");
+    chk("stats: unique opens/clicks over delivered (bounces excluded), rates rounded", g.reached === 3 && g.bounced === 1 && g.opened === 2 && g.clicked === 1 && g.open_rate === 66.7 && g.click_rate === 33.3 && g.click_to_open === 50, JSON.stringify(g));
+    chk("stats: links ranked by people then clicks; scanner hits and other campaigns excluded", g.links.length === 2 && g.links[0].url === "https://x.test/a" && g.links[0].people === 1 && g.links[0].clicks === 2 && g.total_clicks === 3 && g.bot_hits === 1, JSON.stringify(g.links));
+    chk("stats: who-clicked list has the person, click count and first click", g.clickers.length === 1 && g.clickers[0].email === "a@x.com" && g.clickers[0].clicks === 3 && g.clickers[0].first_clicked_at === "2026-11-05T21:01:00Z");
+    chk("stats: only unsubscribes AFTER the send count", g.unsubscribed === 1);
+    const empty = await T.computeCampaignEngagement(makeTrackMockCrm(), "none");
+    chk("stats: an empty / pre-tracking campaign returns zeros, not NaN", empty.reached === 0 && empty.open_rate === 0 && empty.links.length === 0 && empty.clickers.length === 0);
+  }
 }
 
 async function testEmailDomains() {

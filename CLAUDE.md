@@ -129,6 +129,7 @@ customerFileImport.js — Polaris/MPWR "all riders" export (.xlsx/.csv) → DB2 
 outboundApi.js — Bearer-key API (/api/v1) for Google Apps Script/automations: email + SMS audience preview, marketing send, booking-related (transactional) send; consent enforced server-side, dry-run by default, idempotent
 outboundAudience.js — the single definition of "who may be emailed/texted" (segment → recipients + exclusion reasons); explicit consent by default, unknown segment fields rejected
 emailSender.js — email queue → Resend batches → delivery tracking; claim-based (web + cron never double-send), consent re-checked at send time, Resend signed webhook → bounce/complaint suppression
+emailTracking.js — marketing email opens + clicks: signed /e/c/ click links + /e/o/ open pixel (HMAC, EMAIL_TRACKING_SECRET), bot filter, DB2 `email_events`, per-campaign engagement stats
 emailSuppression.js — address-level unsubscribe/suppress (every contact row carrying an email), do-not-email records
 importUnsubscribes.js — legacy Google-Sheet unsubscribe list → suppression; CLI dry-runs by default
 db2_email_sends.sql — DB2: per-recipient send queue + delivery log (APPLIED 2026-09-20)
@@ -635,11 +636,24 @@ CAN-SPAM footer + unsubscribe link, tracking); **delivery** is done by the owner
 Apps Script time trigger (`continueSending`). Bounces: `checkBounces()` reads Gmail's delivery-failure notices → `POST /email/bounces` → address
 suppressed (only addresses WE emailed via Gmail are acted on). `POST /email/preview` returns a rendered [TEST] copy; booking email with
 `transport:"gmail"` returns the rendered message in the response. Stuck `sending` gmail rows recover after 30 min.
-**Limits/honesty:** Gmail caps recipients/day (~100 free, ~1,500 Workspace); no open/click tracking; **Google isn't DKIM-signing the domain
+**Limits/honesty:** Gmail caps recipients/day (~100 free, ~1,500 Workspace); open/click tracking is our own (see "Email engagement
+tracking" below), Gmail itself reports nothing; **Google isn't DKIM-signing the domain
 (no `google._domainkey`, SPF lacks `_spf.google.com`, no DMARC)** so inbox placement is weaker than it could be — same as the owner's old
 Gmail newsletters. When someone with DNS access adds those records (and/or the Resend records), placement improves and `transport:"resend"`
 becomes available with no cap. Also fixed here: booking-email merge fields (`{{trip_date}}` etc.) are now resolved at QUEUE time (they used to
 render blank at send time). Sender/reply-to precedence for the Resend path is `resolveFrom()` (see above).
+
+### Email engagement tracking — opens, clicks, results panel (2026-11-06)
+**Why:** Gmail-transport sends recorded nothing past "sent"; the owner wanted opens, clicks and who clicked. **Design** (`emailTracking.js`):
+at render (`renderCampaignEmail`, shared by both transports via `prepareRows`) every http(s) body link becomes
+`/e/c/<send_id>/<sig>?u=<dest>` and a 1×1 `/e/o/<send_id>/<sig>.gif` goes after the footer. `<sig>` = HMAC(`EMAIL_TRACKING_SECRET`) over send id
+(+ destination for clicks) → no open redirect, no forged hits. Footer/unsubscribe links, mailto/tel/#, `data-notrack` links and the plain-text
+part are never rewritten; previews/test sends (no send row) and transactional email are never tracked. Hits → DB2 `email_events`
+(`db2_email_events.sql`; no IP stored); first HUMAN open/click → `email_sends.opened_at` / `clicked_at` (a click also sets opened_at). Scanner
+user agents are stored with `is_bot` and excluded. Stats: `GET /api/v1/email/campaigns/:id?engagement=1` (reached, opened, clicked, rates,
+unsubscribed-since, links by people, who clicked); shown as a **Results** card on `/newsletter` for a sent newsletter.
+**Limits/honesty:** OFF until `EMAIL_TRACKING_SECRET` (≥16 chars) is set; rotating it breaks links in already-sent emails. Opens are
+approximate (Apple MPP inflates, image blocking deflates); clicks are the reliable number. Campaigns sent before this can't be backfilled.
 
 ### Newsletter paste page + saved newsletters + full-document HTML (2026-09-20)
 Owner wanted to "create HTML for the email and paste it somewhere" with the **CSR CRM database (DB2) as the source of truth**.

@@ -193,18 +193,21 @@ export function buildUnsubscribeUrl(baseUrl, token) {
 // HTML shell, and derives a plain-text alternative.
 // `unsubscribeToken` — pass "preview" for previews/test sends (non-functional
 // placeholder; there's no real contact row to unsubscribe).
+// `tracking` — optional { rewriteBody(html) → html, pixelHtml } from emailTracking.js. Applied to the body only
+// (never the footer, so the unsubscribe link stays direct); the plain-text part is left untracked.
 export function renderEmailForRecipient({
   subject, previewText, bodyHtml, businessName, address, baseUrl,
-  mergeVars = {}, unsubscribeToken = "preview",
+  mergeVars = {}, unsubscribeToken = "preview", tracking = null,
 }) {
   const vars = { business_name: businessName, ...mergeVars };
   const renderedSubject = renderMergeFields(subject, vars);
-  const renderedBody    = renderMergeFields(bodyHtml, vars);
+  const mergedBody      = renderMergeFields(bodyHtml, vars);
+  const renderedBody    = tracking ? tracking.rewriteBody(mergedBody) : mergedBody;
   const unsubscribeUrl  = buildUnsubscribeUrl(baseUrl, unsubscribeToken);
-  const footerHtml      = buildEmailFooter({ businessName, address, unsubscribeUrl });
+  const footerHtml      = buildEmailFooter({ businessName, address, unsubscribeUrl }) + (tracking?.pixelHtml ?? "");
   const html            = isFullHtmlDocument(renderedBody)
     ? injectBeforeBodyEnd(renderedBody, standaloneFooter(footerHtml))
     : wrapEmailShell({ previewText, bodyHtml: renderedBody, footerHtml });
-  const text            = `${htmlToPlainText(renderedBody)}\n\n${buildEmailFooterText({ businessName, address, unsubscribeUrl })}`;
+  const text            = `${htmlToPlainText(mergedBody)}\n\n${buildEmailFooterText({ businessName, address, unsubscribeUrl })}`;
   return { subject: renderedSubject, html, text };
 }

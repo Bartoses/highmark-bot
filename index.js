@@ -94,6 +94,7 @@ import {
   handleEmailUnsubscribe, handleEmailUnsubscribeConfirm,
   handlePortalGetEmailDomain, handlePortalCreateEmailDomain, handlePortalVerifyEmailDomain, handlePortalDeleteEmailDomain,
 } from "./adminEmailCampaigns.js";
+import { handleTrackClick, handleTrackOpen } from "./emailTracking.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -1643,6 +1644,13 @@ if (crmSupabase) {
 }
 app.get("/email/unsubscribe/:token", handleEmailUnsubscribeConfirm);
 app.post("/email/unsubscribe/:token", (req, res) => handleEmailUnsubscribe(req, res, crmSupabase));
+
+// ─── Email Marketing: open + click tracking (signed links; see emailTracking.js) ─
+// Public — linked from every tracked marketing email. Generous limit: one corporate mail scanner can open
+// every link of a send at once, and a 429 on a click would strand a real person.
+const trackLimiter = rateLimit({ windowMs: 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false, skip: () => process.env.TEST_MODE === "true" });
+app.get("/e/c/:sendId/:sig", trackLimiter, (req, res) => handleTrackClick(req, res, { crm: crmSupabase }));
+app.get("/e/o/:sendId/:sig", trackLimiter, (req, res) => handleTrackOpen(req, res, { crm: crmSupabase }));
 
 // ─── Sprint 5: partner activity click tracker ───────────────────────────────
 // 302 redirect to the partner's booking_url and fire-and-forget log to web_events.

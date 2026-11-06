@@ -7,7 +7,7 @@
 //   GET  /api/v1/health
 //   POST /api/v1/email/audience        { segment }                         → who would get it
 //   POST /api/v1/email/send            { subject, html, segment, idempotency_key, dry_run:false }
-//   GET  /api/v1/email/campaigns/:id                                       → delivery counts
+//   GET  /api/v1/email/campaigns/:id                                       → delivery counts (+ ?engagement=1: opens, clicks, links)
 //   POST /api/v1/email/transactional   { booking_pk, subject, html, idempotency_key, dry_run:false }
 //   ── Saved newsletters (stored in the CSR CRM database, table `newsletters`) ──
 //   GET  /api/v1/newsletters                 → recent newsletters (no html)
@@ -48,6 +48,7 @@ import { isEmailConfigured, sendEmail } from "./emailService.js";
 import { renderMergeFields, findTemplateProblems, BOOKING_FIELDS } from "./emailTemplates.js";
 import { normEmail, isEmailAddress, loadSuppressionSets } from "./emailSuppression.js";
 import { scheduleMessage } from "./scheduler.js";
+import { computeCampaignEngagement } from "./emailTracking.js";
 import { normalizePhone } from "./phoneUtils.js";
 
 const MAX_HTML = 500_000;
@@ -293,7 +294,14 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
       const counts = (rows ?? []).reduce((m, r) => (m[r.status] = (m[r.status] ?? 0) + 1, m), {});
       const { data: camp } = await db1.from("email_campaigns").select("id, name, subject, status, sent_at, created_at").eq("id", req.params.id).maybeSingle();
       if (!camp && !rows?.length) return bad(res, "campaign not found", 404);
-      res.json({ campaign: camp ?? null, total: rows?.length ?? 0, counts });
+      // ?engagement=1 adds opens / clicks / top links / who clicked (the /newsletter results panel). Kept opt-in so the
+      // Apps Script status check stays one cheap query; a tracking-table problem never breaks the delivery counts.
+      let engagement;
+      if (req.query.engagement === "1") {
+        try { engagement = await computeCampaignEngagement(crm, req.params.id); }
+        catch (e) { console.error("[OUTBOUND] engagement error:", e.message); engagement = { error: "engagement unavailable" }; }
+      }
+      res.json({ campaign: camp ?? null, total: rows?.length ?? 0, counts, ...(engagement ? { engagement } : {}) });
     } catch { return bad(res, "lookup failed", 500); }
   });
 
