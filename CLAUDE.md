@@ -24,6 +24,11 @@ Before starting any new feature or task, read the `Roadmap` file in this directo
    (`.github/workflows/test.yml`) runs the full suite on every push/PR — keep it green.
 5. **End-to-end verify** — run the Railway health check and confirm the deploy is live
 6. **Update docs** — update CLAUDE.md, README.md, Roadmap, and memory files to reflect the change
+7. **Email changes: send Sean test emails BEFORE any merge/deploy** (Sean's rule, 2026-11-22). For anything that changes an
+   email's look (Ride Recap, newsletters, booking emails), queue `[TEST]` copies rendered from the branch's code to
+   `recap_settings.test_to` (sean@coloradosledrentals.com) via `rideRecap.queueRecapEmail` (transport gmail, dry run; the Apps
+   Script `drainQueue` sends them within 10 min) and wait for his OK. Images that only exist on the branch aren't on the live
+   site yet: embed them as data URIs in the preview copies (Apple Mail shows them) and say so.
 
 ### CI (GitHub Actions — added 2026-06-10)
 `.github/workflows/test.yml` runs `npm test` (full 2,615-case suite) on every push + PR.
@@ -690,7 +695,8 @@ text (`renderRideRecap`, pure; markers `<!--PHOTO_SLOT-->`/`<!--PHOTO_ONLY-->`) 
 **Column facts (DB2, verified):** item/contact/order/ref/promo/opt-in live only in `raw_payload.booking` (see `bookingFacts`);
 FareHarbor's `?ref=` is `online_booking_references` (the `online_ref` column is junk: prices/URLs); `guide_name` exists but is
 empty; `end_at` always set. Sean's answers (2026-11-22, applied to DB2): On-Trail = REA; one review link (…OEAg) for both brands; weather per
-`recap_settings.weather_points` (REA ranch / Columbine / Kremmling shop / Steamboat shop); prints + merch hidden; `reward_code`=FRIEND10. Mobile: `x-apple-disable-message-reformatting` + `text-size-adjust` (iOS Mail was shrinking the email to fit), 17px body text, photo slot in a 260px-high `overflow:hidden` box.
+`recap_settings.weather_points` (REA ranch / Columbine / Kremmling shop / Steamboat shop); prints + merch hidden; `reward_code`=FRIEND10. A/B: `RECAP_EXPERIMENTS` (subject / layout / share_cta), `chooseVariants` (50/50 until 20 real sends per arm, then Thompson sampling, seeded per booking), modes in `recap_settings.experiments`, variants logged in `recap_log.variants` + every link's `utm_term`; stats from real sends + `email_events` clicks; report `GET /api/v1/recaps/experiments`; migration `db2_ride_recap_ab.sql`. Route card: `trip.routeImage` (placeholder art only in sample renders). Photos: Code.gs `hmEmailPhoto_` sends Drive's 1200px thumbnail (big originals broke iPhone Mail).
+Mobile: `x-apple-disable-message-reformatting` + `text-size-adjust` (iOS Mail was shrinking the email to fit), 17px body text, photo slot in a 260px-high `overflow:hidden` box.
 Safety: `dry_run` default true (→ `test_to`, "[TEST]"), TEST_MODE writes nothing. Sharing (simplified 2026-11-22): email = 2 buttons; `/r/share` = "Send to a friend" + "Share to Instagram" (story image via share sheet, press-and-hold fallback) + small Copy/Facebook/Copy-link and `/r/ride` (public, OG tags, no personal data,
 `ref=friend-<id>` booking button), `/r/og/{rea,csr}.png` (from `docs/og/render.cjs`). Tests: `testRideRecap`
 + `snapshots/ride-recap/*.html`. README "Ride Recap emails" has the operator how-to.

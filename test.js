@@ -20314,7 +20314,7 @@ async function testRideRecap() {
       generic.label === "Sled day" && generic.stats.length === 0 && generic.brand.key === "csr" && R.renderRidePage({ ...generic, baseUrl: "https://app.test" }).includes("/r/og/csr.png")
       && R.renderRidePage({ bookingId: "x", type: "rea" }) === null && R.shareContextFrom({ bookingId: "1", type: "nope" }) === null);
     chk("recap social: the email has a 'Post your ride' button to the share page's ride section",
-      R.RECAP_TYPES.every(t => { const h = render(t).html.replace(/&amp;/g, "&"); return h.includes("Post your ride") && /\/r\/share\?b=777&t=\w+&utm_source=ride_recap[^"]*utm_content=share-social#ride/.test(h); }));
+      R.RECAP_TYPES.every(t => { const h = render(t).html.replace(/&amp;/g, "&"); return h.includes("Post your ride") && /\/r\/share\?b=777&t=\w+&utm_source=ride_recap[^"]*utm_content=share-social[^"#]*#ride/.test(h); }));
     const r4 = await fetch(`${BASE_URL}/r/route/rea-placeholder.png`), r5 = await fetch(`${BASE_URL}/r/route/backcountry-placeholder.png`), r6 = await fetch(`${BASE_URL}/r/route/zzz.png`);
     chk("recap route images: /r/route/<type>-placeholder.png served as PNG, anything else 404", r4.status === 200 && r5.status === 200 && /image\/png/.test(r4.headers.get("content-type") ?? "") && r6.status === 404);
     const r1 = await fetch(`${BASE_URL}/r/ride?b=777&t=rea`), r2 = await fetch(`${BASE_URL}/r/og/rea.png`), r3 = await fetch(`${BASE_URL}/r/og/zzz.png`);
@@ -20327,6 +20327,77 @@ async function testRideRecap() {
     const bad = await fetch(`${BASE_URL}/r/share?b=abc&t=rea`);
     chk("recap share route: GET /r/share serves the page (200, no-store); a bad id is a 404",
       ok.status === 200 && /no-store/.test(ok.headers.get("cache-control") ?? "") && okHtml.includes("ref=friend-777") && bad.status === 404, `${ok.status} ${bad.status}`);
+  }
+
+  // ── A/B experiments ──
+  {
+    const nv = R.normalizeVariants({ subject: "B", layout: "x" });
+    chk("recap ab: variants normalize to A/B for every experiment; utm_term encodes them", nv.subject === "B" && nv.layout === "A" && nv.share_cta === "A"
+      && R.variantTerm(nv) === "subject-B.layout-A.share_cta-A" && R.variantTerm(null) === null);
+    const same = R.chooseVariants({ seed: "#123" }), again = R.chooseVariants({ seed: "#123" });
+    chk("recap ab: the same booking always gets the same versions (deterministic)", JSON.stringify(same) === JSON.stringify(again));
+    chk("recap ab: locked modes win (A/B), 'off' = A", JSON.stringify(R.chooseVariants({ seed: "x", modes: { subject: "B", layout: "A", share_cta: "off" } })) === JSON.stringify({ subject: "B", layout: "A", share_cta: "A" }));
+    const cnt = (stats, k) => { let b = 0; for (let i = 0; i < 400; i++) if (R.chooseVariants({ seed: `#${i}`, stats })[k] === "B") b++; return b / 400; };
+    const early = cnt({}, "subject");
+    chk("recap ab: before 20 real sends per version, traffic is split about 50/50", early > 0.4 && early < 0.6, String(early));
+    const strong = { layout: { A: { sends: 200, wins: 60 }, B: { sends: 200, wins: 12 } } };
+    const shareB = cnt(strong, "layout");
+    chk("recap ab: once data is in, traffic shifts to the winner (A clearly better → B gets only a small share)", shareB < 0.1, String(shareB));
+    chk("recap ab: goals — any click for the subject; the review button for layout; share buttons for share_cta",
+      R.goalHit("any_click", ["https://x/?utm_content=book-next"]) && !R.goalHit("any_click", [])
+      && R.goalHit(["google-review"], ["https://g.page/r/x/review?utm_content=google-review"]) && !R.goalHit(["google-review"], ["https://x/?utm_content=newsletter"])
+      && R.goalHit(["share-sms", "share-social"], ["https://app/r/share?b=1&utm_content=share-social#ride"]));
+    const st = R.tallyExperiments([
+      { send_id: "s1", dry_run: false, variants: { subject: "A", layout: "B", share_cta: "A" } },
+      { send_id: "s1", dry_run: false, variants: { subject: "A", layout: "B", share_cta: "A" } },   // same email, 2nd booking
+      { send_id: "s2", dry_run: false, variants: { subject: "B", layout: "A", share_cta: "B" } },
+      { send_id: "s3", dry_run: true, variants: { subject: "B" } },                                    // test send — ignored
+      { send_id: "s4", dry_run: false, variants: null },                                             // before tracking — ignored
+    ], new Map([["s1", ["https://g.page/r/x/review?utm_content=google-review"]], ["s3", ["https://x/?utm_content=google-review"]]]));
+    chk("recap ab: stats count each REAL email once (test sends and untracked rows ignored) and credit the goal clicks",
+      st.subject.A.sends === 1 && st.subject.A.wins === 1 && st.subject.B.sends === 1 && st.subject.B.wins === 0 && st.layout.B.wins === 1 && st.share_cta.A.wins === 0);
+    const rep = R.experimentReport({ ...R.tallyExperiments([], new Map()), layout: { A: { sends: 300, wins: 90 }, B: { sends: 300, wins: 30 } } }, { subject: "B" });
+    chk("recap ab: report shows mode, sends, clicks, rate, chance-to-be-best and status",
+      rep.length === 3 && rep[0].mode === "B" && /collecting data/.test(rep[0].status) && rep[1].status === "winner: A" && rep[1].arms.A.click_rate_pct === 30 && rep[1].arms.A.chance_best_pct >= 95);
+    const vr = (variants) => { const tour = { type: "rea", label: "Grand Tour", stops: [] }; const booking = { bookingId: "777", pk: "#777", name: "Katrina", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z", pax: 2 };
+      return R.renderRideRecap(R.buildRecapData({ booking, tour, trip: R.buildTripDetails({ booking, tour }), settings: { features: ["review", "share", "newsletter"] }, baseUrl: "https://app.test", variants })); };
+    const A = vr({}), B = vr({ subject: "B", layout: "B", share_cta: "B" });
+    chk("recap ab: subject B is the question form (name and no-name), A unchanged",
+      A.subject === "Your Rabbit Ears tour recap, Katrina" && B.subject === "Katrina, how was the Grand Tour?"
+      && R.questionSubject({ type: "backcountry", first: "", label: "x" }) === "How was your backcountry day?" && R.questionSubject({ type: "rental", first: "Bo", label: "x" }) === "Bo, how was your ride?");
+    chk("recap ab: layout B puts the review card before the stats; A after",
+      B.html.indexOf("Leave a Google review") < B.html.indexOf("riders in your group") && A.html.indexOf("Leave a Google review") > A.html.indexOf("riders in your group")
+      && (B.html.match(/Leave a Google review/g) || []).length === 1);
+    chk("recap ab: share_cta B wording, and every tracked link carries the versions in utm_term",
+      B.html.includes(">Give a friend 10% off<") && A.html.includes(">Send to a friend<")
+      && [...B.html.matchAll(/<a\b[^>]*href="(https:[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, "&")).filter(h => !h.includes("/email/unsubscribe/")).every(h => new URL(h).searchParams.get("utm_term") === "subject-B.layout-B.share_cta-B"));
+  }
+  {
+    const db = jobDb({ settings: { dry_run: false, experiments: { subject: "B" } } });
+    await R.runRideRecap(db, { now: NOW, fetchImpl: wxFetch, baseUrl: "https://app.test" });
+    const lg = db.tables.recap_log.find(l => l.booking_id === "#201"), snd = db.tables.email_sends.find(x => x.reference === "#201");
+    chk("recap ab: the job logs which versions each guest got and honours a locked experiment", lg?.variants?.subject === "B" && /how was the Grand Tour\?/.test(snd?.subject ?? ""), JSON.stringify(lg?.variants));
+  }
+
+  // ── Apps Script: photos are shrunk before attaching (iPhone Mail won't auto-download a 4 MB photo) ──
+  {
+    const mkCtx = ({ thumbOk = true, size = 4e6 } = {}) => {
+      const calls = [];
+      const file = { getId: () => "F1", getName: () => "Grand Tour 11am - Jake - 01.jpg", getMimeType: () => "image/jpeg", getSize: () => size,
+        getBlob: () => ({ tag: "original", setName() { return this; } }) };
+      const ctx = { Logger: { log() {} }, ScriptApp: { getOAuthToken: () => "tok" },
+        DriveApp: { getFileById: () => file },
+        PropertiesService: { getScriptProperties: () => ({ getProperty: () => null }) },
+        UrlFetchApp: { fetch: (url) => { calls.push(url);
+          if (url.includes("/drive/v3/files/")) return { getContentText: () => JSON.stringify({ thumbnailLink: "https://lh3.googleusercontent.com/drive-storage/abc=s220" }) };
+          return { getResponseCode: () => (thumbOk ? 200 : 403), getBlob: () => ({ tag: "small", getContentType: () => "image/jpeg", getBytes: () => [1, 2, 3], setName() { return this; } }) }; } } };
+      vm.createContext(ctx); vm.runInContext(fs.readFileSync(new URL("./docs/apps-script/Code.gs", import.meta.url), "utf8"), ctx);
+      return { ctx, calls };
+    };
+    const ok = mkCtx(); const got = ok.ctx.hmFindPhoto_({ file_id: "F1" });
+    chk("apps script photo: a big photo is sent as Drive's 1200px thumbnail, not the original", got?.tag === "small" && ok.calls.some(u => /=s1200$/.test(u)) && !ok.calls.some(u => /=s220=s1200/.test(u)), JSON.stringify(ok.calls));
+    chk("apps script photo: if resizing fails, a big photo is skipped (no broken email) but a small one is sent as-is",
+      mkCtx({ thumbOk: false }).ctx.hmFindPhoto_({ file_id: "F1" }) === null && mkCtx({ thumbOk: false, size: 300000 }).ctx.hmFindPhoto_({ file_id: "F1" })?.tag === "original");
   }
 
   // 8. snapshots (3 types × full / missing). UPDATE_SNAPSHOTS=1 rewrites them.

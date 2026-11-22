@@ -139,11 +139,32 @@ var HM_EMAIL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
 function hmEmailSafeImage_(f) {
   return HM_EMAIL_IMAGE_TYPES.indexOf(String(f.getMimeType()).toLowerCase()) !== -1 && f.getSize() <= 15 * 1024 * 1024;
 }
+// Phone photos are 3-5 MB. iPhone Mail won't auto-download an attachment that big: it shows a "download" placeholder at full
+// size, which pushes the whole email out of shape. So every photo is sent as a 1200px-wide JPEG (about 200 KB) from Drive's
+// own thumbnail service. If that fails, a photo under 1 MB is sent as-is; a bigger one is skipped (better no photo than a
+// broken email).
+var HM_PHOTO_MAX_PX = 1200, HM_PHOTO_RAW_MAX_BYTES = 1024 * 1024;
+function hmEmailPhoto_(file) {
+  try {
+    var token = ScriptApp.getOAuthToken();
+    var meta = JSON.parse(UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + file.getId() + '?fields=thumbnailLink&supportsAllDrives=true',
+      { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true }).getContentText() || '{}');
+    if (meta.thumbnailLink) {
+      var url = String(meta.thumbnailLink).replace(/=s\d+(-[a-z0-9-]+)?$/i, '') + '=s' + HM_PHOTO_MAX_PX;
+      var res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+      if (res.getResponseCode() === 200) {
+        var small = res.getBlob();
+        if (/^image\//.test(String(small.getContentType())) && small.getBytes().length > 0) return small.setName('ridephoto');
+      }
+    }
+  } catch (e) { Logger.log('Photo resize skipped: ' + e.message); }
+  return file.getSize() <= HM_PHOTO_RAW_MAX_BYTES ? file.getBlob().setName('ridephoto') : null;
+}
 function hmFindPhoto_(hint) {
   try {
     if (!hint) return null;
     if (hint.file_id) {
-      try { var byId = DriveApp.getFileById(String(hint.file_id)); if (hmEmailSafeImage_(byId)) return byId.getBlob().setName('ridephoto'); }
+      try { var byId = DriveApp.getFileById(String(hint.file_id)); if (hmEmailSafeImage_(byId)) return hmEmailPhoto_(byId); }
       catch (e) { Logger.log('Photo file_id not usable, searching by name: ' + e.message); }
     }
     var rootId = PropertiesService.getScriptProperties().getProperty('RECAP_PHOTO_FOLDER_ID');
@@ -154,7 +175,7 @@ function hmFindPhoto_(hint) {
     while (files.hasNext()) { var f = files.next(); if (hmEmailSafeImage_(f)) list.push({ file: f, name: f.getName() }); }
     var pick = hmPickPhotoName_(list.map(function (x) { return x.name; }), hint);
     if (pick === null) return null;
-    for (var i = 0; i < list.length; i++) if (list[i].name === pick) return list[i].file.getBlob().setName('ridephoto');
+    for (var i = 0; i < list.length; i++) if (list[i].name === pick) return hmEmailPhoto_(list[i].file);
     return null;
   } catch (e) { Logger.log('Photo lookup skipped: ' + e.message); return null; }
 }
