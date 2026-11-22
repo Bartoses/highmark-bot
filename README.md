@@ -374,7 +374,7 @@ by the click it's meant to drive (any click / the Google review button / the sha
 version has 20 real sends, then traffic shifts toward the winner (Thompson sampling) while still testing the other a little. Lock or stop
 one in `recap_settings.experiments`, e.g. `{"subject":"B","share_cta":"off"}` ("auto" is the default). Report:
 `GET /api/v1/recaps/experiments` (sends, clicks, click rate, chance each version is best, "winner: A" at 95%). Every link carries the
-versions in `utm_term`, so FareHarbor/Google Analytics bookings can be attributed too. Needs `db2_ride_recap_ab.sql`.
+versions in `utm_term`, so FareHarbor/Google Analytics bookings can be attributed too. Uses `db2_ride_recap_ab.sql` (applied 2026-11-22).
 
 **Referral rewards.** When `reward_code` is set, each run looks for new bookings made through a shared link
 (`ref=friend-<booking id>`, stored by FareHarbor as `online_booking_references`) and queues one "Your friend booked!" email

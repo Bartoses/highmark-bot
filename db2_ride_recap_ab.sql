@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- DB2 — Ride Recap A/B experiments (rideRecap.js RECAP_EXPERIMENTS). NOT YET APPLIED — for Sean's review.
+-- DB2 — Ride Recap A/B experiments (rideRecap.js RECAP_EXPERIMENTS). APPLIED to DB2 2026-11-22.
 -- Additive + idempotent. Until applied, recaps still send (all experiments on "auto", variants just aren't logged,
 -- so no winner can be picked).
 --
