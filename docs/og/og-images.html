@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Link-preview images for shared rides (public/og-rea.png, public/og-csr.png), 1200x630.
+     Regenerate: node docs/og/render.cjs  (needs Playwright + network for the logos/fonts) -->
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  body{margin:0} .card{width:1200px;height:630px;box-sizing:border-box;padding:70px 80px;display:flex;flex-direction:column;justify-content:space-between;color:#fff;font-family:Arial,sans-serif;position:relative;overflow:hidden}
+  .rea{background:radial-gradient(circle at 85% 20%,#1d2a38 0,#0E131B 60%)} .csr{background:radial-gradient(circle at 85% 20%,#0B2D4F 0,#06121F 60%)}
+  .kick{font-weight:700;font-size:26px;letter-spacing:6px} .rea .kick{color:#00B4E6} .csr .kick{color:#D9A24E}
+  .rea h1{font:400 150px/0.95 'Bebas Neue',Impact,sans-serif;margin:24px 0 0;text-transform:uppercase} .csr h1{font:700 96px/1.02 Roboto,Arial,sans-serif;margin:24px 0 0}
+  .sub{font-size:34px;color:#C9D6E3;margin-top:18px} .bar{display:flex;align-items:center;justify-content:space-between;position:relative;z-index:1}
+  .pill{font-weight:700;font-size:30px;padding:18px 34px;border-radius:18px} .rea .pill{background:#F99E16;color:#0E131B} .csr .pill{background:#1670C2;color:#fff}
+  .logo{height:70px} .ridge{position:absolute;left:0;right:0;bottom:0;height:140px;opacity:.14}
+</style></head><body>
+<div id="rea" class="card rea">
+  <div><div class="kick">RABBIT EARS ADVENTURES</div><h1>Snowmobile tours<br>in North Routt</h1><div class="sub">Guided rides through meadows and forest trails</div></div>
+  <div class="bar"><img class="logo" src="https://static.wixstatic.com/media/cd57db_5feb2c095c6d4ecabd4ef46c6868f8c9~mv2.png" onerror="this.remove()"><div class="pill">Ride with us</div></div>
+  <svg class="ridge" viewBox="0 0 1200 170" preserveAspectRatio="none"><path d="M0 170 L0 110 L160 40 L300 100 L470 20 L640 95 L820 35 L980 105 L1200 30 L1200 170Z" fill="#00B4E6"/></svg>
+</div>
+<div id="csr" class="card csr">
+  <div><div class="kick">COLORADO SLED RENTALS</div><h1>Snowmobile rentals &amp;<br>guided backcountry</h1><div class="sub">Steamboat Springs &amp; Kremmling, Colorado</div></div>
+  <div class="bar"><div style="background:#fff;border-radius:14px;padding:10px 16px"><img class="logo" style="height:56px;display:block" src="https://coloradosledrentals.com/wp-content/uploads/sites/5969/2022/11/logo-csr.png" onerror="this.parentNode.remove()"></div><div class="pill">Ride with us</div></div>
+  <svg class="ridge" viewBox="0 0 1200 170" preserveAspectRatio="none"><path d="M0 170 L0 110 L160 40 L300 100 L470 20 L640 95 L820 35 L980 105 L1200 30 L1200 170Z" fill="#D9A24E"/></svg>
+</div>
+</body></html>
