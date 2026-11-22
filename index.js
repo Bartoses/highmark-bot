@@ -2268,6 +2268,11 @@ app.get("/r/ride", async (req, res) => {
   if (!html) return res.status(404).type("text/plain").send("This ride link isn't valid.");
   res.set("Cache-Control", "public, max-age=300").type("html").send(html);
 });
+// Ride Recap icons (docs/og/icons.html → public/icons/<name>-<dark|light>.png).
+app.get("/r/icon/:name.png", (req, res) => {
+  if (!/^[a-z]+-(dark|light)$/.test(req.params.name)) return res.status(404).end();
+  res.set("Cache-Control", "public, max-age=604800").sendFile(path.join(__uiDir, "icons", `${req.params.name}.png`), (err) => { if (err && !res.headersSent) res.status(404).end(); });
+});
 // Route-map images for recap emails (placeholders until real routes exist; see docs/og/route-placeholders.html).
 app.get("/r/route/:name.png", (req, res) => {
   if (!["rea-placeholder", "backcountry-placeholder"].includes(req.params.name)) return res.status(404).end();

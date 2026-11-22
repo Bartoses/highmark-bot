@@ -376,6 +376,15 @@ one in `recap_settings.experiments`, e.g. `{"subject":"B","share_cta":"off"}` ("
 `GET /api/v1/recaps/experiments` (sends, clicks, click rate, chance each version is best, "winner: A" at 95%). Every link carries the
 versions in `utm_term`, so FareHarbor/Google Analytics bookings can be attributed too. Uses `db2_ride_recap_ab.sql` (applied 2026-11-22).
 
+**Fun top (A/B experiment `hero`, version B).** Right under the headline: up to 4 **badges** (Powder Day, First Timer / Ride #N,
+Crew of N, Bluebird, Below Zero, Early Riser / Sunset Rider, Deep Base), **your sled** (model, engine, track length from the FareHarbor
+booking; rentals + guided backcountry), a **snow report** (snow on the ground + % of normal from the USDA SNOTEL station set on the
+`weather_points` entry as `snotel` / `snotel_name`, fresh snow in 48 h, a 7-day snow-depth bar chart drawn in table cells) and a
+**next powder alert** (biggest snowfall ≥ 4" in the next 7 days, Open-Meteo, with a booking button). Any source that fails is left out.
+Icons are on-brand line icons (rugged, angular, like the CSR mountain mark) drawn in `docs/og/icons.html`, rendered to
+`public/icons/<name>-<dark|light>.png` by `node docs/og/render.cjs` and served at `/r/icon/` (no emoji; Gmail can't show SVG).
+It's tested against the current top like the other experiments; lock it with `recap_settings.experiments.hero`.
+
 **Referral rewards.** When `reward_code` is set, each run looks for new bookings made through a shared link
 (`ref=friend-<booking id>`, stored by FareHarbor as `online_booking_references`) and queues one "Your friend booked!" email
 with the code to the referring guest, at most once per guest per season (`recap_rewards`).
