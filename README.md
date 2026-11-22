@@ -358,12 +358,15 @@ Set `dry_run` to false to start emailing guests. Recaps already sent in dry run 
 `node rideRecap.js --snapshots out/` writes the six sample renders as HTML. Snapshots are in `snapshots/ride-recap/`
 (`UPDATE_SNAPSHOTS=1 npm test` accepts a template change).
 
-**Sharing.** "Text it to a friend" and "Post your ride" in the email open `/r/share?b=<booking>&t=<type>` (Gmail strips `sms:` links from
-emails). The page has text/share/copy for the FRIEND10 message, plus a **story image** (1080×1920, drawn in the browser) the guest can
-share straight to Instagram/Facebook Stories or save, and Facebook / X / copy-link buttons that post `/r/ride?b=…` — a public page showing
-only the tour, date and ride stats (no names) with a brand preview image (`public/og-rea.png`, `og-csr.png`, regenerate with
-`node docs/og/render.cjs`) and a "Book your ride" button that credits the guest (`ref=friend-<id>`). The ride photo joins the story
-card and preview once the Guide Ride Log provides a public copy (`photoUrl` hook).
+**Sharing.** The recap's share card has two buttons: **Send to a friend** and **Post your ride on Instagram**. Both open
+`/r/share?b=<booking>&t=<type>` (Gmail strips `sms:` links from emails). That page has one main button per section: **Send to a
+friend** (the phone's share sheet with the FRIEND10 message, or a text) and **Share to Instagram** (a 1080×1920 story image drawn in
+the browser, shared through the share sheet where Instagram Stories appears). Where the browser can't share images (e.g. Gmail's
+in-app browser) it says: press and hold the picture → Save to Photos → post it as your story. Small links: Copy message, Facebook,
+Copy link. Facebook/Copy link share `/r/ride?b=…`, a public page showing only the tour, date and ride stats (no names), with a brand
+preview image (`public/og-rea.png`, `og-csr.png`; regenerate with `node docs/og/render.cjs`) and a "Book your ride" button that
+credits the guest (`ref=friend-<id>`). The ride photo joins the story card and preview once the Guide Ride Log provides a public copy
+(`photoUrl` hook).
 
 **Referral rewards.** When `reward_code` is set, each run looks for new bookings made through a shared link
 (`ref=friend-<booking id>`, stored by FareHarbor as `online_booking_references`) and queues one "Your friend booked!" email

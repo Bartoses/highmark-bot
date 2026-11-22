@@ -20094,9 +20094,10 @@ async function testRideRecap() {
     JSON.stringify(allLinks.map(x => x.hs.filter(h => /^https?:/.test(h) && !/utm_source=ride_recap/.test(h)))));
   chk("recap links: every FareHarbor link has ref=followupemail&full-items=yes (or the friend ref)",
     allLinks.every(({ hs }) => hs.filter(h => h.startsWith("https://fareharbor.com")).every(h => { const u = new URL(h); return u.searchParams.get("full-items") === "yes" && u.searchParams.get("ref") === "followupemail"; })) && allLinks.every(({ hs }) => hs.some(h => h.includes("fareharbor.com"))));
-  const shareLinks = allLinks.flatMap(({ hs }) => hs.filter(h => /^mailto:\?/.test(h)).map(h => decodeURIComponent(h)));
-  chk("recap links: 'Email it to a friend' carries the code and a FareHarbor link with ref=friend-<booking id>",
-    shareLinks.length === 3 && shareLinks.every(h => h.includes("FRIEND10") && /fareharbor\.com\S*ref=friend-777/.test(h) && /full-items=yes/.test(h) && /utm_source=ride_recap/.test(h)), JSON.stringify(shareLinks.slice(0, 2)));
+  chk("recap links: the share card has just two buttons — 'Send to a friend' + 'Post your ride on Instagram' (no mailto share)",
+    R.RECAP_TYPES.every(t => { const h = render(t).html; return h.includes(">Send to a friend<") && h.includes(">Post your ride on Instagram<") && !h.includes("Email it to a friend") && !/href="mailto:\?/.test(h); }));
+  chk("recap links: the plain-text version still carries the friend booking link with ref=friend-<booking id>",
+    /fareharbor\.com\S*ref=friend-777\S*full-items=yes\S*utm_source=ride_recap/.test(render("rea").text));
   chk("recap links: no sms: link in the email (Gmail strips them) — 'Text it to a friend' opens the https share page instead",
     allLinks.every(({ t, hs }) => !hs.some(h => h.startsWith("sms:")) && hs.some(h => { try { const u = new URL(h); return u.pathname === "/r/share" && u.searchParams.get("b") === "777" && u.searchParams.get("t") === t && u.searchParams.get("utm_content") === "share-sms"; } catch { return false; } })));
   const sp = R.renderSharePage({ bookingId: "777", type: "rea", settings: { friend_code: "FRIEND10" } });
@@ -20221,7 +20222,7 @@ async function testRideRecap() {
     const row = { id: "11111111-1111-4111-8111-111111111111", email: "a@x.com", subject: "s", body_html: unknown.html, from_name: "Rabbit Ears Adventures" };
     const it = S.renderRecapRow({ row, baseUrl: "https://app.test", trackingSecret: "0123456789abcdef0123" });
     chk("recap tracking: buttons go through /e/c/, unsubscribe + mailto untouched, pixel added, markers intact",
-      it.html.includes("/e/c/11111111-1111-4111-8111-111111111111/") && it.html.includes('href="https://app.test/email/unsubscribe/tok-1"') && it.html.includes('href="mailto:?subject=')
+      it.html.includes("/e/c/11111111-1111-4111-8111-111111111111/") && it.html.includes('href="https://app.test/email/unsubscribe/tok-1"') && it.html.includes('href="mailto:info@coloradosledrentals.com?subject=Feedback')
       && it.html.includes("/e/o/") && it.html.includes("<!--PHOTO_SLOT-->") && it.from.startsWith("Rabbit Ears Adventures"));
   }
   {
@@ -20284,10 +20285,10 @@ async function testRideRecap() {
       ctx.label === "Grand Tour" && ctx.dateLabel === "Jan 29, 2027" && JSON.stringify(ctx.stats) === JSON.stringify([["22 mi", "ridden"], ["3 hrs", "on the snow"], ["3", "riders"]])
       && [share, ride].every(h => !/Katrina|Schultz|kat@example|9794220587/.test(h)));
     const fb = decodeURIComponent((share.match(/href="(https:\/\/www\.facebook\.com\/sharer[^"]+)"/) || [])[1] ?? "");
-    const xl = decodeURIComponent((share.match(/href="(https:\/\/twitter\.com\/intent\/tweet[^"]+)"/) || [])[1]?.replace(/&amp;/g, "&") ?? "");
-    chk("recap social: share page has the story image, Facebook + X post links to the public ride page, and copy-link",
-      share.includes('<canvas id="story"') && share.includes("navigator.canShare") && share.includes('"code":"FRIEND10"') && share.includes('id="copyLink"')
-      && /https:\/\/app\.test\/r\/ride\?b=777&t=rea&utm_source=ride_recap.*utm_content=social-facebook/.test(fb) && /Grand Tour with Rabbit Ears Adventures/.test(xl) && /utm_content=social-x/.test(xl), fb);
+    chk("recap social: share page = one 'Send to a friend' + one 'Share to Instagram' (story image via the share sheet, press-and-hold fallback) + small Facebook/Copy link",
+      share.includes('<canvas id="story"') && share.includes('id="storyImg"') && share.includes(">Share to Instagram<") && share.includes("navigator.canShare") && share.includes('id="storyTip"')
+      && share.includes(">Send to a friend<") && share.includes('"code":"FRIEND10"') && share.includes('id="copyLink"') && !share.includes("twitter.com/intent") && !share.includes(">Text it<")
+      && /https:\/\/app\.test\/r\/ride\?b=777&t=rea&utm_source=ride_recap.*utm_content=social-facebook/.test(fb), fb);
     chk("recap social: ride page carries link-preview tags (title, description, brand image) and a booking button that credits the guest",
       ride.includes('property="og:title" content="Grand Tour with Rabbit Ears Adventures"') && ride.includes('property="og:image" content="https://app.test/r/og/rea.png"')
       && ride.includes('name="twitter:card" content="summary_large_image"') && /href="https:\/\/fareharbor\.com\/embeds\/book\/rabbitearsadventures\/\?ref=friend-777&amp;full-items=yes[^"]*utm_content=ride-page-book/.test(ride)

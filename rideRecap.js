@@ -427,17 +427,13 @@ export function renderRideRecap(d) {
   // share / referral
   if (has("share")) {
     const pct = d.friendPercent, code = e(d.friendCode);
-    const mailSubj = `${pct}% off ${C.name}`;
-    const mailBody = `I just rode with ${C.name} and loved it. Use code ${d.friendCode} at checkout for ${pct}% off: ${link(d.shareUrl, "share-email", true)}`;
     rows += block(card(`<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc};margin-bottom:8px">GIVE ${pct}%, GET ${pct}%</div>` +
       h2("Bring a friend next time", "#FFFFFF") +
       p(`Friends save ${pct}% with this code at checkout. When they ride, you get ${pct}% off your next booking.`, "#C9D6E3") +
       `<div style="border:2px dashed ${C.acc};border-radius:12px;text-align:center;font:700 24px 'Courier New',Courier,monospace;letter-spacing:3px;color:#FFFFFF;padding:12px 0;margin-bottom:14px">${code}</div>` +
-      btn("Text it to a friend", link(d.sharePageUrl, "share-sms")) +
+      btn("Send to a friend", link(d.sharePageUrl, "share-sms")) +
       `<div style="height:10px;line-height:10px;font-size:10px">&nbsp;</div>` +
-      btn("Email it to a friend", `mailto:?subject=${encodeURIComponent(mailSubj)}&body=${encodeURIComponent(mailBody)}`, false) +
-      `<div style="height:10px;line-height:10px;font-size:10px">&nbsp;</div>` +
-      btn("Post your ride (Instagram, Facebook)", link(`${d.sharePageUrl}#ride`, "share-social"), false),
+      btn("Post your ride on Instagram", link(`${d.sharePageUrl}#ride`, "share-social"), false),
     C.dark));
   }
   // take it home: prints only when the Apps Script finds a photo; merch if enabled
@@ -566,32 +562,29 @@ export function renderSharePage(input) {
   const { text } = shareMessage({ bookingId: ctx.bookingId, type: ctx.type, settings: s });
   const sms = `sms:?&body=${encodeURIComponent(text)}`;
   const rideUrl = trackLink(ridePageUrl(baseUrl, ctx), { type: ctx.type, content: "social-link" });
-  const postText = `${ctx.label} with ${C.name}${ctx.dateLabel ? ` · ${ctx.dateLabel}` : ""}`;
   const fb = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(trackLink(ridePageUrl(baseUrl, ctx), { type: ctx.type, content: "social-facebook" }))}`;
-  const x = `https://twitter.com/intent/tweet?text=${encodeURIComponent(postText)}&url=${encodeURIComponent(trackLink(ridePageUrl(baseUrl, ctx), { type: ctx.type, content: "social-x" }))}`;
   const story = { brand: C.name, label: ctx.label, date: ctx.dateLabel, stats: ctx.stats, code: s.friend_code, pct: s.friend_percent,
     dark: C.dark, dark2: C.dark2, acc: C.acc, btn: C.btn, head: C.key === "rea" ? "Bebas Neue" : "Roboto", upper: C.key === "rea",
     site: C.key === "rea" ? "rabbitearsadventures.com" : "coloradosledrentals.com", ...(ctx.photoUrl ? { photo: ctx.photoUrl } : {}) };
   const B = (label, attrs, primary) => pageButton(C, label, attrs, primary);
+  const small = (label, attrs) => `<a ${attrs} style="color:#C9D6E3;font-size:15px;text-decoration:underline;cursor:pointer">${label}</a>`;
+  const eyebrow = (t) => `<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">${t}</div>`;
+  const h = (t, size) => `<h1 style="font:${C.key === "rea" ? `400 ${size}px` : `700 ${Math.round(size * 0.8)}px`}/1.1 ${C.head};text-transform:${C.up};margin:8px 0 12px">${t}</h1>`;
   return pageHead(`Share ${C.name}`, C, `<meta name="robots" content="noindex">`) +
-    `<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">GIVE ${s.friend_percent}%, GET ${s.friend_percent}%</div>` +
-    `<h1 style="font:${C.key === "rea" ? "400 36px" : "700 28px"}/1.1 ${C.head};text-transform:${C.up};margin:8px 0 12px">Bring a friend next time</h1>` +
-    `<p style="color:#C9D6E3;margin:0 0 18px">Friends save ${s.friend_percent}% with this code at checkout. When they ride, you get ${s.friend_percent}% off your next booking.</p>` +
-    `<div style="border:2px dashed ${C.acc};border-radius:12px;text-align:center;font:700 26px 'Courier New',Courier,monospace;letter-spacing:3px;padding:14px 0;margin:0 0 20px">${e(s.friend_code)}</div>` +
-    B("Share with a friend", `id="share" href="${attr(sms)}"`, true) + B("Text it", `href="${attr(sms)}"`, false) + B("Copy message", `id="copy" href="#"`, false) +
-    `<p id="msg" style="color:#C9D6E3;font-size:14px;word-break:break-word;margin:8px 0 0">${e(text)}</p>` +
-    `<div id="ride" style="border-top:1px solid ${C.dark2};margin:28px 0 0;padding:28px 0 0">` +
-    `<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">SHARE YOUR RIDE</div>` +
-    `<h2 style="font:${C.key === "rea" ? "400 32px" : "700 24px"}/1.1 ${C.head};text-transform:${C.up};margin:8px 0 6px">${e(ctx.label)}</h2>` +
-    (ctx.dateLabel ? `<p style="color:#C9D6E3;margin:0 0 14px">${e(ctx.dateLabel)}</p>` : "") +
-    `<canvas id="story" width="1080" height="1920" style="display:block;width:100%;max-width:270px;margin:0 auto 16px;border-radius:12px"></canvas>` +
-    B("Share story image", `id="shareStory" href="#"`, true) +
-    `<a id="saveStory" download="my-ride.png" href="#" style="display:block;text-align:center;color:#C9D6E3;font-size:14px;margin:0 0 16px">Or save the image to post it</a>` +
-    B("Post on Facebook", `href="${attr(fb)}" target="_blank" rel="noopener"`, false) +
-    B("Post on X", `href="${attr(x)}" target="_blank" rel="noopener"`, false) +
-    B("Copy link to your ride", `id="copyLink" href="#"`, false) +
+    // 1) bring a friend — one button
+    `<div id="friend">` + eyebrow(`GIVE ${s.friend_percent}%, GET ${s.friend_percent}%`) + h("Bring a friend next time", 36) +
+    `<p style="color:#C9D6E3;margin:0 0 16px">Friends save ${s.friend_percent}% with code <b style="color:#FFFFFF;letter-spacing:1px">${e(s.friend_code)}</b>. When they ride, you get ${s.friend_percent}% off your next booking.</p>` +
+    B("Send to a friend", `id="share" href="${attr(sms)}"`, true) +
+    `<div style="text-align:center">${small("Copy message", `id="copy" href="#"`)}</div></div>` +
+    // 2) share your ride — Instagram first
+    `<div id="ride" style="border-top:1px solid ${C.dark2};margin:28px 0 0;padding:28px 0 0">` + eyebrow("SHARE YOUR RIDE") + h(e(ctx.label), 32) +
+    `<img id="storyImg" alt="Your ride story image" style="display:block;width:100%;max-width:240px;margin:4px auto 16px;border-radius:12px;border:1px solid #3A4A5C;box-shadow:0 8px 24px rgba(0,0,0,.45);background:${C.dark2};aspect-ratio:9/16">` +
+    `<canvas id="story" width="1080" height="1920" style="display:none"></canvas>` +
+    B("Share to Instagram", `id="shareStory" href="#"`, true) +
+    `<p id="storyTip" style="display:none;color:#C9D6E3;font-size:15px;margin:0 0 14px;text-align:center">Press and hold the picture above, tap <b>Save to Photos</b>, then post it as your Instagram story.</p>` +
+    `<div style="text-align:center">${small("Facebook", `href="${attr(fb)}" target="_blank" rel="noopener"`)}<span style="color:#5B6B7C;padding:0 10px">·</span>${small("Copy link", `id="copyLink" href="#"`)}</div>` +
     `</div>` +
-    `<p style="color:#9FB3C8;font-size:13px;margin:24px 0 0">${C.footer.map(e).join("<br>")}</p></div>` +
+    `<p style="color:#9FB3C8;font-size:13px;margin:28px 0 0">${C.footer.map(e).join("<br>")}</p></div>` +
     `<script>(function(){var t=${jsonForScript(text)},R=${jsonForScript(Object.fromEntries(Object.entries(story).filter(([, v]) => v != null)))},L=${jsonForScript(rideUrl)};` +
     `function copy(v,el){var d=function(){el.textContent="Copied!";};if(navigator.clipboard){navigator.clipboard.writeText(v).then(d,function(){});}else{var a=document.createElement("textarea");a.value=v;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove();d();}}` +
     `var s=document.getElementById("share");if(navigator.share){s.addEventListener("click",function(ev){ev.preventDefault();navigator.share({text:t}).catch(function(){});});}` +
@@ -615,11 +608,12 @@ const STORY_SCRIPT = `var c=document.getElementById("story"),x=c.getContext("2d"
   `x.fillStyle="#FFFFFF";x.font=font(R.upper?"400":"700",R.upper?110:84);x.fillText(st[i][0],bx+36,by+115);x.fillStyle="#9FB3C8";x.font="400 38px Arial,sans-serif";x.fillText(st[i][1],bx+36,by+170);}` +
   `x.fillStyle=R.btn;x.beginPath();if(x.roundRect)x.roundRect(90,1610,900,170,36);else x.rect(90,1610,900,170);x.fill();` +
   `x.fillStyle=R.dark;x.font="700 50px Arial,sans-serif";x.textAlign="center";x.fillText("Use "+R.code+" for "+R.pct+"% off",540,1690);x.font="400 38px Arial,sans-serif";x.fillText(R.site,540,1745);x.textAlign="left";` +
-  `c.toBlob(function(b){if(!b)return;var u=URL.createObjectURL(b),a=document.getElementById("saveStory");a.href=u;window.__story=b;});}` +
+  `document.getElementById("storyImg").src=c.toDataURL("image/png");c.toBlob(function(b){if(b)window.__story=b;});}` +
   `function go(){if(R.photo){var im=new Image();im.crossOrigin="anonymous";im.onload=function(){draw(im);};im.onerror=function(){draw(0);};im.src=R.photo;}else draw(0);}` +
   `if(document.fonts&&document.fonts.load){Promise.all([document.fonts.load("400 100px 'Bebas Neue'"),document.fonts.load("700 100px Roboto")]).then(go,go);}else go();` +
-  `document.getElementById("shareStory").addEventListener("click",function(ev){ev.preventDefault();var b=window.__story;if(!b)return;` +
-  `var f=new File([b],"my-ride.png",{type:"image/png"});if(navigator.canShare&&navigator.canShare({files:[f]})){navigator.share({files:[f]}).catch(function(){});}else{document.getElementById("saveStory").click();}});`;
+  `function tip(){var p=document.getElementById("storyTip");p.style.display="block";p.scrollIntoView({behavior:"smooth",block:"center"});}` +
+  `document.getElementById("shareStory").addEventListener("click",function(ev){ev.preventDefault();var b=window.__story;if(!b){tip();return;}` +
+  `var f=new File([b],"my-ride.png",{type:"image/png"});if(navigator.canShare&&navigator.canShare({files:[f]})){navigator.share({files:[f]}).catch(function(e){if(!e||e.name!=="AbortError")tip();});}else{tip();}});`;
 
 // GET /r/ride — the public page a posted link points at. Social sites read its preview (og:*) tags.
 // Shows only the tour, date and ride stats (never a name, email or phone), plus a booking button that credits the guest (ref=friend-<id>).
