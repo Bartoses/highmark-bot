@@ -378,7 +378,7 @@ export function renderRideRecap(d) {
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="border-radius:12px;background:${primary ? C.btn : "#FFFFFF"};${primary ? "" : `border:2px solid ${C.dark2};`}">` +
     `<a href="${attr(href)}" style="display:block;padding:15px 18px;font:700 16px/20px Arial,Helvetica,sans-serif;color:${primary ? C.btnTxt : C.dark2};text-decoration:none">${text}</a></td></tr></table>`;
   const h2 = (t, color = C.dark2) => `<div style="font:${rea ? "400 28px" : "700 24px"}/1.1 ${C.head};text-transform:${C.up};color:${color};margin:0 0 10px">${t}</div>`;
-  const p = (t, color = C.muted) => `<div style="font:16px/1.5 Arial,Helvetica,sans-serif;color:${color};margin:0 0 14px">${t}</div>`;
+  const p = (t, color = C.muted) => `<div style="font:17px/1.5 Arial,Helvetica,sans-serif;color:${color};margin:0 0 14px">${t}</div>`;
   const block = (inner) => `<tr><td style="padding:24px 20px 0">${inner}</td></tr>`;
   const card = (inner, bg = "#FFFFFF", border = "") =>
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:20px;border-radius:16px;background:${bg};${border ? `border:${border};` : ""}">${inner}</td></tr></table>`;
@@ -388,18 +388,18 @@ export function renderRideRecap(d) {
   rows += `<tr><td style="background:${C.headBg};padding:14px 20px;border-bottom:1px solid #DFE9F0"><img src="${attr(C.logo)}" height="${C.logoH}" alt="${e(C.name)}" style="display:block;border:0;height:${C.logoH}px;width:auto"></td></tr>`;
   // hero: kicker, headline, subline, photo slot (filled by the Apps Script from Drive, or removed)
   rows += `<tr><td style="background:${C.dark};padding:28px 20px 24px;color:#FFFFFF">` +
-    `<div style="font:700 12px/1.4 Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">${e(d.kicker)}</div>` +
+    `<div style="font:700 13px/1.4 Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">${e(d.kicker)}</div>` +
     `<div style="font:${rea ? "400 44px" : "700 30px"}/1.05 ${C.head};text-transform:${C.up};margin:10px 0;color:#FFFFFF">${e(d.h1)}</div>` +
-    `<div style="font:16px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3">${e(d.sub)}</div>` +
+    `<div style="font:17px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3">${e(d.sub)}</div>` +
     (d.highlight ? `<div style="font:italic 15px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3;margin-top:10px">“${e(d.highlight)}”</div>` : "") +
-    (d.photo === false ? "" : "<!--PHOTO_SLOT-->") +
+    (d.photo === false ? "" : `<div style="max-height:260px;overflow:hidden;border-radius:12px">${"<!--PHOTO_SLOT-->"}</div>`) +
     `</td></tr>`;
   // stats 2×2
   if (d.stats.length) {
     let s = "";
     for (let i = 0; i < d.stats.length; i += 2) {
       s += "<tr>" + [d.stats[i], d.stats[i + 1]].map(x => x
-        ? `<td width="50%" valign="top" style="padding:5px"><div style="background:${C.soft};border:1px solid #DFE9F0;border-radius:12px;padding:14px 16px"><div style="font:${rea ? "400 30px" : "700 26px"}/1 ${C.head};color:${C.dark2}">${e(x[0])}</div><div style="font:13px/1.3 Arial,Helvetica,sans-serif;color:${C.muted};margin-top:4px">${e(x[1])}</div></div></td>`
+        ? `<td width="50%" valign="top" style="padding:5px"><div style="background:${C.soft};border:1px solid #DFE9F0;border-radius:12px;padding:14px 16px"><div style="font:${rea ? "400 30px" : "700 26px"}/1 ${C.head};color:${C.dark2}">${e(x[0])}</div><div style="font:15px/1.3 Arial,Helvetica,sans-serif;color:${C.muted};margin-top:4px">${e(x[1])}</div></div></td>`
         : `<td width="50%" style="padding:5px"></td>`).join("") + "</tr>";
     }
     rows += `<tr><td style="padding:18px 15px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${s}</table></td></tr>`;
@@ -411,7 +411,7 @@ export function renderRideRecap(d) {
   }
   // weather labels
   if (d.weather) {
-    rows += `<tr><td style="padding:12px 20px 0;font:14px Arial,Helvetica,sans-serif;color:${C.muted}">` +
+    rows += `<tr><td style="padding:12px 20px 0;font:15px Arial,Helvetica,sans-serif;color:${C.muted}">` +
       d.weather.map(w => `<span style="display:inline-block;background:${C.dark2};color:#FFFFFF;border-radius:999px;padding:7px 12px;margin:0 6px 6px 0"><span style="font-size:11px;color:#9FB3C8;font-weight:700">${e(w[0])}</span> <b>${e(w[1])}</b></span>`).join("") +
       `</td></tr>`;
   }
@@ -455,12 +455,14 @@ export function renderRideRecap(d) {
   }
   // footer — CAN-SPAM: physical address + a working unsubscribe link
   const unsub = d.unsubscribeUrl || `mailto:${RECAP_LINKS.infoEmail}?subject=Unsubscribe`;
-  rows += `<tr><td style="padding:28px 20px;font:13px/1.6 Arial,Helvetica,sans-serif;color:${C.muted};text-align:center">` +
+  rows += `<tr><td style="padding:28px 20px;font:14px/1.6 Arial,Helvetica,sans-serif;color:${C.muted};text-align:center">` +
     C.footer.map(e).join("<br>") + `<br>${RECAP_PHONE} · ${RECAP_SOCIAL}<br>` +
     `<a href="${attr(unsub)}" data-notrack style="color:#1670C2">Unsubscribe</a></td></tr>`;
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<meta name="color-scheme" content="light"><title>${e(d.subject)}</title>` +
+    `<meta name="x-apple-disable-message-reformatting"><meta name="format-detection" content="telephone=no,address=no,email=no,date=no">` +
+    `<style>body{-webkit-text-size-adjust:100%;text-size-adjust:100%}</style>` +
     `<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&amp;family=Roboto:wght@400;700&amp;display=swap" rel="stylesheet"></head>` +
     `<body style="margin:0;padding:0;background:#EEF2F5"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#EEF2F5"><tr><td align="center">` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#FFFFFF">${rows}</table></td></tr></table></body></html>`;
@@ -694,7 +696,10 @@ export function renderReferralReward({ referrer, settings, unsubscribeUrl = null
   const book = trackLink(C.key === "rea" ? RECAP_LINKS.book.rea : RECAP_LINKS.book.csr, { type: "referral_reward", content: "book-reward" });
   const unsub = unsubscribeUrl || `mailto:${RECAP_LINKS.infoEmail}?subject=Unsubscribe`;
   const subject = `Your friend booked! Here's ${s.friend_percent}% off your next ride`;
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(subject)}</title></head>` +
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(subject)}</title>` +
+    `<meta name="x-apple-disable-message-reformatting"><meta name="format-detection" content="telephone=no,address=no,email=no,date=no">` +
+    `<style>body{-webkit-text-size-adjust:100%;text-size-adjust:100%}</style>` +
+    `</head>` +
     `<body style="margin:0;padding:0;background:#EEF2F5"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center">` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#FFFFFF">` +
     `<tr><td style="background:${C.dark};padding:28px 20px;color:#FFFFFF;font:700 26px/1.2 ${C.head};text-transform:${C.up}">${e(first ? `${first}, your friend booked!` : "Your friend booked!")}</td></tr>` +

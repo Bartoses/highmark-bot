@@ -690,7 +690,8 @@ text (`renderRideRecap`, pure; markers `<!--PHOTO_SLOT-->`/`<!--PHOTO_ONLY-->`) 
 **Column facts (DB2, verified):** item/contact/order/ref/promo/opt-in live only in `raw_payload.booking` (see `bookingFacts`);
 FareHarbor's `?ref=` is `online_booking_references` (the `online_ref` column is junk: prices/URLs); `guide_name` exists but is
 empty; `end_at` always set. Sean's answers (2026-11-22, applied to DB2): On-Trail = REA; one review link (…OEAg) for both brands; weather per
-`recap_settings.weather_points` (REA ranch / Columbine / Kremmling shop / Steamboat shop); prints + merch hidden; `reward_code`=FRIEND10. Safety: `dry_run` default true (→ `test_to`, "[TEST]"), TEST_MODE writes nothing. Sharing (simplified 2026-11-22): email = 2 buttons; `/r/share` = "Send to a friend" + "Share to Instagram" (story image via share sheet, press-and-hold fallback) + small Copy/Facebook/Copy-link and `/r/ride` (public, OG tags, no personal data,
+`recap_settings.weather_points` (REA ranch / Columbine / Kremmling shop / Steamboat shop); prints + merch hidden; `reward_code`=FRIEND10. Mobile: `x-apple-disable-message-reformatting` + `text-size-adjust` (iOS Mail was shrinking the email to fit), 17px body text, photo slot in a 260px-high `overflow:hidden` box.
+Safety: `dry_run` default true (→ `test_to`, "[TEST]"), TEST_MODE writes nothing. Sharing (simplified 2026-11-22): email = 2 buttons; `/r/share` = "Send to a friend" + "Share to Instagram" (story image via share sheet, press-and-hold fallback) + small Copy/Facebook/Copy-link and `/r/ride` (public, OG tags, no personal data,
 `ref=friend-<id>` booking button), `/r/og/{rea,csr}.png` (from `docs/og/render.cjs`). Tests: `testRideRecap`
 + `snapshots/ride-recap/*.html`. README "Ride Recap emails" has the operator how-to.
 

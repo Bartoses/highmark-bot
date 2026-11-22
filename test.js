@@ -20075,8 +20075,14 @@ async function testRideRecap() {
     { const r = render(type, o); variants.push(r.html, R.applyPhotoMarkers(r.html, true), R.applyPhotoMarkers(r.html, false), r.text, r.subject); }
   chk("recap content: no render ever contains 'undefined', 'null', NaN or an empty <img src>",
     variants.every(h => !/undefined|\bnull\b|NaN|<img[^>]*src=""/.test(h)), variants.find(h => /undefined|\bnull\b|NaN|<img[^>]*src=""/.test(h))?.match(/.{60}(undefined|null|NaN|src="").{40}/)?.[0]);
-  chk("recap content: email-safe HTML (tables + inline styles, no flex/grid, max-width 600, no <style>/<script>)",
-    variants.filter((_, i) => i % 5 === 0).every(h => !/display\s*:\s*(flex|grid)|<style|<script/i.test(h) && h.includes("max-width:600px") && h.includes('role="presentation"')));
+  chk("recap content: email-safe HTML (tables + inline styles, no flex/grid, max-width 600, no <script>; only the tiny text-size <style> in <head>)",
+    variants.filter((_, i) => i % 5 === 0).every(h => !/display\s*:\s*(flex|grid)|<script/i.test(h) && (h.match(/<style/g) || []).length === 1 && h.indexOf("<style") < h.indexOf("</head>")
+      && h.includes("max-width:600px") && h.includes('role="presentation"')));
+  chk("recap content: iPhone Mail never shrinks it (x-apple-disable-message-reformatting, text-size-adjust) and body text is 17px",
+    [render("rea").html, R.renderReferralReward({ referrer: { name: "Ana", company: "rabbitearsadventures" }, settings: { reward_code: "FRIEND10" } }).html]
+      .every(h => h.includes('name="x-apple-disable-message-reformatting"') && h.includes("-webkit-text-size-adjust:100%")) && render("rea").html.includes("font:17px/1.5 Arial"));
+  chk("recap content: the photo slot sits in a height-capped box so a big photo doesn't fill the phone screen",
+    /<div style="max-height:260px;overflow:hidden;border-radius:12px"><!--PHOTO_SLOT--><\/div>/.test(render("rea").html));
   chk("recap content: plain-text version has the review link, the code and the unsubscribe", /g\.page\/r\/CfQGQSBK_KsOEAg\/review/.test(full.text) && full.text.includes("FRIEND10") && full.text.includes("/email/unsubscribe/tok-1") && !/<[a-z]/i.test(full.text));
   chk("recap content: footer = brand address + phone + social + unsubscribe",
     unknown.html.includes("4492 Hwy 14, Walden, CO 80480") && unknown.html.includes("A Colorado Sled Rentals company") && render("rental").html.includes("2151 Downhill Drive, Steamboat Springs, CO 80487")
