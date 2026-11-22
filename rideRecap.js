@@ -317,7 +317,7 @@ const DOW = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"], MON = ["JAN", "FE
 
 // ── recap data (pure) ────────────────────────────────────────────────────────
 // booking: bookingFacts(). trip: buildTripDetails(). settings: normalizeRecapSettings(). weather: weatherLabels() | null.
-export function buildRecapData({ booking, tour, trip, settings, weather = null, pax = null, unsubscribeUrl = null }) {
+export function buildRecapData({ booking, tour, trip, settings, weather = null, pax = null, unsubscribeUrl = null, baseUrl = resolveBaseUrl() }) {
   const s = normalizeRecapSettings(settings);
   const type = tour.type;
   const brand = RECAP_BRANDS[type === "rea" ? "rea" : "csr"];
@@ -362,6 +362,8 @@ export function buildRecapData({ booking, tour, trip, settings, weather = null, 
     reviewUrl: RECAP_LINKS.review[brand.key],
     nextUrl: type === "rea" ? RECAP_LINKS.book.rea : RECAP_LINKS.book.guided,
     shareUrl: type === "rea" ? RECAP_LINKS.book.rea : RECAP_LINKS.book.csr,
+    // Gmail strips sms: links, so "Text it to a friend" opens this page in the browser, which can text/share (see renderSharePage).
+    sharePageUrl: sharePageUrl(baseUrl, { bookingId: booking.bookingId, type }),
     unsubscribeUrl,
     subject: copy.subject + (first ? `, ${first}` : ""),
   };
@@ -425,14 +427,13 @@ export function renderRideRecap(d) {
   // share / referral
   if (has("share")) {
     const pct = d.friendPercent, code = e(d.friendCode);
-    const smsBody = `You have to try ${C.name}! Use code ${d.friendCode} for ${pct}% off: ${link(d.shareUrl, "share-sms", true)}`;
     const mailSubj = `${pct}% off ${C.name}`;
     const mailBody = `I just rode with ${C.name} and loved it. Use code ${d.friendCode} at checkout for ${pct}% off: ${link(d.shareUrl, "share-email", true)}`;
     rows += block(card(`<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc};margin-bottom:8px">GIVE ${pct}%, GET ${pct}%</div>` +
       h2("Bring a friend next time", "#FFFFFF") +
       p(`Friends save ${pct}% with this code at checkout. When they ride, you get ${pct}% off your next booking.`, "#C9D6E3") +
       `<div style="border:2px dashed ${C.acc};border-radius:12px;text-align:center;font:700 24px 'Courier New',Courier,monospace;letter-spacing:3px;color:#FFFFFF;padding:12px 0;margin-bottom:14px">${code}</div>` +
-      btn("Text it to a friend", `sms:?&body=${encodeURIComponent(smsBody)}`) +
+      btn("Text it to a friend", link(d.sharePageUrl, "share-sms")) +
       `<div style="height:10px;line-height:10px;font-size:10px">&nbsp;</div>` +
       btn("Email it to a friend", `mailto:?subject=${encodeURIComponent(mailSubj)}&body=${encodeURIComponent(mailBody)}`, false),
     C.dark));
@@ -478,12 +479,57 @@ export function renderRideRecapText(d) {
   if (d.weather) out.push("", d.weather.map(w => `${w[0]} ${w[1]}`).join(" · "));
   if (has("review")) out.push("", `How was your ${d.copy.place}? Leave us a Google review: ${link(d.reviewUrl, "google-review")}`,
     `Something not right? Tell us directly: ${RECAP_LINKS.infoEmail}`);
-  if (has("share")) out.push("", `Give ${d.friendPercent}%, get ${d.friendPercent}%: friends save ${d.friendPercent}% with code ${d.friendCode}: ${link(d.shareUrl, "share-email", true)}`);
+  if (has("share")) out.push("", `Give ${d.friendPercent}%, get ${d.friendPercent}%: friends save ${d.friendPercent}% with code ${d.friendCode}: ${link(d.shareUrl, "share-email", true)}`,
+    `Text it to a friend: ${link(d.sharePageUrl, "share-sms")}`);
   if (has("merch")) out.push("", `Wear the memory — a hoodie printed with ${d.merchLine}: ${link(RECAP_LINKS.merch, "merch")}`);
   out.push("", `${d.copy.nextTitle}. ${d.copy.nextBody} ${link(d.nextUrl, "book-next")}`);
   if (has("newsletter")) out.push("", `Get first dibs on powder days: ${link(RECAP_LINKS.newsletter, "newsletter")}`);
   out.push("", "—", ...C.footer, `${RECAP_PHONE} · ${RECAP_SOCIAL}`, `Unsubscribe: ${d.unsubscribeUrl || `email ${RECAP_LINKS.infoEmail} with the subject "Unsubscribe"`}`);
   return out.join("\n");
+}
+
+// ── share page (GET /r/share?b=<booking id>&t=<type>) ─────────────────────────
+// Gmail (web + apps) removes sms: hrefs from emails, so the email's "Text it to a friend" button is an https link to this page.
+// In the phone's browser it offers the native share sheet (Messages, WhatsApp, …), a "Text it" sms: link, and copy-to-clipboard.
+// Nothing here is secret: the booking id only labels the referral (ref=friend-<id>); a reward still needs a real booking.
+export function sharePageUrl(baseUrl, { bookingId, type }) {
+  return `${String(baseUrl || resolveBaseUrl()).replace(/\/$/, "")}/r/share?b=${encodeURIComponent(bookingId)}&t=${encodeURIComponent(type)}`;
+}
+
+export function shareMessage({ bookingId, type, settings }) {
+  const s = normalizeRecapSettings(settings);
+  const C = RECAP_BRANDS[type === "rea" ? "rea" : "csr"];
+  const url = trackLink(type === "rea" ? RECAP_LINKS.book.rea : RECAP_LINKS.book.csr, { type, content: "share-sms", friendRef: bookingId });
+  return { brand: C, url, text: `You have to try ${C.name}! Use code ${s.friend_code} for ${s.friend_percent}% off: ${url}` };
+}
+
+export function renderSharePage({ bookingId, type, settings }) {
+  const b = String(bookingId ?? ""), t = String(type ?? "");
+  if (!/^\d{1,15}$/.test(b) || !RECAP_TYPES.includes(t)) return null;
+  const s = normalizeRecapSettings(settings);
+  const { brand: C, text } = shareMessage({ bookingId: b, type: t, settings: s });
+  const e = escapeHtml, sms = `sms:?&body=${encodeURIComponent(text)}`;
+  const button = (label, attrs, primary) => `<a ${attrs} style="display:block;text-align:center;padding:16px;border-radius:12px;font:700 17px Arial,Helvetica,sans-serif;text-decoration:none;margin:0 0 12px;` +
+    (primary ? `background:${C.btn};color:${C.btnTxt}` : `background:#FFFFFF;color:${C.dark2};border:2px solid ${C.dark2}`) + `">${label}</a>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<meta name="robots" content="noindex"><title>Share ${e(C.name)}</title>` +
+    `<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&amp;family=Roboto:wght@400;700&amp;display=swap" rel="stylesheet"></head>` +
+    `<body style="margin:0;background:${C.dark};color:#FFFFFF;font:16px/1.5 Arial,Helvetica,sans-serif">` +
+    `<div style="max-width:480px;margin:0 auto;padding:32px 20px">` +
+    `<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">GIVE ${s.friend_percent}%, GET ${s.friend_percent}%</div>` +
+    `<h1 style="font:${C.key === "rea" ? "400 36px" : "700 28px"}/1.1 ${C.head};text-transform:${C.up};margin:8px 0 12px">Bring a friend next time</h1>` +
+    `<p style="color:#C9D6E3;margin:0 0 18px">Friends save ${s.friend_percent}% with this code at checkout. When they ride, you get ${s.friend_percent}% off your next booking.</p>` +
+    `<div style="border:2px dashed ${C.acc};border-radius:12px;text-align:center;font:700 26px 'Courier New',Courier,monospace;letter-spacing:3px;padding:14px 0;margin:0 0 20px">${e(s.friend_code)}</div>` +
+    button("Share with a friend", `id="share" href="${attr(sms)}"`, true) +
+    button("Text it", `href="${attr(sms)}"`, false) +
+    button("Copy message", `id="copy" href="#"`, false) +
+    `<p id="msg" style="color:#C9D6E3;font-size:14px;word-break:break-word;margin:8px 0 0">${e(text)}</p>` +
+    `<p style="color:#9FB3C8;font-size:13px;margin:24px 0 0">${C.footer.map(e).join("<br>")}</p></div>` +
+    `<script>(function(){var t=${JSON.stringify(text).replace(/</g, "\\u003c")};` +
+    `var s=document.getElementById("share");if(navigator.share){s.addEventListener("click",function(ev){ev.preventDefault();navigator.share({text:t}).catch(function(){});});}` +
+    `document.getElementById("copy").addEventListener("click",function(ev){ev.preventDefault();var d=function(){ev.target.textContent="Copied!";};` +
+    `if(navigator.clipboard){navigator.clipboard.writeText(t).then(d,function(){});}else{var a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove();d();}});})();</script>` +
+    `</body></html>`;
 }
 
 // What the Apps Script (Code.gs hmSendOne_) does to the markers — for previews/snapshots and tests.
@@ -626,7 +672,7 @@ export async function runRideRecap(crm, {
     const weather = wKey ? weatherByDate.get(wKey) : null;
     const unsubscribeUrl = out.preview ? null : await unsubscribeUrlFor(crm, rc.email, baseUrl);
     const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour });
-    const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl });
+    const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl });
     const msg = renderRideRecap(data);
     const photoHint = data.photo === false ? null : buildPhotoHint({ label: rc.tour.label, startAt: rc.primary.startAt ?? rc.primary.endAt, fileId: typeof data.photo === "string" ? data.photo : null });
     const to = s.dry_run ? s.test_to : rc.email;
@@ -752,7 +798,7 @@ export function sampleRecapRenders() {
     const booking = { bookingId: "392519085", pk: "#392519085", name: full ? "katrina schultz" : "Guest", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z", pax: full ? 3 : 1, guide: full ? "Jake" : "" };
     const trip = buildTripDetails({ booking, tour });
     return buildRecapData({ booking, tour, trip: full ? trip : { ...trip, photo: false }, settings, weather: full ? wx : null, pax: booking.pax,
-      unsubscribeUrl: "https://highmark-bot-production.up.railway.app/email/unsubscribe/00000000-0000-4000-8000-000000000000" });
+      unsubscribeUrl: "https://highmark-bot-production.up.railway.app/email/unsubscribe/00000000-0000-4000-8000-000000000000", baseUrl: "https://highmark-bot-production.up.railway.app" });
   };
   return {
     "rea-full": mk("rea", "Grand Tour", true), "rea-missing": mk("rea", "Grand Tour", false),

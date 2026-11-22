@@ -95,6 +95,7 @@ import {
   handlePortalGetEmailDomain, handlePortalCreateEmailDomain, handlePortalVerifyEmailDomain, handlePortalDeleteEmailDomain,
 } from "./adminEmailCampaigns.js";
 import { handleTrackClick, handleTrackOpen } from "./emailTracking.js";
+import { renderSharePage } from "./rideRecap.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -2253,6 +2254,14 @@ for (const slug of VERTICAL_SLUGS) {
 app.get("/signup", (_req, res) => res.sendFile(path.join(__uiDir, "signup.html")));
 // Paste-and-preview page for newsletters. Public shell only — every action needs the OUTBOUND_API_KEY (entered in the page).
 app.get("/newsletter", (_req, res) => res.sendFile(path.join(__uiDir, "newsletter.html")));
+// Ride Recap "Text it to a friend" page (Gmail strips sms: links from emails). Public; renders only the referral code + link.
+app.get("/r/share", async (req, res) => {
+  let settings = null;
+  try { if (crmSupabase) settings = (await crmSupabase.from("recap_settings").select("*").eq("client_id", "csr_rea").maybeSingle()).data; } catch { /* defaults */ }
+  const html = renderSharePage({ bookingId: req.query.b, type: req.query.t, settings });
+  if (!html) return res.status(404).type("text/plain").send("This share link isn't valid.");
+  res.set("Cache-Control", "no-store").type("html").send(html);
+});
 const signupRateLimit = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max:      10,             // 10 signups per IP per hour
