@@ -667,6 +667,15 @@ Gmail newsletters. When someone with DNS access adds those records (and/or the R
 becomes available with no cap. Also fixed here: booking-email merge fields (`{{trip_date}}` etc.) are now resolved at QUEUE time (they used to
 render blank at send time). Sender/reply-to precedence for the Resend path is `resolveFrom()` (see above).
 
+### Apps Script queue drain + photo slot (APPLIED 2026-11-22)
+`Higmark.gs` in the "CSR Emails" project (`1IeZ8Qp-bFhWMV4FEefyz7db6Bto6EXCVDo4Eg_YKOVNXoRaWPeOWoK10`, standalone, shared drive)
+== `docs/apps-script/Code.gs`. New: `drainQueue` (trigger every 10 min) sends EVERY queued `transport='gmail'` row, not just the
+last newsletter, so server-queued email (Ride Recaps, etc.) needs no manual step; `<!--PHOTO_SLOT-->` / `<!--PHOTO_ONLY-->` +
+`photo_hint` / `from_name` support; `/email/report` results carry `photo`. `GoogleUpload.gs` `onOpen` → `addGoogleAdsMenu_`
+(one `onOpen` now). Pushed via clasp from Sean's Mac (`~/code/csr-emails`, git-snapshotted; rollback `git checkout 790ff0b &&
+clasp push`); verified live via the Drive connector: only those 2 files changed. Change process: `docs/apps-script/HANDOFF.md`.
+Note: the script is standalone, so `onOpen` menus only appear if an installable on-open trigger exists; run functions from the editor.
+
 ### Email engagement tracking — opens, clicks, results panel (2026-11-06)
 **Why:** Gmail-transport sends recorded nothing past "sent"; the owner wanted opens, clicks and who clicked. **Design** (`emailTracking.js`):
 at render (`renderCampaignEmail`, shared by both transports via `prepareRows`) every http(s) body link becomes
