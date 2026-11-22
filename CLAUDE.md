@@ -238,6 +238,16 @@ under that name so Claude Code itself doesn't pick it up).
   the ~4 Claude-call checks fail fast with a placeholder key and spend nothing (CI covers them). Baseline
   2026-11-22 before FH keys: 3,253 pass / 7 fail (4 Claude + 3 FareHarbor). CI remains the full gate.
 - Twilio and Resend hosts are not on the network allowlist, so nothing can text or email from a cloud session.
+- **Production access via network secrets** (send `Authorization: Bearer proxy-injected`; the proxy swaps in the real key):
+  - `https://highmark-bot-production.up.railway.app` — `OUTBOUND_API_KEY` → `/api/v1/*` (health, email
+    audience/preview, dry-run + `[TEST]` sends). Real sends still need `dry_run:false` + `idempotency_key` — don't.
+  - `https://api.supabase.com` — Supabase personal access token; sees the **CRM (DB2, `aiiguzslqiemksrvfvwk`) only**.
+    SQL: `POST /v1/projects/aiiguzslqiemksrvfvwk/database/query {"query":…,"read_only":true}`. Apply DDL only
+    after Sean reviews the migration file. DB1 (`qygcmdyxvjlzbmpdpesc`, "Chatbot") is reachable via the Supabase MCP connector.
+  - `https://backboard.railway.com/graphql/v2` — Railway account token: deployments + `deploymentLogs` for
+    `highmark-bot` (svc `f19d84b0-8f97-4f8c-9391-616386560329`), `highmark-cron` (`4fa2a047-aef1-4631-a19a-90cb9621dd68`),
+    and "CSR Ops Report & Webhooks" / `web` (`bcca97fc-45b0-4571-a9eb-0513bd38dcd8`, the csr-webhook FH→DB2 writer).
+- Not reachable from the cloud: Apps Script / Gmail delivery (`Higmark.gs`, needs Sean's Google login), Twilio, Resend.
 
 ### Full automated test suite
 ```bash
