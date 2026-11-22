@@ -20081,6 +20081,16 @@ async function testRideRecap() {
   chk("recap content: iPhone Mail never shrinks it (x-apple-disable-message-reformatting, text-size-adjust) and body text is 17px",
     [render("rea").html, R.renderReferralReward({ referrer: { name: "Ana", company: "rabbitearsadventures" }, settings: { reward_code: "FRIEND10" } }).html]
       .every(h => h.includes('name="x-apple-disable-message-reformatting"') && h.includes("-webkit-text-size-adjust:100%")) && render("rea").html.includes("font:17px/1.5 Arial"));
+  chk("recap route: the route card appears only when a route image exists (REA 'YOUR LOOP', backcountry 'TRACKED BY YOUR GUIDE'), never for rentals",
+    !render("rea").html.includes("Map of your route") && !render("backcountry").html.includes("Map of your route")
+    && (() => { const mk = (type) => { const tour = { type, label: "Grand Tour", stops: [] }; const booking = { bookingId: "777", pk: "#777", name: "Ana", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z", pax: 2 };
+        return R.renderRideRecap(R.buildRecapData({ booking, tour, trip: { ...R.buildTripDetails({ booking, tour }), routeImage: "https://app.test/r/route/x.png" }, settings: {}, baseUrl: "https://app.test" })).html; };
+      return mk("rea").includes("YOUR LOOP") && mk("rea").includes('src="https://app.test/r/route/x.png"') && mk("backcountry").includes("YOUR ROUTE · TRACKED BY YOUR GUIDE") && !mk("rental").includes("Map of your route"); })());
+  chk("recap route: the PLACEHOLDER route art is only in the sample renders (full REA + backcountry), and a Guide Ride Log route overrides",
+    (() => { const sr = R.sampleRecapRenders(); return sr["rea-full"].routeImage.endsWith("/r/route/rea-placeholder.png") && sr["backcountry-full"].routeImage.endsWith("/r/route/backcountry-placeholder.png")
+      && !sr["rental-full"].routeImage && !sr["rea-missing"].routeImage; })()
+    && R.buildTripDetails({ booking: {}, tour: { stops: [] }, rideLog: { routeImage: "https://x/track.png" } }).routeImage === "https://x/track.png"
+    && R.buildTripDetails({ booking: {}, tour: { stops: [] } }).routeImage === null);
   chk("recap content: the photo slot sits in a height-capped box so a big photo doesn't fill the phone screen",
     /<div style="max-height:260px;overflow:hidden;border-radius:12px"><!--PHOTO_SLOT--><\/div>/.test(render("rea").html));
   chk("recap content: plain-text version has the review link, the code and the unsubscribe", /g\.page\/r\/CfQGQSBK_KsOEAg\/review/.test(full.text) && full.text.includes("FRIEND10") && full.text.includes("/email/unsubscribe/tok-1") && !/<[a-z]/i.test(full.text));
@@ -20187,7 +20197,7 @@ async function testRideRecap() {
     const g1 = sends.find(x => x.reference === "#201");
     chk("recap job: the row carries from_name, photo_hint (rideMedia.buildPhotoHint), plain text and the guest's own unsubscribe link",
       g1.from_name === "Rabbit Ears Adventures" && JSON.stringify(g1.photo_hint) === JSON.stringify({ date: "2027-01-29", label: "Grand Tour", time: "11am" })
-      && g1.body_text.includes("Grand Tour") && g1.body_html.includes("https://app.test/email/unsubscribe/tok-g1") && g1.body_html.includes("with guide Jake") && g1.body_html.includes("Partly cloudy"));
+      && !g1.body_html.includes("Map of your route") && g1.body_text.includes("Grand Tour") && g1.body_html.includes("https://app.test/email/unsubscribe/tok-g1") && g1.body_html.includes("with guide Jake") && g1.body_html.includes("Partly cloudy"));
     chk("recap job: CSR backcountry recap is CSR-branded", sends.find(x => x.reference === "#204").from_name === "Colorado Sled Rentals");
     chk("recap job: the local day is claimed (last_run_on) and a second tick the same day does nothing",
       db.tables.recap_settings[0].last_run_on === "2027-01-29" && (await R.runDueRideRecaps(db, { now: new Date(NOW.getTime() + 5 * 60000), fetchImpl: wxFetch })).ran.length === 0 && db.tables.email_sends.length === 2);
@@ -20305,6 +20315,8 @@ async function testRideRecap() {
       && R.renderRidePage({ bookingId: "x", type: "rea" }) === null && R.shareContextFrom({ bookingId: "1", type: "nope" }) === null);
     chk("recap social: the email has a 'Post your ride' button to the share page's ride section",
       R.RECAP_TYPES.every(t => { const h = render(t).html.replace(/&amp;/g, "&"); return h.includes("Post your ride") && /\/r\/share\?b=777&t=\w+&utm_source=ride_recap[^"]*utm_content=share-social#ride/.test(h); }));
+    const r4 = await fetch(`${BASE_URL}/r/route/rea-placeholder.png`), r5 = await fetch(`${BASE_URL}/r/route/backcountry-placeholder.png`), r6 = await fetch(`${BASE_URL}/r/route/zzz.png`);
+    chk("recap route images: /r/route/<type>-placeholder.png served as PNG, anything else 404", r4.status === 200 && r5.status === 200 && /image\/png/.test(r4.headers.get("content-type") ?? "") && r6.status === 404);
     const r1 = await fetch(`${BASE_URL}/r/ride?b=777&t=rea`), r2 = await fetch(`${BASE_URL}/r/og/rea.png`), r3 = await fetch(`${BASE_URL}/r/og/zzz.png`);
     chk("recap social routes: /r/ride serves the page, /r/og/<brand>.png serves the preview image, unknown brand 404",
       r1.status === 200 && (await r1.text()).includes("og:image") && r2.status === 200 && /image\/png/.test(r2.headers.get("content-type") ?? "") && r3.status === 404, `${r1.status} ${r2.status} ${r3.status}`);

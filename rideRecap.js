@@ -252,7 +252,7 @@ export function planRecaps({ bookings, tours, logged = new Set(), suppressed = n
 export function buildTripDetails({ booking, tour, rideLog = null }) {
   const base = {
     guide: booking?.guide || "", stops: tour?.stops ?? [], miles: tour?.miles ?? null, high_point_ft: tour?.high_point_ft ?? null,
-    highlight: null, photo: null,
+    highlight: null, photo: null, routeImage: tour?.route_image_url ?? null,
   };
   if (!rideLog) return base;
   const out = { ...base };
@@ -354,6 +354,8 @@ export function buildRecapData({ booking, tour, trip, settings, weather = null, 
     type, brand, copy, first, guide, kicker, h1, sub, stats: stats.slice(0, 4),
     stops: type === "rea" ? (trip?.stops ?? []).map(x => String(x).trim()).filter(Boolean) : [],
     highlight: String(trip?.highlight ?? "").trim(),
+    routeImage: type === "rental" ? null : (trip?.routeImage || null),
+    routeTitle: type === "backcountry" ? "YOUR ROUTE · TRACKED BY YOUR GUIDE" : "YOUR LOOP",
     weather: Array.isArray(weather) && weather.length ? weather : null,
     photo: trip?.photo === false ? false : (trip?.photo || null),
     features: s.features, friendCode: s.friend_code, friendPercent: s.friend_percent,
@@ -394,6 +396,11 @@ export function renderRideRecap(d) {
     (d.highlight ? `<div style="font:italic 15px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3;margin-top:10px">“${e(d.highlight)}”</div>` : "") +
     (d.photo === false ? "" : `<div style="max-height:260px;overflow:hidden;border-radius:12px">${"<!--PHOTO_SLOT-->"}</div>`) +
     `</td></tr>`;
+  // route map (REA loop / backcountry track). Only when a route image exists — never a made-up route for a guest.
+  if (d.routeImage) {
+    rows += `<tr><td style="padding:22px 20px 0"><div style="font:700 13px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.muted};margin-bottom:10px">${e(d.routeTitle)}</div>` +
+      `<img src="${attr(d.routeImage)}" width="560" alt="Map of your route" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:14px"></td></tr>`;
+  }
   // stats 2×2
   if (d.stats.length) {
     let s = "";
@@ -912,6 +919,8 @@ export function sampleRecapRenders() {
     const tour = { type, label, miles: full ? 22 : null, high_point_ft: full ? 10340 : null, stops: full && type === "rea" ? ["Dumont Lake overlook", "Rabbit Ears Peak meadow", "Muddy Pass warming hut"] : [] };
     const booking = { bookingId: "392519085", pk: "#392519085", name: full ? "katrina schultz" : "Guest", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z", pax: full ? 3 : 1, guide: full ? "Jake" : "" };
     const trip = buildTripDetails({ booking, tour });
+    // PLACEHOLDER route art so previews show the route card; real recaps only get a route when a real one exists.
+    if (full && type !== "rental") trip.routeImage = `https://highmark-bot-production.up.railway.app/r/route/${type}-placeholder.png`;
     return buildRecapData({ booking, tour, trip: full ? trip : { ...trip, photo: false }, settings, weather: full ? wx : null, pax: booking.pax,
       unsubscribeUrl: "https://highmark-bot-production.up.railway.app/email/unsubscribe/00000000-0000-4000-8000-000000000000", baseUrl: "https://highmark-bot-production.up.railway.app" });
   };
