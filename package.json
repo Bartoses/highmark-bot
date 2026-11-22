@@ -9,7 +9,7 @@
     "dev": "node --env-file=.env --watch index.js",
     "dev:test": "TEST_MODE=true node --env-file=.env --watch index.js",
     "test": "node test.js",
-    "test:cloud": "NODE_USE_ENV_PROXY=1 TZ=America/Denver ANTHROPIC_API_KEY=${HIGHMARK_ANTHROPIC_API_KEY:-$ANTHROPIC_API_KEY} node test.js",
+    "test:cloud": "NODE_USE_ENV_PROXY=1 TZ=America/Denver ANTHROPIC_API_KEY=${HIGHMARK_ANTHROPIC_API_KEY:-${ANTHROPIC_API_KEY:-sk-ant-not-set}} node test.js",
     "chat": "node chat.js",
     "ui": "TEST_MODE=true node --env-file=.env index.js",
     "refresh-token": "node mpwrTokenRefresh.js"

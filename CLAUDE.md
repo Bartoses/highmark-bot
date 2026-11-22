@@ -234,9 +234,9 @@ under that name so Claude Code itself doesn't pick it up).
   `CRM_SUPABASE_KEY` in the environment are placeholders. Code reading them still works.
 - Like CI, this is a **live** run: it writes + cleans up tagged test rows in DB1/DB2. Don't run it while a
   GitHub CI run is in progress (they share test rows and phone numbers).
-- Expected failures in the cloud: the 3 FareHarbor checks (no FH keys in the environment) and, if
-  `HIGHMARK_ANTHROPIC_API_KEY` isn't set, ~4 Claude-call checks. Baseline 2026-11-22: 3,253 pass / 7 fail
-  (all 7 = those two causes). CI remains the full gate.
+- FareHarbor keys are environment variables (added 2026-11-22). No Anthropic key by default, to save credits:
+  the ~4 Claude-call checks fail fast with a placeholder key and spend nothing (CI covers them). Baseline
+  2026-11-22 before FH keys: 3,253 pass / 7 fail (4 Claude + 3 FareHarbor). CI remains the full gate.
 - Twilio and Resend hosts are not on the network allowlist, so nothing can text or email from a cloud session.
 
 ### Full automated test suite
