@@ -20333,10 +20333,10 @@ async function testRideRecap() {
   {
     const nv = R.normalizeVariants({ subject: "B", layout: "x" });
     chk("recap ab: variants normalize to A/B for every experiment; utm_term encodes them", nv.subject === "B" && nv.layout === "A" && nv.share_cta === "A"
-      && R.variantTerm(nv) === "subject-B.layout-A.share_cta-A" && R.variantTerm(null) === null);
+      && R.variantTerm(nv) === "subject-B.layout-A.share_cta-A.hero-A" && R.variantTerm(null) === null);
     const same = R.chooseVariants({ seed: "#123" }), again = R.chooseVariants({ seed: "#123" });
     chk("recap ab: the same booking always gets the same versions (deterministic)", JSON.stringify(same) === JSON.stringify(again));
-    chk("recap ab: locked modes win (A/B), 'off' = A", JSON.stringify(R.chooseVariants({ seed: "x", modes: { subject: "B", layout: "A", share_cta: "off" } })) === JSON.stringify({ subject: "B", layout: "A", share_cta: "A" }));
+    chk("recap ab: locked modes win (A/B), 'off' = A", JSON.stringify(R.chooseVariants({ seed: "x", modes: { subject: "B", layout: "A", share_cta: "off", hero: "B" } })) === JSON.stringify({ subject: "B", layout: "A", share_cta: "A", hero: "B" }));
     const cnt = (stats, k) => { let b = 0; for (let i = 0; i < 400; i++) if (R.chooseVariants({ seed: `#${i}`, stats })[k] === "B") b++; return b / 400; };
     const early = cnt({}, "subject");
     chk("recap ab: before 20 real sends per version, traffic is split about 50/50", early > 0.4 && early < 0.6, String(early));
@@ -20358,7 +20358,7 @@ async function testRideRecap() {
       st.subject.A.sends === 1 && st.subject.A.wins === 1 && st.subject.B.sends === 1 && st.subject.B.wins === 0 && st.layout.B.wins === 1 && st.share_cta.A.wins === 0);
     const rep = R.experimentReport({ ...R.tallyExperiments([], new Map()), layout: { A: { sends: 300, wins: 90 }, B: { sends: 300, wins: 30 } } }, { subject: "B" });
     chk("recap ab: report shows mode, sends, clicks, rate, chance-to-be-best and status",
-      rep.length === 3 && rep[0].mode === "B" && /collecting data/.test(rep[0].status) && rep[1].status === "winner: A" && rep[1].arms.A.click_rate_pct === 30 && rep[1].arms.A.chance_best_pct >= 95);
+      rep.length === 4 && rep[0].mode === "B" && /collecting data/.test(rep[0].status) && rep[1].status === "winner: A" && rep[1].arms.A.click_rate_pct === 30 && rep[1].arms.A.chance_best_pct >= 95);
     const vr = (variants) => { const tour = { type: "rea", label: "Grand Tour", stops: [] }; const booking = { bookingId: "777", pk: "#777", name: "Katrina", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z", pax: 2 };
       return R.renderRideRecap(R.buildRecapData({ booking, tour, trip: R.buildTripDetails({ booking, tour }), settings: { features: ["review", "share", "newsletter"] }, baseUrl: "https://app.test", variants })); };
     const A = vr({}), B = vr({ subject: "B", layout: "B", share_cta: "B" });
@@ -20370,13 +20370,73 @@ async function testRideRecap() {
       && (B.html.match(/Leave a Google review/g) || []).length === 1);
     chk("recap ab: share_cta B wording, and every tracked link carries the versions in utm_term",
       B.html.includes(">Give a friend 10% off<") && A.html.includes(">Send to a friend<")
-      && [...B.html.matchAll(/<a\b[^>]*href="(https:[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, "&")).filter(h => !h.includes("/email/unsubscribe/")).every(h => new URL(h).searchParams.get("utm_term") === "subject-B.layout-B.share_cta-B"));
+      && [...B.html.matchAll(/<a\b[^>]*href="(https:[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, "&")).filter(h => !h.includes("/email/unsubscribe/")).every(h => new URL(h).searchParams.get("utm_term") === "subject-B.layout-B.share_cta-B.hero-A"));
   }
   {
     const db = jobDb({ settings: { dry_run: false, experiments: { subject: "B" } } });
     await R.runRideRecap(db, { now: NOW, fetchImpl: wxFetch, baseUrl: "https://app.test" });
     const lg = db.tables.recap_log.find(l => l.booking_id === "#201"), snd = db.tables.email_sends.find(x => x.reference === "#201");
     chk("recap ab: the job logs which versions each guest got and honours a locked experiment", lg?.variants?.subject === "B" && /how was the Grand Tour\?/.test(snd?.subject ?? ""), JSON.stringify(lg?.variants));
+  }
+
+  // ── "fun top" (experiment hero = B): your sled, badges, snow report + chart, powder alert ──
+  {
+    const H = await import("./recapHero.js");
+    const P = H.parseSled;
+    chk("hero sled: model, engine and track come from the FareHarbor name; RZR / fuel / 'Snowmobile' give none",
+      JSON.stringify(P('Polaris 850 Khaos 165" Slash • Steamboat')) === JSON.stringify({ name: 'Polaris 850 Khaos 165" Slash', engine: "850", trackIn: 165, note: "a long track, built to float in deep powder" })
+      && P("Polaris Boost 850 Khaos Slash 165 • Steamboat").engine === "850 Boost (turbo)" && P('Polaris S4 Indy Adventure 137" 7S  • Steamboat').note === "a nimble trail-length track"
+      && P('2026 Polaris 850 Khaos 155" Slash • Steamboat').name === 'Polaris 850 Khaos 155" Slash' && P('Sled Ski - Polaris S4 VOYAGEUR 146" 7S').engine === "S4 four-stroke"
+      && P("2025 Polaris RZR Experience • 4 Seater • Kremmling") === null && P("Fuel Steamboat") === null && P("Snowmobile") === null);
+    const sl = H.sledsFromBookings([
+      { raw_payload: { booking: { availability: { item: { name: 'Polaris 850 Khaos 165" Slash • Steamboat' } }, customers: [{}, {}] } } },
+      { raw_payload: { booking: { availability: { item: { name: "Beginner Private Guided Backcountry Adventure" } }, customers: [
+        { customer_type_rate: { customer_type: { singular: 'Polaris 850 Khaos 155" • Steamboat' } } }, { customer_type_rate: { customer_type: { singular: 'Polaris 650 Pro-RMK 155" • Steamboat' } } }] } } },
+      { raw_payload: { booking: { availability: { item: { name: "3 Hour - Grand Tour" } }, customers: [{ customer_type_rate: { customer_type: { singular: "Snowmobile" } } }] } } } ]);
+    chk("hero sled: a rental counts one sled per unit booked; guided rides count each rider's sled; tours add none",
+      sl.length === 3 && sl[0].sled.name === 'Polaris 850 Khaos 165" Slash' && sl[0].count === 2 && sl.find(x => x.sled.engine === "650").count === 1);
+    const cond = H.conditionsFromDaily({ time: ["2027-01-27", "2027-01-28", "2027-01-29", "2027-01-30", "2027-01-31", "2027-02-01"], weathercode: [73, 73, 0, 3, 75, 3],
+      temperature_2m_max: [20, 18, 24, 25, 15, 20], temperature_2m_min: [5, 2, -4, 3, -1, 4], snowfall_sum: [4.2, 3.1, 0, 0.5, 9.4, 1] }, "2027-01-29");
+    chk("hero conditions: fresh snow = ride day + 2 days before; powder alert = biggest day ahead if >= 4 in",
+      cond.fresh48 === 7.3 && cond.day.lo === -4 && cond.powder.inches === 9 && cond.powder.label === "Sun, Jan 31"
+      && H.conditionsFromDaily({ time: ["2027-01-29", "2027-01-30"], snowfall_sum: [0, 2] }, "2027-01-29").powder === null && H.conditionsFromDaily({}, "2027-01-29") === null);
+    const csv = "#comment line\n#Date,Snow Depth (in),SWE % of median\n2027-01-27,60,130\n2027-01-28,62,135\n2027-01-29,64,142\n";
+    const snow = H.snowReportFromCsv(csv, { stationName: "Rabbit Ears Pass" });
+    chk("hero snow: SNOTEL CSV → depth today, % of normal, a day-by-day series for the chart; empty → none",
+      snow.depthIn === 64 && snow.pctNormal === 142 && snow.days.length === 3 && snow.days[2].label === "Fri" && H.snowReportFromCsv("#nothing\n") === null
+      && H.snowReportFromCsv("2027-01-29,64,\n").pctNormal === null);
+    const badges = H.buildBadges({ conditions: cond, snow, pax: 6, startHour: 8, label: "First Tracks", priorRides: 2 }).map(b => b.text);
+    chk("hero badges: priority Powder Day > Ride #N / First Timer > Crew > Bluebird > Below Zero > Early Riser / Sunset > Deep Base, max 4",
+      JSON.stringify(badges) === JSON.stringify(["Powder Day", "Ride #3", "Crew of 6", "Bluebird"])
+      && H.buildBadges({ priorRides: 0, pax: 2, label: "Sunset Ride" }).map(b => b.text).join() === "First Timer,Sunset Rider" && H.buildBadges({}).length === 0);
+    const Cc = R.RECAP_BRANDS.csr;
+    const html = H.renderHeroModules({ hero: { badges: [{ icon: "*", text: "Bluebird" }], sleds: sl, snow, fresh48: 7.3, powder: cond.powder }, C: Cc, rea: false, bookLink: "https://fh.test/?a=1&b=2" });
+    chk("hero render: badges, sled card (YOUR SLEDS · n), snow chart with today's bar, powder alert + button; nothing for an empty hero",
+      html.includes("Bluebird") && html.includes("YOUR SLEDS · 4") && html.includes("64&quot; on the ground") === false && html.includes('64" on the ground') && html.includes("142%</b> of normal")
+      && html.includes("NEXT POWDER ALERT") && html.includes('href="https://fh.test/?a=1&amp;b=2"') && !/undefined|\bnull\b|NaN/.test(html) && H.renderHeroModules({ hero: null, C: Cc }) === "");
+    const sr = R.sampleRecapRenders()["rental-full"];
+    const vA = R.renderRideRecap({ ...sr, variants: R.normalizeVariants({}) }).html, vB = R.renderRideRecap({ ...sr, variants: R.normalizeVariants({ hero: "B" }) }).html;
+    chk("hero ab: version B shows the fun top (and drops the duplicate weather pills); version A is unchanged",
+      vB.includes("YOUR SLEDS") && vB.includes("SNOW REPORT") && vB.includes("utm_content=powder-alert") && !vB.includes(">SKY</span>")
+      && !vA.includes("YOUR SLEDS") && !vA.includes("SNOW REPORT") && vA.includes(">SKY</span>") && !/undefined|\bnull\b|NaN/.test(vB));
+    chk("hero: multi-day rentals show days, not 'Full day'", R.hoursLabel("2027-01-27T16:00:00Z", "2027-01-30T00:00:00Z") === "2 days" && R.hoursLabel("2027-01-29T15:00:00Z", "2027-01-30T13:00:00Z") === "Full day");
+    chk("hero: iPhone Mail date/phone auto-links are neutralised", vA.includes("a[x-apple-data-detectors]{color:inherit!important"));
+  }
+  {
+    const routes = async (url) => {
+      if (url.includes("open-meteo")) return { ok: true, json: async () => ({ daily: { time: ["2027-01-27", "2027-01-28", "2027-01-29", "2027-01-30", "2027-01-31"], weathercode: [73, 73, 0, 3, 75],
+        temperature_2m_max: [20, 18, 24, 25, 15], temperature_2m_min: [5, 2, -4, 3, -1], snowfall_sum: [4, 3, 0, 0, 7], snowfall: [] , weathercode_: [] } }) };
+      if (url.includes("wcc.sc.egov.usda.gov")) return { ok: true, text: async () => "2027-01-28,60,130\n2027-01-29,64,142\n" };
+      return { ok: false };
+    };
+    const db = jobDb({ settings: { dry_run: false, experiments: { hero: "B" }, weather_points: [{ name: "REA ranch", type: "rea", lat: 40.4, lon: -106.5, snotel: "713:CO:SNTL", snotel_name: "Rabbit Ears Pass" }] } });
+    db.tables.contacts.find(c => c.id === "k1").total_bookings = 3;
+    await R.runRideRecap(db, { now: NOW, fetchImpl: routes, baseUrl: "https://app.test" });
+    const h = db.tables.email_sends.find(x => x.reference === "#201")?.body_html ?? "";
+    chk("hero job: version B pulls snow (SNOTEL), conditions (Open-Meteo) and ride history (contacts) into the email",
+      h.includes("SNOW REPORT · RABBIT EARS PASS") && h.includes('64" on the ground') && h.includes("Ride #3") && h.includes("Powder Day") && h.includes("NEXT POWDER ALERT")
+      && db.tables.recap_log.find(l => l.booking_id === "#201")?.variants?.hero === "B",
+      JSON.stringify({ snow: h.includes("SNOW REPORT"), depth: h.includes('64" on the ground'), ride: h.includes("Ride #3"), powder: h.includes("Powder Day"), alert: h.includes("NEXT POWDER ALERT"), v: db.tables.recap_log.find(l => l.booking_id === "#201")?.variants, badges: (h.match(/<span style="display:inline-block;background[^>]*>[^<]*/g) || []).map(x => x.replace(/<[^>]*>/, "")) }));
   }
 
   // ── Apps Script: photos are shrunk before attaching (iPhone Mail won't auto-download a 4 MB photo) ──

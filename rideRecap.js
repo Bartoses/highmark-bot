@@ -24,6 +24,7 @@ import { buildPhotoHint } from "./rideMedia.js";
 import { escapeHtml, buildUnsubscribeUrl } from "./emailTemplates.js";
 import { loadSuppressionSets, normEmail, isEmailAddress, escapeLike } from "./emailSuppression.js";
 import { resolveBaseUrl } from "./emailSender.js";
+import { fetchConditions, fetchSnowReport, buildBadges, sledsFromBookings, renderHeroModules } from "./recapHero.js";
 
 export const RECAP_TYPES = ["rea", "backcountry", "rental"];
 export const RECAP_FEATURES = ["review", "share", "prints", "merch", "newsletter"];
@@ -103,7 +104,8 @@ export function normalizeRecapSettings(row = {}) {
   s.weather_lon = row?.weather_lon != null && Number.isFinite(lon) ? lon : null;
   s.experiments = row?.experiments && typeof row.experiments === "object" && !Array.isArray(row.experiments) ? { ...row.experiments } : {};
   s.weather_points = (Array.isArray(row?.weather_points) ? row.weather_points : [])
-    .map(p => ({ name: p?.name ? String(p.name) : null, type: p?.type ? String(p.type) : null, match: p?.match ? String(p.match) : null, lat: Number(p?.lat), lon: Number(p?.lon) }))
+    .map(p => ({ name: p?.name ? String(p.name) : null, type: p?.type ? String(p.type) : null, match: p?.match ? String(p.match) : null, lat: Number(p?.lat), lon: Number(p?.lon),
+      snotel: p?.snotel ? String(p.snotel) : null, snotel_name: p?.snotel_name ? String(p.snotel_name) : null }))
     .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
   return s;
 }
@@ -189,6 +191,7 @@ export function bookingFacts(row) {
     orderId: b.order?.display_id ?? null,
     rebookedFrom: b.rebooked_from ?? null,
     updatedAt: row?.updated_at ?? null,
+    rawPayload: row?.raw_payload ?? null,
   };
 }
 
@@ -204,6 +207,7 @@ export function hoursLabel(startAt, endAt) {
   if (!startAt || !endAt) return "";
   const h = (new Date(endAt) - new Date(startAt)) / 36e5;
   if (!(h > 0) || !Number.isFinite(h)) return "";
+  if (h >= 20) { const days = Math.max(1, Math.round(h / 24)); return days === 1 ? "Full day" : `${days} days`; }   // multi-day rentals
   if (h >= 7) return "Full day";
   const r = Math.round(h * 2) / 2 || 0.5;
   return `${r} ${r === 1 ? "hr" : "hrs"}`;
@@ -282,7 +286,7 @@ export function weatherPointFor({ item, type }, settings) {
   const s = normalizeRecapSettings(settings);
   const name = String(item ?? "").toLowerCase();
   const hit = s.weather_points.find(p => (!p.type || p.type === type) && (!p.match || name.includes(p.match.toLowerCase())));
-  if (hit) return { lat: hit.lat, lon: hit.lon, name: hit.name };
+  if (hit) return { lat: hit.lat, lon: hit.lon, name: hit.name, snotel: hit.snotel ?? null, snotelName: hit.snotel_name ?? null };
   return s.weather_lat != null && s.weather_lon != null ? { lat: s.weather_lat, lon: s.weather_lon, name: null } : null;
 }
 
@@ -319,7 +323,7 @@ const DOW = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"], MON = ["JAN", "FE
 
 // ── recap data (pure) ────────────────────────────────────────────────────────
 // booking: bookingFacts(). trip: buildTripDetails(). settings: normalizeRecapSettings(). weather: weatherLabels() | null.
-export function buildRecapData({ booking, tour, trip, settings, weather = null, pax = null, unsubscribeUrl = null, baseUrl = resolveBaseUrl(), variants = null }) {
+export function buildRecapData({ booking, tour, trip, settings, weather = null, pax = null, unsubscribeUrl = null, baseUrl = resolveBaseUrl(), variants = null, hero = null }) {
   const s = normalizeRecapSettings(settings);
   const type = tour.type;
   const brand = RECAP_BRANDS[type === "rea" ? "rea" : "csr"];
@@ -370,6 +374,7 @@ export function buildRecapData({ booking, tour, trip, settings, weather = null, 
     sharePageUrl: sharePageUrl(baseUrl, { bookingId: booking.bookingId, type }),
     unsubscribeUrl,
     variants: normalizeVariants(variants),
+    hero: hero && (hero.badges?.length || hero.sleds?.length || hero.snow || hero.powder) ? hero : null,
     subject: normalizeVariants(variants).subject === "B" ? questionSubject({ type, first, label: tour.label }) : copy.subject + (first ? `, ${first}` : ""),
   };
 }
@@ -389,6 +394,7 @@ export const RECAP_EXPERIMENTS = Object.freeze({
   subject:   { label: "Subject line", arms: { A: "Statement: \"Your Rabbit Ears tour recap, Katrina\"", B: "Question: \"Katrina, how was the Grand Tour?\"" }, goal: "any_click" },
   layout:    { label: "Review card position", arms: { A: "After the stats", B: "Right after the photo" }, goal: ["google-review"] },
   share_cta: { label: "Share button wording", arms: { A: "Send to a friend", B: "Give a friend 10% off" }, goal: ["share-sms", "share-social"] },
+  hero:      { label: "Top of the email", arms: { A: "Current top", B: "Fun top: badges, your sled, snow report + chart, powder alert" }, goal: "any_click" },
 });
 export const EXPERIMENT_MIN_SENDS = 20;
 const ARMS = ["A", "B"];
@@ -525,6 +531,8 @@ export function renderRideRecap(d) {
     (d.highlight ? `<div style="font:italic 15px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3;margin-top:10px">“${e(d.highlight)}”</div>` : "") +
     (d.photo === false ? "" : `<div style="max-height:260px;overflow:hidden;border-radius:12px">${"<!--PHOTO_SLOT-->"}</div>`) +
     `</td></tr>`;
+  const funTop = d.variants.hero === "B" && d.hero;
+  if (funTop) rows += renderHeroModules({ hero: d.hero, C, rea, bookLink: link(d.nextUrl, "powder-alert") });
   if (has("review") && d.variants.layout === "B") rows += reviewCard();
   // route map (REA loop / backcountry track). Only when a route image exists — never a made-up route for a guest.
   if (d.routeImage) {
@@ -547,7 +555,7 @@ export function renderRideRecap(d) {
       d.stops.map((s, i) => `<div style="font:16px/1.6 Arial,Helvetica,sans-serif;color:${C.dark2}"><b>${i + 1}.</b> ${e(s)}</div>`).join(""));
   }
   // weather labels
-  if (d.weather) {
+  if (d.weather && !(funTop && d.hero.snow)) {   // the snow report already covers conditions
     rows += `<tr><td style="padding:12px 20px 0;font:15px Arial,Helvetica,sans-serif;color:${C.muted}">` +
       d.weather.map(w => `<span style="display:inline-block;background:${C.dark2};color:#FFFFFF;border-radius:999px;padding:7px 12px;margin:0 6px 6px 0"><span style="font-size:11px;color:#9FB3C8;font-weight:700">${e(w[0])}</span> <b>${e(w[1])}</b></span>`).join("") +
       `</td></tr>`;
@@ -601,7 +609,7 @@ export function renderRideRecap(d) {
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<meta name="color-scheme" content="light"><title>${e(d.subject)}</title>` +
     `<meta name="x-apple-disable-message-reformatting"><meta name="format-detection" content="telephone=no,address=no,email=no,date=no">` +
-    `<style>body{-webkit-text-size-adjust:100%;text-size-adjust:100%}</style>` +
+    `<style>body{-webkit-text-size-adjust:100%;text-size-adjust:100%}a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important;font:inherit!important}</style>` +
     `<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&amp;family=Roboto:wght@400;700&amp;display=swap" rel="stylesheet"></head>` +
     `<body style="margin:0;padding:0;background:#EEF2F5"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#EEF2F5"><tr><td align="center">` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#FFFFFF">${rows}</table></td></tr></table></body></html>`;
@@ -837,7 +845,7 @@ export function renderReferralReward({ referrer, settings, unsubscribeUrl = null
   const subject = `Your friend booked! Here's ${s.friend_percent}% off your next ride`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(subject)}</title>` +
     `<meta name="x-apple-disable-message-reformatting"><meta name="format-detection" content="telephone=no,address=no,email=no,date=no">` +
-    `<style>body{-webkit-text-size-adjust:100%;text-size-adjust:100%}</style>` +
+    `<style>body{-webkit-text-size-adjust:100%;text-size-adjust:100%}a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important;font:inherit!important}</style>` +
     `</head>` +
     `<body style="margin:0;padding:0;background:#EEF2F5"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center">` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#FFFFFF">` +
@@ -889,6 +897,27 @@ export async function queueRecapEmail(crm, { clientId, to, subject, html, text, 
   throw new Error(`recap enqueue failed (is db2_ride_recap.sql applied?): ${error?.message}`);
 }
 
+// The "fun top" data for one recap (A/B experiment hero = B). Network results are cached per day + place. Never throws.
+async function buildHeroData({ crm, rc, pt, date, fetchImpl, cache, preview }) {
+  const memo = async (key, fn) => { if (!cache.has(key)) cache.set(key, await fn().catch(() => null)); return cache.get(key); };
+  const conditions = pt ? await memo(`c|${date}|${pt.lat}|${pt.lon}`, () => fetchConditions({ lat: pt.lat, lon: pt.lon, date, fetchImpl })) : null;
+  const snow = pt?.snotel ? await memo(`s|${date}|${pt.snotel}`, () => fetchSnowReport({ stationId: pt.snotel, stationName: pt.snotelName, date, fetchImpl })) : null;
+  let priorRides = null;
+  if (!preview) {
+    try {
+      const { data } = await crm.from("contacts").select("total_bookings").ilike("email", escapeLike(rc.email)).limit(5);
+      const total = Math.max(0, ...(data ?? []).map(c => Number(c.total_bookings) || 0));
+      if ((data ?? []).length) priorRides = Math.max(0, total - 1);   // total includes this ride
+    } catch { /* badge skipped */ }
+  }
+  const start = rc.primary.startAt ? zonedParts(rc.primary.startAt, "America/Denver").h : null;
+  return {
+    badges: buildBadges({ conditions, snow, pax: rc.pax, startHour: start, label: rc.tour.label, priorRides }),
+    sleds: sledsFromBookings(rc.bookings.map(b => ({ raw_payload: b.rawPayload, item: b.item }))),
+    snow, fresh48: conditions?.fresh48 ?? null, powder: conditions?.powder ?? null,
+  };
+}
+
 // One day's recaps for a client. TEST_MODE → plan only, nothing written.
 export async function runRideRecap(crm, {
   clientId = "csr_rea", now = new Date(), settings = null, tours = null, baseUrl = resolveBaseUrl(),
@@ -917,7 +946,7 @@ export async function runRideRecap(crm, {
   const plan = planRecaps({ bookings: rows, tours: t, logged, suppressed: sup.all, now, tz: s.timezone });
   out.skipped = plan.skipped.length; out.review = plan.review.length;
 
-  const weatherByDate = new Map();
+  const weatherByDate = new Map(), heroCache = new Map();
   const exp = plan.recaps.length ? await loadExperimentStats(crm, { clientId, nowMs: new Date(now).getTime() }) : { stats: {} };
   for (const rc of plan.recaps) {
     const date = localDate(rc.primary.startAt ?? rc.primary.endAt, s.timezone);
@@ -928,7 +957,8 @@ export async function runRideRecap(crm, {
     const unsubscribeUrl = out.preview ? null : await unsubscribeUrlFor(crm, rc.email, baseUrl);
     const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour });
     const variants = chooseVariants({ seed: rc.primary.pk, stats: exp.stats, modes: s.experiments });
-    const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl, variants });
+    const hero = variants.hero === "B" ? await buildHeroData({ crm, rc, pt, date, fetchImpl, cache: heroCache, preview: out.preview }) : null;
+    const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl, variants, hero });
     const msg = renderRideRecap(data);
     const photoHint = data.photo === false ? null : buildPhotoHint({ label: rc.tour.label, startAt: rc.primary.startAt ?? rc.primary.endAt, fileId: typeof data.photo === "string" ? data.photo : null });
     const to = s.dry_run ? s.test_to : rc.email;
@@ -1058,7 +1088,16 @@ export function sampleRecapRenders() {
     const trip = buildTripDetails({ booking, tour });
     // PLACEHOLDER route art so previews show the route card; real recaps only get a route when a real one exists.
     if (full && type !== "rental") trip.routeImage = `https://highmark-bot-production.up.railway.app/r/route/${type}-placeholder.png`;
-    return buildRecapData({ booking, tour, trip: full ? trip : { ...trip, photo: false }, settings, weather: full ? wx : null, pax: booking.pax,
+    // Sample "fun top" (experiment hero = B) — shown only when a preview sets variants.hero = "B".
+    const hero = !full ? null : {
+      badges: [{ icon: "❄️", text: "Powder Day" }, { icon: "🏔️", text: "Deep Base" }, { icon: "🔁", text: "Ride #3" }, { icon: "🤘", text: "Crew of 3" }],
+      sleds: type === "rea" ? [] : [{ sled: { name: type === "rental" ? 'Polaris 850 Khaos 165" Slash' : 'Polaris 850 Khaos 155"', engine: "850", trackIn: type === "rental" ? 165 : 155,
+        note: type === "rental" ? "a long track, built to float in deep powder" : "a mountain-length track for climbing and carving" }, count: 3 }],
+      snow: { station: type === "backcountry" ? "Columbine" : "Rabbit Ears Pass", depthIn: 64, pctNormal: 142,
+        days: [["Sat", 52], ["Sun", 53], ["Mon", 55], ["Tue", 56], ["Wed", 60], ["Thu", 63], ["Fri", 64]].map(([label, depthIn]) => ({ label, depthIn })) },
+      fresh48: 8, powder: { label: "Thu, Feb 4", inches: 9 },
+    };
+    return buildRecapData({ booking, tour, trip: full ? trip : { ...trip, photo: false }, settings, weather: full ? wx : null, pax: booking.pax, hero,
       unsubscribeUrl: "https://highmark-bot-production.up.railway.app/email/unsubscribe/00000000-0000-4000-8000-000000000000", baseUrl: "https://highmark-bot-production.up.railway.app" });
   };
   return {
