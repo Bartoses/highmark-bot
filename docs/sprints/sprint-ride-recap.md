@@ -93,8 +93,11 @@ The drain side is done in `docs/apps-script/Code.gs` (pasted into `Higmark.gs`);
   the row so they survive the queue:
   - `from_name`: sender display name (`"Rabbit Ears Adventures"` for REA recaps, `"Colorado Sled Rentals"` for CSR).
     Leave it null for other email types, which keep the script's default.
-  - `photo_hint`: `{ "date": "YYYY-MM-DD", "label": "<recap_tours.label>" }`. The script looks in
-    `<RECAP_PHOTO_FOLDER_ID>/<date>/` for an image whose file name contains the label, falling back to the label's first word.
+  - `photo_hint`: build it with **`buildPhotoHint({ label, startAt })` from `rideMedia.js`**, which gives
+    `{ "date": "YYYY-MM-DD", "label": "<recap_tours.label>", "time": "11am" }` in Denver time. Don't hand-roll it. The
+    script looks in `<RECAP_PHOTO_FOLDER_ID>/<date>/` for a JPEG/PNG/GIF named with that label **and** time, so two
+    Grand Tours on one day never swap photos. `rideMedia.js` documents the naming and matching rules and tests them
+    against the live Apps Script code. Later, the Guide app adds `file_id` to point at the exact photo.
 - **Two HTML markers in the recap body:**
   - `<!--PHOTO_SLOT-->` where the hero photo goes. It becomes a 560px `cid:ridephoto` image, or is removed.
   - `<!--PHOTO_ONLY--> … <!--/PHOTO_ONLY-->` around the print offer. It's kept only when a photo was found.

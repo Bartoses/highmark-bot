@@ -25,6 +25,13 @@ owned by sean@coloradosledrentals.com. Local clone: `~/code/csr-emails` (clasp +
    `checkConnection` to confirm the API still answers.
 5. Optional: Project Settings → Script properties → `RECAP_PHOTO_FOLDER_ID` = the "Tour Photos" Drive folder id.
 
+## Change set 2 (2026-11-22, later): safer photo matching
+1. **`Higmark.gs`** ← replace the whole file again with the latest `docs/apps-script/Code.gs`. Only `hmFindPhoto_`
+   changed, plus a new `hmPickPhotoName_` and `HM_EMAIL_IMAGE_TYPES`. It now uses `photo_hint.file_id` first, matches
+   label **and** start time (two same-tour rides a day never swap photos), picks the `- 01` cover deterministically,
+   and ignores HEIC, WebP and video.
+2. `git diff --stat` must show only `Higmark.js`. Push, pull to verify, commit. No new permissions and no trigger changes.
+
 ## Verify
 - `clasp pull` after the push and confirm there's no diff (the push landed exactly).
 - In the editor: run `checkConnection` (should say connected); Triggers page shows `drainQueue` every 10 min.

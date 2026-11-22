@@ -1002,9 +1002,22 @@ recaps are real and real-time, and the CRM fills up with useful detail.
   from the portal for managers.
 - **Pick the ride, not a file name:** the page lists that guide's rides today from `daily_manifest` (tour, time, riders).
   The guide taps one, and everything they add attaches to those exact bookings. That replaces matching Drive file names.
-- **Upload photos:** pick from the camera roll, several at once. Photos are resized on the phone before upload (weak
-  mountain signal), and uploads retry until they finish. Storage: Supabase Storage on DB2 (recommended; then the bot can
-  place the photo itself and drop the Drive lookup) or the existing Drive folder. *Decision for Sean.*
+- **Upload photos:** pick from the camera roll, several at once, and star the cover photo. Uploads retry until they
+  finish (weak mountain signal). **Storage = the "Tour Photos" Drive folder** (Sean's choice, 2026-11-22;
+  id `1QoyfkJfW2fNJDRabSC2c41JtusEhwGCL`), written to the **contract in `rideMedia.js`** (built and tested):
+  - Folder `Tour Photos/<rideDateFolder(start)>/`, e.g. `2026-11-22/`. File name from
+    `buildRideMediaFileName({label, startAt, guide, index})`, e.g. `Grand Tour 11am - Jake - 01.jpg`.
+    `label` = the ride's `recap_tours.label`, time = its start (Denver), and `01` = the cover. Guides never type names.
+  - Photos are converted to **JPEG** on the phone (iPhone HEIC doesn't show in most email apps), longest edge 1600px,
+    quality ~0.82 (`PHOTO_UPLOAD_SPEC`). Videos go in the same folder with the same naming (`.mp4`/`.mov`). They're
+    kept for social, never put in email (the script only attaches JPEG/PNG/GIF).
+  - Store each uploaded file's Drive **file id** on the ride log. The recap then sends
+    `buildPhotoHint({label, startAt, fileId})` and the script uses that exact file. The folder search by name is only
+    the fallback for photos dropped in by hand.
+  - **How the bot writes to Drive:** a Google **service account**, added as *Content manager* on the shared drive that
+    holds Tour Photos, with its JSON key in Railway (`GOOGLE_SERVICE_ACCOUNT_JSON`), using the Drive API resumable upload
+    (handles big videos). Service accounts can't store files in a personal *My Drive*, so Tour Photos must live in
+    a **shared drive**. *Check this when building* (Claude's Drive connector couldn't see the folder).
 - **About the ride (all optional, one tap or a few words):** conditions (fresh snow, sky), the route and stops actually
   taken, high point, miles, one highlight ("moose at Rabbit Ears", "first powder day"), and a short note to the group.
   These fill the recap's stats, stops and subline. The guide's name comes from their login, filling `guide_name`, which

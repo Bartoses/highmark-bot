@@ -125,25 +125,58 @@ function hmSendOne_(m) {
   return !!photo;
 }
 
-// Finds the ride photo in Drive: <RECAP_PHOTO_FOLDER_ID>/<YYYY-MM-DD>/<file whose name contains the tour label>.
-// hint = { date: 'YYYY-MM-DD', label: 'Grand Tour' }. Any problem (no folder, no match, no permission) = no photo, never an error.
+// Finds the ride photo. hint = { date: 'YYYY-MM-DD', label: 'Grand Tour', time: '11am' (optional), file_id (optional) }.
+//   1. file_id (set by the Guide Ride Log app, which knows exactly which photo the guide chose) -> that file.
+//   2. Otherwise search <RECAP_PHOTO_FOLDER_ID>/<date>/ by file name (photos dropped in by hand), following the naming
+//      contract "<Label> <time> - <Guide> - <NN>.jpg" (see rideMedia.js in highmark-bot):
+//      - with a time: only files named with that label AND that time (two Grand Tours the same day never swap photos);
+//        a label-only file name is used only when no file names a different time for that label.
+//      - without a time: label match, then the label's first word.
+//      Among matches the alphabetically first name wins, so "- 01" (or a "cover" photo) is the one used.
+// Only email-safe images (JPEG/PNG/GIF, under 15 MB) are used: iPhone HEIC and videos are ignored.
+// Any problem (no folder, no match, no permission) = no photo, never an error.
+var HM_EMAIL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
+function hmEmailSafeImage_(f) {
+  return HM_EMAIL_IMAGE_TYPES.indexOf(String(f.getMimeType()).toLowerCase()) !== -1 && f.getSize() <= 15 * 1024 * 1024;
+}
 function hmFindPhoto_(hint) {
   try {
+    if (!hint) return null;
+    if (hint.file_id) {
+      try { var byId = DriveApp.getFileById(String(hint.file_id)); if (hmEmailSafeImage_(byId)) return byId.getBlob().setName('ridephoto'); }
+      catch (e) { Logger.log('Photo file_id not usable, searching by name: ' + e.message); }
+    }
     var rootId = PropertiesService.getScriptProperties().getProperty('RECAP_PHOTO_FOLDER_ID');
-    if (!rootId || !hint || !hint.date || !hint.label) return null;
+    if (!rootId || !hint.date || !hint.label) return null;
     var days = DriveApp.getFolderById(rootId).getFoldersByName(String(hint.date));
     if (!days.hasNext()) return null;
-    var label = String(hint.label).toLowerCase(), firstWord = label.split(/\s+/)[0], fallback = null;
-    var files = days.next().getFiles();
-    while (files.hasNext()) {
-      var f = files.next();
-      if (String(f.getMimeType()).indexOf('image/') !== 0 || f.getSize() > 15 * 1024 * 1024) continue;   // images only, under 15 MB
-      var name = f.getName().toLowerCase();
-      if (name.indexOf(label) !== -1) return f.getBlob().setName('ridephoto');                       // full label match wins
-      if (!fallback && firstWord.length > 3 && name.indexOf(firstWord) !== -1) fallback = f;          // e.g. "grand" in "Grand 11am.jpg"
-    }
-    return fallback ? fallback.getBlob().setName('ridephoto') : null;
+    var files = days.next().getFiles(), list = [];
+    while (files.hasNext()) { var f = files.next(); if (hmEmailSafeImage_(f)) list.push({ file: f, name: f.getName() }); }
+    var pick = hmPickPhotoName_(list.map(function (x) { return x.name; }), hint);
+    if (pick === null) return null;
+    for (var i = 0; i < list.length; i++) if (list[i].name === pick) return list[i].file.getBlob().setName('ridephoto');
+    return null;
   } catch (e) { Logger.log('Photo lookup skipped: ' + e.message); return null; }
+}
+// Pure: chooses which file name (if any) belongs to this ride. Mirrors pickRidePhotoName() in rideMedia.js (tested there).
+function hmPickPhotoName_(names, hint) {
+  var norm = function (s) { return String(s || '').toLowerCase().replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ').trim(); };
+  var timeRe = /\b(\d{1,2})(?::|\s)?(\d{2})?\s?(am|pm)\b/;
+  var timeOf = function (n) { var m = norm(n).match(timeRe); return m ? (parseInt(m[1], 10) + (m[2] && m[2] !== '00' ? ':' + m[2] : '') + m[3]) : null; };
+  var label = norm(hint.label), want = hint.time ? timeOf(hint.time) : null;
+  var sorted = names.slice().sort();
+  var withLabel = sorted.filter(function (n) { return norm(n).indexOf(label) !== -1; });
+  if (want) {
+    var exact = withLabel.filter(function (n) { return timeOf(n) === want; });
+    if (exact.length) return exact[0];
+    var otherTimes = withLabel.filter(function (n) { var t = timeOf(n); return t && t !== want; });
+    var untimed = withLabel.filter(function (n) { return !timeOf(n); });
+    return (!otherTimes.length && untimed.length) ? untimed[0] : null;
+  }
+  if (withLabel.length) return withLabel[0];
+  var first = label.split(' ')[0];
+  if (first.length > 3) { var loose = sorted.filter(function (n) { return norm(n).indexOf(first) !== -1; }); if (loose.length) return loose[0]; }
+  return null;
 }
 
 // Sends rendered messages through Gmail, then reports each result to Highmark. Returns {sent, failed, deferred}.

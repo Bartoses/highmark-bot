@@ -3262,6 +3262,7 @@ async function main() {
     await testEmailDomains();     // Email Marketing Phase 2: per-client sending domain — resolveSendFrom, route guards, validation
     await testFareHarborNormalizer(); // FareHarbor → DB2 bookings: customer/activity/total fill from raw_payload + bookings-by-create-date poller
     await testFareHarborContacts();   // FareHarbor → CRM contacts mirror: consent comes ONLY from FH flags, opt-outs honored, existing consent never touched
+    await testRideMedia();            // Ride photo naming contract: Guide app file names/folders, photo_hint, matcher == Apps Script hmPickPhotoName_
     await testCustomerFileImport();   // Polaris/MPWR all-riders file → contacts: dedupe within file + vs CRM, grandfathered consent, no DOB/address, SMS never opted in
     await testWaiverImport();         // Smartwaiver → waivers + contacts: email-match dedupe, consent only from verified+ticked, never downgrade, no DOB/DL
     await testOutboundMessaging();    // send API + queue + Resend webhook + suppression: consent enforced server-side, idempotent, fail-closed
@@ -19020,6 +19021,56 @@ async function testFareHarborContacts() {
 
   const none = await C.mirrorFareHarborContacts(null, null, {});
   chk("fhcontacts: null crm client is a safe no-op", none.guests === 0 && none.newContacts === 0);
+}
+
+async function testRideMedia() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const M = await import("./rideMedia.js");
+  const fs = await import("fs"); const vm = await import("vm");
+  // 2026-11-22 18:00Z = 11:00am MST; 20:30Z = 1:30pm; 2026-07-04 15:00Z = 9am MDT; 06:30Z on 11-23 = 11:30pm on 11-22 Denver
+  const am11 = "2026-11-22T18:00:00Z", pm130 = "2026-11-22T20:30:00Z";
+  chk("ridemedia: date folder + time use Denver time (incl. DST + late-night UTC rollover)",
+    M.rideDateFolder(am11) === "2026-11-22" && M.formatRideTime(am11) === "11am" && M.formatRideTime(pm130) === "1:30pm"
+    && M.formatRideTime("2026-07-04T15:00:00Z") === "9am" && M.rideDateFolder("2026-11-23T06:30:00Z") === "2026-11-22"
+    && M.formatRideTime("2026-11-22T19:00:00Z") === "12pm" && M.formatRideTime("2026-11-22T07:00:00Z") === "12am");
+  chk("ridemedia: file name = '<Label> <time> - <Guide> - <NN>.<ext>', cleaned, jpeg->jpg, index padded, guide optional",
+    M.buildRideMediaFileName({ label: "Grand Tour", startAt: am11, guide: "Jake", index: 1 }) === "Grand Tour 11am - Jake - 01.jpg"
+    && M.buildRideMediaFileName({ label: "Tree/Line: *Tour*", startAt: pm130, guide: "  Mia  R ", index: 12, ext: ".JPEG" }) === "Tree Line Tour 1:30pm - Mia R - 12.jpg"
+    && M.buildRideMediaFileName({ label: "Grand Tour", startAt: am11, ext: "mp4" }) === "Grand Tour 11am - 01.mp4");
+  let threw = false; try { M.buildRideMediaFileName({ label: "  ", startAt: am11 }); } catch { threw = true; }
+  chk("ridemedia: missing label refuses to build a name", threw);
+  const h = M.buildPhotoHint({ label: "Grand Tour", startAt: am11, fileId: "abc123" });
+  chk("ridemedia: photo_hint carries date, label, time and optional file_id",
+    h.date === "2026-11-22" && h.label === "Grand Tour" && h.time === "11am" && h.file_id === "abc123" && !("file_id" in M.buildPhotoHint({ label: "Grand Tour", startAt: am11 })));
+  chk("ridemedia: only JPEG/PNG/GIF are email-safe (HEIC, WebP, video are not)",
+    M.isEmailSafeImageType("image/jpeg") && M.isEmailSafeImageType("IMAGE/PNG") && !M.isEmailSafeImageType("image/heic") && !M.isEmailSafeImageType("image/webp") && !M.isEmailSafeImageType("video/mp4"));
+
+  const day = ["Grand Tour 1:30pm - Mia - 02.jpg", "Grand Tour 11am - Jake - 02.jpg", "Grand Tour 11am - Jake - 01.jpg", "Grand Tour 1:30pm - Mia - 01.jpg", "Tree Line 9am - Sam - 01.jpg"];
+  const P = M.pickRidePhotoName;
+  chk("ridemedia: two same-tour rides in a day never swap photos; '- 01' is the cover",
+    P(day, { label: "Grand Tour", time: "11am" }) === "Grand Tour 11am - Jake - 01.jpg" && P(day, { label: "Grand Tour", time: "1:30pm" }) === "Grand Tour 1:30pm - Mia - 01.jpg");
+  chk("ridemedia: a ride with no photo of its own gets none (not another group's)",
+    P(day, { label: "Grand Tour", time: "3pm" }) === null && P(day, { label: "Sunset Ride", time: "4pm" }) === null);
+  chk("ridemedia: hand-dropped names still work: label-only used only when unambiguous; '11 am'/'11AM'/'11:00am' match 11am",
+    P(["Grand Tour.jpg"], { label: "Grand Tour", time: "11am" }) === "Grand Tour.jpg"
+    && P(["Grand Tour.jpg", "Grand Tour 1pm.jpg"], { label: "Grand Tour", time: "11am" }) === null
+    && P(["grand_tour_11_AM.jpg"], { label: "Grand Tour", time: "11am" }) === "grand_tour_11_AM.jpg"
+    && P(["Grand Tour 11:00am.jpg"], { label: "Grand Tour", time: "11am" }) === "Grand Tour 11:00am.jpg"
+    && P(["Grand 11am.jpg"], { label: "Grand Tour" }) === "Grand 11am.jpg");
+
+  // Parity: the real Apps Script matcher (Code.gs) must agree with rideMedia on every case.
+  const ctx = { Logger: { log() {} } }; vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(new URL("./docs/apps-script/Code.gs", import.meta.url), "utf8"), ctx);
+  const cases = [
+    [day, { label: "Grand Tour", time: "11am" }], [day, { label: "Grand Tour", time: "1:30pm" }], [day, { label: "Grand Tour", time: "3pm" }],
+    [day, { label: "Tree Line", time: "9am" }], [day, { label: "Grand Tour" }], [["Grand Tour.jpg"], { label: "Grand Tour", time: "11am" }],
+    [["Grand Tour.jpg", "Grand Tour 1pm.jpg"], { label: "Grand Tour", time: "11am" }], [["grand_tour_11_AM.jpg"], { label: "Grand Tour", time: "11am" }],
+    [["Grand 11am.jpg"], { label: "Grand Tour" }], [["Rabbit Ears Tour 10am - A - 01.jpg"], { label: "Rabbit Ears Tour", time: "10am" }], [[], { label: "Grand Tour", time: "11am" }],
+  ];
+  const mismatches = cases.filter(([n, hint]) => ctx.hmPickPhotoName_(n, hint) !== P(n, hint));
+  chk("ridemedia: Apps Script hmPickPhotoName_ == rideMedia.pickRidePhotoName on every case", mismatches.length === 0, JSON.stringify(mismatches.map(c => c[1])));
+  chk("ridemedia: Apps Script only accepts JPEG/PNG/GIF (same list as rideMedia)",
+    JSON.stringify(Array.from(ctx.HM_EMAIL_IMAGE_TYPES)) === JSON.stringify(M.EMAIL_IMAGE_TYPES));
 }
 
 async function testCustomerFileImport() {

@@ -129,6 +129,7 @@ customerFileImport.js — Polaris/MPWR "all riders" export (.xlsx/.csv) → DB2 
 outboundApi.js — Bearer-key API (/api/v1) for Google Apps Script/automations: email + SMS audience preview, marketing send, booking-related (transactional) send; consent enforced server-side, dry-run by default, idempotent
 outboundAudience.js — the single definition of "who may be emailed/texted" (segment → recipients + exclusion reasons); explicit consent by default, unknown segment fields rejected
 emailSender.js — email queue → Resend batches → delivery tracking; claim-based (web + cron never double-send), consent re-checked at send time, Resend signed webhook → bounce/complaint suppression
+rideMedia.js — ride photo/video Drive naming contract (Tour Photos/<YYYY-MM-DD>/"<Label> <time> - <Guide> - <NN>.jpg"), buildPhotoHint for recaps, pickRidePhotoName == Apps Script hmPickPhotoName_ (parity-tested)
 emailTracking.js — marketing email opens + clicks: signed /e/c/ click links + /e/o/ open pixel (HMAC, EMAIL_TRACKING_SECRET), bot filter, DB2 `email_events`, per-campaign engagement stats
 emailSuppression.js — address-level unsubscribe/suppress (every contact row carrying an email), do-not-email records
 importUnsubscribes.js — legacy Google-Sheet unsubscribe list → suppression; CLI dry-runs by default
