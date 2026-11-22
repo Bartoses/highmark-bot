@@ -20094,9 +20094,19 @@ async function testRideRecap() {
     JSON.stringify(allLinks.map(x => x.hs.filter(h => /^https?:/.test(h) && !/utm_source=ride_recap/.test(h)))));
   chk("recap links: every FareHarbor link has ref=followupemail&full-items=yes (or the friend ref)",
     allLinks.every(({ hs }) => hs.filter(h => h.startsWith("https://fareharbor.com")).every(h => { const u = new URL(h); return u.searchParams.get("full-items") === "yes" && u.searchParams.get("ref") === "followupemail"; })) && allLinks.every(({ hs }) => hs.some(h => h.includes("fareharbor.com"))));
-  const shareLinks = allLinks.flatMap(({ hs }) => hs.filter(h => /^(sms|mailto):\?/.test(h)).map(h => decodeURIComponent(h)));
-  chk("recap links: share links (text + email) carry the code and a FareHarbor link with ref=friend-<booking id>",
-    shareLinks.length === 6 && shareLinks.every(h => h.includes("FRIEND10") && /fareharbor\.com\S*ref=friend-777/.test(h) && /full-items=yes/.test(h) && /utm_source=ride_recap/.test(h)), JSON.stringify(shareLinks.slice(0, 2)));
+  const shareLinks = allLinks.flatMap(({ hs }) => hs.filter(h => /^mailto:\?/.test(h)).map(h => decodeURIComponent(h)));
+  chk("recap links: 'Email it to a friend' carries the code and a FareHarbor link with ref=friend-<booking id>",
+    shareLinks.length === 3 && shareLinks.every(h => h.includes("FRIEND10") && /fareharbor\.com\S*ref=friend-777/.test(h) && /full-items=yes/.test(h) && /utm_source=ride_recap/.test(h)), JSON.stringify(shareLinks.slice(0, 2)));
+  chk("recap links: no sms: link in the email (Gmail strips them) — 'Text it to a friend' opens the https share page instead",
+    allLinks.every(({ t, hs }) => !hs.some(h => h.startsWith("sms:")) && hs.some(h => { try { const u = new URL(h); return u.pathname === "/r/share" && u.searchParams.get("b") === "777" && u.searchParams.get("t") === t && u.searchParams.get("utm_content") === "share-sms"; } catch { return false; } })));
+  const sp = R.renderSharePage({ bookingId: "777", type: "rea", settings: { friend_code: "FRIEND10" } });
+  const spSms = decodeURIComponent((sp.match(/href="(sms:[^"]+)"/) || [])[1]?.replace(/&amp;/g, "&") ?? "");
+  chk("recap share page: sms link + share sheet + copy carry the code and the ref=friend-<id> FareHarbor link",
+    spSms.startsWith("sms:?&body=You have to try Rabbit Ears Adventures! Use code FRIEND10") && /ref=friend-777/.test(spSms) && /full-items=yes/.test(spSms)
+    && sp.includes("navigator.share") && sp.includes('id="copy"') && sp.includes("#F99E16") && !/undefined|\bnull\b/.test(sp));
+  chk("recap share page: bad booking id or type → no page (404); CSR types are CSR-branded",
+    R.renderSharePage({ bookingId: "<script>", type: "rea" }) === null && R.renderSharePage({ bookingId: "1", type: "zzz" }) === null && R.renderSharePage({ bookingId: "", type: "rea" }) === null
+    && R.renderSharePage({ bookingId: "9", type: "rental" }).includes("Colorado Sled Rentals") && R.renderSharePage({ bookingId: "9", type: "rental" }).includes("coloradosledrentals/?ref=friend-9"));
   chk("recap links: every brand uses the confirmed Google review link (…OEAg)",
     allLinks.every(({ hs }) => hs.some(h => h.startsWith("https://g.page/r/CfQGQSBK_KsOEAg/review?"))) && !allLinks.some(({ hs }) => hs.some(h => h.includes("OEAE"))));
   const pts = { weather_lat: 40.5, weather_lon: -106.8, weather_points: [
@@ -20210,8 +20220,8 @@ async function testRideRecap() {
     // click/open tracking applies to recaps but never to the unsubscribe link or the markers
     const row = { id: "11111111-1111-4111-8111-111111111111", email: "a@x.com", subject: "s", body_html: unknown.html, from_name: "Rabbit Ears Adventures" };
     const it = S.renderRecapRow({ row, baseUrl: "https://app.test", trackingSecret: "0123456789abcdef0123" });
-    chk("recap tracking: buttons go through /e/c/, unsubscribe + sms/mailto untouched, pixel added, markers intact",
-      it.html.includes("/e/c/11111111-1111-4111-8111-111111111111/") && it.html.includes('href="https://app.test/email/unsubscribe/tok-1"') && it.html.includes('href="sms:?&amp;body=')
+    chk("recap tracking: buttons go through /e/c/, unsubscribe + mailto untouched, pixel added, markers intact",
+      it.html.includes("/e/c/11111111-1111-4111-8111-111111111111/") && it.html.includes('href="https://app.test/email/unsubscribe/tok-1"') && it.html.includes('href="mailto:?subject=')
       && it.html.includes("/e/o/") && it.html.includes("<!--PHOTO_SLOT-->") && it.from.startsWith("Rabbit Ears Adventures"));
   }
   {
@@ -20262,6 +20272,14 @@ async function testRideRecap() {
     chk("recap referral: a reward last season doesn't block this season", (await R.runReferralRewards(nextSeason, { now: NOW })).queued === 1);
     chk("recap referral: friend ref parsing + season label", R.parseFriendRef("friend-123") === "123" && R.parseFriendRef("FRIEND-#45") === "45" && R.parseFriendRef("followupemail") === null && R.parseFriendRef(null) === null
       && R.recapSeason(new Date("2027-03-01T12:00:00Z")) === "2026-27" && R.recapSeason(new Date("2026-08-01T12:00:00Z")) === "2026-27");
+  }
+
+  {
+    const ok = await fetch(`${BASE_URL}/r/share?b=777&t=backcountry`);
+    const okHtml = await ok.text();
+    const bad = await fetch(`${BASE_URL}/r/share?b=abc&t=rea`);
+    chk("recap share route: GET /r/share serves the page (200, no-store); a bad id is a 404",
+      ok.status === 200 && /no-store/.test(ok.headers.get("cache-control") ?? "") && okHtml.includes("ref=friend-777") && bad.status === 404, `${ok.status} ${bad.status}`);
   }
 
   // 8. snapshots (3 types × full / missing). UPDATE_SNAPSHOTS=1 rewrites them.
