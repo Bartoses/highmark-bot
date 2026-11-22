@@ -36,9 +36,10 @@ var QUOTA_RESERVE = 5;                                // keep a few sends of tod
 var RUN_BUDGET_MS = 270000;                           // stop after ~4.5 minutes (Apps Script kills a run at 6 min); it resumes by itself
 
 // ---- MENU (shows up in the spreadsheet) ----
-// NOTE: Apps Script allows only ONE onOpen() per project. If another file of yours already defines onOpen(),
-// delete this one and add the createMenu(...) lines below into yours.
+// NOTE: Apps Script allows only ONE onOpen() per project; this is it. Other files add their menus through a helper
+// called from here (e.g. GoogleUpload.gs -> addGoogleAdsMenu_). The helper is optional, so this file works on its own too.
 function onOpen() {
+  if (typeof addGoogleAdsMenu_ === 'function') { try { addGoogleAdsMenu_(); } catch (e) { Logger.log('Google Ads menu: ' + e.message); } }
   SpreadsheetApp.getUi().createMenu('Highmark')
     .addItem('Check connection', 'checkConnection')
     .addItem('Preview newsletter audience', 'previewNewsletter')

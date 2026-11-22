@@ -1018,6 +1018,18 @@ recaps are real and real-time, and the CRM fills up with useful detail.
   guest-facing text.
 - Build in highmark-bot: a `/guide` page (public/guide.html, mobile-first), `ride_logs` + `ride_log_photos` +
   `ride_log_riders` (DB2), and signed-link auth reusing the briefing's phone identity.
+- **Videos too:** short clips alongside photos. Upload them in pieces (large files, weak signal) and keep them out of
+  the email body; link to them or use a still frame.
+- **Manager tools (role-gated: owner / GM / ops / marketing, not guides):**
+  - **Post to social:** pick photos or videos from today's rides, write a caption (AI draft from the ride log's
+    highlight), and post or schedule to Instagram / Facebook for CSR or REA. Phase A: one-tap share via the phone's
+    share sheet, with the caption copied (no API setup). Phase B: direct posting via the Meta Graph API (needs a
+    Business account + app review), or a scheduler like Buffer. Only use media whose riders' waiver allows it.
+  - **Text the day's riders:** pick a ride and send a text to its guests ("running 15 min late", "meet at the North Routt
+    trailhead", "photos are in your email"). These count as **booking-related texts**: they go through the existing
+    `/api/v1/sms/transactional` rails (one booking's own guests only, STOP honored, logged in the conversation thread),
+    never as marketing. Templates plus free text, with a preview before send. Marketing texts stay in Campaigns,
+    explicit-consent only.
 
 ## NEXT 5 BUILDS (STRICT ORDER)
 
