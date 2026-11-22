@@ -332,7 +332,7 @@ FRIEND10 referral code, offers prints/merch and the next ride. Spec: `docs/sprin
 (`transport='gmail'`, `category='recap'`). The Apps Script `drainQueue` trigger sends them from info@ within 10 minutes and
 fills in the ride photo from Drive (`Tour Photos/<date>/<Label> <time> - … .jpg`, see `rideMedia.js`).
 
-**Migration:** `db2_ride_recap.sql` (DB2). Until it is applied the job does nothing.
+**Migration:** `db2_ride_recap.sql` (DB2, applied 2026-11-22).
 
 **Edit tours and settings** in the Supabase Table Editor (DB2, no deploy):
 - `recap_tours`: `match` is a piece of the FareHarbor item name. `type` is `rea`, `backcountry`, `rental`, or `skip` (never email).

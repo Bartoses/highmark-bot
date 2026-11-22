@@ -991,7 +991,7 @@ importer (dry-run ready; live apply pending), FH→contacts mirror with consent 
 5. Fix `csr-webhook` `fh_sync` (dead endpoint) to use `bookings-by-create-date` + fetch-by-uuid.
 
 ## PLANNED — Ride Recap emails + Guide Ride Log app (added 2026-11-22)
-**Ride Recap** (sprint spec: `docs/sprints/sprint-ride-recap.md`, BUILT 2026-11-22 — server side in `rideRecap.js`, PR open; `db2_ride_recap.sql` awaiting review/apply, then live in dry run). A branded same-evening email to every
+**Ride Recap** (sprint spec: `docs/sprints/sprint-ride-recap.md`, BUILT 2026-11-22 — server side in `rideRecap.js`, PR open; `db2_ride_recap.sql` applied 2026-11-22; goes live in dry run once merged + deployed). A branded same-evening email to every
 guest after a tour or rental: review, referral (FRIEND10), next ride, prints/merch. It's queued by the bot and delivered by
 the Apps Script `drainQueue` (every 10 min, as info@). The photo comes from Drive via `photo_hint` until the Guide app exists.
 

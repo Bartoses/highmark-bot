@@ -1,6 +1,6 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- DB2 (CSR/REA CRM, aiiguzslqiemksrvfvwk) — Ride Recap emails (rideRecap.js)
--- NOT YET APPLIED — for Sean's review. Additive + idempotent; run once in the DB2 SQL editor.
+-- APPLIED to DB2 2026-11-22. Additive + idempotent; run once in the DB2 SQL editor.
 -- Until it is applied the cron job finds no recap_settings table and does nothing.
 --
 --   recap_settings  one row per client — edit in the Table Editor, no deploy needed
