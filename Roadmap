@@ -990,6 +990,35 @@ importer (dry-run ready; live apply pending), FH→contacts mirror with consent 
 4. **Ongoing Smartwaiver ingestion** (webhook/API → `waiverImport.importWaivers`) so waivers stop being a manual CSV.
 5. Fix `csr-webhook` `fh_sync` (dead endpoint) to use `bookings-by-create-date` + fetch-by-uuid.
 
+## PLANNED — Ride Recap emails + Guide Ride Log app (added 2026-11-22)
+**Ride Recap** (sprint spec: `docs/sprints/sprint-ride-recap.md`, IN PROGRESS). A branded same-evening email to every
+guest after a tour or rental: review, referral (FRIEND10), next ride, prints/merch. It's queued by the bot and delivered by
+the Apps Script `drainQueue` (every 10 min, as info@). The photo comes from Drive via `photo_hint` until the Guide app exists.
+
+**Guide Ride Log** (NEXT after Ride Recap). A phone-first page where guides log each ride mid-day or end of day, so
+recaps are real and real-time, and the CRM fills up with useful detail.
+- **Getting there:** a link in the guide's morning SMS briefing (guides are already `operator_phones` with role `guide`),
+  e.g. "Log today's rides: <link>". It's signed per guide per day, so there's no password to remember. Also reachable
+  from the portal for managers.
+- **Pick the ride, not a file name:** the page lists that guide's rides today from `daily_manifest` (tour, time, riders).
+  The guide taps one, and everything they add attaches to those exact bookings. That replaces matching Drive file names.
+- **Upload photos:** pick from the camera roll, several at once. Photos are resized on the phone before upload (weak
+  mountain signal), and uploads retry until they finish. Storage: Supabase Storage on DB2 (recommended; then the bot can
+  place the photo itself and drop the Drive lookup) or the existing Drive folder. *Decision for Sean.*
+- **About the ride (all optional, one tap or a few words):** conditions (fresh snow, sky), the route and stops actually
+  taken, high point, miles, one highlight ("moose at Rabbit Ears", "first powder day"), and a short note to the group.
+  These fill the recap's stats, stops and subline. The guide's name comes from their login, filling `guide_name`, which
+  is often empty today.
+- **About the riders (internal only, never emailed):** quick chips per rider, e.g. skill level, first time, interested
+  in backcountry, interested in renting, birthday or celebration, VIP. These become CRM `contacts` tags and notes for
+  future segments, such as "advanced riders who haven't done backcountry".
+- **Timing:** the recap job waits for the ride's log until a cutoff (setting, e.g. 8 pm), then sends with whatever exists.
+  The existing missing-data rules mean a recap without a log still looks finished.
+- **Check first:** does the Smartwaiver release cover using guests' photos in email? Rider notes must never appear in
+  guest-facing text.
+- Build in highmark-bot: a `/guide` page (public/guide.html, mobile-first), `ride_logs` + `ride_log_photos` +
+  `ride_log_riders` (DB2), and signed-link auth reusing the briefing's phone identity.
+
 ## NEXT 5 BUILDS (STRICT ORDER)
 
 1. Sprint 3C — Conversations upgrade (search, filter by phone, bulk pause)

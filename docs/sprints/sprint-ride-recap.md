@@ -103,6 +103,12 @@ The drain side is done in `docs/apps-script/Code.gs` (pasted into `Higmark.gs`);
   `reportGmailResults` currently ignores unknown fields, so extend it.
 - Emails without these markers or fields are sent exactly as before (verified with a mock-based simulation).
 
+#### 5b. Leave room for the Guide Ride Log (next sprint, see Roadmap; don't build it now)
+Guides will soon log each ride (photos, stops taken, highlight, conditions, notes) against specific bookings.
+Build the recap so trip details come from **one `tripDetails` input** (`guide`, `stops`, `miles`, `high_point_ft`,
+`highlight`, `photo`), filled today from `recap_tours` + the booking. Later, a `ride_logs` row can override it without
+touching the template.
+
 ### 6. Weather
 - Open-Meteo (free, no key) daily values for the trailhead: snowfall, max temp, weather code → labels (SNOW, HIGH, SKY). If the call fails, hide the labels; never block the send.
 
