@@ -39,11 +39,12 @@
 //   • Hard cap on recipients per send (OUTBOUND_MAX_RECIPIENTS, default 5000) and an optional
 //     `expected_recipients` tripwire (409 if the audience is far bigger than you expected).
 // ─────────────────────────────────────────────────────────────────────────────
+import { handleRecapPhotoUpload } from "./recapSimple.js";
 import crypto from "crypto";
 import express from "express";
 import { normalizeSegment, SegmentError, selectEmailRecipients, selectSmsRecipients, loadSmsOptOuts, maskEmail, maskPhone } from "./outboundAudience.js";
 import { loadExperimentStats, experimentReport } from "./rideRecap.js";
-import { enqueueCampaignSends, enqueueTransactional, drainEmailQueue, resolveMailingAddress, resolveReplyTo, resolveFrom, resolveBaseUrl, renderCampaignEmail, pullGmailMessages, reportGmailResults, reportGmailBounces } from "./emailSender.js";
+import { enqueueCampaignSends, enqueueTransactional, drainEmailQueue, resolveMailingAddress, resolveReplyTo, resolveFrom, resolveBaseUrl, renderCampaignEmail, renderRecapRow, pullGmailMessages, reportGmailResults, reportGmailBounces } from "./emailSender.js";
 import { createEmailCampaign } from "./emailCampaigns.js";
 import { isEmailConfigured, sendEmail } from "./emailService.js";
 import { renderMergeFields, findTemplateProblems, BOOKING_FIELDS } from "./emailTemplates.js";
@@ -287,6 +288,15 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
       if (error || !data) throw new Error(error?.message ?? "insert failed");
       return res.status(201).json({ id: data.id, updated: false, warnings });
     } catch (e) { console.error("[OUTBOUND] newsletters save error:", e.message); return bad(res, "could not save the newsletter", 500); }
+  });
+
+  // Ride Recap simple template: the Apps Script uploads the ride photo it found in Drive; the bot checks it is a strict
+  // match for that ride, resizes + hosts it (Supabase Storage, recap-photos) and returns the finished email to send.
+  router.post("/recaps/photo", async (req, res) => {
+    try {
+      const r = await handleRecapPhotoUpload(crm, req.body, { render: (row) => renderRecapRow({ row }) });
+      res.status(r.status).json(r.body);
+    } catch (e) { console.error("[OUTBOUND] recaps/photo error:", e.message); return bad(res, "photo upload failed", 500); }
   });
 
   // Ride Recap A/B experiments: sends, clicks, click rate and chance-to-be-best per version (real sends only).

@@ -379,3 +379,42 @@ versions in `utm_term`, so FareHarbor/Google Analytics bookings can be attribute
 **Referral rewards.** When `reward_code` is set, each run looks for new bookings made through a shared link
 (`ref=friend-<booking id>`, stored by FareHarbor as `online_booking_references`) and queues one "Your friend booked!" email
 with the code to the referring guest, at most once per guest per season (`recap_rewards`).
+
+### Templates: `v1` and `simple` (recapSimple.js, added 2026-11-22)
+
+`recap_settings.template` picks the layout (migration `db2_ride_recap_v2.sql`). **`v1`** (default) is the email above,
+byte-for-byte unchanged. **`simple`** is the v2 layout from the "Simple v2" design page: logo, one hero, kicker + headline +
+one sentence, one stat line, "Your photos are ready", "Had a good day?", "Bring a friend", optional gear, book again, footer.
+
+- **Switch:** in DB2 `recap_settings`, set `template` to `simple` (or back to `v1` for an instant fallback). No deploy needed;
+  the next daily run uses it. Unknown values count as `v1`.
+- **Preview first:** `npm run recap:preview -- --template=simple` writes the six sample cases to `tmp/recap-preview/*.html` and
+  sends each as a `[TEST]` email to `recap_settings.test_to` only. `--booking=<FareHarbor id>` renders a real booking
+  (read-only lookup; `--photo` adds the sample photo), `--case=a,b` picks cases, `--no-send` only writes files. Cloud sessions:
+  prefix with `NODE_USE_ENV_PROXY=1`.
+- **Photos are hosted, not attached.** For a simple recap the Apps Script finds the ride photo in Drive and uploads it to
+  `POST /api/v1/recaps/photo`. The bot checks it is a strict match, resizes it with `sharp` (1200px JPEG under 250 KB, a
+  1200×900 hero cropped ~35% from the top, three 400×300 thumbnails), stores it in the public Supabase Storage bucket
+  `recap-photos` at `<YYYY-MM-DD>/<booking id>*.jpg`, and returns the finished email. An Apps Script without that code (or any
+  upload problem) sends the no-photo version, so nothing breaks before Code.gs is pushed. v1 keeps its inline photo.
+- **Strict photo matching (both templates):** the Drive day folder must be the ride date, the file name must contain the tour
+  label (`recap_tours.label`), and a winter ride never takes a summer/RZR/UTV/ATV photo or a Jun–Sep folder. No match = no
+  photo; there is no "any image" fallback.
+- **Add a loop map:** export the map as a 1080×660 PNG (SVG is stripped by Gmail), upload it to Storage bucket `recap-maps`
+  as `<tour-slug>.png` (e.g. `first-tracks.png`), and put its public URL in `recap_tours.map_url` for that loop's row(s).
+  The Grand Tour map is `docs/maps/rea-grand-tour-map.png` → `recap-maps/grand-tour.png`.
+
+**Hidden-when-missing rules (simple):**
+
+| Block | Shown only when |
+|---|---|
+| Hero photo + "Your photos are ready" | the Apps Script found and uploaded a strict-match photo |
+| Route map hero | REA tour, no photo, and `recap_tours.map_url` is set |
+| Stat line | at least 2 of: miles (`recap_tours.miles`), high point (`high_point_ft`), hours (booking start/end) |
+| "Next storm: ~N″ Day" | CSR recap and a live Open-Meteo forecast (fetched that day) shows ≥3″ in the next 7 days; else "Ready for your next ride?" |
+| Bring a friend | `share` in `features` |
+| Gear from your ride | `merch` in `features` |
+| Guest's first name | a real-looking first name on the booking; else "Thanks for riding with us." |
+
+Never shown: "Ride #N" (no booking-history source yet), snow depth / % of normal (no confirmed live station source yet),
+emoji (a test fails on any character above U+FFFF).

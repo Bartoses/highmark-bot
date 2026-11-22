@@ -995,6 +995,12 @@ importer (dry-run ready; live apply pending), FH→contacts mirror with consent 
 guest after a tour or rental: review, referral (FRIEND10), next ride, prints/merch. It's queued by the bot and delivered by
 the Apps Script `drainQueue` (every 10 min, as info@). The photo comes from Drive via `photo_hint` until the Guide app exists.
 
+**Ride Recap v2 — simple template** (sprint `sprint-ride-recap-v2-simple.md`, BUILT 2026-11-22, PR `claude/recap-v2-simple`, awaiting
+Sean's OK on 4 [TEST] emails). `recap_settings.template` = v1 (default, unchanged) | simple. Hosted photos via Supabase Storage,
+strict photo matching for both templates, REA route-map hero (Grand Tour map uploaded), live "Next storm" line. To do after merge:
+apply `db2_ride_recap_v2.sql`, Sean pushes Code.gs change set 4, Sean flips `template` to `simple` when happy.
+Open: real stop names + elevations per loop, maps for First Tracks / Tree Line / Sunset, snow data source, CSR vs REA review links.
+
 **Guide Ride Log** (NEXT after Ride Recap). A phone-first page where guides log each ride mid-day or end of day, so
 recaps are real and real-time, and the CRM fills up with useful detail.
 - **Getting there:** a link in the guide's morning SMS briefing (guides are already `operator_phones` with role `guide`),

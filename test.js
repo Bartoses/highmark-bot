@@ -19067,7 +19067,23 @@ async function testRideMedia() {
     && P(["Grand Tour.jpg", "Grand Tour 1pm.jpg"], { label: "Grand Tour", time: "11am" }) === null
     && P(["grand_tour_11_AM.jpg"], { label: "Grand Tour", time: "11am" }) === "grand_tour_11_AM.jpg"
     && P(["Grand Tour 11:00am.jpg"], { label: "Grand Tour", time: "11am" }) === "Grand Tour 11:00am.jpg"
-    && P(["Grand 11am.jpg"], { label: "Grand Tour" }) === "Grand 11am.jpg");
+    && P(["Grand 11am.jpg"], { label: "Grand Tour" }) === null);
+  chk("ridemedia: STRICT — no loose 'first word' fallback; a winter ride never takes a summer/RZR/UTV photo",
+    P(["Grand 11am.jpg", "Grandview RZR 11am.jpg"], { label: "Grand Tour" }) === null
+    && P(["Grand Tour 11am RZR - 01.jpg", "Grand Tour 11am - Jake - 02.jpg"], { label: "Grand Tour", time: "11am", season: "winter" }) === "Grand Tour 11am - Jake - 02.jpg"
+    && P(["Grand Tour 11am UTV summer.jpg"], { label: "Grand Tour", time: "11am", season: "winter" }) === null
+    && P(["Grand Tour 11am RZR - 01.jpg"], { label: "Grand Tour", time: "11am" }) === "Grand Tour 11am RZR - 01.jpg");
+  const hint = { date: "2027-01-29", label: "Grand Tour", time: "11am", season: "winter" };
+  const S = M.isStrictPhotoMatch;
+  chk("ridemedia: server photo gate — exact match passes; wrong date / wrong label / summer name / summer folder refused",
+    S({ folderDate: "2027-01-29", fileName: "Grand Tour 11am - Jake - 01.jpg" }, hint)
+    && !S({ folderDate: "2027-01-28", fileName: "Grand Tour 11am - Jake - 01.jpg" }, hint)
+    && !S({ folderDate: "2027-01-29", fileName: "Tree Line 11am - Jake - 01.jpg" }, hint)
+    && !S({ folderDate: "2027-01-29", fileName: "Grand Tour 11am RZR - 01.jpg" }, hint)
+    && !S({ folderDate: "2026-07-29", fileName: "Grand Tour 11am - 01.jpg" }, { ...hint, date: "2026-07-29" })
+    && !S({ folderDate: "2027-01-29", fileName: "" }, hint) && !S({ folderDate: "2027-01-29", fileName: "x.jpg" }, null));
+  const hh = M.buildPhotoHint({ label: "Grand Tour", startAt: am11, season: "winter", hosted: true });
+  chk("ridemedia: photo_hint carries season + hosted only when asked", hh.season === "winter" && hh.hosted === true && !("hosted" in M.buildPhotoHint({ label: "Grand Tour", startAt: am11 })));
 
   // Parity: the real Apps Script matcher (Code.gs) must agree with rideMedia on every case.
   const ctx = { Logger: { log() {} } }; vm.createContext(ctx);
@@ -19076,7 +19092,8 @@ async function testRideMedia() {
     [day, { label: "Grand Tour", time: "11am" }], [day, { label: "Grand Tour", time: "1:30pm" }], [day, { label: "Grand Tour", time: "3pm" }],
     [day, { label: "Tree Line", time: "9am" }], [day, { label: "Grand Tour" }], [["Grand Tour.jpg"], { label: "Grand Tour", time: "11am" }],
     [["Grand Tour.jpg", "Grand Tour 1pm.jpg"], { label: "Grand Tour", time: "11am" }], [["grand_tour_11_AM.jpg"], { label: "Grand Tour", time: "11am" }],
-    [["Grand 11am.jpg"], { label: "Grand Tour" }], [["Rabbit Ears Tour 10am - A - 01.jpg"], { label: "Rabbit Ears Tour", time: "10am" }], [[], { label: "Grand Tour", time: "11am" }],
+    [["Grand 11am.jpg"], { label: "Grand Tour" }], [["Grand Tour 11am RZR - 01.jpg", "Grand Tour 11am - Jake - 02.jpg"], { label: "Grand Tour", time: "11am", season: "winter" }],
+    [["Grand Tour 11am UTV summer.jpg"], { label: "Grand Tour", time: "11am", season: "winter" }], [["Grand Tour 11am RZR - 01.jpg"], { label: "Grand Tour", time: "11am" }], [["Rabbit Ears Tour 10am - A - 01.jpg"], { label: "Rabbit Ears Tour", time: "10am" }], [[], { label: "Grand Tour", time: "11am" }],
   ];
   const mismatches = cases.filter(([n, hint]) => ctx.hmPickPhotoName_(n, hint) !== P(n, hint));
   chk("ridemedia: Apps Script hmPickPhotoName_ == rideMedia.pickRidePhotoName on every case", mismatches.length === 0, JSON.stringify(mismatches.map(c => c[1])));
@@ -20196,7 +20213,7 @@ async function testRideRecap() {
       sends.every(x => x.email === "sean@coloradosledrentals.com" && x.subject.startsWith("[TEST] ")) && db.tables.recap_log.some(l => l.email === "guest1@example.com" && l.sent_to === "sean@coloradosledrentals.com" && l.dry_run === true));
     const g1 = sends.find(x => x.reference === "#201");
     chk("recap job: the row carries from_name, photo_hint (rideMedia.buildPhotoHint), plain text and the guest's own unsubscribe link",
-      g1.from_name === "Rabbit Ears Adventures" && JSON.stringify(g1.photo_hint) === JSON.stringify({ date: "2027-01-29", label: "Grand Tour", time: "11am" })
+      g1.from_name === "Rabbit Ears Adventures" && JSON.stringify(g1.photo_hint) === JSON.stringify({ date: "2027-01-29", label: "Grand Tour", time: "11am", season: "winter" })
       && !g1.body_html.includes("Map of your route") && g1.body_text.includes("Grand Tour") && g1.body_html.includes("https://app.test/email/unsubscribe/tok-g1") && g1.body_html.includes("with guide Jake") && g1.body_html.includes("Partly cloudy"));
     chk("recap job: CSR backcountry recap is CSR-branded", sends.find(x => x.reference === "#204").from_name === "Colorado Sled Rentals");
     chk("recap job: the local day is claimed (last_run_on) and a second tick the same day does nothing",
@@ -20398,6 +20415,145 @@ async function testRideRecap() {
     chk("apps script photo: a big photo is sent as Drive's 1200px thumbnail, not the original", got?.tag === "small" && ok.calls.some(u => /=s1200$/.test(u)) && !ok.calls.some(u => /=s220=s1200/.test(u)), JSON.stringify(ok.calls));
     chk("apps script photo: if resizing fails, a big photo is skipped (no broken email) but a small one is sent as-is",
       mkCtx({ thumbOk: false }).ctx.hmFindPhoto_({ file_id: "F1" }) === null && mkCtx({ thumbOk: false, size: 300000 }).ctx.hmFindPhoto_({ file_id: "F1" })?.tag === "original");
+  }
+
+  // 7b. SIMPLE template (recapSimple.js, recap_settings.template = 'simple') — sprint-ride-recap-v2-simple.md tests 2–10
+  {
+    const X = await import("./recapSimple.js");
+    const RM = await import("./rideMedia.js");
+    const samples = X.sampleSimpleRenders();
+    const simple = Object.fromEntries(Object.entries(samples).map(([n, { data, photos }]) => { const r = X.renderSimpleRecap(data); return [n, { ...r, raw: r.html, html: RM.applyHostedPhotos(r.html, photos), data }]; }));
+    const v1 = Object.fromEntries(Object.entries(R.sampleRecapRenders()).map(([n, d]) => [n, R.renderRideRecap(d)]));
+    chk("simple: template setting — default v1, 'simple' accepted, anything else falls back to v1",
+      R.normalizeRecapSettings({}).template === "v1" && R.normalizeRecapSettings({ template: "simple" }).template === "simple"
+      && R.normalizeRecapSettings({ template: "fancy" }).template === "v1" && R.normalizeRecapSettings({ template: null }).template === "v1");
+    const astral = (s) => [...String(s)].some(ch => ch.codePointAt(0) > 0xFFFF);
+    const all = [...Object.values(simple).flatMap(r => [r.html, r.text, r.subject]), ...Object.values(v1).flatMap(r => [r.html, r.text, r.subject])];
+    chk("simple+v1: no character above U+FFFF (no emoji) in any rendered email, html or text", !all.some(astral));
+    chk("simple+v1: every rendered email declares <meta charset=\"utf-8\">", [...Object.values(simple), ...Object.values(v1)].every(r => r.html.includes('<meta charset="utf-8">')));
+    const imgs = (h) => [...h.matchAll(/<img\b[^>]*>/g)].map(m => m[0]);
+    chk("simple: no cid:/attachment; every <img> has an https:// src and a non-empty alt (photo and no-photo versions)",
+      Object.values(simple).every(r => !/cid:/i.test(r.html) && !r.html.includes("PHOTO_SLOT") && imgs(r.html).length > 0
+        && imgs(r.html).every(t => /\bsrc="https:\/\/[^"]+"/.test(t) && /\balt="[^"]+"/.test(t))), JSON.stringify(Object.values(simple).flatMap(r => imgs(r.html)).filter(t => !/src="https:/.test(t))));
+    chk("simple: no RR_ markers or __RR_ tokens survive once photos are applied (either way)", Object.values(simple).every(r => !/RR_PHOTO|RR_NOPHOTO|__RR_/.test(r.html)));
+    chk("simple: hero order — photo when there is one; REA map only without a photo; no map/photo → no hero",
+      simple["simple-rea-photo"].html.includes("ride-sample-hero.jpg") && !simple["simple-rea-photo"].html.includes("grand-tour.png")
+      && simple["simple-rea-map"].html.includes("recap-maps/grand-tour.png") && !simple["simple-rea-map"].html.includes("ride-sample")
+      && !/<img[^>]+(ride-sample|recap-maps)/.test(simple["simple-rea-nomap"].html) && !/<img[^>]+(ride-sample|recap-maps)/.test(simple["simple-csr-nophoto"].html));
+    chk("simple: 'Your photos are ready' (3 thumbs + download button) only with a photo",
+      simple["simple-csr-full"].html.includes("Your photos are ready") && (simple["simple-csr-full"].html.match(/ride-sample-t\d\.jpg/g) ?? []).length === 3
+      && simple["simple-csr-full"].html.includes("See &amp; download photos") && !simple["simple-csr-nophoto"].html.includes("Your photos are ready") && !simple["simple-rea-map"].html.includes("Your photos are ready"));
+    chk("simple: map hero is REA-only (a CSR rental with a map_url still gets none)",
+      X.buildSimpleRecapData({ booking: { bookingId: "1", name: "Al", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z" }, tour: { type: "rental", label: "Polaris rental", map_url: X.GRAND_TOUR_MAP_URL }, trip: {}, settings: {} }).mapUrl === null);
+    // stat line
+    chk("simple: stat line — 3 items render; 1 item → hidden; never 'undefined'/'null'/'NaN'",
+      X.buildStatLine({ miles: 24, highPointFt: 9880, startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z" }).map(x => x[0]).join("|") === "24 mi|9,880′|3 hrs"
+      && X.buildStatLine({ miles: null, highPointFt: null, startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z" }).length === 0
+      && X.buildStatLine({ miles: 0, highPointFt: "", startAt: null, endAt: null }).length === 0
+      && !simple["simple-missing"].html.includes("RIDDEN") && Object.values(simple).every(r => !/\b(undefined|null|NaN)\b/.test(r.html.replace(/<[^>]+>/g, " ")) && !/\b(undefined|null|NaN)\b/.test(r.text)));
+    // data honesty
+    const storm = X.nextStormFromDaily({ time: ["2027-01-29", "2027-01-30", "2027-02-04"], snowfall_sum: [12, 2, 9.4] }, "2027-01-29");
+    chk("simple: next storm comes only from a live forecast — biggest ≥3″ day after today; dry week → none",
+      storm?.inches === 9 && storm.day === "Thursday" && storm.source === "Open-Meteo forecast"
+      && X.nextStormFromDaily({ time: ["2027-01-30"], snowfall_sum: [2.9] }, "2027-01-29") === null && X.nextStormFromDaily(null, "2027-01-29") === null);
+    chk("simple: 'Next storm' shows only with a forecast (CSR), otherwise 'Ready for your next ride?'; REA always 'Come back for sunset'",
+      simple["simple-csr-full"].html.includes("Next storm: ~9″ Thursday") && simple["simple-missing"].html.includes("Ready for your next ride?") && !simple["simple-missing"].html.includes("Next storm")
+      && simple["simple-rea-map"].html.includes("Come back for sunset") && !simple["simple-rea-map"].html.includes("Next storm"));
+    chk("simple+v1: no unsourced numbers — no 'Ride #N', no snow-depth / % of normal stats anywhere",
+      all.every(h => !/Ride #\d|% of normal|on the ground/i.test(h)));
+    const failFetch = async () => { throw new Error("offline"); };
+    chk("simple: a forecast failure hides the line, never blocks the send", (await X.fetchNextStorm({ lat: 40, lon: -106, fromYmd: "2027-01-29", fetchImpl: failFetch })) === null);
+    // links
+    const hrefs = (h) => [...h.matchAll(/href="([^"]+)"/g)].map(m => m[1].replace(/&amp;/g, "&"));
+    const badLinks = [];
+    for (const [n, r] of Object.entries(simple)) {
+      for (const u of hrefs(r.html)) {
+        if (/^mailto:/.test(u) || u.includes("/email/unsubscribe/") || u.includes("fonts.googleapis.com") || u.includes("/storage/v1/object/public/")) continue;
+        const q = new URL(u).searchParams;
+        if (q.get("utm_source") !== "ride_recap" || q.get("utm_medium") !== "email" || q.get("utm_campaign") !== r.data.type || !q.get("utm_content")) badLinks.push(`${n}: ${u}`);
+        if (/fareharbor\.com/.test(u) && !(q.get("ref") === "followupemail" && q.get("full-items") === "yes")) badLinks.push(`${n} FH: ${u}`);
+      }
+    }
+    chk("simple: every link carries ride_recap UTMs; FareHarbor links keep ref=followupemail&full-items=yes", badLinks.length === 0, badLinks.slice(0, 4).join(" | "));
+    const mailto = hrefs(simple["simple-rea-map"].html).find(u => u.startsWith("mailto:?"));
+    chk("simple: share = the share page (Gmail strips sms:) + a mailto fallback whose link carries ref=friend-<id>",
+      hrefs(simple["simple-rea-map"].html).some(u => u.includes("/r/share?b=392519085") && u.includes("utm_content=share-sms")) && decodeURIComponent(mailto ?? "").includes("ref=friend-392519085"));
+    chk("simple: the review button uses the brand's Google link; review + 'Tell us directly' in EVERY email (even features=['review'] only)",
+      Object.values(simple).every(r => r.html.includes("Leave a review") && r.html.includes("Something not right? Tell us directly")
+        && hrefs(r.html).some(u => u.startsWith(R.RECAP_LINKS.review[r.data.brand.key]))));
+    chk("simple: no 'Gear from your ride' unless merch is in features; no share card unless share is",
+      simple["simple-csr-full"].html.includes("Gear from your ride") && !simple["simple-missing"].html.includes("Gear from your ride") && !simple["simple-missing"].html.includes("BRING A FRIEND"));
+    chk("simple: footer = address, phone, social, Newsletter + Unsubscribe; table-based (no flex/grid)",
+      Object.values(simple).every(r => r.html.includes(R.RECAP_PHONE) && r.html.includes(R.RECAP_SOCIAL) && r.html.includes(">Newsletter</a>") && r.html.includes(">Unsubscribe</a>")
+        && !/display:\s*(flex|grid)/.test(r.html) && /max-width:600px/.test(r.html)));
+    chk("simple: buttons are full-width tables with 16px text (≥48px tall: 14+20+14 + 2px border)", Object.values(simple).every(r => (r.html.match(/padding:14px 16px;font:700 16px\/20px/g) ?? []).length >= 2));
+    chk("simple: no name → the generic headline", simple["simple-missing"].html.includes("Thanks for riding with us."));
+    // hosted photo blocks
+    const raw = simple["simple-rea-photo"].raw;
+    chk("hosted photos: applyHostedPhotos is a no-op on v1 HTML and idempotent; invalid photo urls → the no-photo version",
+      RM.applyHostedPhotos(v1["rea-full"].html, X.SAMPLE_PHOTOS) === v1["rea-full"].html
+      && RM.applyHostedPhotos(simple["simple-rea-photo"].html, null) === simple["simple-rea-photo"].html
+      && RM.applyHostedPhotos(raw, { hero: "http://x/a.jpg", full: "javascript:1" }) === RM.applyHostedPhotos(raw, null));
+    const row = { id: "s-1", category: "recap", status: "sending", reference: "#392519085", email: "sean@coloradosledrentals.com", subject: "[TEST] x", body_html: raw, body_text: "t", from_name: "Rabbit Ears Adventures",
+      photo_hint: { date: "2027-01-29", label: "Grand Tour", time: "11am", season: "winter", hosted: true } };
+    chk("hosted photos: the pull render shows the map until a photo is uploaded, then the photo",
+      S.renderRecapRow({ row, trackingSecret: null }).html.includes("grand-tour.png")
+      && S.renderRecapRow({ row: { ...row, photo_hint: { ...row.photo_hint, hosted_photo: X.SAMPLE_PHOTOS } }, trackingSecret: null }).html.includes("ride-sample-hero.jpg"));
+    const upDb = makeFhMockCrm({ email_sends: [{ ...row }] });
+    const uploads = [];
+    const deps = { render: (r) => S.renderRecapRow({ row: r, trackingSecret: null }), process: async () => ({ full: Buffer.from("f"), hero: Buffer.from("h"), thumbs: [Buffer.from("1"), Buffer.from("2"), Buffer.from("3")] }),
+      upload: async (_c, a) => (uploads.push(a), { full: "https://cdn.test/2027-01-29/392519085.jpg", hero: "https://cdn.test/2027-01-29/392519085-hero.jpg", thumbs: ["https://cdn.test/t1.jpg", "https://cdn.test/t2.jpg", "https://cdn.test/t3.jpg"] }) };
+    const img = Buffer.from("fake-jpeg").toString("base64");
+    const okUp = await X.handleRecapPhotoUpload(upDb, { send_id: "s-1", folder_date: "2027-01-29", file_name: "Grand Tour 11am - Jake - 01.jpg", content_type: "image/jpeg", data: img }, deps);
+    chk("photo upload: a strict match is hosted at <date>/<booking id> and the finished email (photo, no map) comes back",
+      okUp.status === 200 && okUp.body.html.includes("https://cdn.test/2027-01-29/392519085-hero.jpg") && !okUp.body.html.includes("grand-tour.png")
+      && uploads[0]?.date === "2027-01-29" && X.photoBasePath(uploads[0].date, uploads[0].bookingRef) === "2027-01-29/392519085"
+      && upDb.tables.email_sends[0].photo_hint.hosted_photo?.hero === "https://cdn.test/2027-01-29/392519085-hero.jpg", JSON.stringify(okUp).slice(0, 200));
+    const tryUp = (b) => X.handleRecapPhotoUpload(makeFhMockCrm({ email_sends: [{ ...row }] }), { send_id: "s-1", folder_date: "2027-01-29", file_name: "Grand Tour 11am - Jake - 01.jpg", content_type: "image/jpeg", data: img, ...b }, deps);
+    chk("photo upload: wrong date / wrong tour / summer photo / not a recap / not hosted / non-image are all refused",
+      (await tryUp({ folder_date: "2027-01-28" })).status === 422 && (await tryUp({ file_name: "Tree Line 11am - 01.jpg" })).status === 422
+      && (await tryUp({ file_name: "Grand Tour 11am RZR - 01.jpg" })).status === 422 && (await tryUp({ content_type: "image/heic" })).status === 415
+      && (await X.handleRecapPhotoUpload(makeFhMockCrm({ email_sends: [{ ...row, category: "marketing" }] }), { send_id: "s-1", data: img }, deps)).status === 404
+      && (await X.handleRecapPhotoUpload(makeFhMockCrm({ email_sends: [{ ...row, photo_hint: { ...row.photo_hint, hosted: false } }] }), { send_id: "s-1", data: img }, deps)).status === 409
+      && (await X.handleRecapPhotoUpload(makeFhMockCrm({ email_sends: [{ ...row, status: "sent" }] }), { send_id: "s-1", data: img }, deps)).status === 409);
+    let sharpOk = false; try { await import("sharp"); sharpOk = true; } catch { /* optional */ }
+    if (sharpOk) {
+      const sharp = (await import("sharp")).default;
+      const big = await sharp({ create: { width: 3000, height: 4000, channels: 3, background: { r: 200, g: 220, b: 255 } } }).jpeg({ quality: 95 }).toBuffer();
+      const set = await X.processRidePhoto(big);
+      const m = async (b) => sharp(b).metadata();
+      const [mf, mh, mt] = [await m(set.full), await m(set.hero), await m(set.thumbs[0])];
+      chk("photo processing: 1200px-wide JPEG under 250 KB, a 1200×900 hero and three 400×300 thumbs",
+        mf.format === "jpeg" && mf.width === 1200 && set.full.length < 250 * 1024 && mh.width === 1200 && mh.height === 900 && mt.width === 400 && mt.height === 300 && set.thumbs.length === 3);
+    }
+    // the job with template = simple
+    {
+      const db = jobDb({ settings: { template: "simple" } });
+      db.tables.recap_tours.find(t => t.match === "Grand Tour").map_url = X.GRAND_TOUR_MAP_URL;
+      const stormFetch = async (u) => ({ ok: true, json: async () => (/snowfall_sum&precip/.test(u) && !/temperature/.test(u)
+        ? { daily: { time: ["2027-01-29", "2027-01-30", "2027-02-04"], snowfall_sum: [0, 1, 9] } } : { daily: { weathercode: [3], temperature_2m_max: [21], snowfall_sum: [0] } }) });
+      await R.runDueRideRecaps(db, { now: NOW, fetchImpl: stormFetch, baseUrl: "https://app.test" });
+      const g1 = db.tables.email_sends.find(x => x.reference === "#201"), bc = db.tables.email_sends.find(x => x.reference === "#204");
+      chk("simple job: template=simple queues the simple email with a hosted, winter photo_hint and the map as the no-photo hero",
+        g1 && g1.body_html.includes("<!--RR_PHOTO-->") && g1.body_html.includes("grand-tour.png") && g1.photo_hint.hosted === true && g1.photo_hint.season === "winter"
+        && !g1.body_html.includes("PHOTO_SLOT") && g1.subject.startsWith("[TEST] "), JSON.stringify(g1?.photo_hint));
+      chk("simple job: CSR backcountry gets the live 'Next storm' line; variants logged with template=simple",
+        bc?.body_html.includes("Next storm: ~9″ Thursday") && db.tables.recap_log.find(l => l.booking_id === "#201")?.variants?.template === "simple");
+      const pulled = await S.pullGmailMessages(db, null, { limit: 10, baseUrl: "https://app.test" });
+      const pm = pulled.messages.find(x => x.send_id === g1.id);
+      chk("simple job: an Apps Script without hosted-photo support still sends a correct no-photo email (map hero, no markers)",
+        pm && !/RR_PHOTO|__RR_/.test(pm.html) && pm.html.includes("grand-tour.png") && pm.photo_hint?.hosted === true);
+      chk("experiments: a simple-template send only counts toward the subject test",
+        JSON.stringify(R.tallyExperiments([{ send_id: "a", dry_run: false, variants: { subject: "B", template: "simple" } }], new Map()).layout) === JSON.stringify({ A: { sends: 0, wins: 0 }, B: { sends: 0, wins: 0 } }));
+    }
+    // simple snapshots (6 cases, photos applied)
+    const sdir = new URL("./snapshots/ride-recap/", import.meta.url); const smism = [];
+    for (const [name, r] of Object.entries(simple)) {
+      const file = new URL(`${name}.html`, sdir);
+      if (process.env.UPDATE_SNAPSHOTS === "1" || !fs.existsSync(file)) fs.writeFileSync(file, r.html);
+      else if (fs.readFileSync(file, "utf8") !== r.html) smism.push(name);
+    }
+    chk("simple snapshots: 6 cases (CSR full / CSR no photo / REA photo / REA map / REA no map / all missing) match snapshots/ride-recap/simple-*", Object.keys(simple).length === 6 && smism.length === 0, `changed: ${smism.join(", ")}`);
   }
 
   // 8. snapshots (3 types × full / missing). UPDATE_SNAPSHOTS=1 rewrites them.

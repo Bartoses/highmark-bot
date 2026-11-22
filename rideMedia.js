@@ -61,10 +61,16 @@ export function buildRideMediaFileName({ label, startAt, guide = "", index = 1, 
   return `${l} ${formatRideTime(startAt)}${g ? ` - ${g}` : ""} - ${pad2(Math.max(1, Number(index) || 1))}.${e}`;
 }
 
-/** photo_hint sent with a queued recap. file_id (from the Guide app) is used first; date/label/time are the fallback. */
-export function buildPhotoHint({ label, startAt, fileId = null }) {
+/**
+ * photo_hint sent with a queued recap. file_id (from the Guide app) is used first; date/label/time are the fallback.
+ * season "winter" (every recap ride is on snow) makes the matcher refuse summer/RZR/UTV photos. hosted = the simple
+ * template: the Apps Script uploads the photo to the bot (POST /api/v1/recaps/photo) instead of attaching it.
+ */
+export function buildPhotoHint({ label, startAt, fileId = null, season = null, hosted = false }) {
   const hint = { date: rideDateFolder(startAt), label: cleanNamePart(label), time: formatRideTime(startAt) };
   if (fileId) hint.file_id = String(fileId);
+  if (season) hint.season = String(season);
+  if (hosted) hint.hosted = true;
   return hint;
 }
 
@@ -80,11 +86,20 @@ function timeOf(n) {
   return m ? (parseInt(m[1], 10) + (m[2] && m[2] !== "00" ? ":" + m[2] : "") + m[3]) : null;
 }
 
-/** Which file name in the day folder belongs to this ride (or null). Names must already be filtered to email-safe images. */
+// A winter ride never takes a summer photo (the Jan 29 test send showed a RZR shot on a Grand Tour recap).
+const SUMMER_RE = /\b(rzr|utv|atv|sxs|side by side|summer|jeep|xpedition|general)\b/;
+const isSummerName = (n) => SUMMER_RE.test(norm(n));
+const isSummerDate = (ymd) => { const m = Number(String(ymd || "").slice(5, 7)); return m >= 6 && m <= 9; };
+
+/**
+ * Which file name in the day folder belongs to this ride (or null). Names must already be filtered to email-safe images.
+ * STRICT: the name must contain the tour label (no loose "first word" fallback any more); with a time, only that time.
+ */
 export function pickRidePhotoName(names, hint) {
   const label = norm(hint.label);
+  if (!label) return null;
   const want = hint.time ? timeOf(hint.time) : null;
-  const sorted = names.slice().sort();
+  const sorted = names.slice().sort().filter((n) => hint.season !== "winter" || !isSummerName(n));
   const withLabel = sorted.filter((n) => norm(n).includes(label));
   if (want) {
     const exact = withLabel.filter((n) => timeOf(n) === want);
@@ -93,8 +108,37 @@ export function pickRidePhotoName(names, hint) {
     const untimed = withLabel.filter((n) => !timeOf(n));
     return (!otherTimes.length && untimed.length) ? untimed[0] : null;
   }
-  if (withLabel.length) return withLabel[0];
-  const first = label.split(" ")[0];
-  if (first.length > 3) { const loose = sorted.filter((n) => norm(n).includes(first)); if (loose.length) return loose[0]; }
-  return null;
+  return withLabel.length ? withLabel[0] : null;
+}
+
+/**
+ * Server-side gate for an uploaded photo (POST /api/v1/recaps/photo): (a) its Drive day folder IS the ride date,
+ * (b) its file name contains the tour label, (c) the season matches (a winter ride never takes a summer/RZR/UTV file or
+ * a Jun–Sep folder). No match = no photo; there is never an "any image" fallback.
+ */
+export function isStrictPhotoMatch({ folderDate, fileName }, hint) {
+  if (!hint?.date || !hint?.label || !fileName) return false;
+  if (String(folderDate || "") !== String(hint.date)) return false;
+  if (!norm(fileName).includes(norm(hint.label))) return false;
+  if ((hint.season ?? "winter") === "winter" && (isSummerName(fileName) || isSummerDate(folderDate))) return false;
+  return true;
+}
+
+// ── simple-template hosted photos (recapSimple.js) ──
+const htmlAttr = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+// photos: { hero, full, thumbs:[3 urls] } | null. Keeps exactly one of the photo / no-photo blocks. Idempotent; HTML without
+// markers (v1, transactional, already-applied) comes back unchanged.
+export function applyHostedPhotos(html, photos) {
+  let h = String(html ?? "");
+  if (!h.includes("<!--RR_PHOTO-->") && !h.includes("<!--RR_NOPHOTO-->")) return h;
+  const ok = photos && /^https:\/\//.test(String(photos.hero ?? "")) && /^https:\/\//.test(String(photos.full ?? ""));
+  if (ok) {
+    const t = [0, 1, 2].map(i => (/^https:\/\//.test(String(photos.thumbs?.[i] ?? "")) ? photos.thumbs[i] : photos.hero));
+    h = h.replace(/<!--RR_NOPHOTO-->[\s\S]*?<!--\/RR_NOPHOTO-->/g, "").replace(/<!--\/?RR_PHOTO-->/g, "")
+      .replace(/__RR_HERO__/g, htmlAttr(photos.hero)).replace(/__RR_FULL__/g, htmlAttr(photos.full))
+      .replace(/__RR_T1__/g, htmlAttr(t[0])).replace(/__RR_T2__/g, htmlAttr(t[1])).replace(/__RR_T3__/g, htmlAttr(t[2]));
+  } else {
+    h = h.replace(/<!--RR_PHOTO-->[\s\S]*?<!--\/RR_PHOTO-->/g, "").replace(/<!--\/?RR_NOPHOTO-->/g, "");
+  }
+  return h;
 }

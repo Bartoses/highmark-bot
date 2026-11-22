@@ -102,13 +102,21 @@ function hmAssertSender_() {
   if (!ok) throw new Error(SEND_AS + ' is not set up as a "Send mail as" address in this Gmail account (Gmail -> Settings -> Accounts).');
 }
 // Sends one rendered message. Ride Recap emails carry a photo placeholder that only this script can fill (the bot can't
-// read Google Drive):  <!--PHOTO_SLOT-->  becomes the guide's photo from Drive, and anything between
-// <!--PHOTO_ONLY--> ... <!--/PHOTO_ONLY-->  (the print offer) is kept only when a photo was found. No placeholder = sent
-// exactly as before. Returns true when a photo was attached.
+// read Google Drive):
+//   - v1 recaps: <!--PHOTO_SLOT-->  becomes the guide's photo from Drive (inline image), and anything between
+//     <!--PHOTO_ONLY--> ... <!--/PHOTO_ONLY-->  (the print offer) is kept only when a photo was found.
+//   - simple recaps (photo_hint.hosted): the photo is uploaded to Highmark (POST /recaps/photo), which stores it in
+//     Supabase Storage and returns the finished email with the photo as a normal https image (no attachment).
+//     Any problem = the email goes out exactly as pulled (no photo, the route map if there is one).
+// No placeholder and no hosted hint = sent exactly as before. Returns true when a photo was used.
 function hmSendOne_(m) {
   var opts = { htmlBody: m.html, from: SEND_AS, name: m.from_name || SENDER_NAME, replyTo: m.reply_to || REPLY_TO };
+  var text = m.text || '';
   var photo = null;
-  if (m.html && m.html.indexOf('<!--PHOTO_SLOT-->') !== -1) {
+  if (m.photo_hint && m.photo_hint.hosted) {
+    var hosted = hmHostPhoto_(m);
+    if (hosted) { opts.htmlBody = hosted.html; text = hosted.text || text; photo = true; }
+  } else if (m.html && m.html.indexOf('<!--PHOTO_SLOT-->') !== -1) {
     photo = m.photo_hint ? hmFindPhoto_(m.photo_hint) : null;
     var html = m.html;
     if (photo) {
@@ -121,8 +129,24 @@ function hmSendOne_(m) {
     }
     opts.htmlBody = html.replace(/<!--PHOTO_SLOT-->/g, '');
   }
-  GmailApp.sendEmail(m.to, m.subject, m.text || '', opts);
+  GmailApp.sendEmail(m.to, m.subject, text, opts);
   return !!photo;
+}
+
+// Simple template: find the ride photo (same strict rules), shrink it (Drive thumbnail, 1200px), upload it to Highmark.
+// Returns { html, text } from the server, or null (no photo / not accepted / any error).
+function hmHostPhoto_(m) {
+  try {
+    var found = hmFindPhotoFile_(m.photo_hint);
+    if (!found) return null;
+    var blob = hmEmailPhoto_(found.file);
+    if (!blob) return null;
+    var r = hmApi_('POST', '/recaps/photo', {
+      send_id: m.send_id, folder_date: found.date, file_name: found.name,
+      content_type: String(blob.getContentType() || 'image/jpeg'), data: Utilities.base64Encode(blob.getBytes())
+    });
+    return (r && r.html) ? r : null;
+  } catch (e) { Logger.log('Hosted photo skipped: ' + e.message); return null; }
 }
 
 // Finds the ride photo. hint = { date: 'YYYY-MM-DD', label: 'Grand Tour', time: '11am' (optional), file_id (optional) }.
@@ -131,7 +155,8 @@ function hmSendOne_(m) {
 //      contract "<Label> <time> - <Guide> - <NN>.jpg" (see rideMedia.js in highmark-bot):
 //      - with a time: only files named with that label AND that time (two Grand Tours the same day never swap photos);
 //        a label-only file name is used only when no file names a different time for that label.
-//      - without a time: label match, then the label's first word.
+//      - without a time: label match only (never "any image": a wrong photo is worse than none).
+//      - a winter ride (hint.season 'winter') never takes a summer/RZR/UTV photo.
 //      Among matches the alphabetically first name wins, so "- 01" (or a "cover" photo) is the one used.
 // Only email-safe images (JPEG/PNG/GIF, under 15 MB) are used: iPhone HEIC and videos are ignored.
 // Any problem (no folder, no match, no permission) = no photo, never an error.
@@ -161,11 +186,22 @@ function hmEmailPhoto_(file) {
   return file.getSize() <= HM_PHOTO_RAW_MAX_BYTES ? file.getBlob().setName('ridephoto') : null;
 }
 function hmFindPhoto_(hint) {
+  var found = hmFindPhotoFile_(hint);
+  return found ? hmEmailPhoto_(found.file) : null;
+}
+// -> { file, name, date } or null. date = the Drive day folder the file came from (the server checks it == the ride date).
+function hmFindPhotoFile_(hint) {
   try {
     if (!hint) return null;
     if (hint.file_id) {
-      try { var byId = DriveApp.getFileById(String(hint.file_id)); if (hmEmailSafeImage_(byId)) return hmEmailPhoto_(byId); }
-      catch (e) { Logger.log('Photo file_id not usable, searching by name: ' + e.message); }
+      try {
+        var byId = DriveApp.getFileById(String(hint.file_id));
+        if (hmEmailSafeImage_(byId)) {
+          var parents = byId.getParents ? byId.getParents() : null, date = hint.date;
+          if (parents && parents.hasNext()) date = parents.next().getName();
+          return { file: byId, name: byId.getName(), date: date };
+        }
+      } catch (e) { Logger.log('Photo file_id not usable, searching by name: ' + e.message); }
     }
     var rootId = PropertiesService.getScriptProperties().getProperty('RECAP_PHOTO_FOLDER_ID');
     if (!rootId || !hint.date || !hint.label) return null;
@@ -175,7 +211,7 @@ function hmFindPhoto_(hint) {
     while (files.hasNext()) { var f = files.next(); if (hmEmailSafeImage_(f)) list.push({ file: f, name: f.getName() }); }
     var pick = hmPickPhotoName_(list.map(function (x) { return x.name; }), hint);
     if (pick === null) return null;
-    for (var i = 0; i < list.length; i++) if (list[i].name === pick) return hmEmailPhoto_(list[i].file);
+    for (var i = 0; i < list.length; i++) if (list[i].name === pick) return { file: list[i].file, name: pick, date: String(hint.date) };
     return null;
   } catch (e) { Logger.log('Photo lookup skipped: ' + e.message); return null; }
 }
@@ -184,8 +220,10 @@ function hmPickPhotoName_(names, hint) {
   var norm = function (s) { return String(s || '').toLowerCase().replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ').trim(); };
   var timeRe = /\b(\d{1,2})(?::|\s)?(\d{2})?\s?(am|pm)\b/;
   var timeOf = function (n) { var m = norm(n).match(timeRe); return m ? (parseInt(m[1], 10) + (m[2] && m[2] !== '00' ? ':' + m[2] : '') + m[3]) : null; };
+  var summerRe = /\b(rzr|utv|atv|sxs|side by side|summer|jeep|xpedition|general)\b/;
   var label = norm(hint.label), want = hint.time ? timeOf(hint.time) : null;
-  var sorted = names.slice().sort();
+  if (!label) return null;
+  var sorted = names.slice().sort().filter(function (n) { return hint.season !== 'winter' || !summerRe.test(norm(n)); });
   var withLabel = sorted.filter(function (n) { return norm(n).indexOf(label) !== -1; });
   if (want) {
     var exact = withLabel.filter(function (n) { return timeOf(n) === want; });
@@ -194,10 +232,7 @@ function hmPickPhotoName_(names, hint) {
     var untimed = withLabel.filter(function (n) { return !timeOf(n); });
     return (!otherTimes.length && untimed.length) ? untimed[0] : null;
   }
-  if (withLabel.length) return withLabel[0];
-  var first = label.split(' ')[0];
-  if (first.length > 3) { var loose = sorted.filter(function (n) { return norm(n).indexOf(first) !== -1; }); if (loose.length) return loose[0]; }
-  return null;
+  return withLabel.length ? withLabel[0] : null;
 }
 
 // Sends rendered messages through Gmail, then reports each result to Highmark. Returns {sent, failed, deferred}.

@@ -40,6 +40,15 @@ owned by sean@coloradosledrentals.com. Local clone: `~/code/csr-emails` (clasp +
    already has; no new triggers.
 2. `git diff --stat` must show only `Higmark.js`. Push, pull to verify, commit.
 
+## Change set 4 (2026-11-22, night): strict photo matching + hosted photos for the simple template
+Only after Sean OKs the PR (branch `claude/recap-v2-simple`).
+1. **`Higmark.gs`** <- replace the whole file with the latest `docs/apps-script/Code.gs`. Changes: `hmPickPhotoName_` is strict
+   (no "first word" fallback; a winter ride never takes a RZR/UTV/summer photo); `hmFindPhotoFile_` (new, returns the file + its
+   day folder); `hmHostPhoto_` (new): for a simple-template recap (`photo_hint.hosted`) it uploads the photo to
+   `POST /api/v1/recaps/photo` and sends the finished email the bot returns. v1 recaps work exactly as before. Uses only
+   UrlFetch + Drive, which the script already has; no new triggers.
+2. `git diff --stat` must show only `Higmark.js`. Push, pull to verify, commit.
+
 ## Verify
 - `clasp pull` after the push and confirm there's no diff (the push landed exactly).
 - In the editor: run `checkConnection` (should say connected); Triggers page shows `drainQueue` every 10 min.

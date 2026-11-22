@@ -104,6 +104,8 @@ app.set("trust proxy", 1); // Railway sits behind a proxy — required for expre
 // further down; the closure only reads it when a request arrives.
 app.post("/webhooks/resend", express.raw({ type: "application/json", limit: "1mb" }), (req, res) => handleResendWebhook(req, res, { crm: crmSupabase }));
 app.use(express.urlencoded({ extended: false }));
+// Ride Recap photo uploads (base64 JPEG from the Apps Script) are bigger than express.json()'s 100 KB default.
+app.use("/api/v1/recaps/photo", express.json({ limit: "20mb" }));
 app.use(express.json());
 
 // ─────────────────────────────────────────────────────────────────────────────

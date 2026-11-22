@@ -18,6 +18,7 @@
 //   • a bad address fails the whole Resend batch, so a failed batch is retried one-by-one to
 //     isolate it; after 3 attempts a row is marked 'failed'.
 // ─────────────────────────────────────────────────────────────────────────────
+import { applyHostedPhotos } from "./rideMedia.js";
 import crypto from "crypto";
 import { sendEmailBatch, fromAddress, RESEND_BATCH_MAX } from "./emailService.js";
 import { renderEmailForRecipient, renderMergeFields, wrapEmailShell, htmlToPlainText, buildUnsubscribeUrl, escapeHtml, isFullHtmlDocument, injectBeforeBodyEnd } from "./emailTemplates.js";
@@ -103,7 +104,9 @@ export function renderCampaignEmail({ campaign, client, recipient, baseUrl, doma
 // added here (it needs the send id). The unsubscribe link is never rewritten (rewriteLinks skips /email/unsubscribe/ and
 // data-notrack), and the Apps Script still sees the <!--PHOTO_SLOT--> / <!--PHOTO_ONLY--> markers untouched.
 export function renderRecapRow({ row, client = null, baseUrl = resolveBaseUrl(), trackingSecret }) {
-  let html = row.body_html ?? "";
+  // Simple-template recaps: keep the hosted photo blocks if the Apps Script uploaded a photo, else the no-photo version
+  // (route map or nothing). v1 HTML has no RR_ markers and comes back unchanged.
+  let html = applyHostedPhotos(row.body_html ?? "", parseHint(row.photo_hint)?.hosted_photo ?? null);
   const tracking = buildTracking({ baseUrl, sendId: row.id, ...(trackingSecret !== undefined ? { secret: trackingSecret } : {}) });
   if (tracking) html = injectBeforeBodyEnd(tracking.rewriteBody(html), tracking.pixelHtml);
   return {

@@ -24,6 +24,7 @@ import { buildPhotoHint } from "./rideMedia.js";
 import { escapeHtml, buildUnsubscribeUrl } from "./emailTemplates.js";
 import { loadSuppressionSets, normEmail, isEmailAddress, escapeLike } from "./emailSuppression.js";
 import { resolveBaseUrl } from "./emailSender.js";
+import { buildSimpleRecapData, renderSimpleRecap, fetchNextStorm, normalizeTemplate } from "./recapSimple.js";
 
 export const RECAP_TYPES = ["rea", "backcountry", "rental"];
 export const RECAP_FEATURES = ["review", "share", "prints", "merch", "newsletter"];
@@ -33,6 +34,7 @@ export const DEFAULT_RECAP_SETTINGS = Object.freeze({
   enabled: true, send_hour: 18, timezone: "America/Denver", dry_run: true, test_to: "sean@coloradosledrentals.com",
   features: [...RECAP_FEATURES], friend_code: "FRIEND10", friend_percent: 10, reward_code: null,
   weather_lat: null, weather_lon: null, weather_points: [], lookback_days: 1, last_run_on: null,
+  template: "v1",                                                    // v1 | simple (recapSimple.js) — db2_ride_recap_v2.sql
 });
 
 export const RECAP_LINKS = Object.freeze({
@@ -101,6 +103,7 @@ export function normalizeRecapSettings(row = {}) {
   const lat = Number(row?.weather_lat), lon = Number(row?.weather_lon);
   s.weather_lat = row?.weather_lat != null && Number.isFinite(lat) ? lat : null;
   s.weather_lon = row?.weather_lon != null && Number.isFinite(lon) ? lon : null;
+  s.template = normalizeTemplate(row?.template);                      // anything unknown = v1 (today's email)
   s.experiments = row?.experiments && typeof row.experiments === "object" && !Array.isArray(row.experiments) ? { ...row.experiments } : {};
   s.weather_points = (Array.isArray(row?.weather_points) ? row.weather_points : [])
     .map(p => ({ name: p?.name ? String(p.name) : null, type: p?.type ? String(p.type) : null, match: p?.match ? String(p.match) : null, lat: Number(p?.lat), lon: Number(p?.lon) }))
@@ -462,6 +465,7 @@ export function tallyExperiments(logRows, clicksBySend) {
     seen.add(r.send_id);
     const v = normalizeVariants(r.variants), clicks = clicksBySend.get(r.send_id) ?? [];
     for (const [k, def] of Object.entries(RECAP_EXPERIMENTS)) {
+      if (r.variants.template === "simple" && k !== "subject") continue;   // the simple template only runs the subject test
       stats[k][v[k]].sends++;
       if (goalHit(def.goal, clicks)) stats[k][v[k]].wins++;
     }
@@ -917,22 +921,39 @@ export async function runRideRecap(crm, {
   const plan = planRecaps({ bookings: rows, tours: t, logged, suppressed: sup.all, now, tz: s.timezone });
   out.skipped = plan.skipped.length; out.review = plan.review.length;
 
-  const weatherByDate = new Map();
+  const weatherByDate = new Map(), stormByPoint = new Map();
+  const simple = s.template === "simple";
   const exp = plan.recaps.length ? await loadExperimentStats(crm, { clientId, nowMs: new Date(now).getTime() }) : { stats: {} };
   for (const rc of plan.recaps) {
     const date = localDate(rc.primary.startAt ?? rc.primary.endAt, s.timezone);
     const pt = weatherPointFor({ item: rc.primary.item, type: rc.tour.type }, s);
     const wKey = pt ? `${date}|${pt.lat}|${pt.lon}` : null;
-    if (wKey && !weatherByDate.has(wKey)) weatherByDate.set(wKey, await fetchRecapWeather({ lat: pt.lat, lon: pt.lon, date, fetchImpl }));
-    const weather = wKey ? weatherByDate.get(wKey) : null;
+    if (!simple && wKey && !weatherByDate.has(wKey)) weatherByDate.set(wKey, await fetchRecapWeather({ lat: pt.lat, lon: pt.lon, date, fetchImpl }));
+    const weather = !simple && wKey ? weatherByDate.get(wKey) : null;
     const unsubscribeUrl = out.preview ? null : await unsubscribeUrlFor(crm, rc.email, baseUrl);
     const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour });
     const variants = chooseVariants({ seed: rc.primary.pk, stats: exp.stats, modes: s.experiments });
-    const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl, variants });
-    const msg = renderRideRecap(data);
-    const photoHint = data.photo === false ? null : buildPhotoHint({ label: rc.tour.label, startAt: rc.primary.startAt ?? rc.primary.endAt, fileId: typeof data.photo === "string" ? data.photo : null });
+    let data, msg;
+    if (simple) {
+      // "Next storm" (CSR only): a live forecast fetched now, from the ride's weather point. None → the line is hidden.
+      let nextStorm = null;
+      if (rc.tour.type !== "rea" && pt) {
+        const sKey = `${pt.lat}|${pt.lon}`;
+        if (!stormByPoint.has(sKey)) stormByPoint.set(sKey, await fetchNextStorm({ lat: pt.lat, lon: pt.lon, fromYmd: localDate(now, s.timezone), fetchImpl }));
+        nextStorm = stormByPoint.get(sKey);
+      }
+      data = buildSimpleRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, nextStorm, unsubscribeUrl, baseUrl, variants });
+      msg = renderSimpleRecap(data);
+    } else {
+      data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl, variants });
+      msg = renderRideRecap(data);
+    }
+    // season "winter": every recap ride is on snow, so the photo matcher refuses summer/RZR/UTV files (both templates).
+    const photoHint = data.photo === false ? null : buildPhotoHint({ label: rc.tour.label, startAt: rc.primary.startAt ?? rc.primary.endAt,
+      fileId: typeof data.photo === "string" ? data.photo : null, season: "winter", hosted: simple });
+    const loggedVariants = simple ? { ...data.variants, template: "simple" } : data.variants;
     const to = s.dry_run ? s.test_to : rc.email;
-    const summary = { booking_id: rc.primary.pk, bookings: rc.bookings.map(b => b.pk), email: rc.email, to, type: rc.tour.type, subject: (s.dry_run ? "[TEST] " : "") + msg.subject, photo_hint: photoHint, weather: !!weather, variants: data.variants };
+    const summary = { booking_id: rc.primary.pk, bookings: rc.bookings.map(b => b.pk), email: rc.email, to, type: rc.tour.type, subject: (s.dry_run ? "[TEST] " : "") + msg.subject, photo_hint: photoHint, weather: !!weather, variants: loggedVariants, template: s.template };
     out.recaps.push(summary);
     if (out.preview) continue;
 
@@ -941,7 +962,7 @@ export async function runRideRecap(crm, {
       reference: rc.primary.pk, idempotencyKey: `recap-${rc.primary.pk}`, dryRun: s.dry_run });
     const logRows = rc.bookings.map(b => ({
       booking_id: b.pk, client_id: clientId, email: rc.email, sent_to: to, type: rc.tour.type, send_id: q.row.id,
-      primary_booking_id: rc.primary.pk, dry_run: s.dry_run, weather: !!weather, queued_at: new Date(now).toISOString(), variants: data.variants,
+      primary_booking_id: rc.primary.pk, dry_run: s.dry_run, weather: !!weather, queued_at: new Date(now).toISOString(), variants: loggedVariants,
     }));
     let { error: lgErr } = await crm.from("recap_log").upsert(logRows, { onConflict: "booking_id", ignoreDuplicates: true });
     if (lgErr && /variants/i.test(lgErr.message)) {   // db2_ride_recap_ab.sql not applied yet → log without the variant
