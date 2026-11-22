@@ -129,6 +129,8 @@ customerFileImport.js — Polaris/MPWR "all riders" export (.xlsx/.csv) → DB2 
 outboundApi.js — Bearer-key API (/api/v1) for Google Apps Script/automations: email + SMS audience preview, marketing send, booking-related (transactional) send; consent enforced server-side, dry-run by default, idempotent
 outboundAudience.js — the single definition of "who may be emailed/texted" (segment → recipients + exclusion reasons); explicit consent by default, unknown segment fields rejected
 emailSender.js — email queue → Resend batches → delivery tracking; claim-based (web + cron never double-send), consent re-checked at send time, Resend signed webhook → bounce/complaint suppression
+rideMedia.js — ride photo/video Drive naming contract (Tour Photos/<YYYY-MM-DD>/"<Label> <time> - <Guide> - <NN>.jpg"), buildPhotoHint for recaps, pickRidePhotoName == Apps Script hmPickPhotoName_ (parity-tested)
+rideRecap.js — Ride Recap: daily same-evening recap per finished FH ride (recap_settings/recap_tours/recap_log/recap_review/recap_rewards in DB2), renders branded HTML, queues transport='gmail' category='recap' rows (from_name + photo_hint for the Apps Script); referral-reward hook (off until reward_code); CLI previews by default
 emailTracking.js — marketing email opens + clicks: signed /e/c/ click links + /e/o/ open pixel (HMAC, EMAIL_TRACKING_SECRET), bot filter, DB2 `email_events`, per-campaign engagement stats
 emailSuppression.js — address-level unsubscribe/suppress (every contact row carrying an email), do-not-email records
 importUnsubscribes.js — legacy Google-Sheet unsubscribe list → suppression; CLI dry-runs by default
@@ -186,7 +188,7 @@ PROMPTS.md             — Session starter prompts
 ```
 
 **SQL migrations** (run once in Supabase DB1 SQL editor):
-`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — applied to DB1), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — applied to DB2), `db1_email_domains.sql` (Email Marketing Phase 2: `client_email_domains` table — **NOT YET APPLIED**, run in DB1 before using the per-client sending domain card), `db2_email_sends.sql` (DB2 — email send queue + delivery log; **applied 2026-09-20**), `db2_contact_model.sql` (DB2 — clean contact model for email+SMS outreach; **applied 2026-09-20**, see "Contact model + waiver import")
+`db1_clients.sql`, `db1_client_pages.sql`, `db1_crawl_settings.sql`, `db1_lead_capture.sql`, `db1_lead_mgmt.sql`, `db1_lead_name.sql`, `db1_lead_followup.sql`, `db1_campaigns.sql`, `db1_portal.sql`, `db1_portal_invites.sql`, `db1_demo_analytics.sql`, `db1_cancellation_sent.sql`, `db1_opt_outs.sql`, `db1_waitlist.sql`, `db1_partner_activities.sql`, `db1_onboarding_status.sql`, `db1_sms_consent.sql`, `db1_operator_phones.sql`, `db1_operator_phones_rls.sql`, `db1_conversation_type.sql`, `db1_processed_messages.sql` (P0-4 inbound idempotency; applied to DB1 + RLS enabled), `db1_conversation_lock.sql` (P1-1 optimistic concurrency: `conversations.lock_version` — applied to DB1), `db1_voice.sql` (Voice AI: voice_numbers, voice_agents [+ai_enabled, voice], voice_calls — applied), `db1_voice_spam.sql` (Phase 4 shared spam network: spam_numbers — applied), `db1_operator_locations.sql` (per-employee briefing scoping: `operator_phones.locations TEXT[]` — applied to DB1), `db2_work_orders.sql` (+ RLS; MPWR fleet work orders — applied to DB2), `db1_operator_intelligence_2.sql` (OI 2.0: widen `operator_phones.role` to 8 canonical roles + `briefing_detail` to 4 tiers + add `display_name` — applied to DB1), `db1_dashboard_layout.sql` (OI 2.0 Phase 2: `portal_users.dashboard_layout` JSONB for Mission Control — applied to DB1), `db1_portal_invites_delivery.sql` (`portal_invites.phone` + `delivery_method` for auto-delivery — applied to DB1), `db1_email_campaigns.sql` (Email Marketing: `email_campaigns` table — applied to DB1), `db2_email_consent.sql` (Email Marketing: `contacts.email_marketing_consent` / `.email_unsubscribed_at` / `.email_unsubscribe_token` — applied to DB2), `db1_email_domains.sql` (Email Marketing Phase 2: `client_email_domains` table — **NOT YET APPLIED**, run in DB1 before using the per-client sending domain card), `db2_email_sends.sql` (DB2 — email send queue + delivery log; **applied 2026-09-20**), `db2_contact_model.sql` (DB2 — clean contact model for email+SMS outreach; **applied 2026-09-20**, see "Contact model + waiver import"), `db2_ride_recap.sql` (DB2 — Ride Recap tables + `email_sends` recap columns; **applied 2026-11-22**)
 
 ---
 
@@ -224,6 +226,30 @@ Each client entry defines: `id`, `botName`, `tone`, `inboundPhones`, `supportPho
 npm run chat
 ```
 Commands: `/reset` (fresh conversation), `/quit`
+
+### Claude Code cloud sessions (environment `highmark-bot`, added 2026-11-22)
+Run the suite with **`npm run test:cloud`**, not `npm test`. It sets `NODE_USE_ENV_PROXY=1` (Node's
+built-in `fetch` ignores the cloud proxy without it → every Supabase call fails with "fetch failed"),
+`TZ=America/Denver`, and maps `HIGHMARK_ANTHROPIC_API_KEY` → `ANTHROPIC_API_KEY` (the key is stored
+under that name so Claude Code itself doesn't pick it up).
+- DB1/DB2 keys are **network secrets** injected by the proxy (`apikey` header); `SUPABASE_KEY` /
+  `CRM_SUPABASE_KEY` in the environment are placeholders. Code reading them still works.
+- Like CI, this is a **live** run: it writes + cleans up tagged test rows in DB1/DB2. Don't run it while a
+  GitHub CI run is in progress (they share test rows and phone numbers).
+- FareHarbor keys are environment variables (added 2026-11-22). No Anthropic key by default, to save credits:
+  the ~4 Claude-call checks fail fast with a placeholder key and spend nothing (CI covers them). Baseline
+  2026-11-22 before FH keys: 3,253 pass / 7 fail (4 Claude + 3 FareHarbor). CI remains the full gate.
+- Twilio and Resend hosts are not on the network allowlist, so nothing can text or email from a cloud session.
+- **Production access via network secrets** (send `Authorization: Bearer proxy-injected`; the proxy swaps in the real key):
+  - `https://highmark-bot-production.up.railway.app` — `OUTBOUND_API_KEY` → `/api/v1/*` (health, email
+    audience/preview, dry-run + `[TEST]` sends). Real sends still need `dry_run:false` + `idempotency_key` — don't.
+  - `https://api.supabase.com` — Supabase personal access token; sees the **CRM (DB2, `aiiguzslqiemksrvfvwk`) only**.
+    SQL: `POST /v1/projects/aiiguzslqiemksrvfvwk/database/query {"query":…,"read_only":true}`. Apply DDL only
+    after Sean reviews the migration file. DB1 (`qygcmdyxvjlzbmpdpesc`, "Chatbot") is reachable via the Supabase MCP connector.
+  - `https://backboard.railway.com/graphql/v2` — Railway account token: deployments + `deploymentLogs` for
+    `highmark-bot` (svc `f19d84b0-8f97-4f8c-9391-616386560329`), `highmark-cron` (`4fa2a047-aef1-4631-a19a-90cb9621dd68`),
+    and "CSR Ops Report & Webhooks" / `web` (`bcca97fc-45b0-4571-a9eb-0513bd38dcd8`, the csr-webhook FH→DB2 writer).
+- Not reachable from the cloud: Apps Script / Gmail delivery (`Higmark.gs`, needs Sean's Google login), Twilio, Resend.
 
 ### Full automated test suite
 ```bash
@@ -642,6 +668,30 @@ tracking" below), Gmail itself reports nothing; **Google isn't DKIM-signing the 
 Gmail newsletters. When someone with DNS access adds those records (and/or the Resend records), placement improves and `transport:"resend"`
 becomes available with no cap. Also fixed here: booking-email merge fields (`{{trip_date}}` etc.) are now resolved at QUEUE time (they used to
 render blank at send time). Sender/reply-to precedence for the Resend path is `resolveFrom()` (see above).
+
+### Apps Script queue drain + photo slot (APPLIED 2026-11-22)
+`Higmark.gs` in the "CSR Emails" project (`1IeZ8Qp-bFhWMV4FEefyz7db6Bto6EXCVDo4Eg_YKOVNXoRaWPeOWoK10`, standalone, shared drive)
+== `docs/apps-script/Code.gs`. New: `drainQueue` (trigger every 10 min) sends EVERY queued `transport='gmail'` row, not just the
+last newsletter, so server-queued email (Ride Recaps, etc.) needs no manual step; `<!--PHOTO_SLOT-->` / `<!--PHOTO_ONLY-->` +
+`photo_hint` / `from_name` support; `/email/report` results carry `photo`. `GoogleUpload.gs` `onOpen` → `addGoogleAdsMenu_`
+(one `onOpen` now). Pushed via clasp from Sean's Mac (`~/code/csr-emails`, git-snapshotted; rollback `git checkout 790ff0b &&
+clasp push`); verified live via the Drive connector: only those 2 files changed. Change process: `docs/apps-script/HANDOFF.md`.
+Note: the script is standalone, so `onOpen` menus only appear if an installable on-open trigger exists; run functions from the editor.
+
+### Ride Recap emails (rideRecap.js + db2_ride_recap.sql, 2026-11-22 — migration APPLIED 2026-11-22)
+Cron (`runDueRideRecaps`, own try/catch) → at `recap_settings.send_hour` local, once per local day (day claimed via conditional
+update of `last_run_on`) → `planRecaps` over DB2 `bookings` (FH rows only, `status='booked'`, end_at in [midnight of today −
+`lookback_days`, now], item matched by `recap_tours`) → one recap per guest per ride day (dupe rows / multi-sled orders fold; pax
+summed) → skips `recap_log`, unsubscribed/suppressed (`loadSuppressionSets().all`); no/bad email → `recap_review` → renders HTML +
+text (`renderRideRecap`, pure; markers `<!--PHOTO_SLOT-->`/`<!--PHOTO_ONLY-->`) → ONE insert into `email_sends` (`transport='gmail'`,
+`category='recap'`, `body_text`, `from_name`, `photo_hint` = `rideMedia.buildPhotoHint`, idempotency `recap-<pk>`) → `recap_log`.
+`emailSender`: `prepareRows` 'recap' branch re-checks unsubscribe at send time and adds click/open tracking (`renderRecapRow`);
+`/email/pull` messages gain `from_name` + `photo_hint` (null for other types); `/email/report` `photo` → `recap_log.photo`.
+**Column facts (DB2, verified):** item/contact/order/ref/promo/opt-in live only in `raw_payload.booking` (see `bookingFacts`);
+FareHarbor's `?ref=` is `online_booking_references` (the `online_ref` column is junk: prices/URLs); `guide_name` exists but is
+empty; `end_at` always set. Sean's answers (2026-11-22, applied to DB2): On-Trail = REA; one review link (…OEAg) for both brands; weather per
+`recap_settings.weather_points` (REA ranch / Columbine / Kremmling shop / Steamboat shop); prints + merch hidden; `reward_code`=FRIEND10. Safety: `dry_run` default true (→ `test_to`, "[TEST]"), TEST_MODE writes nothing. Tests: `testRideRecap`
++ `snapshots/ride-recap/*.html`. README "Ride Recap emails" has the operator how-to.
 
 ### Email engagement tracking — opens, clicks, results panel (2026-11-06)
 **Why:** Gmail-transport sends recorded nothing past "sent"; the owner wanted opens, clicks and who clicked. **Design** (`emailTracking.js`):

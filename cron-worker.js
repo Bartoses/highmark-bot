@@ -24,6 +24,7 @@ import { pollNewBookings, isFareHarborPollDue } from "./bookingConfirmations.js"
 import { normalizeFareHarborBookings } from "./fareharborNormalizer.js";
 import { mirrorFareHarborContacts } from "./fareharborContacts.js";
 import { drainEmailQueue, defaultQueueDeps } from "./emailSender.js";
+import { runDueRideRecaps } from "./rideRecap.js";
 import { loadDbClients } from "./clients.js";
 
 const required = [
@@ -133,6 +134,18 @@ try {
       }
     } catch (err) {
       console.error(`[CRON-WORKER] FH contacts mirror failed (non-fatal): ${err.message}`);
+    }
+  }
+
+  // Ride Recap — once a day per client at recap_settings.send_hour (local time), queue a branded recap for every guest whose
+  // tour/rental finished today (transport='gmail': the Apps Script drainQueue sends them). dry_run (default) sends all of them
+  // to recap_settings.test_to. No recap_settings table yet = no-op. Own try/catch.
+  if (crmSupabase) {
+    try {
+      const rr = await runDueRideRecaps(crmSupabase, { now: new Date() });
+      for (const r of rr.ran) console.log(`[CRON-WORKER] ride recap ${r.clientId}: ` + (r.error ? `FAILED ${r.error}` : `${r.queued} queued${r.dry_run ? " (dry run)" : ""}, ${r.review} to review, ${r.rewards} rewards`));
+    } catch (err) {
+      console.error(`[CRON-WORKER] ride recap failed (non-fatal): ${err.message}`);
     }
   }
 

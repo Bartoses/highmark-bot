@@ -12,7 +12,9 @@
  *   1. Project Settings (gear icon) -> Script properties -> add:
  *        HIGHMARK_API_URL = https://highmark-bot-production.up.railway.app/api/v1
  *        HIGHMARK_API_KEY = <the OUTBOUND_API_KEY from Railway -> highmark-bot -> Variables>
+ *        RECAP_PHOTO_FOLDER_ID = <Drive folder id of "Tour Photos"> (optional; Ride Recap photos, subfolders YYYY-MM-DD)
  *   2. Run checkConnection() once and approve the permission prompts (Gmail + external requests).
+ *   3. Run setupQueueDrain() once (and approve Drive access) so ride recaps + other queued emails send every 10 minutes.
  *
  * SENDING A NEWSLETTER (menu: Highmark)
  *   1. Paste + Save the newsletter on the Newsletter page.
@@ -34,9 +36,10 @@ var QUOTA_RESERVE = 5;                                // keep a few sends of tod
 var RUN_BUDGET_MS = 270000;                           // stop after ~4.5 minutes (Apps Script kills a run at 6 min); it resumes by itself
 
 // ---- MENU (shows up in the spreadsheet) ----
-// NOTE: Apps Script allows only ONE onOpen() per project. If another file of yours already defines onOpen(),
-// delete this one and add the createMenu(...) lines below into yours.
+// NOTE: Apps Script allows only ONE onOpen() per project; this is it. Other files add their menus through a helper
+// called from here (e.g. GoogleUpload.gs -> addGoogleAdsMenu_). The helper is optional, so this file works on its own too.
 function onOpen() {
+  if (typeof addGoogleAdsMenu_ === 'function') { try { addGoogleAdsMenu_(); } catch (e) { Logger.log('Google Ads menu: ' + e.message); } }
   SpreadsheetApp.getUi().createMenu('Highmark')
     .addItem('Check connection', 'checkConnection')
     .addItem('Preview newsletter audience', 'previewNewsletter')
@@ -44,6 +47,7 @@ function onOpen() {
     .addItem('Send newsletter...', 'sendNewsletter')
     .addSeparator()
     .addItem('Send the rest now', 'continueSending')
+    .addItem('Send queued emails now (recaps etc.)', 'drainQueue')
     .addItem('Sending status', 'campaignStatus')
     .addItem('Check for bounced addresses', 'checkBounces')
     .addToUi();
@@ -97,8 +101,82 @@ function hmAssertSender_() {
            GmailApp.getAliases().map(function (a) { return a.toLowerCase(); }).indexOf(SEND_AS.toLowerCase()) !== -1;
   if (!ok) throw new Error(SEND_AS + ' is not set up as a "Send mail as" address in this Gmail account (Gmail -> Settings -> Accounts).');
 }
+// Sends one rendered message. Ride Recap emails carry a photo placeholder that only this script can fill (the bot can't
+// read Google Drive):  <!--PHOTO_SLOT-->  becomes the guide's photo from Drive, and anything between
+// <!--PHOTO_ONLY--> ... <!--/PHOTO_ONLY-->  (the print offer) is kept only when a photo was found. No placeholder = sent
+// exactly as before. Returns true when a photo was attached.
 function hmSendOne_(m) {
-  GmailApp.sendEmail(m.to, m.subject, m.text || '', { htmlBody: m.html, from: SEND_AS, name: SENDER_NAME, replyTo: m.reply_to || REPLY_TO });
+  var opts = { htmlBody: m.html, from: SEND_AS, name: m.from_name || SENDER_NAME, replyTo: m.reply_to || REPLY_TO };
+  var photo = null;
+  if (m.html && m.html.indexOf('<!--PHOTO_SLOT-->') !== -1) {
+    photo = m.photo_hint ? hmFindPhoto_(m.photo_hint) : null;
+    var html = m.html;
+    if (photo) {
+      html = html.replace('<!--PHOTO_SLOT-->', '<img src="cid:ridephoto" width="560" alt="Photo from your ride" ' +
+        'style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:12px;margin-top:16px">');
+      html = html.replace(/<!--\/?PHOTO_ONLY-->/g, '');
+      opts.inlineImages = { ridephoto: photo };
+    } else {
+      html = html.replace(/<!--PHOTO_ONLY-->[\s\S]*?<!--\/PHOTO_ONLY-->/g, '');
+    }
+    opts.htmlBody = html.replace(/<!--PHOTO_SLOT-->/g, '');
+  }
+  GmailApp.sendEmail(m.to, m.subject, m.text || '', opts);
+  return !!photo;
+}
+
+// Finds the ride photo. hint = { date: 'YYYY-MM-DD', label: 'Grand Tour', time: '11am' (optional), file_id (optional) }.
+//   1. file_id (set by the Guide Ride Log app, which knows exactly which photo the guide chose) -> that file.
+//   2. Otherwise search <RECAP_PHOTO_FOLDER_ID>/<date>/ by file name (photos dropped in by hand), following the naming
+//      contract "<Label> <time> - <Guide> - <NN>.jpg" (see rideMedia.js in highmark-bot):
+//      - with a time: only files named with that label AND that time (two Grand Tours the same day never swap photos);
+//        a label-only file name is used only when no file names a different time for that label.
+//      - without a time: label match, then the label's first word.
+//      Among matches the alphabetically first name wins, so "- 01" (or a "cover" photo) is the one used.
+// Only email-safe images (JPEG/PNG/GIF, under 15 MB) are used: iPhone HEIC and videos are ignored.
+// Any problem (no folder, no match, no permission) = no photo, never an error.
+var HM_EMAIL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
+function hmEmailSafeImage_(f) {
+  return HM_EMAIL_IMAGE_TYPES.indexOf(String(f.getMimeType()).toLowerCase()) !== -1 && f.getSize() <= 15 * 1024 * 1024;
+}
+function hmFindPhoto_(hint) {
+  try {
+    if (!hint) return null;
+    if (hint.file_id) {
+      try { var byId = DriveApp.getFileById(String(hint.file_id)); if (hmEmailSafeImage_(byId)) return byId.getBlob().setName('ridephoto'); }
+      catch (e) { Logger.log('Photo file_id not usable, searching by name: ' + e.message); }
+    }
+    var rootId = PropertiesService.getScriptProperties().getProperty('RECAP_PHOTO_FOLDER_ID');
+    if (!rootId || !hint.date || !hint.label) return null;
+    var days = DriveApp.getFolderById(rootId).getFoldersByName(String(hint.date));
+    if (!days.hasNext()) return null;
+    var files = days.next().getFiles(), list = [];
+    while (files.hasNext()) { var f = files.next(); if (hmEmailSafeImage_(f)) list.push({ file: f, name: f.getName() }); }
+    var pick = hmPickPhotoName_(list.map(function (x) { return x.name; }), hint);
+    if (pick === null) return null;
+    for (var i = 0; i < list.length; i++) if (list[i].name === pick) return list[i].file.getBlob().setName('ridephoto');
+    return null;
+  } catch (e) { Logger.log('Photo lookup skipped: ' + e.message); return null; }
+}
+// Pure: chooses which file name (if any) belongs to this ride. Mirrors pickRidePhotoName() in rideMedia.js (tested there).
+function hmPickPhotoName_(names, hint) {
+  var norm = function (s) { return String(s || '').toLowerCase().replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ').trim(); };
+  var timeRe = /\b(\d{1,2})(?::|\s)?(\d{2})?\s?(am|pm)\b/;
+  var timeOf = function (n) { var m = norm(n).match(timeRe); return m ? (parseInt(m[1], 10) + (m[2] && m[2] !== '00' ? ':' + m[2] : '') + m[3]) : null; };
+  var label = norm(hint.label), want = hint.time ? timeOf(hint.time) : null;
+  var sorted = names.slice().sort();
+  var withLabel = sorted.filter(function (n) { return norm(n).indexOf(label) !== -1; });
+  if (want) {
+    var exact = withLabel.filter(function (n) { return timeOf(n) === want; });
+    if (exact.length) return exact[0];
+    var otherTimes = withLabel.filter(function (n) { var t = timeOf(n); return t && t !== want; });
+    var untimed = withLabel.filter(function (n) { return !timeOf(n); });
+    return (!otherTimes.length && untimed.length) ? untimed[0] : null;
+  }
+  if (withLabel.length) return withLabel[0];
+  var first = label.split(' ')[0];
+  if (first.length > 3) { var loose = sorted.filter(function (n) { return norm(n).indexOf(first) !== -1; }); if (loose.length) return loose[0]; }
+  return null;
 }
 
 // Sends rendered messages through Gmail, then reports each result to Highmark. Returns {sent, failed, deferred}.
@@ -109,7 +187,7 @@ function hmSendMessages_(messages, deadline) {
     var m = messages[i];
     if (!stop && ((deadline && Date.now() > deadline) || MailApp.getRemainingDailyQuota() <= 0)) stop = true;   // out of time or quota: hand the rest back
     if (stop) { results.push({ send_id: m.send_id, deferred: true }); deferred++; continue; }
-    try { hmSendOne_(m); results.push({ send_id: m.send_id, ok: true }); sent++; }
+    try { var hadPhoto = hmSendOne_(m); results.push({ send_id: m.send_id, ok: true, photo: hadPhoto }); sent++; }
     catch (e) {
       var msg = String((e && e.message) || e);
       if (/too many times|quota|limit exceeded|service invoked/i.test(msg)) { stop = true; results.push({ send_id: m.send_id, deferred: true }); deferred++; }
@@ -238,6 +316,30 @@ function checkBounces() {
   Logger.log('Bounce check: ' + emails.length + ' bounced address(es) found, ' + r.suppressed + ' suppressed.');
   if (emails.length) hmSay_(r.suppressed + ' bounced address(es) will not be emailed again.');
 }
+
+// ---- standing queue drain (Ride Recaps and anything else Highmark queues for Gmail) ----
+// Every 10 minutes: send whatever Highmark has queued (ride recaps, booking emails, the rest of a newsletter),
+// within today's Gmail quota. Run setupQueueDrain() ONCE to turn it on; stopQueueDrain() turns it off.
+function drainQueue() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return;                         // another send is already running; the next tick picks it up
+  var deadline = Date.now() + RUN_BUDGET_MS, sent = 0, failed = 0;
+  try {
+    for (var guard = 0; guard < 60; guard++) {
+      var quota = MailApp.getRemainingDailyQuota() - QUOTA_RESERVE;
+      if (quota <= 0) break;
+      var r = hmApi_('POST', '/email/pull', { limit: Math.min(20, quota) });
+      if (r.blocked) { Logger.log('Highmark is holding sends: ' + r.blocked); break; }
+      if (!r.messages.length) break;
+      var s = hmSendMessages_(r.messages, deadline);
+      sent += s.sent; failed += s.failed;
+      if (s.deferred || Date.now() > deadline) break;
+    }
+  } finally { lock.releaseLock(); }
+  if (sent || failed) Logger.log('Queue drain: sent ' + sent + (failed ? ', failed ' + failed : '') + '.');
+}
+function setupQueueDrain() { hmEnsureRecurring_('drainQueue', 10); hmEnsureTrigger_('checkBounces', 10); hmSay_('Queued emails will now go out automatically every 10 minutes.'); }
+function stopQueueDrain()  { hmRemoveTrigger_('drainQueue'); hmSay_('Automatic sending of queued emails is off.'); }
 
 // ---- triggers ----
 function hmEnsureTrigger_(fn, hour) {          // once a day
