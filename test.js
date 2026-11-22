@@ -20274,6 +20274,34 @@ async function testRideRecap() {
       && R.recapSeason(new Date("2027-03-01T12:00:00Z")) === "2026-27" && R.recapSeason(new Date("2026-08-01T12:00:00Z")) === "2026-27");
   }
 
+  // social sharing: story image + public ride page with link previews; never a guest's name/email/phone
+  {
+    const row = { fareharbor_pk: "#777", status: "booked", start_at: "2027-01-29T18:00:00Z", end_at: "2027-01-29T21:00:00Z", customer_count: 3,
+      raw_payload: { booking: { availability: { item: { name: "3 Hour - Grand Tour" } }, contact: { name: "Katrina Schultz", email: "kat@example.com", phone: "9794220587" } } } };
+    const ctx = R.shareContextFrom({ bookingId: "777", type: "rea", row, tours: [{ match: "Grand Tour", type: "rea", label: "Grand Tour", miles: 22 }], settings: { friend_code: "FRIEND10" } });
+    const share = R.renderSharePage({ ...ctx, baseUrl: "https://app.test" }), ride = R.renderRidePage({ ...ctx, baseUrl: "https://app.test" });
+    chk("recap social: share context = tour, date, stats from the booking (miles, hours, riders) — no personal data",
+      ctx.label === "Grand Tour" && ctx.dateLabel === "Jan 29, 2027" && JSON.stringify(ctx.stats) === JSON.stringify([["22 mi", "ridden"], ["3 hrs", "on the snow"], ["3", "riders"]])
+      && [share, ride].every(h => !/Katrina|Schultz|kat@example|9794220587/.test(h)));
+    const fb = decodeURIComponent((share.match(/href="(https:\/\/www\.facebook\.com\/sharer[^"]+)"/) || [])[1] ?? "");
+    const xl = decodeURIComponent((share.match(/href="(https:\/\/twitter\.com\/intent\/tweet[^"]+)"/) || [])[1]?.replace(/&amp;/g, "&") ?? "");
+    chk("recap social: share page has the story image, Facebook + X post links to the public ride page, and copy-link",
+      share.includes('<canvas id="story"') && share.includes("navigator.canShare") && share.includes('"code":"FRIEND10"') && share.includes('id="copyLink"')
+      && /https:\/\/app\.test\/r\/ride\?b=777&t=rea&utm_source=ride_recap.*utm_content=social-facebook/.test(fb) && /Grand Tour with Rabbit Ears Adventures/.test(xl) && /utm_content=social-x/.test(xl), fb);
+    chk("recap social: ride page carries link-preview tags (title, description, brand image) and a booking button that credits the guest",
+      ride.includes('property="og:title" content="Grand Tour with Rabbit Ears Adventures"') && ride.includes('property="og:image" content="https://app.test/r/og/rea.png"')
+      && ride.includes('name="twitter:card" content="summary_large_image"') && /href="https:\/\/fareharbor\.com\/embeds\/book\/rabbitearsadventures\/\?ref=friend-777&amp;full-items=yes[^"]*utm_content=ride-page-book/.test(ride)
+      && !/undefined|\bnull\b/.test(ride + share));
+    const generic = R.shareContextFrom({ bookingId: "5", type: "rental", settings: {} });
+    chk("recap social: unknown booking → a generic page for that type; bad input → no page",
+      generic.label === "Sled day" && generic.stats.length === 0 && generic.brand.key === "csr" && R.renderRidePage({ ...generic, baseUrl: "https://app.test" }).includes("/r/og/csr.png")
+      && R.renderRidePage({ bookingId: "x", type: "rea" }) === null && R.shareContextFrom({ bookingId: "1", type: "nope" }) === null);
+    chk("recap social: the email has a 'Post your ride' button to the share page's ride section",
+      R.RECAP_TYPES.every(t => { const h = render(t).html.replace(/&amp;/g, "&"); return h.includes("Post your ride") && /\/r\/share\?b=777&t=\w+&utm_source=ride_recap[^"]*utm_content=share-social#ride/.test(h); }));
+    const r1 = await fetch(`${BASE_URL}/r/ride?b=777&t=rea`), r2 = await fetch(`${BASE_URL}/r/og/rea.png`), r3 = await fetch(`${BASE_URL}/r/og/zzz.png`);
+    chk("recap social routes: /r/ride serves the page, /r/og/<brand>.png serves the preview image, unknown brand 404",
+      r1.status === 200 && (await r1.text()).includes("og:image") && r2.status === 200 && /image\/png/.test(r2.headers.get("content-type") ?? "") && r3.status === 404, `${r1.status} ${r2.status} ${r3.status}`);
+  }
   {
     const ok = await fetch(`${BASE_URL}/r/share?b=777&t=backcountry`);
     const okHtml = await ok.text();
