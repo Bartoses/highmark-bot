@@ -99,6 +99,22 @@ export function renderCampaignEmail({ campaign, client, recipient, baseUrl, doma
   };
 }
 
+// A Ride Recap row (category 'recap'): the body is the finished document from rideRecap.js. Only click/open tracking is
+// added here (it needs the send id). The unsubscribe link is never rewritten (rewriteLinks skips /email/unsubscribe/ and
+// data-notrack), and the Apps Script still sees the <!--PHOTO_SLOT--> / <!--PHOTO_ONLY--> markers untouched.
+export function renderRecapRow({ row, client = null, baseUrl = resolveBaseUrl(), trackingSecret }) {
+  let html = row.body_html ?? "";
+  const tracking = buildTracking({ baseUrl, sendId: row.id, ...(trackingSecret !== undefined ? { secret: trackingSecret } : {}) });
+  if (tracking) html = injectBeforeBodyEnd(tracking.rewriteBody(html), tracking.pixelHtml);
+  return {
+    from: resolveFrom({ displayName: row.from_name || client?.name || null }),
+    to: [row.email], subject: row.subject ?? "", html,
+    text: row.body_text || htmlToPlainText(row.body_html ?? ""),
+    ...(resolveReplyTo(null, client) ? { reply_to: resolveReplyTo(null, client) } : {}),
+    tags: [{ name: "category", value: "recap" }],
+  };
+}
+
 // A booking email: no unsubscribe link (it's about their own booking) but still identifies the business.
 export function renderTransactionalEmail({ row, client, mergeVars = {}, domainRow = null, replyTo = null }) {
   const businessName = client?.name ?? "Your Business";
@@ -206,6 +222,11 @@ async function prepareRows(crm, db1, claimed, { resolveClient, getCampaign, getD
     if (row.category === "transactional") {
       if (sup.hard.has(email)) skipReason = "address_suppressed";
       else item = renderTransactionalEmail({ row: { ...row, email }, client, mergeVars: { first_name: contact?.first_name ?? "there" } });
+    } else if (row.category === "recap") {
+      // Ride Recap (rideRecap.js): rendered in full at queue time (own footer + unsubscribe link). Re-check at send time:
+      // anyone who unsubscribed or bounced since it was queued is skipped.
+      if (sup.all.has(email)) skipReason = "unsubscribed";
+      else item = renderRecapRow({ row: { ...row, email }, client, baseUrl });
     } else {
       if (!campaigns.has(row.campaign_id)) campaigns.set(row.campaign_id, getCampaign ? await getCampaign(db1, row.campaign_id) : null);
       const campaign = campaigns.get(row.campaign_id);
@@ -358,6 +379,9 @@ export async function pullGmailMessages(crm, db1, {
         out.messages = ready.map(({ row, item }) => ({
           send_id: row.id, campaign_id: row.campaign_id, category: row.category,
           to: item.to[0], subject: item.subject, html: item.html, text: item.text, reply_to: item.reply_to ?? null,
+          // Optional, for the Apps Script (Code.gs hmSendOne_): sender display name, and where to find the ride photo in Drive.
+          // null for every non-recap email, which keeps the script's defaults.
+          from_name: row.from_name ?? null, photo_hint: parseHint(row.photo_hint),
         }));
       }
     }
@@ -369,14 +393,17 @@ export async function pullGmailMessages(crm, db1, {
   return out;
 }
 
-// results: [{ send_id, ok, error? }]. Only rows currently 'sending' are touched, so a repeated report is a harmless no-op.
+const parseHint = (h) => { if (!h) return null; if (typeof h === "object") return h; try { return JSON.parse(h); } catch { return null; } };
+
+// results: [{ send_id, ok, error?, photo? }]. photo (true|false, Ride Recaps) = whether the script attached a Drive photo;
+// recorded in recap_log.photo. Only rows currently 'sending' are touched, so a repeated report is a harmless no-op.
 export async function reportGmailResults(crm, db1, results, { getCampaign = null, nowMs = Date.now() } = {}) {
   const out = { sent: 0, failed: 0, requeued: 0, ignored: 0 };
   if (!crm || !Array.isArray(results)) return out;
   const iso = new Date(nowMs).toISOString(); const touched = new Set();
   for (const r of results) {
     if (!r?.send_id) { out.ignored++; continue; }
-    const { data } = await crm.from("email_sends").select("id, status, attempts, campaign_id").eq("id", r.send_id).eq("transport", "gmail").limit(1);
+    const { data } = await crm.from("email_sends").select("id, status, attempts, campaign_id, category").eq("id", r.send_id).eq("transport", "gmail").limit(1);
     const row = data?.[0];
     if (!row || row.status !== "sending") { out.ignored++; continue; }
     if (row.campaign_id) touched.add(row.campaign_id);
@@ -386,6 +413,14 @@ export async function reportGmailResults(crm, db1, results, { getCampaign = null
     const attempts = (row.attempts ?? 0) + 1;
     if (r.ok === true) {
       await crm.from("email_sends").update({ status: "sent", provider_id: "gmail", sent_at: iso, error: null, attempts, updated_at: iso }).eq("id", row.id); out.sent++;
+      if (row.category === "recap") {
+        // best-effort: a missing recap_log (migration not applied) or reward row (no log) must never fail the report
+        try {
+          const patch = { sent_at: iso, ...(typeof r.photo === "boolean" ? { photo: r.photo } : {}) };
+          const { error: lgErr } = await crm.from("recap_log").update(patch).eq("send_id", row.id);
+          if (lgErr) console.error(`[GMAIL REPORT] recap_log update failed: ${lgErr.message}`);
+        } catch (e) { console.error(`[GMAIL REPORT] recap_log update failed: ${e.message}`); }
+      }
     } else {
       const err = String(r.error ?? "send failed").slice(0, 300);
       if (PERMANENT_FAILURE.test(err) || attempts >= MAX_ATTEMPTS) { await crm.from("email_sends").update({ status: "failed", error: err, attempts, updated_at: iso }).eq("id", row.id); out.failed++; }

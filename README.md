@@ -320,3 +320,42 @@ multi-tenant module on the same clients/CRM/knowledge as the SMS bot.
 ---
 
 Built by Whiteout Solutions · Steamboat Springs, CO
+
+## Ride Recap emails (rideRecap.js)
+
+A branded "thanks for riding" email to every guest whose tour or rental finished that day (Rabbit Ears tour, CSR guided
+backcountry, CSR rental). It asks for a Google review (with a "Tell us directly" link for every guest), shares the
+FRIEND10 referral code, offers prints/merch and the next ride. Spec: `docs/sprints/sprint-ride-recap.md`.
+
+**How it runs.** The cron worker checks every 5 minutes. When the local clock reaches `recap_settings.send_hour` (default
+18:00 America/Denver) and the job hasn't run that day, it queues one recap per guest in `email_sends`
+(`transport='gmail'`, `category='recap'`). The Apps Script `drainQueue` trigger sends them from info@ within 10 minutes and
+fills in the ride photo from Drive (`Tour Photos/<date>/<Label> <time> - … .jpg`, see `rideMedia.js`).
+
+**Migration:** `db2_ride_recap.sql` (DB2). Until it is applied the job does nothing.
+
+**Edit tours and settings** in the Supabase Table Editor (DB2, no deploy):
+- `recap_tours`: `match` is a piece of the FareHarbor item name. `type` is `rea`, `backcountry`, `rental`, or `skip` (never email).
+  `label` is shown in the email and used to find the photo. Fill in `miles`, `high_point_ft` and `stops` (REA) when you have
+  them; anything blank is left out of the email. Set `active` to false to stop a tour.
+- `recap_settings` (one row, `csr_rea`): `send_hour`, `features` (remove `merch` to hide it), `friend_code`/`friend_percent`,
+  `weather_lat`/`weather_lon` (blank = no weather labels), `reward_code` (blank = referral rewards off).
+
+**Turn off dry run.** While `dry_run` is true (the default), every recap goes to `test_to` with "[TEST]" in the subject.
+Set `dry_run` to false to start emailing guests. Recaps already sent in dry run are not re-sent to the guests.
+
+**Check what happened.**
+- `recap_log`: one row per booking (guest `email`, `sent_to`, `type`, `dry_run`, `photo` once sent, `send_id` → `email_sends`
+  for status/opens/clicks). Bookings folded into one email (e.g. two sleds on one order) point at `primary_booking_id`.
+- `recap_review`: bookings skipped because the email is missing or invalid. Fix the email in FareHarbor; the next run
+  (within `lookback_days`) picks it up.
+- `recap_settings.last_run_on` / `last_run_summary`: when it last ran and what it queued. To re-run today, clear `last_run_on`
+  (bookings already in `recap_log` are never emailed twice).
+
+**Preview without sending:** `node --env-file=.env rideRecap.js` prints today's plan (nothing written);
+`node rideRecap.js --snapshots out/` writes the six sample renders as HTML. Snapshots are in `snapshots/ride-recap/`
+(`UPDATE_SNAPSHOTS=1 npm test` accepts a template change).
+
+**Referral rewards (off).** When `reward_code` is set, each run looks for new bookings made through a shared link
+(`ref=friend-<booking id>`, stored by FareHarbor as `online_booking_references`) and queues one "Your friend booked!" email
+with the code to the referring guest, at most once per guest per season (`recap_rewards`).

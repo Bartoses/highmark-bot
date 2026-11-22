@@ -3266,6 +3266,7 @@ async function main() {
     await testCustomerFileImport();   // Polaris/MPWR all-riders file → contacts: dedupe within file + vs CRM, grandfathered consent, no DOB/address, SMS never opted in
     await testWaiverImport();         // Smartwaiver → waivers + contacts: email-match dedupe, consent only from verified+ticked, never downgrade, no DOB/DL
     await testOutboundMessaging();    // send API + queue + Resend webhook + suppression: consent enforced server-side, idempotent, fail-closed
+    await testRideRecap();            // Ride Recap: item mapping, eligibility, missing-data rules, links/UTM, settings, referral hook, Gmail contract, snapshots
     await testEmailTracking();        // opens + clicks: signed links (no open redirect), footer/unsubscribe untouched, bot filter, stats, public routes
   } catch (e) {
     fail("Test server", e.message);
@@ -18684,6 +18685,7 @@ function makeFhMockCrm(seed) {
       select(cols) { st.cols = cols; if (st.patch) st.returning = true; return api; },
       like(col, pat) { const pre = pat.replace(/%$/, ""); st.filters.push(r => String(r[col] ?? "").startsWith(pre)); return api; },
       gte(col, v) { st.filters.push(r => r[col] != null && r[col] >= v); return api; },
+      lte(col, v) { st.filters.push(r => r[col] != null && r[col] <= v); return api; },
       neq(col, v) { st.filters.push(r => r[col] !== v); return api; },
       lt(col, v) { st.filters.push(r => r[col] != null && r[col] < v); return api; },
       contains(col, obj) { st.filters.push(r => r[col] && Object.entries(obj).every(([k, v]) => r[col][k] === v)); return api; },
@@ -18692,7 +18694,7 @@ function makeFhMockCrm(seed) {
       in(col, list) { st.filters.push(r => list.includes(r[col])); return api; },
       or(expr) {
         const conds = expr.split(",").map(c => c.split("."));
-        st.filters.push(r => conds.some(([col, op]) => op === "is" && (r[col] ?? null) === null));
+        st.filters.push(r => conds.some(([col, op, ...v]) => (op === "is" && (r[col] ?? null) === null) || (op === "neq" && r[col] !== v.join("."))));
         return api;
       },
       not(col, op, v) { if (op === "is") st.filters.push(r => (r[col] ?? null) !== v); return api; },
@@ -18753,6 +18755,15 @@ function makeFhMockCrm(seed) {
               }
             }
             for (const r of rows) { tables[table].push({ id: `row-${idn++}`, ...r }); if (table === "contacts") writes.contactInserts++; }
+            return resolve({ data: null, error: null });
+          }
+          if (st.insert && !st.returningSingle) {                                    // awaited insert, any other table
+            const rows = Array.isArray(st.insert) ? st.insert : [st.insert];
+            if (table === "recap_rewards") for (const r of rows) {
+              if (tables.recap_rewards.some(x => x.friend_booking_id === r.friend_booking_id || (x.client_id === r.client_id && x.referrer_email === r.referrer_email && x.season === r.season)))
+                return resolve({ data: null, error: { message: "duplicate key value violates unique constraint recap_rewards" } });
+            }
+            for (const r of rows) tables[table].push({ id: `row-${idn++}`, ...r });
             return resolve({ data: null, error: null });
           }
           if (st.patch) {
@@ -19953,6 +19964,305 @@ function makeTrackMockCrm(seed = {}) {
     return q;
   };
   return { tables, from: query };
+}
+
+async function testRideRecap() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const R = await import("./rideRecap.js");
+  const S = await import("./emailSender.js");
+  const fs = await import("fs"); const vm = await import("vm");
+  const withEnv = async (vars, fn) => {
+    const prev = {}; for (const k of Object.keys(vars)) { prev[k] = process.env[k]; if (vars[k] === undefined) delete process.env[k]; else process.env[k] = vars[k]; }
+    try { return await fn(); } finally { for (const k of Object.keys(vars)) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; } }
+  };
+  // seed == db2_ride_recap.sql
+  const TOURS = [
+    { match: "Grand Tour", type: "rea", label: "Grand Tour" }, { match: 'Grand "Private" Tour', type: "rea", label: "Grand Tour" },
+    { match: "First Tracks", type: "rea", label: "First Tracks" }, { match: "Tree Line", type: "rea", label: "Tree Line" },
+    { match: "Sunset Ride", type: "rea", label: "Sunset Ride" }, { match: "Rabbit Ears", type: "rea", label: "Rabbit Ears Tour" },
+    { match: "On-Trail Guided", type: "rea", label: "On-Trail Guided Tour" }, { match: "Backcountry", type: "backcountry", label: "Private Guided Backcountry" },
+    { match: "Polaris", type: "rental", label: "Polaris rental" }, { match: "RZR", type: "skip", label: "RZR", priority: 10 },
+  ];
+  const sql = fs.readFileSync(new URL("./db2_ride_recap.sql", import.meta.url), "utf8");
+  chk("recap: the test tour list matches the migration seed", TOURS.every(t => sql.includes(`'${t.match}'`)) && /'RZR',\s*'skip'/.test(sql));
+
+  // 1. item mapping
+  const M = (n) => R.matchTour(n, TOURS)?.type ?? null;
+  chk("recap map: Grand Tour → rea; Backcountry → backcountry; Polaris 850 → rental",
+    M("3 Hour - Grand Tour") === "rea" && M("Pro-Ride Private Guided Backcountry Adventure (Full Day)") === "backcountry" && M('Polaris 850 Khaos 165" Slash • Steamboat') === "rental");
+  chk("recap map: Fuel / Trailer / RZR / gear / gift cards → no email",
+    [ "Fuel Steamboat", "2-Place Trailer - Kremmling", "2025 Polaris RZR Experience • 4 Seater • Kremmling", "2025 Polaris Turbo RZR XP 1000 • 4 Seater • Steamboat", "Steamboat Ortovox Ava Bag", "Gift Cards", "", null ].every(n => M(n) === null));
+  chk("recap map: every REA item seen in DB2 maps (incl. the 'Grand \"Private\" Tour' and the 2-hour tours)",
+    [ "3 Hour Grand \"Private\" Tour", "Tree Line - 2 Hour Afternoon Tour", "First Tracks - 2 Hour Morning Tour", "Sunset Ride - 3 Hour" ].every(n => M(n) === "rea")
+    && R.matchTour('3 Hour Grand "Private" Tour', TOURS).label === "Grand Tour");
+  chk("recap map: case-insensitive; inactive rows ignored", M("GRAND TOUR") === "rea" && R.matchTour("Grand Tour", [{ match: "Grand Tour", type: "rea", active: false }]) === null);
+
+  // 2. eligibility
+  const NOW = new Date("2027-01-30T03:00:00Z");                    // 8pm Jan 29, Denver
+  let pkN = 500;
+  const bk = (o = {}) => {
+    const pk = o.pk ?? `#${pkN++}`;
+    return { fareharbor_pk: pk, company: o.company ?? "rabbitearsadventures", status: o.status ?? "booked", start_at: o.start ?? "2027-01-29T18:00:00Z",
+      end_at: o.end ?? "2027-01-29T21:00:00Z", customer_count: o.pax ?? 2, guide_name: o.guide ?? null, updated_at: o.updated ?? "2027-01-29T00:00:00Z",
+      raw_payload: { booking: { pk: Number(pk.slice(1)), status: o.status ?? "booked", availability: { item: { name: o.item ?? "3 Hour - Grand Tour" } },
+        contact: { name: o.name ?? "Katrina Schultz", email: o.email === undefined ? "kat@example.com" : o.email, is_subscribed_for_email_updates: false },
+        order: { display_id: o.order ?? `ORD${pk}` }, online_booking_references: o.ref ?? "", rebooked_from: o.rebookedFrom ?? null,
+        custom_field_values: o.promo ? [{ name: "Promo Code", value: o.promo, display_value: o.promo }] : [] } } };
+  };
+  const plan = R.planRecaps({
+    now: NOW, tours: TOURS, logged: new Set(["#900"]), suppressed: new Set(["gone@example.com"]),
+    bookings: [
+      bk({ pk: "#101", email: "a@example.com" }), bk({ pk: "#101", email: "a@example.com", updated: "2027-01-29T05:00:00Z" }),   // duplicate row
+      bk({ pk: "#102", status: "cancelled", email: "c@example.com" }), bk({ pk: "#103", status: "rebooked", email: "r@example.com" }),
+      bk({ pk: "#104", email: null }), bk({ pk: "#105", email: "not-an-email" }), bk({ pk: "#106", email: "gone@example.com" }),
+      bk({ pk: "#900", email: "logged@example.com" }), bk({ pk: "#107", item: "Fuel Steamboat", email: "f@example.com" }),
+      bk({ pk: "#108", end: "2027-01-30T05:00:00Z", email: "late@example.com" }),
+      bk({ pk: "#110", item: 'Polaris 850 Khaos • Steamboat', company: "coloradosledrentals", email: "fam@example.com", order: "O1", pax: 1 }),
+      bk({ pk: "#111", item: 'Polaris 650 RMK • Steamboat', company: "coloradosledrentals", email: "FAM@example.com", order: "O1", pax: 1 }),
+      bk({ pk: "#112", item: "2-Place Trailer - Steamboat", company: "coloradosledrentals", email: "fam@example.com", order: "O1" }),
+      { fareharbor_pk: "CO-ABC-123", status: "booked", end_at: "2027-01-29T21:00:00Z", raw_payload: null },
+    ] });
+  const rpk = plan.recaps.map(r => r.primary.pk), sk = Object.fromEntries(plan.skipped.map(x => [x.booking_id, x.reason])), rv = Object.fromEntries(plan.review.map(x => [x.booking_id, x.reason]));
+  chk("recap eligibility: duplicate rows of one booking → one email", rpk.filter(x => x === "#101").length === 1, JSON.stringify(rpk));
+  chk("recap eligibility: cancelled and rebooked (old half) are skipped", sk["#102"] === "cancelled" && sk["#103"] === "rebooked");
+  chk("recap eligibility: missing / invalid email → recap_review", rv["#104"] === "no_email" && rv["#105"] === "invalid_email");
+  chk("recap eligibility: unsubscribed → skipped (never reviewed, never emailed)", sk["#106"] === "unsubscribed" && !rpk.includes("#106"));
+  chk("recap eligibility: already in recap_log → skipped", sk["#900"] === "already_sent");
+  chk("recap eligibility: Fuel → skipped; ride not finished yet → skipped; MPWR rows ignored", sk["#107"] === "not_a_recap_item" && sk["#108"] === "not_finished" && !JSON.stringify(plan).includes("CO-ABC"));
+  const fam = plan.recaps.find(r => r.email === "fam@example.com");
+  chk("recap eligibility: two sleds on one order (one guest, any email case) → ONE email, riders summed, all bookings logged",
+    plan.recaps.filter(r => r.email === "fam@example.com").length === 1 && fam.pax === 2 && fam.bookings.length === 2 && fam.tour.type === "rental", JSON.stringify(fam?.bookings?.map(b => b.pk)));
+  chk("recap eligibility: exactly the 2 eligible guests are planned", plan.recaps.length === 2, JSON.stringify(rpk));
+  const facts = R.bookingFacts(bk({ pk: "#120", promo: "SS10", ref: "friend-101", rebookedFrom: "uuid-x" }));
+  chk("recap facts: ref (online_booking_references), promo code, rebooked_from, order id come out of raw_payload",
+    facts.ref === "friend-101" && facts.promoCode === "SS10" && facts.rebookedFrom === "uuid-x" && facts.orderId === "ORD#120" && facts.bookingId === "120" && facts.email === "kat@example.com");
+
+  // 3. missing-data rules
+  const settings = R.normalizeRecapSettings({});
+  const render = (type, o = {}) => {
+    const tour = { type, label: o.label ?? "Grand Tour", miles: o.miles ?? null, high_point_ft: o.high ?? null, stops: o.stops ?? [] };
+    const booking = { bookingId: "777", pk: "#777", name: o.name ?? "Katrina Schultz", startAt: "2027-01-29T18:00:00Z", endAt: o.end === undefined ? "2027-01-29T21:00:00Z" : o.end, pax: o.pax ?? 3, guide: o.guide ?? "" };
+    const trip = { ...R.buildTripDetails({ booking, tour }), ...(o.photo !== undefined ? { photo: o.photo } : {}) };
+    const d = R.buildRecapData({ booking, tour, trip, settings: { ...settings, ...(o.settings ?? {}) }, weather: o.weather ?? null, unsubscribeUrl: o.unsub === undefined ? "https://app.test/email/unsubscribe/tok-1" : o.unsub });
+    return { d, ...R.renderRideRecap(d) };
+  };
+  chk("recap content: no name / junk name / initial → generic headline, subject without ', Name'",
+    ["", "Guest", "J", "J.", "guest smith", "N/A"].every(n => { const r = render("rea", { name: n }); return r.d.h1 === "Thanks for riding with us." && r.subject === "Your Rabbit Ears tour recap"; })
+    && render("rea", { name: "KATRINA schultz" }).subject === "Your Rabbit Ears tour recap, Katrina");
+  chk("recap content: subjects per type", render("backcountry").subject === "Your backcountry day, recapped, Katrina" && render("rental", { name: "" }).subject === "Thanks for riding with CSR");
+  chk("recap content: guide name shows when known and the phrase disappears when not",
+    render("rea", { guide: "Jake" }).html.includes("with guide Jake") && !/with guide/.test(render("rea").html) && !/with guide/.test(render("backcountry").html));
+  const noPhoto = render("rea", { photo: false });
+  chk("recap content: known no-photo → no photo slot and no print offer", !noPhoto.html.includes("PHOTO_SLOT") && !noPhoto.html.includes("Keep the moment"));
+  const unknown = render("rea");
+  chk("recap content: photo unknown → marker for the Apps Script; print offer wrapped in PHOTO_ONLY; no <img> for the photo",
+    unknown.html.includes("<!--PHOTO_SLOT-->") && /<!--PHOTO_ONLY-->[\s\S]*Keep the moment[\s\S]*<!--\/PHOTO_ONLY-->/.test(unknown.html) && !unknown.html.includes("cid:ridephoto"));
+  chk("recap content: script finds no photo → no slot, no print offer; finds one → cid image + print offer",
+    (() => { const n = R.applyPhotoMarkers(unknown.html, false), y = R.applyPhotoMarkers(unknown.html, true); return !/PHOTO_|Keep the moment|cid:/.test(n) && y.includes('src="cid:ridephoto"') && y.includes("Keep the moment") && !/PHOTO_/.test(y); })());
+  const bare = render("rea", { pax: 2 });
+  chk("recap content: no tour stats → hours + riders tiles still render, no miles/high-point tiles",
+    bare.d.stats.length === 2 && bare.d.stats[0][0] === "3 hrs" && bare.d.stats[1][0] === "2" && !/ mi<|highest point/.test(bare.html));
+  const full = render("rea", { miles: 22, high: 10340, stops: ["Dumont Lake"], weather: [["HIGH", "24°F"], ["SKY", "Bluebird"]] });
+  chk("recap content: tour stats + stops + weather render when present", full.d.stats.length === 4 && full.html.includes("10,340 ft") && full.html.includes("STOPS ON YOUR LOOP") && full.html.includes("Bluebird"));
+  chk("recap content: weather failure → labels hidden; stops are REA-only", !/SKY|HIGH</.test(render("rea").html) && !render("rental", { stops: ["x"] }).html.includes("STOPS ON YOUR LOOP"));
+  chk("recap content: merch line falls back to tour + date without miles", render("rea").d.merchLine === "Grand Tour · 01.29.27" && full.d.merchLine === "Grand Tour · 01.29.27 · 22 mi");
+  chk("recap content: hours label", R.hoursLabel("2027-01-29T18:00:00Z", "2027-01-29T19:00:00Z") === "1 hr" && R.hoursLabel("2027-01-29T18:00:00Z", "2027-01-29T19:30:00Z") === "1.5 hrs"
+    && R.hoursLabel("2027-01-29T15:00:00Z", "2027-01-29T23:00:00Z") === "Full day" && R.hoursLabel(null, "x") === "" && R.hoursLabel("2027-01-29T19:00:00Z", "2027-01-29T18:00:00Z") === "");
+  chk("recap content: names/guides are HTML-escaped", render("rea", { guide: "<b>Jo</b>" }).html.includes("&lt;b&gt;Jo") && !render("rea", { guide: "<b>Jo</b>" }).html.includes("<b>Jo</b>"));
+  chk("recap content: no end time → no hours tile, still finished", (() => { const r = render("rental", { end: null }); return r.d.stats.length === 1 && r.d.stats[0][1] === "riders in your group"; })());
+  const variants = [];
+  for (const type of R.RECAP_TYPES) for (const o of [{}, { name: "", guide: "", pax: 0, end: null, unsub: null }, { miles: 5, high: 9000, stops: ["a"], guide: "Mia", weather: [["SNOW", "2 in"]] }, { photo: false }])
+    { const r = render(type, o); variants.push(r.html, R.applyPhotoMarkers(r.html, true), R.applyPhotoMarkers(r.html, false), r.text, r.subject); }
+  chk("recap content: no render ever contains 'undefined', 'null', NaN or an empty <img src>",
+    variants.every(h => !/undefined|\bnull\b|NaN|<img[^>]*src=""/.test(h)), variants.find(h => /undefined|\bnull\b|NaN|<img[^>]*src=""/.test(h))?.match(/.{60}(undefined|null|NaN|src="").{40}/)?.[0]);
+  chk("recap content: email-safe HTML (tables + inline styles, no flex/grid, max-width 600, no <style>/<script>)",
+    variants.filter((_, i) => i % 5 === 0).every(h => !/display\s*:\s*(flex|grid)|<style|<script/i.test(h) && h.includes("max-width:600px") && h.includes('role="presentation"')));
+  chk("recap content: plain-text version has the review link, the code and the unsubscribe", /g\.page\/r\/CfQGQSBK_KsOEAg\/review/.test(full.text) && full.text.includes("FRIEND10") && full.text.includes("/email/unsubscribe/tok-1") && !/<[a-z]/i.test(full.text));
+  chk("recap content: footer = brand address + phone + social + unsubscribe",
+    unknown.html.includes("4492 Hwy 14, Walden, CO 80480") && unknown.html.includes("A Colorado Sled Rentals company") && render("rental").html.includes("2151 Downhill Drive, Steamboat Springs, CO 80487")
+    && [unknown.html, render("rental").html].every(h => h.includes("(970) 439-1707") && h.includes("@coloradosledrentals") && h.includes('href="https://app.test/email/unsubscribe/tok-1"')));
+  chk("recap content: no unsubscribe token → a working mailto unsubscribe, never a blank link", render("rea", { unsub: null }).html.includes('href="mailto:info@coloradosledrentals.com?subject=Unsubscribe"'));
+  chk("recap content: brands — REA dark/cyan/orange/Bebas Neue, CSR navy/blue/gold/Roboto",
+    unknown.html.includes("#00B4E6") && unknown.html.includes("#F99E16") && unknown.html.includes("Bebas Neue") && render("rental").html.includes("#06121F") && render("rental").html.includes("#1670C2") && render("rental").html.includes("#D9A24E") && render("backcountry").html.includes("Roboto")
+    && unknown.fromName === "Rabbit Ears Adventures" && render("backcountry").fromName === "Colorado Sled Rentals");
+
+  // 4. links
+  const hrefs = (html) => [...html.matchAll(/<a\b[^>]*\bhref="([^"]*)"/g)].map(m => m[1].replace(/&amp;/g, "&"));
+  const allLinks = R.RECAP_TYPES.map(t => ({ t, hs: hrefs(render(t, { miles: 3 }).html) }));
+  chk("recap links: every http(s) link (except our unsubscribe) has utm_source=ride_recap, utm_medium=email, utm_campaign=<type>, utm_content",
+    allLinks.every(({ t, hs }) => hs.filter(h => /^https?:/.test(h) && !h.includes("/email/unsubscribe/")).every(h => { const u = new URL(h); return u.searchParams.get("utm_source") === "ride_recap" && u.searchParams.get("utm_medium") === "email" && u.searchParams.get("utm_campaign") === t && !!u.searchParams.get("utm_content"); })),
+    JSON.stringify(allLinks.map(x => x.hs.filter(h => /^https?:/.test(h) && !/utm_source=ride_recap/.test(h)))));
+  chk("recap links: every FareHarbor link has ref=followupemail&full-items=yes (or the friend ref)",
+    allLinks.every(({ hs }) => hs.filter(h => h.startsWith("https://fareharbor.com")).every(h => { const u = new URL(h); return u.searchParams.get("full-items") === "yes" && u.searchParams.get("ref") === "followupemail"; })) && allLinks.every(({ hs }) => hs.some(h => h.includes("fareharbor.com"))));
+  const shareLinks = allLinks.flatMap(({ hs }) => hs.filter(h => /^(sms|mailto):\?/.test(h)).map(h => decodeURIComponent(h)));
+  chk("recap links: share links (text + email) carry the code and a FareHarbor link with ref=friend-<booking id>",
+    shareLinks.length === 6 && shareLinks.every(h => h.includes("FRIEND10") && /fareharbor\.com\S*ref=friend-777/.test(h) && /full-items=yes/.test(h) && /utm_source=ride_recap/.test(h)), JSON.stringify(shareLinks.slice(0, 2)));
+  chk("recap links: review link matches the brand (REA …OEAg, CSR …OEAE)",
+    allLinks.every(({ t, hs }) => hs.some(h => h.startsWith(t === "rea" ? "https://g.page/r/CfQGQSBK_KsOEAg/review?" : "https://g.page/r/CfQGQSBK_KsOEAE/review?"))));
+  chk("recap links: next ride → REA sunset flow / CSR guided flow; newsletter link present",
+    allLinks.find(x => x.t === "rea").hs.some(h => h.includes("rabbitearsadventures") && h.includes("utm_content=book-next")) && allLinks.find(x => x.t === "rental").hs.some(h => h.includes("flow=1262220") && h.includes("utm_content=book-next"))
+    && allLinks.every(({ hs }) => hs.some(h => h.startsWith(R.RECAP_LINKS.newsletter))));
+
+  // 5. review card — no review gating
+  chk("recap review: the Google review button AND 'Tell us directly' appear in every email (all types, all data states)",
+    R.RECAP_TYPES.every(t => [{}, { name: "" }, { photo: false }].every(o => { const h = render(t, o).html; return h.includes("Leave a Google review") && h.includes("Something not right? Tell us directly") && h.includes("mailto:info@coloradosledrentals.com?subject=Feedback"); })));
+
+  // 6. settings
+  chk("recap settings: defaults = 6pm Denver, DRY RUN on, Sean as test_to, all features, FRIEND10/10%, no reward code",
+    settings.send_hour === 18 && settings.timezone === "America/Denver" && settings.dry_run === true && settings.test_to === "sean@coloradosledrentals.com" && settings.features.length === 5 && settings.friend_code === "FRIEND10" && settings.reward_code === null);
+  chk("recap settings: only an explicit false turns dry run off; junk features/hours are ignored",
+    R.normalizeRecapSettings({ dry_run: null }).dry_run === true && R.normalizeRecapSettings({ dry_run: false }).dry_run === false && R.normalizeRecapSettings({ send_hour: 99 }).send_hour === 18 && R.normalizeRecapSettings({ features: ["review", "bogus"] }).features.join() === "review");
+  const at = (iso) => new Date(iso);
+  chk("recap settings: due once the local clock reaches send_hour, once per local day; changing send_hour reschedules",
+    R.isRecapDue({ send_hour: 18 }, at("2027-01-30T01:05:00Z")) === true             // 6:05pm MST
+    && R.isRecapDue({ send_hour: 18 }, at("2027-01-30T00:55:00Z")) === false          // 5:55pm
+    && R.isRecapDue({ send_hour: 17 }, at("2027-01-30T00:55:00Z")) === true
+    && R.isRecapDue({ send_hour: 20 }, at("2027-01-30T01:05:00Z")) === false
+    && R.isRecapDue({ send_hour: 18, last_run_on: "2027-01-29" }, at("2027-01-30T03:00:00Z")) === false
+    && R.isRecapDue({ send_hour: 18, last_run_on: "2027-01-28" }, at("2027-01-30T03:00:00Z")) === true
+    && R.isRecapDue({ send_hour: 18, enabled: false }, at("2027-01-30T03:00:00Z")) === false
+    && R.isRecapDue({ send_hour: 18 }, at("2026-07-05T00:30:00Z")) === true);         // 6:30pm MDT (DST)
+  chk("recap settings: features without merch removes the merch section (and without share/newsletter theirs)",
+    render("rea").html.includes("Wear the memory") && !render("rea", { settings: { features: ["review", "share", "prints", "newsletter"] } }).html.includes("Wear the memory")
+    && !render("rea", { settings: { features: ["review"] } }).html.includes("FRIEND10") && !render("rea", { settings: { features: ["review"] } }).html.includes("Join the newsletter"));
+  const w = R.recapWindow({ lookback_days: 1 }, NOW);
+  chk("recap settings: window = local midnight of yesterday (Denver) → now", w.from.toISOString() === "2027-01-28T07:00:00.000Z" && w.to.getTime() === NOW.getTime()
+    && R.recapWindow({ lookback_days: 0 }, NOW).from.toISOString() === "2027-01-29T07:00:00.000Z" && R.zonedMidnight("2026-07-04").toISOString() === "2026-07-04T06:00:00.000Z");
+
+  // weather
+  chk("recap weather: Open-Meteo daily → SNOW/HIGH/SKY labels; bad data → null",
+    JSON.stringify(R.weatherLabels({ weathercode: [73], temperature_2m_max: [23.6], snowfall_sum: [5.6] })) === JSON.stringify([["SNOW", "6 in"], ["HIGH", "24°F"], ["SKY", "Snowing"]])
+    && R.weatherLabels({ weathercode: [0], temperature_2m_max: [30], snowfall_sum: [0] }).length === 2 && R.weatherLabels({}) === null);
+  chk("recap weather: a failing / throwing / missing-coords fetch never blocks (→ null)",
+    await R.fetchRecapWeather({ lat: 1, lon: 2, date: "2027-01-29", fetchImpl: async () => { throw new Error("down"); } }) === null
+    && await R.fetchRecapWeather({ lat: 1, lon: 2, date: "2027-01-29", fetchImpl: async () => ({ ok: false }) }) === null
+    && await R.fetchRecapWeather({ lat: null, lon: 2, date: "2027-01-29", fetchImpl: async () => { throw new Error("never called"); } }) === null);
+
+  // ── the job, end to end against a mock DB2 ──
+  const wxFetch = async () => ({ ok: true, json: async () => ({ daily: { weathercode: [3], temperature_2m_max: [21], snowfall_sum: [0] } }) });
+  const jobDb = (extra = {}) => makeFhMockCrm({
+    recap_settings: [{ client_id: "csr_rea", send_hour: 18, dry_run: true, test_to: "sean@coloradosledrentals.com", weather_lat: 40.5, weather_lon: -106.7, ...(extra.settings ?? {}) }],
+    recap_tours: TOURS.map((t, i) => ({ id: `t${i}`, client_id: "csr_rea", active: true, stops: [], ...t })),
+    bookings: extra.bookings ?? [bk({ pk: "#201", email: "Guest1@Example.com", guide: "Jake" }), bk({ pk: "#202", email: "gone@example.com" }), bk({ pk: "#203", email: null }),
+      bk({ pk: "#204", item: "Private Guided Backcountry Adventure", company: "coloradosledrentals", email: "bc@example.com", start: "2027-01-29T16:00:00Z" })],
+    contacts: [{ id: "k1", email: "guest1@example.com", email_unsubscribe_token: "tok-g1" }, { id: "k2", email: "gone@example.com", email_unsubscribed_at: "2026-01-01T00:00:00Z", email_unsubscribe_token: "tok-x" }],
+    recap_log: extra.recap_log ?? [], email_sends: [], recap_review: [], recap_rewards: extra.recap_rewards ?? [],
+  });
+  {
+    const db = jobDb();
+    const r = await R.runDueRideRecaps(db, { now: NOW, fetchImpl: wxFetch, baseUrl: "https://app.test" });
+    const sends = db.tables.email_sends;
+    chk("recap job: due → queues one Gmail 'recap' row per eligible guest (2), review + skip recorded",
+      r.ran.length === 1 && r.ran[0].queued === 2 && sends.length === 2 && sends.every(x => x.transport === "gmail" && x.category === "recap" && x.status === "queued")
+      && db.tables.recap_review.length === 1 && db.tables.recap_review[0].reason === "no_email", JSON.stringify(r));
+    chk("recap job: dry_run → every recap goes to test_to with [TEST] in the subject; the guest is recorded in recap_log",
+      sends.every(x => x.email === "sean@coloradosledrentals.com" && x.subject.startsWith("[TEST] ")) && db.tables.recap_log.some(l => l.email === "guest1@example.com" && l.sent_to === "sean@coloradosledrentals.com" && l.dry_run === true));
+    const g1 = sends.find(x => x.reference === "#201");
+    chk("recap job: the row carries from_name, photo_hint (rideMedia.buildPhotoHint), plain text and the guest's own unsubscribe link",
+      g1.from_name === "Rabbit Ears Adventures" && JSON.stringify(g1.photo_hint) === JSON.stringify({ date: "2027-01-29", label: "Grand Tour", time: "11am" })
+      && g1.body_text.includes("Grand Tour") && g1.body_html.includes("https://app.test/email/unsubscribe/tok-g1") && g1.body_html.includes("with guide Jake") && g1.body_html.includes("Partly cloudy"));
+    chk("recap job: CSR backcountry recap is CSR-branded", sends.find(x => x.reference === "#204").from_name === "Colorado Sled Rentals");
+    chk("recap job: the local day is claimed (last_run_on) and a second tick the same day does nothing",
+      db.tables.recap_settings[0].last_run_on === "2027-01-29" && (await R.runDueRideRecaps(db, { now: new Date(NOW.getTime() + 5 * 60000), fetchImpl: wxFetch })).ran.length === 0 && db.tables.email_sends.length === 2);
+    db.tables.recap_settings[0].last_run_on = null;
+    const again = await R.runDueRideRecaps(db, { now: NOW, fetchImpl: wxFetch });
+    chk("recap job: re-running a day never emails anyone twice (recap_log)", again.ran[0].queued === 0 && db.tables.email_sends.length === 2, JSON.stringify(again));
+
+    // Gmail contract: /email/pull → from_name + photo_hint; /email/report photo → recap_log.photo
+    const pull = await S.pullGmailMessages(db, null, { limit: 10, resolveClient: () => ({ name: "Colorado Sled Rentals", supportEmail: "info@coloradosledrentals.com" }), baseUrl: "https://app.test" });
+    const pm = pull.messages.find(m => m.send_id === g1.id);
+    chk("recap pull: messages carry from_name + photo_hint, the HTML keeps the PHOTO markers, subject/text intact",
+      pull.messages.length === 2 && pm.from_name === "Rabbit Ears Adventures" && pm.photo_hint.label === "Grand Tour" && pm.photo_hint.time === "11am"
+      && pm.html.includes("<!--PHOTO_SLOT-->") && pm.html.includes("<!--PHOTO_ONLY-->") && pm.subject.startsWith("[TEST] ") && pm.text === g1.body_text);
+    const rep = await S.reportGmailResults(db, null, pull.messages.map(m => ({ send_id: m.send_id, ok: true, photo: m.send_id === g1.id })));
+    const log1 = db.tables.recap_log.find(l => l.booking_id === "#201"), log4 = db.tables.recap_log.find(l => l.booking_id === "#204");
+    chk("recap report: photo true|false lands in recap_log.photo (+ sent_at); rows marked sent",
+      rep.sent === 2 && log1.photo === true && log4.photo === false && !!log1.sent_at && db.tables.email_sends.every(x => x.status === "sent"));
+  }
+  {
+    // live mode (dry_run off) + a guest who unsubscribes after queueing
+    const db = jobDb({ settings: { dry_run: false } });
+    await R.runRideRecap(db, { now: NOW, fetchImpl: wxFetch, baseUrl: "https://app.test" });
+    chk("recap job: dry_run off → the recap goes to the guest, no [TEST]", db.tables.email_sends.some(x => x.email === "guest1@example.com" && !x.subject.startsWith("[TEST]")));
+    db.tables.contacts.find(c => c.id === "k1").email_unsubscribed_at = "2027-01-30T03:01:00Z";
+    const pull = await S.pullGmailMessages(db, null, { limit: 10, baseUrl: "https://app.test" });
+    chk("recap pull: unsubscribed after queueing → skipped at send time", !pull.messages.some(m => m.to === "guest1@example.com") && db.tables.email_sends.find(x => x.email === "guest1@example.com").status === "skipped");
+  }
+  await withEnv({ TEST_MODE: "true" }, async () => {
+    const db = jobDb();
+    const r = await R.runDueRideRecaps(db, { now: NOW, fetchImpl: wxFetch });
+    chk("recap safety: TEST_MODE plans but writes NOTHING (no email_sends, no recap_log, day not claimed)",
+      r.ran.length === 1 && db.tables.email_sends.length === 0 && db.tables.recap_log.length === 0 && !db.tables.recap_settings[0].last_run_on, JSON.stringify(r));
+  });
+  chk("recap safety: no recap_settings table → the cron step is a no-op, not a crash",
+    (await R.runDueRideRecaps({ from: () => ({ select: async () => ({ data: null, error: { message: "relation \"recap_settings\" does not exist" } }) }) }, { now: NOW })).ran.length === 0);
+  {
+    // click/open tracking applies to recaps but never to the unsubscribe link or the markers
+    const row = { id: "11111111-1111-4111-8111-111111111111", email: "a@x.com", subject: "s", body_html: unknown.html, from_name: "Rabbit Ears Adventures" };
+    const it = S.renderRecapRow({ row, baseUrl: "https://app.test", trackingSecret: "0123456789abcdef0123" });
+    chk("recap tracking: buttons go through /e/c/, unsubscribe + sms/mailto untouched, pixel added, markers intact",
+      it.html.includes("/e/c/11111111-1111-4111-8111-111111111111/") && it.html.includes('href="https://app.test/email/unsubscribe/tok-1"') && it.html.includes('href="sms:?&amp;body=')
+      && it.html.includes("/e/o/") && it.html.includes("<!--PHOTO_SLOT-->") && it.from.startsWith("Rabbit Ears Adventures"));
+  }
+  {
+    // non-recap Gmail messages keep the script's defaults
+    const db = makeFhMockCrm({ contacts: [], email_sends: [] });
+    await S.enqueueTransactional(db, { clientId: "csr_rea", email: "b@x.com", subject: "Your trip", bodyHtml: "<p>Hi</p>", reference: "#1", idempotencyKey: "k-1", transport: "gmail" });
+    const p = await S.pullGmailMessages(db, null, { limit: 5, baseUrl: "https://app.test" });
+    chk("recap pull: other email types get from_name=null and photo_hint=null (backward compatible)", p.messages.length === 1 && p.messages[0].from_name === null && p.messages[0].photo_hint === null);
+  }
+  {
+    // the real Apps Script hmSendOne_ against a recap: photo found / not found / non-recap untouched
+    const sent = [];
+    const ctx = { Logger: { log() {} }, GmailApp: { sendEmail: (to, subj, text, opts) => sent.push({ to, subj, text, opts }) }, PropertiesService: { getScriptProperties: () => ({ getProperty: () => null }) } };
+    vm.createContext(ctx); vm.runInContext(fs.readFileSync(new URL("./docs/apps-script/Code.gs", import.meta.url), "utf8"), ctx);
+    const msg = { to: "a@x.com", subject: "s", html: unknown.html, text: "t", from_name: "Rabbit Ears Adventures", photo_hint: { date: "2027-01-29", label: "Grand Tour", time: "11am" } };
+    ctx.hmFindPhoto_ = () => ({ blob: 1 });
+    const had = ctx.hmSendOne_(msg);
+    ctx.hmFindPhoto_ = () => null;
+    const hadNot = ctx.hmSendOne_(msg);
+    ctx.hmSendOne_({ to: "b@x.com", subject: "s", html: "<p>plain</p>", text: "t" });
+    chk("recap ↔ Apps Script: the live hmSendOne_ produces exactly applyPhotoMarkers() for found / not found, and uses from_name",
+      had === true && hadNot === false && sent[0].opts.htmlBody === R.applyPhotoMarkers(unknown.html, true) && sent[1].opts.htmlBody === R.applyPhotoMarkers(unknown.html, false)
+      && sent[0].opts.name === "Rabbit Ears Adventures" && !!sent[0].opts.inlineImages && sent[2].opts.htmlBody === "<p>plain</p>");
+  }
+
+  // 7. referral reward hook
+  {
+    const ref = (o) => ({ ...bk(o), created_at: o.created ?? "2027-01-29T12:00:00Z" });
+    const mk = (settings, extra = {}) => makeFhMockCrm({
+      recap_settings: [{ client_id: "csr_rea", ...settings }], contacts: [],
+      bookings: [ref({ pk: "#123", email: "referrer@example.com", name: "Ana Lee", created: "2026-12-01T00:00:00Z" }),
+        ref({ pk: "#300", email: "friend1@example.com", ref: "friend-123" }), ref({ pk: "#301", email: "friend2@example.com", ref: "friend-123" }),
+        ref({ pk: "#302", email: "referrer@example.com", ref: "friend-123" }), ref({ pk: "#303", email: "x@example.com", ref: "homepage" })],
+      recap_rewards: extra.rewards ?? [], email_sends: [],
+    });
+    const off = mk({ reward_code: null });
+    const r0 = await R.runReferralRewards(off, { now: NOW });
+    chk("recap referral: reward_code null → nothing queued (hook ships disabled)", r0.queued === 0 && off.tables.email_sends.length === 0 && off.tables.recap_rewards.length === 0);
+    const on = mk({ reward_code: "THANKS10", dry_run: false });
+    const r1 = await R.runReferralRewards(on, { now: NOW, baseUrl: "https://app.test" });
+    const s1 = on.tables.email_sends;
+    chk("recap referral: a friend-123 booking queues ONE reward to booking 123's email (two friends, one per season; self-referral ignored)",
+      r1.queued === 1 && s1.length === 1 && s1[0].email === "referrer@example.com" && s1[0].body_html.includes("THANKS10") && s1[0].category === "recap"
+      && on.tables.recap_rewards.length === 1 && on.tables.recap_rewards[0].season === "2026-27", JSON.stringify(r1));
+    const r2 = await R.runReferralRewards(on, { now: NOW });
+    chk("recap referral: re-running never queues a second reward", r2.queued === 0 && on.tables.email_sends.length === 1);
+    const nextSeason = mk({ reward_code: "THANKS10", dry_run: false }, { rewards: [{ client_id: "csr_rea", season: "2025-26", referrer_email: "referrer@example.com", friend_booking_id: "#9" }] });
+    chk("recap referral: a reward last season doesn't block this season", (await R.runReferralRewards(nextSeason, { now: NOW })).queued === 1);
+    chk("recap referral: friend ref parsing + season label", R.parseFriendRef("friend-123") === "123" && R.parseFriendRef("FRIEND-#45") === "45" && R.parseFriendRef("followupemail") === null && R.parseFriendRef(null) === null
+      && R.recapSeason(new Date("2027-03-01T12:00:00Z")) === "2026-27" && R.recapSeason(new Date("2026-08-01T12:00:00Z")) === "2026-27");
+  }
+
+  // 8. snapshots (3 types × full / missing). UPDATE_SNAPSHOTS=1 rewrites them.
+  const dir = new URL("./snapshots/ride-recap/", import.meta.url);
+  const renders = R.sampleRecapRenders(); const mism = [];
+  for (const [name, d] of Object.entries(renders)) {
+    const html = R.renderRideRecap(d).html, file = new URL(`${name}.html`, dir);
+    if (process.env.UPDATE_SNAPSHOTS === "1" || !fs.existsSync(file)) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, html); }
+    else if (fs.readFileSync(file, "utf8") !== html) mism.push(name);
+  }
+  chk("recap snapshots: 6 renders (rea/backcountry/rental × full/missing) match snapshots/ride-recap/", Object.keys(renders).length === 6 && mism.length === 0, `changed: ${mism.join(", ")} (UPDATE_SNAPSHOTS=1 to accept)`);
 }
 
 async function testEmailTracking() {
