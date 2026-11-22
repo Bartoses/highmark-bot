@@ -32,6 +32,14 @@ owned by sean@coloradosledrentals.com. Local clone: `~/code/csr-emails` (clasp +
    and ignores HEIC, WebP and video.
 2. `git diff --stat` must show only `Higmark.js`. Push, pull to verify, commit. No new permissions and no trigger changes.
 
+## Change set 3 (2026-11-22, evening): shrink ride photos before attaching
+1. **`Higmark.gs`** <- replace the whole file again with the latest `docs/apps-script/Code.gs` (branch `claude/recap-mobile-text`, or
+   `main` once merged). New `hmEmailPhoto_`: the photo is sent as Drive's 1200px thumbnail (~200 KB) instead of the 3-5 MB original.
+   iPhone Mail doesn't auto-download big attachments, so the full-size photo showed as a "download" placeholder that pushed the email
+   out of shape. If resizing fails, photos over 1 MB are skipped (no broken email). Uses the Drive permission + UrlFetch the script
+   already has; no new triggers.
+2. `git diff --stat` must show only `Higmark.js`. Push, pull to verify, commit.
+
 ## Verify
 - `clasp pull` after the push and confirm there's no diff (the push landed exactly).
 - In the editor: run `checkConnection` (should say connected); Triggers page shows `drainQueue` every 10 min.

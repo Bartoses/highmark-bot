@@ -42,6 +42,7 @@
 import crypto from "crypto";
 import express from "express";
 import { normalizeSegment, SegmentError, selectEmailRecipients, selectSmsRecipients, loadSmsOptOuts, maskEmail, maskPhone } from "./outboundAudience.js";
+import { loadExperimentStats, experimentReport } from "./rideRecap.js";
 import { enqueueCampaignSends, enqueueTransactional, drainEmailQueue, resolveMailingAddress, resolveReplyTo, resolveFrom, resolveBaseUrl, renderCampaignEmail, pullGmailMessages, reportGmailResults, reportGmailBounces } from "./emailSender.js";
 import { createEmailCampaign } from "./emailCampaigns.js";
 import { isEmailConfigured, sendEmail } from "./emailService.js";
@@ -286,6 +287,15 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
       if (error || !data) throw new Error(error?.message ?? "insert failed");
       return res.status(201).json({ id: data.id, updated: false, warnings });
     } catch (e) { console.error("[OUTBOUND] newsletters save error:", e.message); return bad(res, "could not save the newsletter", 500); }
+  });
+
+  // Ride Recap A/B experiments: sends, clicks, click rate and chance-to-be-best per version (real sends only).
+  router.get("/recaps/experiments", async (_req, res) => {
+    try {
+      const { data: settings } = await crm.from("recap_settings").select("experiments").eq("client_id", "csr_rea").maybeSingle();
+      const { stats, error } = await loadExperimentStats(crm, { clientId: "csr_rea" });
+      res.json({ experiments: experimentReport(stats, settings?.experiments ?? {}), ...(error ? { note: "variant tracking not set up yet (db2_ride_recap_ab.sql)" } : {}) });
+    } catch (e) { console.error("[OUTBOUND] recaps/experiments error:", e.message); return bad(res, "report failed", 500); }
   });
 
   router.get("/email/campaigns/:id", async (req, res) => {

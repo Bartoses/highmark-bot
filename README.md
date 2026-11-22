@@ -368,6 +368,14 @@ preview image (`public/og-rea.png`, `og-csr.png`; regenerate with `node docs/og/
 credits the guest (`ref=friend-<id>`). The ride photo joins the story card and preview once the Guide Ride Log provides a public copy
 (`photoUrl` hook).
 
+**A/B testing (automatic).** Every recap gets version A or B of each experiment: `subject` (statement vs question), `layout`
+(review card after the stats vs right after the photo) and `share_cta` ("Send to a friend" vs "Give a friend 10% off"). Each is judged
+by the click it's meant to drive (any click / the Google review button / the share buttons), from real sends only. 50/50 until each
+version has 20 real sends, then traffic shifts toward the winner (Thompson sampling) while still testing the other a little. Lock or stop
+one in `recap_settings.experiments`, e.g. `{"subject":"B","share_cta":"off"}` ("auto" is the default). Report:
+`GET /api/v1/recaps/experiments` (sends, clicks, click rate, chance each version is best, "winner: A" at 95%). Every link carries the
+versions in `utm_term`, so FareHarbor/Google Analytics bookings can be attributed too. Uses `db2_ride_recap_ab.sql` (applied 2026-11-22).
+
 **Referral rewards.** When `reward_code` is set, each run looks for new bookings made through a shared link
 (`ref=friend-<booking id>`, stored by FareHarbor as `online_booking_references`) and queues one "Your friend booked!" email
 with the code to the referring guest, at most once per guest per season (`recap_rewards`).

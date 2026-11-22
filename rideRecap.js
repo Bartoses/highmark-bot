@@ -101,6 +101,7 @@ export function normalizeRecapSettings(row = {}) {
   const lat = Number(row?.weather_lat), lon = Number(row?.weather_lon);
   s.weather_lat = row?.weather_lat != null && Number.isFinite(lat) ? lat : null;
   s.weather_lon = row?.weather_lon != null && Number.isFinite(lon) ? lon : null;
+  s.experiments = row?.experiments && typeof row.experiments === "object" && !Array.isArray(row.experiments) ? { ...row.experiments } : {};
   s.weather_points = (Array.isArray(row?.weather_points) ? row.weather_points : [])
     .map(p => ({ name: p?.name ? String(p.name) : null, type: p?.type ? String(p.type) : null, match: p?.match ? String(p.match) : null, lat: Number(p?.lat), lon: Number(p?.lon) }))
     .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
@@ -252,7 +253,7 @@ export function planRecaps({ bookings, tours, logged = new Set(), suppressed = n
 export function buildTripDetails({ booking, tour, rideLog = null }) {
   const base = {
     guide: booking?.guide || "", stops: tour?.stops ?? [], miles: tour?.miles ?? null, high_point_ft: tour?.high_point_ft ?? null,
-    highlight: null, photo: null,
+    highlight: null, photo: null, routeImage: tour?.route_image_url ?? null,
   };
   if (!rideLog) return base;
   const out = { ...base };
@@ -301,13 +302,14 @@ export async function fetchRecapWeather({ lat, lon, date, fetchImpl = globalThis
 // ── links ────────────────────────────────────────────────────────────────────
 // Every http(s) link: utm_source=ride_recap&utm_medium=email&utm_campaign=<type>&utm_content=<button>.
 // friendRef: replaces FareHarbor's ref=followupemail with ref=friend-<booking id> (the shared referral link).
-export function trackLink(base, { type, content, friendRef = null }) {
+export function trackLink(base, { type, content, friendRef = null, term = null }) {
   const u = new URL(base);
   if (friendRef) u.searchParams.set("ref", `friend-${friendRef}`);
   u.searchParams.set("utm_source", "ride_recap");
   u.searchParams.set("utm_medium", "email");
   u.searchParams.set("utm_campaign", type);
   u.searchParams.set("utm_content", content);
+  if (term) u.searchParams.set("utm_term", term);
   return u.toString();
 }
 const attr = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
@@ -317,7 +319,7 @@ const DOW = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"], MON = ["JAN", "FE
 
 // ── recap data (pure) ────────────────────────────────────────────────────────
 // booking: bookingFacts(). trip: buildTripDetails(). settings: normalizeRecapSettings(). weather: weatherLabels() | null.
-export function buildRecapData({ booking, tour, trip, settings, weather = null, pax = null, unsubscribeUrl = null, baseUrl = resolveBaseUrl() }) {
+export function buildRecapData({ booking, tour, trip, settings, weather = null, pax = null, unsubscribeUrl = null, baseUrl = resolveBaseUrl(), variants = null }) {
   const s = normalizeRecapSettings(settings);
   const type = tour.type;
   const brand = RECAP_BRANDS[type === "rea" ? "rea" : "csr"];
@@ -354,6 +356,8 @@ export function buildRecapData({ booking, tour, trip, settings, weather = null, 
     type, brand, copy, first, guide, kicker, h1, sub, stats: stats.slice(0, 4),
     stops: type === "rea" ? (trip?.stops ?? []).map(x => String(x).trim()).filter(Boolean) : [],
     highlight: String(trip?.highlight ?? "").trim(),
+    routeImage: type === "rental" ? null : (trip?.routeImage || null),
+    routeTitle: type === "backcountry" ? "YOUR ROUTE · TRACKED BY YOUR GUIDE" : "YOUR LOOP",
     weather: Array.isArray(weather) && weather.length ? weather : null,
     photo: trip?.photo === false ? false : (trip?.photo || null),
     features: s.features, friendCode: s.friend_code, friendPercent: s.friend_percent,
@@ -365,20 +369,147 @@ export function buildRecapData({ booking, tour, trip, settings, weather = null, 
     // Gmail strips sms: links, so "Text it to a friend" opens this page in the browser, which can text/share (see renderSharePage).
     sharePageUrl: sharePageUrl(baseUrl, { bookingId: booking.bookingId, type }),
     unsubscribeUrl,
-    subject: copy.subject + (first ? `, ${first}` : ""),
+    variants: normalizeVariants(variants),
+    subject: normalizeVariants(variants).subject === "B" ? questionSubject({ type, first, label: tour.label }) : copy.subject + (first ? `, ${first}` : ""),
   };
+}
+
+// Subject B ("question"): "Katrina, how was the Grand Tour?" / "How was your backcountry day?"
+export function questionSubject({ type, first, label }) {
+  const q = { rea: `how was the ${label}?`, backcountry: "how was your backcountry day?", rental: "how was your ride?" }[type];
+  return first ? `${first}, ${q}` : q.charAt(0).toUpperCase() + q.slice(1);
+}
+
+// ── A/B experiments ──────────────────────────────────────────────────────────
+// Each recap gets arm A or B of every experiment. Stats come from REAL sends only (recap_log.dry_run=false) and our own
+// click tracking (email_events, human clicks, matched by the button's utm_content). Selection: 50/50 until every arm has
+// MIN_SENDS real sends, then Thompson sampling (Beta posteriors), so traffic shifts toward the winner automatically while
+// still testing the other arm a little. recap_settings.experiments[key] = "auto" (default) | "A" | "B" (locked) | "off" (= A).
+export const RECAP_EXPERIMENTS = Object.freeze({
+  subject:   { label: "Subject line", arms: { A: "Statement: \"Your Rabbit Ears tour recap, Katrina\"", B: "Question: \"Katrina, how was the Grand Tour?\"" }, goal: "any_click" },
+  layout:    { label: "Review card position", arms: { A: "After the stats", B: "Right after the photo" }, goal: ["google-review"] },
+  share_cta: { label: "Share button wording", arms: { A: "Send to a friend", B: "Give a friend 10% off" }, goal: ["share-sms", "share-social"] },
+});
+export const EXPERIMENT_MIN_SENDS = 20;
+const ARMS = ["A", "B"];
+
+export function normalizeVariants(v) {
+  const out = {};
+  for (const k of Object.keys(RECAP_EXPERIMENTS)) out[k] = v?.[k] === "B" ? "B" : "A";
+  return out;
+}
+export const variantTerm = (v) => v ? Object.keys(RECAP_EXPERIMENTS).map(k => `${k}-${normalizeVariants(v)[k]}`).join(".") : null;
+
+// Deterministic PRNG per (seed) so a re-run picks the same arms for the same booking.
+function seededRandom(seed) {
+  let h = 2166136261;
+  for (const ch of String(seed)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return () => { h += 0x6D2B79F5; let t = h; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+// Beta(a,b) sample via two Gamma draws (Marsaglia–Tsang), a,b >= 1 here.
+function gammaSample(k, rnd) {
+  const d = k - 1 / 3, c = 1 / Math.sqrt(9 * d);
+  for (;;) {
+    let x, v;
+    do { const u1 = rnd() || 1e-12, u2 = rnd(); x = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2); v = 1 + c * x; } while (v <= 0);
+    v = v * v * v; const u = rnd() || 1e-12;
+    if (Math.log(u) < 0.5 * x * x + d - d * v + d * Math.log(v)) return d * v;
+  }
+}
+const betaSample = (a, b, rnd) => { const x = gammaSample(a, rnd); return x / (x + gammaSample(b, rnd)); };
+
+// stats: { [exp]: { A: { sends, wins }, B: { sends, wins } } }. mode per experiment from recap_settings.experiments.
+export function chooseVariants({ seed, stats = {}, modes = {} }) {
+  const rnd = seededRandom(seed), out = {};
+  for (const k of Object.keys(RECAP_EXPERIMENTS)) {
+    const mode = String(modes?.[k] ?? "auto");
+    if (mode === "A" || mode === "B") { out[k] = mode; continue; }
+    if (mode === "off") { out[k] = "A"; continue; }
+    const st = stats[k] ?? {};
+    const n = (a) => st[a]?.sends ?? 0, w = (a) => st[a]?.wins ?? 0;
+    if (ARMS.some(a => n(a) < EXPERIMENT_MIN_SENDS)) { out[k] = rnd() < 0.5 ? "A" : "B"; continue; }   // explore evenly first
+    const draw = (a) => betaSample(1 + w(a), 1 + Math.max(0, n(a) - w(a)), rnd);
+    out[k] = draw("A") >= draw("B") ? "A" : "B";
+  }
+  return out;
+}
+
+// Chance each arm is best (Monte Carlo over the Beta posteriors) — for the report.
+export function probBest(st, draws = 4000, seed = "report") {
+  const rnd = seededRandom(seed); let a = 0;
+  for (let i = 0; i < draws; i++) {
+    const x = betaSample(1 + (st.A?.wins ?? 0), 1 + Math.max(0, (st.A?.sends ?? 0) - (st.A?.wins ?? 0)), rnd);
+    const y = betaSample(1 + (st.B?.wins ?? 0), 1 + Math.max(0, (st.B?.sends ?? 0) - (st.B?.wins ?? 0)), rnd);
+    if (x >= y) a++;
+  }
+  return { A: a / draws, B: 1 - a / draws };
+}
+
+// Did this send achieve the experiment's goal? clicks = human click URLs for the send.
+export function goalHit(goal, clickUrls) {
+  if (!clickUrls?.length) return false;
+  if (goal === "any_click") return true;
+  return clickUrls.some(u => { try { return goal.includes(new URL(u).searchParams.get("utm_content")); } catch { return false; } });
+}
+
+// Pure: fold log rows + click events into per-arm stats.
+export function tallyExperiments(logRows, clicksBySend) {
+  const stats = {};
+  for (const k of Object.keys(RECAP_EXPERIMENTS)) stats[k] = { A: { sends: 0, wins: 0 }, B: { sends: 0, wins: 0 } };
+  const seen = new Set();
+  for (const r of logRows ?? []) {
+    if (!r?.send_id || r.dry_run !== false || !r.variants || seen.has(r.send_id)) continue;   // one email may cover several bookings
+    seen.add(r.send_id);
+    const v = normalizeVariants(r.variants), clicks = clicksBySend.get(r.send_id) ?? [];
+    for (const [k, def] of Object.entries(RECAP_EXPERIMENTS)) {
+      stats[k][v[k]].sends++;
+      if (goalHit(def.goal, clicks)) stats[k][v[k]].wins++;
+    }
+  }
+  return stats;
+}
+
+export async function loadExperimentStats(crm, { clientId = "csr_rea", sinceDays = 365, nowMs = Date.now() } = {}) {
+  const since = new Date(nowMs - sinceDays * 864e5).toISOString();
+  const logs = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await crm.from("recap_log").select("send_id, dry_run, variants").eq("client_id", clientId).eq("dry_run", false)
+      .gte("queued_at", since).order("queued_at", { ascending: true }).range(from, from + 999);
+    if (error) return { stats: tallyExperiments([], new Map()), error: error.message };   // variants column missing → no stats yet
+    logs.push(...(data ?? []));
+    if ((data?.length ?? 0) < 1000) break;
+  }
+  const ids = [...new Set(logs.map(r => r.send_id).filter(Boolean))], clicks = new Map();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await crm.from("email_events").select("send_id, url, is_bot").eq("type", "click").in("send_id", ids.slice(i, i + 200));
+    for (const e of data ?? []) { if (e.is_bot) continue; if (!clicks.has(e.send_id)) clicks.set(e.send_id, []); clicks.get(e.send_id).push(e.url); }
+  }
+  return { stats: tallyExperiments(logs, clicks) };
+}
+
+export function experimentReport(stats, modes = {}) {
+  return Object.entries(RECAP_EXPERIMENTS).map(([k, def]) => {
+    const st = stats?.[k] ?? { A: { sends: 0, wins: 0 }, B: { sends: 0, wins: 0 } };
+    const rate = (a) => st[a].sends ? Math.round((st[a].wins / st[a].sends) * 1000) / 10 : null;
+    const pb = probBest(st);
+    const ready = ARMS.every(a => st[a].sends >= EXPERIMENT_MIN_SENDS);
+    const leader = pb.A >= pb.B ? "A" : "B";
+    return { key: k, label: def.label, mode: String(modes?.[k] ?? "auto"), goal: def.goal === "any_click" ? "any click" : def.goal.join(" or "),
+      arms: Object.fromEntries(ARMS.map(a => [a, { description: def.arms[a], sends: st[a].sends, clicks: st[a].wins, click_rate_pct: rate(a), chance_best_pct: Math.round(pb[a] * 100) }])),
+      status: !ready ? `collecting data (needs ${EXPERIMENT_MIN_SENDS} real sends per version)` : (pb[leader] >= 0.95 ? `winner: ${leader}` : `leaning ${leader}`) };
+  });
 }
 
 // ── HTML (table-based, inline styles, no flex/grid, max-width 600) ───────────
 export function renderRideRecap(d) {
   const C = d.brand, rea = C.key === "rea", type = d.type, e = escapeHtml;
   const has = (f) => d.features.includes(f);
-  const link = (base, content, friend = false) => trackLink(base, { type, content, friendRef: friend ? d.bookingId : null });
+  const link = (base, content, friend = false) => trackLink(base, { type, content, friendRef: friend ? d.bookingId : null, term: variantTerm(d.variants) });
   const btn = (text, href, primary = true) =>
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="border-radius:12px;background:${primary ? C.btn : "#FFFFFF"};${primary ? "" : `border:2px solid ${C.dark2};`}">` +
     `<a href="${attr(href)}" style="display:block;padding:15px 18px;font:700 16px/20px Arial,Helvetica,sans-serif;color:${primary ? C.btnTxt : C.dark2};text-decoration:none">${text}</a></td></tr></table>`;
   const h2 = (t, color = C.dark2) => `<div style="font:${rea ? "400 28px" : "700 24px"}/1.1 ${C.head};text-transform:${C.up};color:${color};margin:0 0 10px">${t}</div>`;
-  const p = (t, color = C.muted) => `<div style="font:16px/1.5 Arial,Helvetica,sans-serif;color:${color};margin:0 0 14px">${t}</div>`;
+  const p = (t, color = C.muted) => `<div style="font:17px/1.5 Arial,Helvetica,sans-serif;color:${color};margin:0 0 14px">${t}</div>`;
   const block = (inner) => `<tr><td style="padding:24px 20px 0">${inner}</td></tr>`;
   const card = (inner, bg = "#FFFFFF", border = "") =>
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:20px;border-radius:16px;background:${bg};${border ? `border:${border};` : ""}">${inner}</td></tr></table>`;
@@ -388,18 +519,24 @@ export function renderRideRecap(d) {
   rows += `<tr><td style="background:${C.headBg};padding:14px 20px;border-bottom:1px solid #DFE9F0"><img src="${attr(C.logo)}" height="${C.logoH}" alt="${e(C.name)}" style="display:block;border:0;height:${C.logoH}px;width:auto"></td></tr>`;
   // hero: kicker, headline, subline, photo slot (filled by the Apps Script from Drive, or removed)
   rows += `<tr><td style="background:${C.dark};padding:28px 20px 24px;color:#FFFFFF">` +
-    `<div style="font:700 12px/1.4 Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">${e(d.kicker)}</div>` +
+    `<div style="font:700 13px/1.4 Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">${e(d.kicker)}</div>` +
     `<div style="font:${rea ? "400 44px" : "700 30px"}/1.05 ${C.head};text-transform:${C.up};margin:10px 0;color:#FFFFFF">${e(d.h1)}</div>` +
-    `<div style="font:16px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3">${e(d.sub)}</div>` +
+    `<div style="font:17px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3">${e(d.sub)}</div>` +
     (d.highlight ? `<div style="font:italic 15px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3;margin-top:10px">“${e(d.highlight)}”</div>` : "") +
-    (d.photo === false ? "" : "<!--PHOTO_SLOT-->") +
+    (d.photo === false ? "" : `<div style="max-height:260px;overflow:hidden;border-radius:12px">${"<!--PHOTO_SLOT-->"}</div>`) +
     `</td></tr>`;
+  if (has("review") && d.variants.layout === "B") rows += reviewCard();
+  // route map (REA loop / backcountry track). Only when a route image exists — never a made-up route for a guest.
+  if (d.routeImage) {
+    rows += `<tr><td style="padding:22px 20px 0"><div style="font:700 13px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.muted};margin-bottom:10px">${e(d.routeTitle)}</div>` +
+      `<img src="${attr(d.routeImage)}" width="560" alt="Map of your route" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:14px"></td></tr>`;
+  }
   // stats 2×2
   if (d.stats.length) {
     let s = "";
     for (let i = 0; i < d.stats.length; i += 2) {
       s += "<tr>" + [d.stats[i], d.stats[i + 1]].map(x => x
-        ? `<td width="50%" valign="top" style="padding:5px"><div style="background:${C.soft};border:1px solid #DFE9F0;border-radius:12px;padding:14px 16px"><div style="font:${rea ? "400 30px" : "700 26px"}/1 ${C.head};color:${C.dark2}">${e(x[0])}</div><div style="font:13px/1.3 Arial,Helvetica,sans-serif;color:${C.muted};margin-top:4px">${e(x[1])}</div></div></td>`
+        ? `<td width="50%" valign="top" style="padding:5px"><div style="background:${C.soft};border:1px solid #DFE9F0;border-radius:12px;padding:14px 16px"><div style="font:${rea ? "400 30px" : "700 26px"}/1 ${C.head};color:${C.dark2}">${e(x[0])}</div><div style="font:15px/1.3 Arial,Helvetica,sans-serif;color:${C.muted};margin-top:4px">${e(x[1])}</div></div></td>`
         : `<td width="50%" style="padding:5px"></td>`).join("") + "</tr>";
     }
     rows += `<tr><td style="padding:18px 15px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${s}</table></td></tr>`;
@@ -411,14 +548,16 @@ export function renderRideRecap(d) {
   }
   // weather labels
   if (d.weather) {
-    rows += `<tr><td style="padding:12px 20px 0;font:14px Arial,Helvetica,sans-serif;color:${C.muted}">` +
+    rows += `<tr><td style="padding:12px 20px 0;font:15px Arial,Helvetica,sans-serif;color:${C.muted}">` +
       d.weather.map(w => `<span style="display:inline-block;background:${C.dark2};color:#FFFFFF;border-radius:999px;padding:7px 12px;margin:0 6px 6px 0"><span style="font-size:11px;color:#9FB3C8;font-weight:700">${e(w[0])}</span> <b>${e(w[1])}</b></span>`).join("") +
       `</td></tr>`;
   }
-  // review — EVERY guest sees both the review button and "tell us directly" (no review gating)
-  if (has("review")) {
+  // review — EVERY guest sees both the review button and "tell us directly" (no review gating). Experiment "layout":
+  // A = here (after the stats), B = right after the hero (rendered there and skipped here).
+  if (has("review") && d.variants.layout !== "B") rows += reviewCard();
+  function reviewCard() {
     const feedback = `mailto:${RECAP_LINKS.infoEmail}?subject=${encodeURIComponent(`Feedback on my ride (#${d.bookingId})`)}`;
-    rows += block(card(`<div style="font-size:20px;color:#F5B301;letter-spacing:2px;margin-bottom:8px">★★★★★</div>` + h2(`How was your ${e(d.copy.place)}?`) +
+    return block(card(`<div style="font-size:20px;color:#F5B301;letter-spacing:2px;margin-bottom:8px">★★★★★</div>` + h2(`How was your ${e(d.copy.place)}?`) +
       p("If you had a great time, a quick Google review helps our small local team more than anything. It takes about a minute.") +
       btn("Leave a Google review", link(d.reviewUrl, "google-review")) +
       `<div style="text-align:center;padding:12px 0 0"><a href="${attr(feedback)}" style="font:700 15px Arial,Helvetica,sans-serif;color:#1670C2">Something not right? Tell us directly</a></div>`,
@@ -431,7 +570,7 @@ export function renderRideRecap(d) {
       h2("Bring a friend next time", "#FFFFFF") +
       p(`Friends save ${pct}% with this code at checkout. When they ride, you get ${pct}% off your next booking.`, "#C9D6E3") +
       `<div style="border:2px dashed ${C.acc};border-radius:12px;text-align:center;font:700 24px 'Courier New',Courier,monospace;letter-spacing:3px;color:#FFFFFF;padding:12px 0;margin-bottom:14px">${code}</div>` +
-      btn("Send to a friend", link(d.sharePageUrl, "share-sms")) +
+      btn(d.variants.share_cta === "B" ? `Give a friend ${pct}% off` : "Send to a friend", link(d.sharePageUrl, "share-sms")) +
       `<div style="height:10px;line-height:10px;font-size:10px">&nbsp;</div>` +
       btn("Post your ride on Instagram", link(`${d.sharePageUrl}#ride`, "share-social"), false),
     C.dark));
@@ -455,12 +594,14 @@ export function renderRideRecap(d) {
   }
   // footer — CAN-SPAM: physical address + a working unsubscribe link
   const unsub = d.unsubscribeUrl || `mailto:${RECAP_LINKS.infoEmail}?subject=Unsubscribe`;
-  rows += `<tr><td style="padding:28px 20px;font:13px/1.6 Arial,Helvetica,sans-serif;color:${C.muted};text-align:center">` +
+  rows += `<tr><td style="padding:28px 20px;font:14px/1.6 Arial,Helvetica,sans-serif;color:${C.muted};text-align:center">` +
     C.footer.map(e).join("<br>") + `<br>${RECAP_PHONE} · ${RECAP_SOCIAL}<br>` +
     `<a href="${attr(unsub)}" data-notrack style="color:#1670C2">Unsubscribe</a></td></tr>`;
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<meta name="color-scheme" content="light"><title>${e(d.subject)}</title>` +
+    `<meta name="x-apple-disable-message-reformatting"><meta name="format-detection" content="telephone=no,address=no,email=no,date=no">` +
+    `<style>body{-webkit-text-size-adjust:100%;text-size-adjust:100%}</style>` +
     `<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&amp;family=Roboto:wght@400;700&amp;display=swap" rel="stylesheet"></head>` +
     `<body style="margin:0;padding:0;background:#EEF2F5"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#EEF2F5"><tr><td align="center">` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#FFFFFF">${rows}</table></td></tr></table></body></html>`;
@@ -694,7 +835,10 @@ export function renderReferralReward({ referrer, settings, unsubscribeUrl = null
   const book = trackLink(C.key === "rea" ? RECAP_LINKS.book.rea : RECAP_LINKS.book.csr, { type: "referral_reward", content: "book-reward" });
   const unsub = unsubscribeUrl || `mailto:${RECAP_LINKS.infoEmail}?subject=Unsubscribe`;
   const subject = `Your friend booked! Here's ${s.friend_percent}% off your next ride`;
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(subject)}</title></head>` +
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(subject)}</title>` +
+    `<meta name="x-apple-disable-message-reformatting"><meta name="format-detection" content="telephone=no,address=no,email=no,date=no">` +
+    `<style>body{-webkit-text-size-adjust:100%;text-size-adjust:100%}</style>` +
+    `</head>` +
     `<body style="margin:0;padding:0;background:#EEF2F5"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center">` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#FFFFFF">` +
     `<tr><td style="background:${C.dark};padding:28px 20px;color:#FFFFFF;font:700 26px/1.2 ${C.head};text-transform:${C.up}">${e(first ? `${first}, your friend booked!` : "Your friend booked!")}</td></tr>` +
@@ -774,6 +918,7 @@ export async function runRideRecap(crm, {
   out.skipped = plan.skipped.length; out.review = plan.review.length;
 
   const weatherByDate = new Map();
+  const exp = plan.recaps.length ? await loadExperimentStats(crm, { clientId, nowMs: new Date(now).getTime() }) : { stats: {} };
   for (const rc of plan.recaps) {
     const date = localDate(rc.primary.startAt ?? rc.primary.endAt, s.timezone);
     const pt = weatherPointFor({ item: rc.primary.item, type: rc.tour.type }, s);
@@ -782,11 +927,12 @@ export async function runRideRecap(crm, {
     const weather = wKey ? weatherByDate.get(wKey) : null;
     const unsubscribeUrl = out.preview ? null : await unsubscribeUrlFor(crm, rc.email, baseUrl);
     const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour });
-    const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl });
+    const variants = chooseVariants({ seed: rc.primary.pk, stats: exp.stats, modes: s.experiments });
+    const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl, variants });
     const msg = renderRideRecap(data);
     const photoHint = data.photo === false ? null : buildPhotoHint({ label: rc.tour.label, startAt: rc.primary.startAt ?? rc.primary.endAt, fileId: typeof data.photo === "string" ? data.photo : null });
     const to = s.dry_run ? s.test_to : rc.email;
-    const summary = { booking_id: rc.primary.pk, bookings: rc.bookings.map(b => b.pk), email: rc.email, to, type: rc.tour.type, subject: (s.dry_run ? "[TEST] " : "") + msg.subject, photo_hint: photoHint, weather: !!weather };
+    const summary = { booking_id: rc.primary.pk, bookings: rc.bookings.map(b => b.pk), email: rc.email, to, type: rc.tour.type, subject: (s.dry_run ? "[TEST] " : "") + msg.subject, photo_hint: photoHint, weather: !!weather, variants: data.variants };
     out.recaps.push(summary);
     if (out.preview) continue;
 
@@ -795,9 +941,12 @@ export async function runRideRecap(crm, {
       reference: rc.primary.pk, idempotencyKey: `recap-${rc.primary.pk}`, dryRun: s.dry_run });
     const logRows = rc.bookings.map(b => ({
       booking_id: b.pk, client_id: clientId, email: rc.email, sent_to: to, type: rc.tour.type, send_id: q.row.id,
-      primary_booking_id: rc.primary.pk, dry_run: s.dry_run, weather: !!weather, queued_at: new Date(now).toISOString(),
+      primary_booking_id: rc.primary.pk, dry_run: s.dry_run, weather: !!weather, queued_at: new Date(now).toISOString(), variants: data.variants,
     }));
-    const { error: lgErr } = await crm.from("recap_log").upsert(logRows, { onConflict: "booking_id", ignoreDuplicates: true });
+    let { error: lgErr } = await crm.from("recap_log").upsert(logRows, { onConflict: "booking_id", ignoreDuplicates: true });
+    if (lgErr && /variants/i.test(lgErr.message)) {   // db2_ride_recap_ab.sql not applied yet → log without the variant
+      ({ error: lgErr } = await crm.from("recap_log").upsert(logRows.map(({ variants: _v, ...r }) => r), { onConflict: "booking_id", ignoreDuplicates: true }));
+    }
     if (lgErr) throw new Error(`recap_log write failed: ${lgErr.message}`);
     if (!q.duplicate) out.queued++;
   }
@@ -907,6 +1056,8 @@ export function sampleRecapRenders() {
     const tour = { type, label, miles: full ? 22 : null, high_point_ft: full ? 10340 : null, stops: full && type === "rea" ? ["Dumont Lake overlook", "Rabbit Ears Peak meadow", "Muddy Pass warming hut"] : [] };
     const booking = { bookingId: "392519085", pk: "#392519085", name: full ? "katrina schultz" : "Guest", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z", pax: full ? 3 : 1, guide: full ? "Jake" : "" };
     const trip = buildTripDetails({ booking, tour });
+    // PLACEHOLDER route art so previews show the route card; real recaps only get a route when a real one exists.
+    if (full && type !== "rental") trip.routeImage = `https://highmark-bot-production.up.railway.app/r/route/${type}-placeholder.png`;
     return buildRecapData({ booking, tour, trip: full ? trip : { ...trip, photo: false }, settings, weather: full ? wx : null, pax: booking.pax,
       unsubscribeUrl: "https://highmark-bot-production.up.railway.app/email/unsubscribe/00000000-0000-4000-8000-000000000000", baseUrl: "https://highmark-bot-production.up.railway.app" });
   };
