@@ -85,6 +85,24 @@ Section order (all types): header logo → hero (kicker, headline, subline, phot
 - The bot can't read Drive directly, so the bot marks the photo slot in the HTML (e.g. `<!--PHOTO_SLOT-->`) and sends `photo_hint: {date, label}` with the queued email. The Apps Script drain looks the photo up with `DriveApp`, swaps the slot for an inline `cid:` image, or removes the slot if nothing is found. Add that small change to `Higmark.gs`'s drain and keep it backward-compatible with other email types.
 - The framed on-site print is "2 for $25". The email offers a digital copy and more prints only when a photo exists.
 
+#### 5a. Apps Script contract — ALREADY BUILT (2026-11-22), implement the server side to match
+The drain side is done in `docs/apps-script/Code.gs` (pasted into `Higmark.gs`); don't redesign it. The server must:
+- **Queue recaps as `transport: 'gmail'` rows in `email_sends`.** A standing Apps Script trigger, `drainQueue`, runs every
+  10 min and calls `POST /email/pull` with **no `campaign_id`**, so it sends every queued Gmail row. Nothing else is needed to deliver them.
+- **Add two optional fields to each message returned by `/email/pull`** (in `pullGmailMessages`, emailSender.js), stored on
+  the row so they survive the queue:
+  - `from_name`: sender display name (`"Rabbit Ears Adventures"` for REA recaps, `"Colorado Sled Rentals"` for CSR).
+    Leave it null for other email types, which keep the script's default.
+  - `photo_hint`: `{ "date": "YYYY-MM-DD", "label": "<recap_tours.label>" }`. The script looks in
+    `<RECAP_PHOTO_FOLDER_ID>/<date>/` for an image whose file name contains the label, falling back to the label's first word.
+- **Two HTML markers in the recap body:**
+  - `<!--PHOTO_SLOT-->` where the hero photo goes. It becomes a 560px `cid:ridephoto` image, or is removed.
+  - `<!--PHOTO_ONLY--> … <!--/PHOTO_ONLY-->` around the print offer. It's kept only when a photo was found.
+  Don't emit an `<img>` for the photo yourself.
+- **`/email/report` results now carry `photo: true|false`** for each sent message. Record it in `recap_log.photo`.
+  `reportGmailResults` currently ignores unknown fields, so extend it.
+- Emails without these markers or fields are sent exactly as before (verified with a mock-based simulation).
+
 ### 6. Weather
 - Open-Meteo (free, no key) daily values for the trailhead: snowfall, max temp, weather code → labels (SNOW, HIGH, SKY). If the call fails, hide the labels; never block the send.
 
