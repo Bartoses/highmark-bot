@@ -9,5 +9,9 @@ const { chromium } = require("playwright");
   await p.setViewportSize({ width: 1120, height: 600 });
   await p.goto("file://" + path.join(__dirname, "route-placeholders.html")).catch(() => {});
   for (const id of ["rea", "backcountry"]) await (await p.$("#" + id)).screenshot({ path: path.join(__dirname, "..", "..", "public", `route-${id}-placeholder.png`), omitBackground: true });
+  // icon set -> public/icons/<name>-<dark|light>.png
+  const fs = require("fs"); fs.mkdirSync(path.join(__dirname, "..", "..", "public", "icons"), { recursive: true });
+  await p.goto("file://" + path.join(__dirname, "icons.html")); await p.waitForFunction(() => window.ICON_IDS);
+  for (const id of await p.evaluate(() => window.ICON_IDS)) await (await p.$("#" + id)).screenshot({ path: path.join(__dirname, "..", "..", "public", "icons", `${id}.png`), omitBackground: true });
   await b.close();
 })();

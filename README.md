@@ -381,6 +381,8 @@ Crew of N, Bluebird, Below Zero, Early Riser / Sunset Rider, Deep Base), **your 
 booking; rentals + guided backcountry), a **snow report** (snow on the ground + % of normal from the USDA SNOTEL station set on the
 `weather_points` entry as `snotel` / `snotel_name`, fresh snow in 48 h, a 7-day snow-depth bar chart drawn in table cells) and a
 **next powder alert** (biggest snowfall ≥ 4" in the next 7 days, Open-Meteo, with a booking button). Any source that fails is left out.
+Icons are on-brand line icons (rugged, angular, like the CSR mountain mark) drawn in `docs/og/icons.html`, rendered to
+`public/icons/<name>-<dark|light>.png` by `node docs/og/render.cjs` and served at `/r/icon/` (no emoji; Gmail can't show SVG).
 It's tested against the current top like the other experiments; lock it with `recap_settings.experiments.hero`.
 
 **Referral rewards.** When `reward_code` is set, each run looks for new bookings made through a shared link

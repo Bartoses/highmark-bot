@@ -97,32 +97,36 @@ export function snowReportFromCsv(text, { stationName = null } = {}) {
 export function buildBadges({ conditions = null, snow = null, pax = 0, startHour = null, label = "", priorRides = null }) {
   // Priority order (max 4): the day's headline, then the personal ones, then weather/time.
   const b = [], d = conditions?.day;
-  if ((conditions?.fresh48 ?? 0) >= 6 || (d?.snow ?? 0) >= 4) b.push({ icon: "❄️", text: "Powder Day" });
-  if (priorRides === 0) b.push({ icon: "⭐", text: "First Timer" });
-  else if (priorRides > 0) b.push({ icon: "🔁", text: `Ride #${priorRides + 1}` });
-  if (pax >= 4) b.push({ icon: "🤘", text: `Crew of ${pax}` });
-  if (d?.code != null && d.code <= 1) b.push({ icon: "☀️", text: "Bluebird" });
-  if (d?.lo != null && d.lo <= 0) b.push({ icon: "🥶", text: "Below Zero" });
-  if (/sunset/i.test(label)) b.push({ icon: "🌅", text: "Sunset Rider" });
-  else if (startHour != null && startHour < 9) b.push({ icon: "🌄", text: "Early Riser" });
-  if (snow?.depthIn >= 60) b.push({ icon: "🏔️", text: "Deep Base" });
+  if ((conditions?.fresh48 ?? 0) >= 6 || (d?.snow ?? 0) >= 4) b.push({ icon: "powder", text: "Powder Day" });
+  if (priorRides === 0) b.push({ icon: "first", text: "First Timer" });
+  else if (priorRides > 0) b.push({ icon: "ride", text: `Ride #${priorRides + 1}` });
+  if (pax >= 4) b.push({ icon: "crew", text: `Crew of ${pax}` });
+  if (d?.code != null && d.code <= 1) b.push({ icon: "bluebird", text: "Bluebird" });
+  if (d?.lo != null && d.lo <= 0) b.push({ icon: "cold", text: "Below Zero" });
+  if (/sunset/i.test(label)) b.push({ icon: "sunset", text: "Sunset Rider" });
+  else if (startHour != null && startHour < 9) b.push({ icon: "early", text: "Early Riser" });
+  if (snow?.depthIn >= 60) b.push({ icon: "deepbase", text: "Deep Base" });
   return b.slice(0, 4);
 }
 
 // ── HTML (email-safe: tables + inline styles) ────────────────────────────────
-export function renderHeroModules({ hero, C, rea, bookLink }) {
+// Icons: on-brand line icons (docs/og/icons.html → public/icons/<name>-<dark|light>.png, served at /r/icon/). iconUrl(name, variant).
+export const HERO_ICONS = ["powder", "first", "ride", "crew", "bluebird", "cold", "sunset", "early", "deepbase", "sled", "snow", "storm", "mountain"];
+export function renderHeroModules({ hero, C, rea, bookLink, iconUrl = null }) {
   if (!hero) return "";
   const e = escapeHtml, out = [];
-  const label = (t) => `<div style="font:700 13px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.muted};margin:0 0 10px">${t}</div>`;
+  const icon = (name, variant, size = 20) => iconUrl && HERO_ICONS.includes(name)
+    ? `<img src="${String(iconUrl(name, variant)).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" width="${size}" height="${size}" alt="" style="display:inline-block;vertical-align:-4px;border:0;margin-right:7px">` : "";
+  const label = (t, ic = "") => `<div style="font:700 13px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.muted};margin:0 0 10px">${ic}${t}</div>`;
   const big = (t, color = C.dark2) => `<div style="font:${rea ? "400 40px" : "700 32px"}/1 ${C.head};color:${color}">${t}</div>`;
   if (hero.badges?.length) {
     out.push(`<tr><td style="padding:20px 20px 0">` + hero.badges.map(x =>
-      `<span style="display:inline-block;background:${C.soft};border:1px solid #DFE9F0;border-radius:999px;padding:8px 14px;margin:0 6px 8px 0;font:700 15px Arial,Helvetica,sans-serif;color:${C.dark2}">${x.icon} ${e(x.text)}</span>`).join("") + `</td></tr>`);
+      `<span style="display:inline-block;background:${C.soft};border:1px solid #DFE9F0;border-radius:999px;padding:8px 14px;margin:0 6px 8px 0;font:700 15px Arial,Helvetica,sans-serif;color:${C.dark2}">${icon(x.icon, "dark")}${e(x.text)}</span>`).join("") + `</td></tr>`);
   }
   if (hero.sleds?.length) {
     const s = hero.sleds[0].sled, n = hero.sleds.reduce((t, x) => t + x.count, 0);
     out.push(`<tr><td style="padding:16px 20px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="background:${C.dark};border-radius:16px;padding:20px">` +
-      `<div style="font:700 13px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc};margin:0 0 8px">${n > 1 ? `YOUR SLEDS · ${n}` : "YOUR SLED"}</div>` +
+      `<div style="font:700 13px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc};margin:0 0 8px">${icon("sled", "light", 24)}${n > 1 ? `YOUR SLEDS · ${n}` : "YOUR SLED"}</div>` +
       `<div style="font:${rea ? "400 34px" : "700 26px"}/1.1 ${C.head};color:#FFFFFF">${e(s.name)}</div>` +
       `<div style="font:17px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3;margin-top:8px">${[s.engine ? `${e(s.engine)} engine` : "", s.trackIn ? `${s.trackIn}-inch track` : ""].filter(Boolean).join(" · ")}` +
       (s.note ? `<br>${e(s.note.charAt(0).toUpperCase() + s.note.slice(1))}.` : "") +
@@ -141,14 +145,14 @@ export function renderHeroModules({ hero, C, rea, bookLink }) {
     }).join("");
     const facts = [snow.pctNormal ? `<b>${snow.pctNormal}%</b> of normal` : "", hero.fresh48 >= 1 ? `<b>+${Math.round(hero.fresh48)}"</b> fresh in 48 hrs` : ""].filter(Boolean).join(" · ");
     out.push(`<tr><td style="padding:16px 20px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="background:${C.soft};border:1px solid #DFE9F0;border-radius:16px;padding:20px">` +
-      label(`SNOW REPORT${snow.station ? ` · ${e(snow.station.toUpperCase())}` : ""}`) + big(`${snow.depthIn}" on the ground`) +
+      label(`SNOW${snow.station ? ` · ${e(snow.station.toUpperCase())}` : " REPORT"}`, icon("snow", "dark", 22)) + big(`${snow.depthIn}" on the ground`) +
       (facts ? `<div style="font:17px/1.5 Arial,Helvetica,sans-serif;color:${C.muted};margin-top:8px">${facts}</div>` : "") +
       (snow.days.length > 1 ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px"><tr>${bars}</tr></table>` : "") +
       `</td></tr></table></td></tr>`);
   }
   if (hero.powder && bookLink) {
     out.push(`<tr><td style="padding:16px 20px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="background:${C.dark2};border-radius:16px;padding:20px">` +
-      `<div style="font:700 13px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc};margin:0 0 8px">❄️ NEXT POWDER ALERT</div>` +
+      `<div style="font:700 13px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc};margin:0 0 8px">${icon("storm", "light", 24)}NEXT POWDER ALERT</div>` +
       `<div style="font:${rea ? "400 34px" : "700 26px"}/1.1 ${C.head};color:#FFFFFF">~${hero.powder.inches}" of new snow ${e(hero.powder.label)}</div>` +
       `<div style="font:17px/1.5 Arial,Helvetica,sans-serif;color:#C9D6E3;margin:8px 0 14px">Powder days fill up first. Grab your spot.</div>` +
       `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="border-radius:12px;background:${C.btn}"><a href="${String(bookLink).replace(/&/g, "&amp;")}" style="display:block;padding:15px 18px;font:700 17px Arial,Helvetica,sans-serif;color:${C.btnTxt};text-decoration:none">Book the powder day</a></td></tr></table>` +

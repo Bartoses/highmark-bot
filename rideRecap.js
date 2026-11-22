@@ -372,6 +372,7 @@ export function buildRecapData({ booking, tour, trip, settings, weather = null, 
     shareUrl: type === "rea" ? RECAP_LINKS.book.rea : RECAP_LINKS.book.csr,
     // Gmail strips sms: links, so "Text it to a friend" opens this page in the browser, which can text/share (see renderSharePage).
     sharePageUrl: sharePageUrl(baseUrl, { bookingId: booking.bookingId, type }),
+    assetBase: String(baseUrl || resolveBaseUrl()).replace(/\/$/, ""),
     unsubscribeUrl,
     variants: normalizeVariants(variants),
     hero: hero && (hero.badges?.length || hero.sleds?.length || hero.snow || hero.powder) ? hero : null,
@@ -532,7 +533,8 @@ export function renderRideRecap(d) {
     (d.photo === false ? "" : `<div style="max-height:260px;overflow:hidden;border-radius:12px">${"<!--PHOTO_SLOT-->"}</div>`) +
     `</td></tr>`;
   const funTop = d.variants.hero === "B" && d.hero;
-  if (funTop) rows += renderHeroModules({ hero: d.hero, C, rea, bookLink: link(d.nextUrl, "powder-alert") });
+  if (funTop) rows += renderHeroModules({ hero: d.hero, C, rea, bookLink: link(d.nextUrl, "powder-alert"),
+    iconUrl: d.iconUrl ?? ((name, variant) => `${d.assetBase}/r/icon/${name}-${variant}.png`) });
   if (has("review") && d.variants.layout === "B") rows += reviewCard();
   // route map (REA loop / backcountry track). Only when a route image exists — never a made-up route for a guest.
   if (d.routeImage) {
@@ -1090,7 +1092,7 @@ export function sampleRecapRenders() {
     if (full && type !== "rental") trip.routeImage = `https://highmark-bot-production.up.railway.app/r/route/${type}-placeholder.png`;
     // Sample "fun top" (experiment hero = B) — shown only when a preview sets variants.hero = "B".
     const hero = !full ? null : {
-      badges: [{ icon: "❄️", text: "Powder Day" }, { icon: "🏔️", text: "Deep Base" }, { icon: "🔁", text: "Ride #3" }, { icon: "🤘", text: "Crew of 3" }],
+      badges: [{ icon: "powder", text: "Powder Day" }, { icon: "ride", text: "Ride #3" }, { icon: "crew", text: "Crew of 3" }, { icon: "deepbase", text: "Deep Base" }],
       sleds: type === "rea" ? [] : [{ sled: { name: type === "rental" ? 'Polaris 850 Khaos 165" Slash' : 'Polaris 850 Khaos 155"', engine: "850", trackIn: type === "rental" ? 165 : 155,
         note: type === "rental" ? "a long track, built to float in deep powder" : "a mountain-length track for climbing and carving" }, count: 3 }],
       snow: { station: type === "backcountry" ? "Columbine" : "Rabbit Ears Pass", depthIn: 64, pctNormal: 142,

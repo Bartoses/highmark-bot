@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Ride Recap icon set: rugged, angular line icons in the CSR mountain-mark style. Rendered by docs/og/render.cjs to
+     public/icons/<name>-<dark|light>.png (96x96, shown at 20-28px). Stroke-only, square caps, mitered joins. -->
+<html><head><meta charset="utf-8"><style>body{margin:0;background:transparent} svg{display:block;width:96px;height:96px}</style></head><body>
+<div id="out"></div>
+<script>
+const P = { // 48x48 grid
+  powder:  '<path d="M24 5v38M7.5 14.5l33 19M7.5 33.5l33-19"/><path d="M18 8l6 5 6-5M18 40l6-5 6 5M7 21l7-1-2-7M41 27l-7 1 2 7M7 27l7 1-2 7M41 21l-7-1 2-7"/>',
+  bluebird:'<path d="M24 15l7 4v10l-7 4-7-4V19z"/><path d="M24 3v6M24 39v6M5 24h6M37 24h6M10 10l4 4M34 34l4 4M38 10l-4 4M14 34l-4 4"/>',
+  cold:    '<path d="M20 6h8v23l4 5-4 8h-8l-4-8 4-5z"/><path d="M24 14v20M32 12h6M32 18h4M32 24h6"/>',
+  deepbase:'<path d="M2 38l10-14 4 2 9-17 7 9 3-2 11 22"/><path d="M16 26l-3 12M25 9l-6 29"/>',
+  first:   '<path d="M14 44V5"/><path d="M14 6l22 7-22 8"/><path d="M6 44h16"/>',
+  ride:    '<path d="M10 8v32M18 8v32M26 8v32M34 8v32"/><path d="M4 32l40-16"/>',
+  crew:    '<path d="M24 8l5 5-5 5-5-5z"/><path d="M14 40l3-14h14l3 14"/><path d="M8 16l4 4-4 4-4-4zM40 16l4 4-4 4-4-4z"/><path d="M2 40l3-10h7M46 40l-3-10h-7"/>',
+  early:   '<path d="M4 36h40"/><path d="M14 36l10-12 10 12"/><path d="M24 4v12M18 10l6-6 6 6"/><path d="M8 26l4 3M40 26l-4 3"/>',
+  sunset:  '<path d="M4 30h40"/><path d="M14 30l10-12 10 12"/><path d="M24 34v10M18 38l6 6 6-6"/><path d="M8 20l4 3M40 20l-4 3"/>',
+  sled:    '<path d="M3 38h26l3-6H7z"/><path d="M9 32l5-9h11l7-7 9 5-3 11H32"/><path d="M28 16l3-8h5"/><path d="M33 38h11l2-3M39 32v6"/>',
+  snow:    '<path d="M24 4v40"/><path d="M24 10h7M24 18h5M24 26h7M24 34h5"/><path d="M4 44l9-10 6 4 5-6 8 7 6-3 6 8"/>',
+  storm:   '<path d="M8 28l5-10 8 1 6-9 9 4 4 8 4 6H8z"/><path d="M14 36l-3 4M22 36l-3 4M30 36l-3 4M38 36l-3 4"/>',
+  mountain:'<path d="M1 38l10-12 6 2 10-19 8 9 3-3 9 10 2 13"/><path d="M17 28l-4 10M27 9l-8 29M35 18l-2 20"/>',
+};
+const C = { dark: "#1F2A37", light: "#FFFFFF" };
+let html = "";
+for (const [name, d] of Object.entries(P)) for (const [v, col] of Object.entries(C))
+  html += `<svg id="${name}-${v}" viewBox="0 0 48 48" fill="none" stroke="${col}" stroke-width="3.6" stroke-linecap="square" stroke-linejoin="miter" xmlns="http://www.w3.org/2000/svg">${d}</svg>`;
+document.getElementById("out").innerHTML = html;
+window.ICON_IDS = Object.keys(P).flatMap(n => Object.keys(C).map(v => `${n}-${v}`));
+</script></body></html>

@@ -20316,6 +20316,8 @@ async function testRideRecap() {
     chk("recap social: the email has a 'Post your ride' button to the share page's ride section",
       R.RECAP_TYPES.every(t => { const h = render(t).html.replace(/&amp;/g, "&"); return h.includes("Post your ride") && /\/r\/share\?b=777&t=\w+&utm_source=ride_recap[^"]*utm_content=share-social[^"#]*#ride/.test(h); }));
     const r4 = await fetch(`${BASE_URL}/r/route/rea-placeholder.png`), r5 = await fetch(`${BASE_URL}/r/route/backcountry-placeholder.png`), r6 = await fetch(`${BASE_URL}/r/route/zzz.png`);
+    const i1 = await fetch(`${BASE_URL}/r/icon/powder-dark.png`), i2 = await fetch(`${BASE_URL}/r/icon/nope-dark.png`), i3 = await fetch(`${BASE_URL}/r/icon/..%2Fog-rea.png`);
+    chk("recap icon route: /r/icon/<name>-<dark|light>.png served, unknown or odd names 404", i1.status === 200 && /image\/png/.test(i1.headers.get("content-type") ?? "") && i2.status === 404 && i3.status === 404, `${i1.status} ${i2.status} ${i3.status}`);
     chk("recap route images: /r/route/<type>-placeholder.png served as PNG, anything else 404", r4.status === 200 && r5.status === 200 && /image\/png/.test(r4.headers.get("content-type") ?? "") && r6.status === 404);
     const r1 = await fetch(`${BASE_URL}/r/ride?b=777&t=rea`), r2 = await fetch(`${BASE_URL}/r/og/rea.png`), r3 = await fetch(`${BASE_URL}/r/og/zzz.png`);
     chk("recap social routes: /r/ride serves the page, /r/og/<brand>.png serves the preview image, unknown brand 404",
@@ -20417,8 +20419,14 @@ async function testRideRecap() {
     const sr = R.sampleRecapRenders()["rental-full"];
     const vA = R.renderRideRecap({ ...sr, variants: R.normalizeVariants({}) }).html, vB = R.renderRideRecap({ ...sr, variants: R.normalizeVariants({ hero: "B" }) }).html;
     chk("hero ab: version B shows the fun top (and drops the duplicate weather pills); version A is unchanged",
-      vB.includes("YOUR SLEDS") && vB.includes("SNOW REPORT") && vB.includes("utm_content=powder-alert") && !vB.includes(">SKY</span>")
-      && !vA.includes("YOUR SLEDS") && !vA.includes("SNOW REPORT") && vA.includes(">SKY</span>") && !/undefined|\bnull\b|NaN/.test(vB));
+      vB.includes("YOUR SLEDS") && vB.includes("SNOW · ") && vB.includes("utm_content=powder-alert") && !vB.includes(">SKY</span>")
+      && !vA.includes("YOUR SLEDS") && !vA.includes("SNOW · ") && vA.includes(">SKY</span>") && !/undefined|\bnull\b|NaN/.test(vB));
+    const withIcons = R.renderRideRecap({ ...sr, variants: R.normalizeVariants({ hero: "B" }), assetBase: "https://app.test" }).html;
+    chk("hero icons: badges + card headers use the on-brand PNG icons from /r/icon/ (dark on light, white on dark) — no emoji",
+      withIcons.includes('src="https://app.test/r/icon/powder-dark.png"') && withIcons.includes('src="https://app.test/r/icon/sled-light.png"') && withIcons.includes('src="https://app.test/r/icon/snow-dark.png"')
+      && withIcons.includes('src="https://app.test/r/icon/storm-light.png"') && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{FE0F}]/u.test(withIcons.replace(/★/g, "")));
+    const fs2 = await import("fs");
+    chk("hero icons: every icon name used exists as a dark and a light PNG", H.HERO_ICONS.every(n => ["dark", "light"].every(v => fs2.existsSync(new URL(`./public/icons/${n}-${v}.png`, import.meta.url)))));
     chk("hero: multi-day rentals show days, not 'Full day'", R.hoursLabel("2027-01-27T16:00:00Z", "2027-01-30T00:00:00Z") === "2 days" && R.hoursLabel("2027-01-29T15:00:00Z", "2027-01-30T13:00:00Z") === "Full day");
     chk("hero: iPhone Mail date/phone auto-links are neutralised", vA.includes("a[x-apple-data-detectors]{color:inherit!important"));
   }
@@ -20434,7 +20442,7 @@ async function testRideRecap() {
     await R.runRideRecap(db, { now: NOW, fetchImpl: routes, baseUrl: "https://app.test" });
     const h = db.tables.email_sends.find(x => x.reference === "#201")?.body_html ?? "";
     chk("hero job: version B pulls snow (SNOTEL), conditions (Open-Meteo) and ride history (contacts) into the email",
-      h.includes("SNOW REPORT · RABBIT EARS PASS") && h.includes('64" on the ground') && h.includes("Ride #3") && h.includes("Powder Day") && h.includes("NEXT POWDER ALERT")
+      h.includes("SNOW · RABBIT EARS PASS") && h.includes('64" on the ground') && h.includes("Ride #3") && h.includes("Powder Day") && h.includes("NEXT POWDER ALERT")
       && db.tables.recap_log.find(l => l.booking_id === "#201")?.variants?.hero === "B",
       JSON.stringify({ snow: h.includes("SNOW REPORT"), depth: h.includes('64" on the ground'), ride: h.includes("Ride #3"), powder: h.includes("Powder Day"), alert: h.includes("NEXT POWDER ALERT"), v: db.tables.recap_log.find(l => l.booking_id === "#201")?.variants, badges: (h.match(/<span style="display:inline-block;background[^>]*>[^<]*/g) || []).map(x => x.replace(/<[^>]*>/, "")) }));
   }
