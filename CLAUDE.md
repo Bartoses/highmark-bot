@@ -225,6 +225,20 @@ npm run chat
 ```
 Commands: `/reset` (fresh conversation), `/quit`
 
+### Claude Code cloud sessions (environment `highmark-bot`, added 2026-11-22)
+Run the suite with **`npm run test:cloud`**, not `npm test`. It sets `NODE_USE_ENV_PROXY=1` (Node's
+built-in `fetch` ignores the cloud proxy without it → every Supabase call fails with "fetch failed"),
+`TZ=America/Denver`, and maps `HIGHMARK_ANTHROPIC_API_KEY` → `ANTHROPIC_API_KEY` (the key is stored
+under that name so Claude Code itself doesn't pick it up).
+- DB1/DB2 keys are **network secrets** injected by the proxy (`apikey` header); `SUPABASE_KEY` /
+  `CRM_SUPABASE_KEY` in the environment are placeholders. Code reading them still works.
+- Like CI, this is a **live** run: it writes + cleans up tagged test rows in DB1/DB2. Don't run it while a
+  GitHub CI run is in progress (they share test rows and phone numbers).
+- Expected failures in the cloud: the 3 FareHarbor checks (no FH keys in the environment) and, if
+  `HIGHMARK_ANTHROPIC_API_KEY` isn't set, ~4 Claude-call checks. Baseline 2026-11-22: 3,253 pass / 7 fail
+  (all 7 = those two causes). CI remains the full gate.
+- Twilio and Resend hosts are not on the network allowlist, so nothing can text or email from a cloud session.
+
 ### Full automated test suite
 ```bash
 npm test
