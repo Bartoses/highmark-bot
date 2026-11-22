@@ -339,7 +339,9 @@ fills in the ride photo from Drive (`Tour Photos/<date>/<Label> <time> - … .jp
   `label` is shown in the email and used to find the photo. Fill in `miles`, `high_point_ft` and `stops` (REA) when you have
   them; anything blank is left out of the email. Set `active` to false to stop a tour.
 - `recap_settings` (one row, `csr_rea`): `send_hour`, `features` (remove `merch` to hide it), `friend_code`/`friend_percent`,
-  `weather_lat`/`weather_lon` (blank = no weather labels), `reward_code` (blank = referral rewards off).
+  `weather_points` (list of `{name, type, match, lat, lon}`; the first entry whose type matches the recap and whose `match` is in the
+  item name wins — REA ranch, Columbine trailhead, Kremmling shop, Steamboat shop), `weather_lat`/`weather_lon` (fallback; blank =
+  no weather labels), `reward_code` (blank = referral rewards off; currently FRIEND10).
 
 **Turn off dry run.** While `dry_run` is true (the default), every recap goes to `test_to` with "[TEST]" in the subject.
 Set `dry_run` to false to start emailing guests. Recaps already sent in dry run are not re-sent to the guests.

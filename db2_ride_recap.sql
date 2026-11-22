@@ -126,3 +126,20 @@ ALTER TABLE public.recap_tours    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recap_log      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recap_review   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recap_rewards  ENABLE ROW LEVEL SECURITY;
+
+-- ── Follow-up (Sean's answers, 2026-11-22) — APPLIED ─────────────────────────
+-- Weather per ride type/location (first match wins; weather_lat/lon stays the fallback = CSR Steamboat shop).
+-- Prints + merch hidden until they're figured out. Referral reward ON with FRIEND10 (10% off the referrer's next booking).
+ALTER TABLE public.recap_settings ADD COLUMN IF NOT EXISTS weather_points jsonb NOT NULL DEFAULT '[]'::jsonb;
+UPDATE public.recap_settings SET
+  weather_points = '[
+    {"name":"REA ranch",           "type":"rea",                              "lat":40.42238,   "lon":-106.522734},
+    {"name":"Columbine trailhead", "type":"backcountry",                      "lat":40.87126,   "lon":-106.939442},
+    {"name":"Kremmling shop",      "type":"rental", "match":"Kremmling",      "lat":40.057876,  "lon":-106.374048},
+    {"name":"CSR Steamboat shop",  "type":"rental",                           "lat":40.5036963, "lon":-106.8643171}
+  ]'::jsonb,
+  weather_lat = 40.5036963, weather_lon = -106.8643171,
+  features    = ARRAY['review','share','newsletter'],
+  reward_code = 'FRIEND10',
+  updated_at  = now()
+WHERE client_id = 'csr_rea';

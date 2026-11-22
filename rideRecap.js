@@ -32,11 +32,12 @@ export const RECAP_CATEGORY = "recap";
 export const DEFAULT_RECAP_SETTINGS = Object.freeze({
   enabled: true, send_hour: 18, timezone: "America/Denver", dry_run: true, test_to: "sean@coloradosledrentals.com",
   features: [...RECAP_FEATURES], friend_code: "FRIEND10", friend_percent: 10, reward_code: null,
-  weather_lat: null, weather_lon: null, lookback_days: 1, last_run_on: null,
+  weather_lat: null, weather_lon: null, weather_points: [], lookback_days: 1, last_run_on: null,
 });
 
 export const RECAP_LINKS = Object.freeze({
-  review: { csr: "https://g.page/r/CfQGQSBK_KsOEAE/review", rea: "https://g.page/r/CfQGQSBK_KsOEAg/review" },   // TODO(Sean): confirm which is which
+  // Sean, 2026-11-22: one Google review link for both brands.
+  review: { csr: "https://g.page/r/CfQGQSBK_KsOEAg/review", rea: "https://g.page/r/CfQGQSBK_KsOEAg/review" },
   book: {
     rea: "https://fareharbor.com/embeds/book/rabbitearsadventures/?ref=followupemail&full-items=yes&flow=1491038",
     guided: "https://fareharbor.com/embeds/book/coloradosledrentals/?ref=followupemail&full-items=yes&flow=1262220",
@@ -100,6 +101,9 @@ export function normalizeRecapSettings(row = {}) {
   const lat = Number(row?.weather_lat), lon = Number(row?.weather_lon);
   s.weather_lat = row?.weather_lat != null && Number.isFinite(lat) ? lat : null;
   s.weather_lon = row?.weather_lon != null && Number.isFinite(lon) ? lon : null;
+  s.weather_points = (Array.isArray(row?.weather_points) ? row.weather_points : [])
+    .map(p => ({ name: p?.name ? String(p.name) : null, type: p?.type ? String(p.type) : null, match: p?.match ? String(p.match) : null, lat: Number(p?.lat), lon: Number(p?.lon) }))
+    .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
   return s;
 }
 
@@ -268,6 +272,17 @@ export function weatherLabels(daily) {
   out.push(["HIGH", `${Math.round(hi)}°F`]);
   out.push(["SKY", sky]);
   return out;
+}
+
+// Where to take the weather for a ride: the first recap_settings.weather_points entry whose `type` (if set) equals the recap
+// type and whose `match` (if set) appears in the item name — e.g. REA ranch for tours, Columbine for backcountry, the
+// Kremmling shop for "… • Kremmling" rentals, the Steamboat shop for other rentals. Else weather_lat/weather_lon. Else none.
+export function weatherPointFor({ item, type }, settings) {
+  const s = normalizeRecapSettings(settings);
+  const name = String(item ?? "").toLowerCase();
+  const hit = s.weather_points.find(p => (!p.type || p.type === type) && (!p.match || name.includes(p.match.toLowerCase())));
+  if (hit) return { lat: hit.lat, lon: hit.lon, name: hit.name };
+  return s.weather_lat != null && s.weather_lon != null ? { lat: s.weather_lat, lon: s.weather_lon, name: null } : null;
 }
 
 export async function fetchRecapWeather({ lat, lon, date, fetchImpl = globalThis.fetch, timeoutMs = 8000 }) {
@@ -605,8 +620,10 @@ export async function runRideRecap(crm, {
   const weatherByDate = new Map();
   for (const rc of plan.recaps) {
     const date = localDate(rc.primary.startAt ?? rc.primary.endAt, s.timezone);
-    if (!weatherByDate.has(date)) weatherByDate.set(date, await fetchRecapWeather({ lat: s.weather_lat, lon: s.weather_lon, date, fetchImpl }));
-    const weather = weatherByDate.get(date);
+    const pt = weatherPointFor({ item: rc.primary.item, type: rc.tour.type }, s);
+    const wKey = pt ? `${date}|${pt.lat}|${pt.lon}` : null;
+    if (wKey && !weatherByDate.has(wKey)) weatherByDate.set(wKey, await fetchRecapWeather({ lat: pt.lat, lon: pt.lon, date, fetchImpl }));
+    const weather = wKey ? weatherByDate.get(wKey) : null;
     const unsubscribeUrl = out.preview ? null : await unsubscribeUrlFor(crm, rc.email, baseUrl);
     const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour });
     const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl });

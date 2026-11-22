@@ -20097,8 +20097,18 @@ async function testRideRecap() {
   const shareLinks = allLinks.flatMap(({ hs }) => hs.filter(h => /^(sms|mailto):\?/.test(h)).map(h => decodeURIComponent(h)));
   chk("recap links: share links (text + email) carry the code and a FareHarbor link with ref=friend-<booking id>",
     shareLinks.length === 6 && shareLinks.every(h => h.includes("FRIEND10") && /fareharbor\.com\S*ref=friend-777/.test(h) && /full-items=yes/.test(h) && /utm_source=ride_recap/.test(h)), JSON.stringify(shareLinks.slice(0, 2)));
-  chk("recap links: review link matches the brand (REA …OEAg, CSR …OEAE)",
-    allLinks.every(({ t, hs }) => hs.some(h => h.startsWith(t === "rea" ? "https://g.page/r/CfQGQSBK_KsOEAg/review?" : "https://g.page/r/CfQGQSBK_KsOEAE/review?"))));
+  chk("recap links: every brand uses the confirmed Google review link (…OEAg)",
+    allLinks.every(({ hs }) => hs.some(h => h.startsWith("https://g.page/r/CfQGQSBK_KsOEAg/review?"))) && !allLinks.some(({ hs }) => hs.some(h => h.includes("OEAE"))));
+  const pts = { weather_lat: 40.5, weather_lon: -106.8, weather_points: [
+    { name: "REA ranch", type: "rea", lat: 40.42238, lon: -106.522734 }, { name: "Columbine", type: "backcountry", lat: 40.87126, lon: -106.939442 },
+    { name: "Kremmling shop", type: "rental", match: "Kremmling", lat: 40.057876, lon: -106.374048 }, { name: "CSR shop", type: "rental", lat: 40.5036963, lon: -106.8643171 }, { name: "bad", lat: "x", lon: 1 } ] };
+  chk("recap weather point: REA → ranch, backcountry → Columbine, Kremmling rental → Kremmling shop, other rental → Steamboat shop, else fallback/none",
+    R.weatherPointFor({ item: "3 Hour - Grand Tour", type: "rea" }, pts).name === "REA ranch" && R.weatherPointFor({ item: "On-Trail Guided Snowmobile Tour", type: "rea" }, pts).name === "REA ranch"
+    && R.weatherPointFor({ item: "Pro-Ride Private Guided Backcountry Adventure", type: "backcountry" }, pts).name === "Columbine"
+    && R.weatherPointFor({ item: 'Polaris 850 Khaos 165" Slash • Kremmling', type: "rental" }, pts).name === "Kremmling shop"
+    && R.weatherPointFor({ item: 'Polaris 850 Khaos 165" Slash • Steamboat', type: "rental" }, pts).name === "CSR shop"
+    && R.weatherPointFor({ item: "x", type: "other" }, pts).lat === 40.5 && R.weatherPointFor({ item: "x", type: "rea" }, {}) === null
+    && R.normalizeRecapSettings(pts).weather_points.length === 4);
   chk("recap links: next ride → REA sunset flow / CSR guided flow; newsletter link present",
     allLinks.find(x => x.t === "rea").hs.some(h => h.includes("rabbitearsadventures") && h.includes("utm_content=book-next")) && allLinks.find(x => x.t === "rental").hs.some(h => h.includes("flow=1262220") && h.includes("utm_content=book-next"))
     && allLinks.every(({ hs }) => hs.some(h => h.startsWith(R.RECAP_LINKS.newsletter))));
