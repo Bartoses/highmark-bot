@@ -287,8 +287,10 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
       .sort((x, y) => x.kind.localeCompare(y.kind) || x.unit.localeCompare(y.unit, undefined, { numeric: true }));
     b.staff_notes = snotes.filter(x => x.booking_pk === b.pk && !x.hidden).sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)))
       .map(x => ({ id: x.id, note: x.note, by: x.author_name ?? null, by_phone: x.author_phone ?? null, at: x.created_at }));
-    const r = runs.find(x => (x.booking_pks ?? []).includes(b.pk));
-    b.run = r ? { id: r.id, kind: r.kind, vehicle: r.vehicle ?? null, depart_at: r.depart_at ?? null, driver: r.driver_name ?? null } : null;
+    const brief = (r) => (r ? { id: r.id, kind: r.kind, vehicle: r.vehicle ?? null, depart_at: r.depart_at ?? null, driver: r.driver_name ?? null } : null);
+    const on = runs.filter(x => (x.booking_pks ?? []).includes(b.pk));
+    b.run = brief(on.find(x => x.kind !== "from_trail") ?? null);
+    b.return_run = brief(on.find(x => x.kind === "from_trail") ?? null);
   }
   deps.runs = runs;
   for (const d of deps) {
@@ -311,7 +313,7 @@ export function publicDeparture(d, me, view = me.access) {
   const manifest = (d.bookings ?? []).map(b => details
     ? { pk: b.pk, name: b.full_name, pax: b.pax, phone: b.phone, item: d.type === "rental" ? b.item : null, notes: b.notes ?? [],
         waiver_signed: b.waiver_signed ?? null, checked_in: b.checked_in ?? null, due_cents: b.due_cents ?? 0, equipment: b.equipment ?? null,
-        shuttle: b.shuttle ?? null, guides: guidesFor(b.pk), units: b.units ?? [], run: b.run ?? null,
+        shuttle: b.shuttle ?? null, guides: guidesFor(b.pk), units: b.units ?? [], run: b.run ?? null, return_run: b.return_run ?? null,
         staff_notes: (b.staff_notes ?? []).map(n => ({ id: n.id, note: n.note, by: n.by, at: n.at, mine: n.by_phone === me.phone })),
         ...(money ? { total_cents: b.total_cents ?? 0, paid_cents: b.paid_cents ?? 0, source: b.source ?? null, booked_at: b.booked_at ?? null } : {}) }
     : { pk: b.pk, name: b.name, pax: b.pax });
@@ -522,19 +524,23 @@ export function suggestRuns(deps, runs, { seats = VAN_SEATS } = {}) {
   for (const d of deps ?? []) for (const b of d.bookings) {
     if (!b.shuttle?.seats || taken.has(b.pk)) continue;
     const key = String(d.start_at);
-    (groups.get(key) ?? groups.set(key, { start_at: d.start_at, items: [], aps: new Set() }).get(key)).items.push({ b, d });
+    (groups.get(key) ?? groups.set(key, { start_at: d.start_at, end_at: d.end_at ?? null, items: [], aps: new Set() }).get(key)).items.push({ b, d });
   }
   const out = [];
   for (const g of [...groups.values()].sort((x, y) => String(x.start_at).localeCompare(String(y.start_at)))) {
     let cur = null;
     for (const { b, d } of g.items.sort((x, y) => y.b.shuttle.seats - x.b.shuttle.seats)) {
       const n = b.shuttle.seats;
-      if (!cur || cur.used + n > seats) { cur = { kind: "to_trail", depart_at: null, seats, booking_pks: [], availability_pks: [], used: 0, ride_at: g.start_at }; out.push(cur); }
+      if (!cur || cur.used + n > seats) { cur = { kind: "to_trail", depart_at: null, seats, booking_pks: [], availability_pks: [], used: 0, ride_at: g.start_at, ride_end: g.end_at }; out.push(cur); }
       cur.booking_pks.push(b.pk); cur.used += n;
       if (!cur.availability_pks.includes(String(d.availability_pk))) cur.availability_pks.push(String(d.availability_pk));
     }
   }
   return out;
+}
+// Sean (2026-11-23): every run to the trailhead gets a matching return run, leaving when the ride ends.
+export function returnRunFor(r) {
+  return { kind: "from_trail", depart_at: r.ride_end ?? null, seats: r.seats, booking_pks: [...r.booking_pks], availability_pks: [...r.availability_pks], used: r.used };
 }
 async function unitSuggestions(crm) {
   try {
@@ -608,15 +614,17 @@ export async function handleGuideRun(deps, body) {
   const date = body.d ? allowedDate(body.d, a.date, "manager") : a.date;
   const all = await loadDay(deps.crm, deps.db1, { date });
   if (body.action === "suggest") {
-    const made = suggestRuns(all, all.runs);
+    // only to-trailhead runs count as "taken" — a return run alone doesn't stop a booking from being planned
+    const made = suggestRuns(all, (all.runs ?? []).filter(r => r.kind === "to_trail"));
+    const vans = new Set((all.runs ?? []).map(r => r.vehicle).filter(Boolean));
     let n = 0;
+    const insert = async (r, vehicle) => (await deps.crm.from("shuttle_runs").insert({ client_id: "csr_rea", run_date: date, kind: r.kind, seats: r.seats, vehicle,
+      depart_at: r.depart_at ?? null, booking_pks: r.booking_pks, availability_pks: r.availability_pks, stops: r.booking_pks.map(pk => ({ booking_pk: pk })), created_by: a.me.phone })).error;
     for (const r of made) {
-      const vehicle = `Van ${(all.runs?.length ?? 0) + (++n)}`;
-      const { error } = await deps.crm.from("shuttle_runs").insert({ client_id: "csr_rea", run_date: date, kind: r.kind, seats: r.seats, vehicle,
-        booking_pks: r.booking_pks, availability_pks: r.availability_pks, stops: r.booking_pks.map(pk => ({ booking_pk: pk })), created_by: a.me.phone });
-      if (error) return { status: 500, body: { error: "could not save" } };
+      let vehicle; do vehicle = `Van ${++n}`; while (vans.has(vehicle)); vans.add(vehicle);
+      if (await insert(r, vehicle) || await insert(returnRunFor(r), vehicle)) return { status: 500, body: { error: "could not save" } };
     }
-    return { status: 200, body: { ok: true, created: made.length } };
+    return { status: 200, body: { ok: true, created: made.length, returns: made.length } };
   }
   if (body.remove && body.id) {
     await deps.crm.from("shuttle_runs").delete().eq("id", String(body.id)).eq("run_date", date);

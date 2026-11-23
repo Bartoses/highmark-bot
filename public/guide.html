@@ -349,7 +349,8 @@
   function canEquip() { return S.view === "manager" || S.view === "shop"; }
   function bookingExtras(b) {
     var h = "";
-    if (b.run) h += "<div class='shut'>🚐 <b>" + esc(b.run.vehicle || "Van") + "</b>" + (b.run.depart_at ? " · leaves " + esc(time(b.run.depart_at)) : "") + (b.run.driver ? " · driver " + esc(b.run.driver) : " · no driver yet") + "</div>";
+    [[b.run, ""], [b.return_run, "Return: "]].forEach(function (x) { var r = x[0]; if (!r) return;
+      h += "<div class='shut'>🚐 " + x[1] + "<b>" + esc(r.vehicle || "Van") + "</b>" + (r.depart_at ? " · leaves " + esc(time(r.depart_at)) : "") + (r.driver ? " · driver " + esc(r.driver) : " · no driver yet") + "</div>"; });
     h += "<div>" + (b.units || []).map(function (u) { return "<span class='unit'>" + KIND[u.kind] + " " + esc(u.unit) + (canEquip() ? "<button aria-label='Remove' data-unit-del='" + esc(u.id) + "' data-b='" + esc(b.pk) + "'>×</button>" : "") + "</span>"; }).join("") + "</div>";
     if (canEquip()) {
       var dl = "dl" + b.pk.replace(/\W/g, "");
@@ -371,7 +372,7 @@
   function shuttleCard(list) {
     var seats = list.reduce(function (n, d) { return n + (d.shuttle_seats || 0); }, 0), runs = S.day.runs || [];
     if (!seats && !runs.length) return "";
-    var onRun = {}; runs.forEach(function (r) { r.booking_pks.forEach(function (p) { onRun[p] = 1; }); });
+    var onRun = {}; runs.forEach(function (r) { if (r.kind === "to_trail") r.booking_pks.forEach(function (p) { onRun[p] = 1; }); });
     var waiting = []; list.forEach(function (d) { d.bookings.forEach(function (b) { if (b.shuttle && b.shuttle.seats && !onRun[b.pk]) waiting.push(b); }); });
     return "<div class='card'><div class='row'><div class='label'>🚐 Shuttles</div><span class='meta'>" + seats + " seat" + (seats === 1 ? "" : "s") + " requested</span></div>" +
       runs.map(function (r) { return "<button class='card run' style='margin:8px 0 0' data-run='" + esc(r.id) + "'><div class='time' style='font-size:15px'>" + runLine(r) + "</div>" +
@@ -390,7 +391,7 @@
     }).join("");
   }
   function wireRuns() {
-    if ($("planRuns")) $("planRuns").onclick = function () { api("POST", "/guide/api/run", { action: "suggest", d: S.date }).then(function (j) { toast(j.created ? "Planned " + j.created + " van run" + (j.created === 1 ? "" : "s") + ". Pick drivers." : "Nothing to plan"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
+    if ($("planRuns")) $("planRuns").onclick = function () { api("POST", "/guide/api/run", { action: "suggest", d: S.date }).then(function (j) { toast(j.created ? "Planned " + j.created + " van run" + (j.created === 1 ? "" : "s") + " + return" + (j.created === 1 ? "" : "s") + ". Pick drivers." : "Nothing to plan"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
     if ($("newRun")) $("newRun").onclick = function () { enter(function () { S.editRun = { kind: "to_trail", seats: 25, booking_pks: [] }; }); };
     each("[data-run]", function (b) { b.onclick = function () { var r = (S.day.runs || []).filter(function (x) { return x.id === b.getAttribute("data-run"); })[0]; if (r) enter(function () { S.editRun = JSON.parse(JSON.stringify(r)); }); }; });
   }

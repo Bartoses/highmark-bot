@@ -33,6 +33,8 @@ shows its van + driver. Sleds/trailers per booking (managers + shop add, everyon
 from units already used until the shop's unit list is ready — Sean: every unit has a fixed name like "K-12", a full list
 is coming). Staff notes per booking (the booking's guide, shop for rentals, managers; remove your own, managers any).
 Sheet sync still waits on access to the "Weekly Shop Manifest".
+**Return runs + driver notifications (Sean, 2026-11-23):** "Plan van runs" also makes the matching **return run** (From the
+trailhead, same van name + riders, leaves when the ride ends). Drivers are told **in the app only** (no briefing text).
 **Was next** — `db2_guide_ops.sql`: `shuttle_runs` (van runs, one driver per run, 25 seats),
 `booking_equipment` (sled/trailer per booking; synced with the shop sheet both ways, then the app replaces it), and
 `booking_staff_notes`. The sheet sync needs the "Weekly Shop Manifest" shared with the connected Google account (still

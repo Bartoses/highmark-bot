@@ -19400,9 +19400,13 @@ async function testGuideApp() {
       chk("van runs: managers only", (await G.handleGuideRun(od, { t: t(JAKE), action: "suggest" })).status === 403);
       const sg = await G.handleGuideRun(od, { t: t(BOSS), action: "suggest" });
       const run = ob.crm.tables.shuttle_runs[0];
-      chk("van runs: 'Plan van runs' makes a run for the shuttle request (Van 1, 25 seats, that booking)",
-        sg.status === 200 && sg.body.created === 1 && run.vehicle === "Van 1" && run.seats === 25 && run.booking_pks.join() === "#1" && run.run_date === "2026-12-11"
-        && (await G.handleGuideRun(od, { t: t(BOSS), action: "suggest" })).body.created === 0);
+      const ret = ob.crm.tables.shuttle_runs.find(r => r.kind === "from_trail");
+      chk("van runs: 'Plan van runs' makes a run for the shuttle request (Van 1, 25 seats, that booking) + its return run when the ride ends",
+        sg.status === 200 && sg.body.created === 1 && run.vehicle === "Van 1" && run.kind === "to_trail" && run.seats === 25 && run.booking_pks.join() === "#1" && run.run_date === "2026-12-11"
+        && ret && ret.vehicle === "Van 1" && ret.booking_pks.join() === "#1" && ret.depart_at === "2026-12-11T21:00:00.000Z" && ob.crm.tables.shuttle_runs.length === 2
+        && (await G.handleGuideRun(od, { t: t(BOSS), action: "suggest" })).body.created === 0, JSON.stringify(ob.crm.tables.shuttle_runs));
+      chk("van runs: return run = same riders, leaves at the ride's end", JSON.stringify(G.returnRunFor({ kind: "to_trail", seats: 25, booking_pks: ["#a"], availability_pks: ["1"], used: 3, ride_end: "X" }))
+        === '{"kind":"from_trail","depart_at":"X","seats":25,"booking_pks":["#a"],"availability_pks":["1"],"used":3}');
       const sv = await G.handleGuideRun(od, { t: t(BOSS), id: run.id, vehicle: "Van 1", kind: "to_trail", depart_time: "07:15", driver_phone: DAN, booking_pks: ["#1", "#2", "#nope"] });
       chk("van runs: a manager sets the driver, leave time and riders (bookings from other days ignored); unknown driver refused",
         sv.status === 200 && run.driver_name === "Dan Driver" && run.depart_at === "2026-12-11T14:15:00.000Z" && run.booking_pks.join() === "#1,#2"
@@ -19412,14 +19416,15 @@ async function testGuideApp() {
       if (prevTC === undefined) delete process.env.GUIDE_TEAM_CODE; else process.env.GUIDE_TEAM_CODE = prevTC;
       const mr = dd.body.my_runs[0];
       chk("van runs: the driver sees their run with stops in order, seats and the pickup address",
-        dd.status === 200 && mr && mr.stops.length === 2 && mr.stops[0].name === "Katrina Smith" && mr.stops[0].seats === 2 && mr.stops[0].address === "Rabbit Ears Motel" && mr.used === 3 && dd.body.runs.length === 0, JSON.stringify(dd.body).slice(0, 300));
+        dd.status === 200 && mr && dd.body.my_runs.length === 1 && mr.stops.length === 2 && mr.stops[0].name === "Katrina Smith" && mr.stops[0].seats === 2 && mr.stops[0].address === "Rabbit Ears Motel" && mr.used === 3 && dd.body.runs.length === 0, JSON.stringify(dd.body).slice(0, 300));
       const bd = await G.handleGuideDay(od, { t: t(BOSS) }), jd2 = (await G.handleGuideDay(od, { t: t(JAKE) })).body;
       chk("van runs: managers see every run; guests' bookings show their van + driver; guides don't get the run list",
-        bd.body.runs.length === 1 && jd2.runs.length === 0 && jd2.departures.find(x => x.availability_pk === "5001").bookings.find(b => b.pk === "#1").run.driver === "Dan Driver");
+        bd.body.runs.length === 2 && jd2.runs.length === 0 && jd2.departures.find(x => x.availability_pk === "5001").bookings.find(b => b.pk === "#1").run.driver === "Dan Driver"
+        && jd2.departures.find(x => x.availability_pk === "5001").bookings.find(b => b.pk === "#1").return_run.kind === "from_trail");
       chk("sleds: managers and shop get name suggestions from units already used; guides don't",
         bd.body.units.sled.includes("K-12") && bd.body.units.trailer.includes("4-place #2") && jd2.units === null);
       const del = await G.handleGuideRun(od, { t: t(BOSS), id: run.id, remove: true });
-      chk("van runs: a manager can delete a run", del.status === 200 && ob.crm.tables.shuttle_runs.length === 0);
+      chk("van runs: a manager can delete a run", del.status === 200 && ob.crm.tables.shuttle_runs.length === 1);
     }
 
     // ── locations, staff, manager assignment ──
