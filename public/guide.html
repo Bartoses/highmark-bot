@@ -189,6 +189,7 @@
     if (S.tab === "settings" && S.view === "manager") {
       if (S.sub === "tours") return S.editTour ? renderTourEdit() : renderTours();
       if (S.sub === "staff") return S.editStaff ? renderStaffEdit() : renderStaff();
+      if (S.sub === "shuttle") return renderShuttleSettings();
       return renderSettings();
     }
     if (S.editRun) return renderRunEdit();
@@ -220,7 +221,7 @@
     if (S.view !== "manager") return "";
     var h = "<div class='seg tabs'>" + [["bookings", "Bookings"], ["settings", "Settings"]].map(function (t) {
       return "<button data-tab='" + t[0] + "' aria-pressed='" + (S.tab === t[0]) + "'>" + t[1] + "</button>"; }).join("") + "</div>";
-    if (S.tab === "settings") h += "<div class='seg subs'>" + [["tours", "Tours"], ["email", "Recap email"], ["staff", "Staff"]].map(function (t) {
+    if (S.tab === "settings") h += "<div class='seg subs'>" + [["tours", "Tours"], ["shuttle", "Shuttles"], ["staff", "Staff"], ["email", "Recap email"]].map(function (t) {
       return "<button data-sub='" + t[0] + "' aria-pressed='" + (S.sub === t[0]) + "'>" + t[1] + "</button>"; }).join("") + "</div>";
     return h;
   }
@@ -366,27 +367,34 @@
     return h;
   }
   function runLine(r) {
-    return esc(r.vehicle || "Van") + " · " + esc(RUNK[r.kind] || "") + (r.depart_at ? " · " + esc(time(r.depart_at)) : "") + " · " + r.used + "/" + r.seats + " seats · " +
+    return esc(r.vehicle || "Van") + (r.location ? " · " + esc(locLabel(r.location)) : "") + " · " + esc(RUNK[r.kind] || "") + (r.depart_at ? " · " + esc(time(r.depart_at)) : "") + " · " + r.used + "/" + r.seats + " seats · " +
       (r.driver_name ? "driver " + esc(r.driver_name) : "<span class='owe'>no driver</span>");
   }
   function shuttleCard(list) {
     var seats = list.reduce(function (n, d) { return n + (d.shuttle_seats || 0); }, 0), runs = S.day.runs || [];
     if (!seats && !runs.length) return "";
     var onRun = {}; runs.forEach(function (r) { if (r.kind === "to_trail") r.booking_pks.forEach(function (p) { onRun[p] = 1; }); });
-    var waiting = []; list.forEach(function (d) { d.bookings.forEach(function (b) { if (b.shuttle && b.shuttle.seats && !onRun[b.pk]) waiting.push(b); }); });
-    return "<div class='card'><div class='row'><div class='label'>🚐 Shuttles</div><span class='meta'>" + seats + " seat" + (seats === 1 ? "" : "s") + " requested</span></div>" +
-      runs.map(function (r) { return "<button class='card run' style='margin:8px 0 0' data-run='" + esc(r.id) + "'><div class='time' style='font-size:15px'>" + runLine(r) + "</div>" +
-        "<div class='meta'>" + r.stops.map(function (x) { return esc(String(x.name).split(" ")[0]) + " (" + x.seats + ")"; }).join(", ") + "</div></button>"; }).join("") +
-      (waiting.length ? "<p class='meta' style='margin:8px 0 0'><span class='owe'>" + waiting.length + " booking" + (waiting.length === 1 ? "" : "s") + " not on a van yet</span>: " + esc(waiting.map(function (b) { return String(b.name).split(" ")[0] + " (" + b.shuttle.seats + ")"; }).join(", ")) + "</p>" +
-        "<button class='btn dark' id='planRuns' style='margin-top:8px'>Plan van runs</button>" : "") +
+    var waiting = []; list.forEach(function (d) { d.bookings.forEach(function (b) { if (b.shuttle && b.shuttle.seats && !onRun[b.pk]) waiting.push({ b: b, d: d }); }); });
+    // vans never mix locations: one block per location
+    var locs = []; runs.forEach(function (r) { if (locs.indexOf(r.location || "") < 0) locs.push(r.location || ""); });
+    waiting.forEach(function (x) { if (locs.indexOf(x.d.location || "") < 0) locs.push(x.d.location || ""); });
+    var h = "<div class='card'><div class='row'><div class='label'>🚐 Shuttles</div><span class='meta'>" + seats + " seat" + (seats === 1 ? "" : "s") + " requested</span></div>";
+    locs.forEach(function (lk) {
+      var rs = runs.filter(function (r) { return (r.location || "") === lk; }), ws = waiting.filter(function (x) { return (x.d.location || "") === lk; });
+      h += "<h3 class='mo' style='margin:12px 0 2px'>" + esc(lk ? locLabel(lk) : "No location") + "</h3>" +
+        rs.map(function (r) { return "<button class='card run' style='margin:6px 0 0' data-run='" + esc(r.id) + "'><div class='time' style='font-size:15px'>" + runLine(r) + "</div>" +
+          "<div class='meta'>" + r.stops.map(function (x) { return esc(String(x.name).split(" ")[0]) + " (" + x.seats + ")"; }).join(", ") + "</div></button>"; }).join("") +
+        (ws.length ? "<p class='meta' style='margin:6px 0 0'><span class='owe'>Not on a van yet</span>: " + esc(ws.map(function (x) { return String(x.b.name).split(" ")[0] + " (" + x.b.shuttle.seats + ", " + time(x.d.start_at) + ")"; }).join(", ")) + "</p>" : "");
+    });
+    return h + (waiting.length ? "<button class='btn dark' id='planRuns' style='margin-top:10px'>Plan van runs</button><p class='hint'>One van per location and start time. Pickup times come from Settings → Shuttles.</p>" : "") +
       "<button class='btn small ghost' id='newRun' style='margin-top:8px'>+ New run</button></div>";
   }
   function myRunsHtml() {
     var mine = S.day.my_runs || []; if (!mine.length) return "";
     return "<h2 style='margin-top:4px'>Your van runs</h2>" + mine.map(function (r) {
-      return "<div class='card run'><div class='time' style='font-size:15px'>" + runLine(r) + "</div>" + (r.notes ? "<div class='note'>" + esc(r.notes) + "</div>" : "") +
+      return "<div class='card run'><div class='time' style='font-size:15px'>" + runLine(r) + "</div>" + (r.start_point ? "<div class='meta'>Leaves from " + esc(r.start_point) + "</div>" : "") + (r.notes ? "<div class='note'>" + esc(r.notes) + "</div>" : "") +
         r.stops.map(function (x, i) { return "<div class='stop'><b>" + (i + 1) + ". " + esc(x.name) + "</b> · " + x.seats + " seat" + (x.seats === 1 ? "" : "s") + (x.ride ? " · " + esc(x.ride) + (x.ride_at ? " " + esc(time(x.ride_at)) : "") : "") +
-          (x.address ? "<div><a href='https://maps.google.com/?q=" + encodeURIComponent(x.address) + "' target='_blank' rel='noopener'>" + esc(x.address) + "</a></div>" : "<div class='meta'>No pickup address on the booking</div>") +
+          (x.address ? "<div>" + (x.meeting_spot ? "<span class='meta'>Meeting spot: </span>" : "") + "<a href='https://maps.google.com/?q=" + encodeURIComponent(x.address) + "' target='_blank' rel='noopener'>" + esc(x.address) + "</a></div>" : "<div class='meta'>No pickup address on the booking (set a meeting spot in Settings → Shuttles)</div>") +
           (x.phone ? "<a class='btn small ghost' style='margin-top:6px' href='tel:" + esc(x.phone) + "'>Call " + esc(String(x.name).split(" ")[0]) + "</a>" : "") + "</div>"; }).join("") + "</div>";
     }).join("");
   }
@@ -423,6 +431,33 @@
         .then(function () { toast("Run saved"); goBack(); return load(S.date); }).catch(function (e) { toast(e.message); });
     };
     if ($("delRun")) $("delRun").onclick = function () { if (!confirm("Delete this van run?")) return; api("POST", "/guide/api/run", { d: S.date, id: r.id, remove: true }).then(function () { goBack(); return load(S.date); }).catch(function (e) { toast(e.message); }); };
+  }
+
+  // ── managers: shuttle settings per location ──
+  function renderShuttleSettings() {
+    $("hd").innerHTML = headerTop("Settings") + tabs(); wireHeader();
+    if (!S.admin) { $("main").innerHTML = "<div class='empty'><span class='spin'></span>Loading…</div>"; $("bar").hidden = true; return; }
+    $("bar").hidden = true;
+    var sh = S.admin.shuttle || { ready: false, by: {} };
+    var h = "<p class='meta' style='margin:4px 0 10px'>Vans never mix locations: one van per location and ride start time. Pickup = a fixed time below (the latest one that still leaves the minutes-before gap), otherwise the minutes before the ride. Guests are picked up at their lodging, or the meeting spot if the booking has no address. The return van leaves when the ride ends.</p>";
+    if (!sh.ready) h += "<div class='card err'>Shuttle settings switch on once db2_shuttle_settings.sql is applied.</div>";
+    h += (S.admin.locations || []).map(function (l) {
+      var x = sh.by[l.key] || {}, k = l.key;
+      return "<div class='card'><div class='label'>" + esc(l.label) + "</div>" +
+        "<label class='f' for='sl" + k + "'>Pick up this many minutes before the ride</label><input id='sl" + k + "' type='number' inputmode='numeric' value='" + esc(x.lead_minutes != null ? x.lead_minutes : "") + "' placeholder='e.g. 60'>" +
+        "<label class='f' for='sp" + k + "'>Fixed pickup times (optional)</label><input id='sp" + k + "' type='text' value='" + esc((x.pickup_times || []).join(", ")) + "' placeholder='e.g. 6:45, 11:15'>" +
+        "<label class='f' for='ss" + k + "'>Van leaves from</label><input id='ss" + k + "' type='text' maxlength='160' value='" + esc(x.start_point || "") + "' placeholder='e.g. Steamboat shop'>" +
+        "<label class='f' for='sm" + k + "'>Meeting spots (one per line)</label><textarea id='sm" + k + "' placeholder='e.g. Gondola Square bus stop'>" + esc((x.meeting_spots || []).join("\n")) + "</textarea>" +
+        "<div class='bguide' style='grid-template-columns:1fr 1fr'><div><label class='f' for='sr" + k + "'>Return: minutes after the ride</label><input id='sr" + k + "' type='number' inputmode='numeric' value='" + esc(x.return_after_minutes != null ? x.return_after_minutes : 0) + "'></div>" +
+        "<div><label class='f' for='sv" + k + "'>Seats per van</label><input id='sv" + k + "' type='number' inputmode='numeric' value='" + esc(x.seats || 25) + "'></div></div>" +
+        "<button class='btn dark' data-shsave='" + k + "' style='margin-top:10px'" + (sh.ready ? "" : " disabled") + ">Save " + esc(l.label) + "</button></div>";
+    }).join("");
+    $("main").innerHTML = h;
+    each("[data-shsave]", function (b) { b.onclick = function () {
+      var k = b.getAttribute("data-shsave");
+      api("POST", "/guide/api/admin/shuttle", { location: k, lead_minutes: $("sl" + k).value, pickup_times: $("sp" + k).value, start_point: $("ss" + k).value,
+        meeting_spots: $("sm" + k).value, return_after_minutes: $("sr" + k).value, seats: $("sv" + k).value })
+        .then(function () { toast("Saved"); S.admin = null; return loadAdmin(); }).catch(function (e) { toast(e.message); }); }; });
   }
 
   // ── managers: season report ──
