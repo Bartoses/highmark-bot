@@ -7,6 +7,14 @@ Draft 2, 2026-11-23, written with Sean. Decisions marked **(Sean)** came from hi
 **Slice 1 built 2026-11-23** (PR: Guide Ride Log slice 1): A (briefing link only; portal page later), B, C2 (claim/split;
 FareHarbor field read), D1–D4 (photos; videos later), E, G. Not yet: videos, F (rider tags), C3 (manager board), D5/H (Drive), `LOG` keyword.
 
+**Season view + next booking (2026-11-23, Sean: "see the next booking if there is nothing today or tomorrow… managers should see
+all future and past bookings for the 2026/27 season").** ‹ › step through any day (managers: any day; guides/shop: yesterday to
+60 days ahead). An empty day (or a guide with nothing of their own) shows a "Next booking" card that opens that day. **Season**
+(managers) / **Upcoming** (everyone else) lists every day with bookings: count, riders, riders per location, first ride time,
+"N MINE"; location chips filter it; managers see the whole season (Nov 1 – Apr 30) past and future, starting at today.
+Guides can take a future ride ahead of time; managers can assign any day. Photos + ride details stay today/yesterday only, and
+now save to the day being viewed (they used to be looked up on today's date, so morning-after uploads for yesterday failed).
+
 ## Sean's feedback on the slice 1 preview (2026-11-23) → plan
 
 **What the app is for:** each person's day: the bookings, tours, deliveries and jobs they're assigned, their schedule, and

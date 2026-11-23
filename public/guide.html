@@ -64,6 +64,18 @@
   .map { width:100%; border-radius:10px; display:block; margin:8px 0; border:1px solid var(--line); }
   .role { display:block; width:100%; text-align:left; background:#fff; border:2px solid var(--line); border-radius:14px; padding:16px; margin:0 0 10px; font-family:inherit; color:var(--ink); cursor:pointer; }
   .role b { display:block; font-size:18px; } .role span { color:var(--muted); font-size:14px; }
+  .daynav { display:grid; grid-template-columns:44px 1fr 44px auto; gap:6px; margin-top:10px; }
+  .daynav button { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-height:40px; border-radius:10px; border:1px solid #3A4654; background:transparent; color:#fff; font-family:inherit; font-weight:700; font-size:15px; padding:0 10px; }
+  .daynav button:disabled { opacity:.35; }
+  .daynav .cur { background:#fff; color:var(--ink); }
+  .nextcard { text-align:left; }
+  button.card.day { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .day .dn { font-weight:800; font-size:16px; min-width:92px; }
+  .day.past { opacity:.6; }
+  .day.today { border:2px solid var(--acc); }
+  .locs { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+  .loc { font-size:12px; font-weight:700; border-radius:999px; padding:2px 8px; background:#EEF1F4; color:var(--muted); white-space:nowrap; }
+  h3.mo { font-size:14px; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); margin:18px 0 6px; }
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 </style>
 </head>
@@ -80,7 +92,7 @@
   var TEAM = null;
   try { TEAM = JSON.parse(localStorage.getItem("guideTeam") || "null"); } catch (e) { TEAM = null; }
   if (!T && TEAM && TEAM.code && TEAM.phone) T = "team:" + TEAM.code + ":" + TEAM.phone;
-  var S = { day: null, date: null, today: null, open: null, tab: "bookings", sub: "tours", admin: null, editTour: null, editStaff: null, uploading: 0, queue: [], drafts: {}, view: null, loc: null };
+  var S = { day: null, date: null, today: null, open: null, tab: "bookings", sub: "tours", admin: null, editTour: null, editStaff: null, uploading: 0, queue: [], drafts: {}, view: null, loc: null, season: false, seasonData: null };
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   var COND = [["fresh_snow", "Fresh snow"], ["bluebird", "Bluebird"], ["snowing", "Snowing"], ["windy", "Windy"], ["cold", "Cold"]];
@@ -90,6 +102,8 @@
   function toast(msg) { var t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(function () { t.style.display = "none"; }, 2600); }
   function time(iso) { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Denver" }).replace(":00", ""); } catch (e) { return ""; } }
   function dayName(d) { try { return new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }); } catch (e) { return d; } }
+  function addD(d, n) { var x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
+  function canLog() { return S.date === S.today || S.date === addD(S.today, -1); }   // photos + ride details: today or the morning after
   function api(method, path, body) {
     var opts = { method: method, headers: { "Content-Type": "application/json" } };
     if (body) opts.body = JSON.stringify(Object.assign({ t: T, as: S.view }, body));
@@ -130,6 +144,7 @@
       if (S.sub === "staff") return S.editStaff ? renderStaffEdit() : renderStaff();
       return renderSettings();
     }
+    if (S.season) return renderSeason();
     if (S.open && dep(S.open)) renderRide(dep(S.open)); else { S.open = null; renderList(); }
   }
 
@@ -165,14 +180,18 @@
   // ── rides list ──
   function locLabel(k) { var l = (S.day.locations || []).filter(function (x) { return x.key === k; })[0]; return l ? l.label : ""; }
   function renderList() {
-    var yest = S.today !== S.date;
+    var mgr = S.view === "manager";
     if (S.loc === null) { var saved = store.get("guideLoc"); S.loc = saved !== null && saved !== undefined ? saved : (S.view === "manager" ? "" : (S.day.me.home_location || "")); }
     $("hd").innerHTML = headerTop("Bookings") + tabs() +
-      "<div class='seg days'><button aria-pressed='" + yest + "' data-d='y'>Yesterday</button><button aria-pressed='" + !yest + "' data-d='t'>Today · " + esc(dayName(S.today)) + "</button></div>";
+      "<div class='daynav'><button id='prevD' aria-label='Previous day'" + (!mgr && S.date <= addD(S.today, -1) ? " disabled" : "") + ">‹</button>" +
+      "<button id='todayD' class='" + (S.date === S.today ? "cur" : "") + "'>" + esc(relDay(S.date).replace(/^(Today|Tomorrow|Yesterday) · \w+, /, "$1 · ")) + "</button>" +
+      "<button id='nextD' aria-label='Next day'" + (!mgr && S.date >= addD(S.today, 60) ? " disabled" : "") + ">›</button>" +
+      "<button id='seasonB'>" + (mgr ? "Season" : "Upcoming") + "</button></div>";
     wireHeader();
-    each(".days button", function (b) {
-      b.onclick = function () { var y = new Date(S.today + "T12:00:00Z"); y.setUTCDate(y.getUTCDate() - 1); load(b.getAttribute("data-d") === "y" ? y.toISOString().slice(0, 10) : S.today); };
-    });
+    $("prevD").onclick = function () { load(addD(S.date, -1)); };
+    $("nextD").onclick = function () { load(addD(S.date, 1)); };
+    $("todayD").onclick = function () { if (S.date !== S.today) load(S.today); };
+    $("seasonB").onclick = function () { S.season = true; S.open = null; render(); scrollTo(0, 0); };
     var allDeps = S.day.departures || [];
     var counts = {}; allDeps.forEach(function (d) { counts[d.location] = (counts[d.location] || 0) + 1; });
     var chips = "<div class='chips' style='margin:0 0 10px'><button class='chip' data-loc='' aria-pressed='" + (S.loc === "") + "'>All · " + allDeps.length + "</button>" +
@@ -181,7 +200,16 @@
     var list = allDeps.filter(function (d) { return (d.mine && S.view !== "manager") || !S.loc || d.location === S.loc; });
     $("bar").hidden = true;
     var wireChips = function () { each("[data-loc]", function (c) { c.onclick = function () { S.loc = c.getAttribute("data-loc"); store.set("guideLoc", S.loc); render(); }; }); };
-    if (!list.length) { $("main").innerHTML = chips + "<div class='empty'>No bookings " + (yest ? "yesterday" : "today") + (S.loc ? " at " + esc(locLabel(S.loc)) : "") + " for this view.</div>"; wireChips(); return; }
+    var nx = S.day.next;
+    var nextCard = nx ? "<button class='card nextcard' id='goNext'><div class='label'>Next booking" + (S.view === "guide" ? " day" : "") + "</div>" +
+      "<div class='time'>" + esc(relDay(nx.date)) + (nx.first ? " · " + esc(time(nx.first.start_at)) + " " + esc(nx.first.label) : "") + "</div>" +
+      "<div class='meta'>" + nx.bookings + " booking" + (nx.bookings === 1 ? "" : "s") + " · " + nx.riders + " riders" + (nx.mine ? " · " + nx.mine + " yours" : "") + " ›</div></button>" : "";
+    var wireNext = function () { if ($("goNext")) $("goNext").onclick = function () { load(nx.date); }; };
+    if (!list.length) {
+      $("main").innerHTML = chips + "<div class='empty'>Nothing " + esc(relDay(S.date).toLowerCase().indexOf("today") === 0 ? "today" : "on " + dayName(S.date)) + (S.loc ? " at " + esc(locLabel(S.loc)) : "") + (mgr ? "" : " for you") + ".</div>" +
+        (nextCard || "<p class='hint' style='text-align:center'>No more bookings in the next few months yet.</p>");
+      wireChips(); wireNext(); return;
+    }
     var riders = list.reduce(function (n, d) { return n + d.riders; }, 0);
     var card = function (d) {
       var who = d.mine ? "<span class='pill mine'>MINE</span>" : (d.assignees.length ? "<span class='meta'>" + esc(d.assignees.map(function (a) { return a.name || "Guide"; }).join(", ")) + "</span>" : "<span class='meta'>Unclaimed</span>");
@@ -202,11 +230,55 @@
     if (S.view === "manager") $("main").innerHTML = chips + head + list.map(card).join("");
     else {
       var mineL = list.filter(function (d) { return d.mine; }), open = list.filter(function (d) { return !d.mine; });
-      $("main").innerHTML = chips + head + "<h2 style='margin-top:4px'>Your bookings</h2>" + (mineL.length ? mineL.map(card).join("") : "<div class='card meta'>Nothing assigned to you yet.</div>") +
+      $("main").innerHTML = chips + head + "<h2 style='margin-top:4px'>Your bookings</h2>" + (mineL.length ? mineL.map(card).join("") : "<div class='card meta'>Nothing assigned to you on this day yet.</div>" + nextCard) +
         (open.length ? "<h2>Not assigned yet</h2>" + open.map(card).join("") : "");
     }
-    wireChips();
-    each("button.card", function (b) { b.onclick = function () { S.open = b.getAttribute("data-pk"); render(); scrollTo(0, 0); }; });
+    wireChips(); wireNext();
+    each("button.card[data-pk]", function (b) { b.onclick = function () { S.open = b.getAttribute("data-pk"); render(); scrollTo(0, 0); }; });
+  }
+
+  function relDay(d) {
+    if (d === S.today) return "Today · " + dayName(d);
+    if (d === addD(S.today, 1)) return "Tomorrow · " + dayName(d);
+    if (d === addD(S.today, -1)) return "Yesterday · " + dayName(d);
+    return dayName(d);
+  }
+
+  // ── season / upcoming: every day with bookings (managers: the whole season, past + future) ──
+  function renderSeason() {
+    var mgr = S.view === "manager";
+    $("hd").innerHTML = "<button class='back' id='back'>‹ Day view</button><h1>" + (mgr ? "Season" : "Upcoming") + (S.seasonData ? " " + esc(S.seasonData.season.label) : "") + "</h1>" +
+      "<div class='sub'><span>" + (mgr ? "Every day with bookings, past and future" : "Days with bookings for you") + "</span></div>";
+    $("back").onclick = function () { S.season = false; render(); };
+    $("bar").hidden = true;
+    if (!S.seasonData || S.seasonData.view !== S.view) {
+      $("main").innerHTML = "<div class='empty'>Loading the season…</div>";
+      api("GET", "/guide/api/season").then(function (j) { S.seasonData = j; if (S.season) renderSeason(); }).catch(function (e) { $("main").innerHTML = '<div class="card err">' + esc(e.message) + "</div>"; });
+      return;
+    }
+    var sd = S.seasonData, days = sd.days.filter(function (x) { return !S.loc || x.by_location[S.loc] || (!mgr && x.mine); });
+    var tot = days.reduce(function (s, x) { s.b += x.bookings; s.r += x.riders; return s; }, { b: 0, r: 0 });
+    var counts = {}; sd.days.forEach(function (x) { Object.keys(x.by_location).forEach(function (k) { counts[k] = (counts[k] || 0) + 1; }); });
+    var h = "<div class='chips' style='margin:0 0 10px'><button class='chip' data-loc='' aria-pressed='" + (S.loc === "") + "'>All · " + sd.days.length + "</button>" +
+      (sd.locations || []).map(function (l) { return "<button class='chip' data-loc='" + l.key + "' aria-pressed='" + (S.loc === l.key) + "'>" + esc(l.label) + " · " + (counts[l.key] || 0) + "</button>"; }).join("") + "</div>";
+    h += "<p class='meta' style='margin:2px 0 4px'>" + days.length + " day" + (days.length === 1 ? "" : "s") + " · " + tot.b + " bookings · " + tot.r + " riders" +
+      (sd.next ? " · next: " + esc(relDay(sd.next.date)) : "") + "</p>";
+    if (!days.length) h += "<div class='empty'>No bookings " + (mgr ? "this season" : "coming up") + (S.loc ? " at " + esc(locLabel(S.loc)) : "") + " yet.</div>";
+    var month = "", anchor = null;
+    days.forEach(function (x) {
+      var m = new Date(x.date + "T12:00:00Z").toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+      if (m !== month) { h += "<h3 class='mo'>" + esc(m) + "</h3>"; month = m; }
+      if (!anchor && x.date >= sd.today) anchor = x.date;
+      var locs = (sd.locations || []).filter(function (l) { return x.by_location[l.key]; }).map(function (l) { return "<span class='loc'>" + esc(l.label) + " " + x.by_location[l.key] + "</span>"; }).join("");
+      h += "<button class='card day" + (x.date < sd.today ? " past" : "") + (x.date === sd.today ? " today" : "") + "' data-day='" + x.date + "' id='d" + x.date + "'>" +
+        "<div><div class='dn'>" + esc(x.date === sd.today ? "Today" : x.date === addD(sd.today, 1) ? "Tomorrow" : dayName(x.date)) + "</div>" +
+        "<div class='meta'>" + x.bookings + " booking" + (x.bookings === 1 ? "" : "s") + " · " + x.riders + " riders" + (x.first ? " · first " + esc(time(x.first.start_at)) : "") + "</div>" +
+        "<div class='locs'>" + locs + "</div></div>" + (x.mine ? "<span class='pill mine'>" + x.mine + " MINE</span>" : "<span class='meta'>›</span>") + "</button>";
+    });
+    $("main").innerHTML = h;
+    each("[data-loc]", function (c) { c.onclick = function () { S.loc = c.getAttribute("data-loc"); store.set("guideLoc", S.loc); renderSeason(); }; });
+    each("[data-day]", function (b) { b.onclick = function () { S.season = false; S.open = null; load(b.getAttribute("data-day")).then(function () { scrollTo(0, 0); }); }; });
+    if (anchor && mgr && $("d" + anchor)) $("d" + anchor).scrollIntoView({ block: "center" });   // the whole season: start at today / the next day
   }
 
   // ── one ride: claim, manifest, photos, ride log ──
@@ -258,6 +330,7 @@
         "<a href='#' id='release' style='color:var(--muted)'>Not mine</a></div>";
     }
     h += manifestHtml(d);
+    var live = canLog();
     h += "<h2>Photos</h2><div class='grid' id='grid'>" + d.photos.map(function (p) {
       return "<div class='ph'><img src='" + esc(p.thumb) + "' alt='Ride photo' loading='lazy'>" +
         "<button class='star' aria-label='Use as cover' aria-pressed='" + p.cover + "' data-id='" + esc(p.id) + "'>★</button>" +
@@ -265,8 +338,9 @@
     }).join("") + S.queue.filter(function (q) { return q.pk === String(d.availability_pk) && !q.done && !q.gaveUp; }).map(function (q) {
       return "<div class='ph up'>" + (q.failed ? "Retrying…" : "Uploading…") + "</div>";
     }).join("") + "</div>" +
-      "<p class='hint'>★ = the photo in the guests' email. Add the group shot first.</p>" +
-      "<button class='btn dark' id='add' style='margin-top:8px'>Add photos</button>";
+      (live ? "<p class='hint'>★ = the photo in the guests' email. Add the group shot first.</p>" +
+      "<button class='btn dark' id='add' style='margin-top:8px'>Add photos</button>" : (d.photos.length ? "" : "<p class='meta'>" + (S.date > S.today ? "Photos and ride details open on the day of the ride." : "No photos for this ride.") + "</p>"));
+    if (!live) { $("main").innerHTML = h; $("bar").hidden = true; wireRide(d); return; }
     var cond = log.conditions || [];
     h += "<h2>About the ride</h2><div class='card'>" +
       "<label class='f' for='miles'>Miles</label><input id='miles' type='number' inputmode='decimal' value='" + esc(log.miles != null ? log.miles : "") + "' placeholder='" + esc(def.miles != null ? def.miles + " (usual)" : "") + "'>" +
@@ -283,22 +357,23 @@
   }
   function wireRide(d) {
     var pk = d.availability_pk;
-    if ($("claim")) $("claim").onclick = function () { api("POST", "/guide/api/claim", { availability_pk: pk }).then(function () { toast("It's yours"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
+    if ($("claim")) $("claim").onclick = function () { api("POST", "/guide/api/claim", { availability_pk: pk, d: S.date }).then(function () { toast("It's yours"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
     if ($("claimSome")) $("claimSome").onclick = function () {
       var ticked = Array.prototype.map.call($("riders").querySelectorAll("input:checked"), function (i) { return i.value; });
       if (!ticked.length) { toast("Tick your riders first"); return; }
-      api("POST", "/guide/api/claim", { availability_pk: pk, booking_pks: ticked }).then(function () { toast("Claimed " + ticked.length); return load(S.date); }).catch(function (e) { toast(e.message); });
+      api("POST", "/guide/api/claim", { availability_pk: pk, booking_pks: ticked, d: S.date }).then(function () { toast("Claimed " + ticked.length); return load(S.date); }).catch(function (e) { toast(e.message); });
     };
     if ($("assign")) $("assign").onclick = function () { var ph = $("who").value; if (!ph) { toast("Pick a person"); return; }
-      api("POST", "/guide/api/assign", { availability_pk: pk, phone: ph }).then(function () { toast("Assigned"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
-    each(".unassign", function (b) { b.onclick = function () { api("POST", "/guide/api/assign", { availability_pk: pk, phone: b.getAttribute("data-phone"), remove: true }).then(function () { return load(S.date); }); }; });
-    if ($("release")) $("release").onclick = function (ev) { ev.preventDefault(); api("POST", "/guide/api/claim", { availability_pk: pk, release: true }).then(function () { return load(S.date); }); };
+      api("POST", "/guide/api/assign", { availability_pk: pk, phone: ph, d: S.date }).then(function () { toast("Assigned"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
+    each(".unassign", function (b) { b.onclick = function () { api("POST", "/guide/api/assign", { availability_pk: pk, phone: b.getAttribute("data-phone"), remove: true, d: S.date }).then(function () { return load(S.date); }); }; });
+    if ($("release")) $("release").onclick = function (ev) { ev.preventDefault(); api("POST", "/guide/api/claim", { availability_pk: pk, release: true, d: S.date }).then(function () { return load(S.date); }); };
     each(".star", function (b) { b.onclick = function () { api("POST", "/guide/api/media", { id: b.getAttribute("data-id"), action: "cover" }).then(function () { return load(S.date); }); }; });
     each(".del", function (b) { b.onclick = function () { if (!confirm("Remove this photo?")) return; api("POST", "/guide/api/media", { id: b.getAttribute("data-id"), action: "remove" }).then(function () { return load(S.date); }); }; });
     each("#cond .chip", function (c) { c.onclick = function () { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); }; });
+    if (!$("add")) return;
     $("add").onclick = function () { $("file").value = ""; $("file").onchange = function () { enqueue(pk, $("file").files); }; $("file").click(); };
     var save = function (done) {
-      var body = { availability_pk: pk, done: done, miles: $("miles").value, high_point_ft: $("hp").value, highlight: $("hl").value, group_note: $("note").value,
+      var body = { availability_pk: pk, d: S.date, done: done, miles: $("miles").value, high_point_ft: $("hp").value, highlight: $("hl").value, group_note: $("note").value,
         stops: $("stops").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
         conditions: Array.prototype.filter.call(document.querySelectorAll("#cond .chip"), function (c) { return c.getAttribute("aria-pressed") === "true"; }).map(function (c) { return c.getAttribute("data-c"); }) };
       api("POST", "/guide/api/log", body).then(function () { delete S.drafts[String(pk)]; $("miles").id = "miles_saved"; toast(done ? "Saved. Thanks!" : "Saved"); return load(S.date); }).catch(function (e) { toast(e.message); });
@@ -440,7 +515,7 @@
   function b64(blob) { return new Promise(function (r) { var f = new FileReader(); f.onload = function () { r(String(f.result).split(",")[1]); }; f.readAsDataURL(blob); }); }
   function uid() { return (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)); }
   function enqueue(pk, files) {
-    Array.prototype.forEach.call(files || [], function (f) { if (/^image\//.test(f.type) || /\.(heic|heif|jpe?g|png)$/i.test(f.name)) S.queue.push({ pk: String(pk), file: f, id: uid(), tries: 0 }); });
+    Array.prototype.forEach.call(files || [], function (f) { if (/^image\//.test(f.type) || /\.(heic|heif|jpe?g|png)$/i.test(f.name)) S.queue.push({ pk: String(pk), d: S.date, file: f, id: uid(), tries: 0 }); });
     toast("Uploading " + S.queue.filter(function (q) { return !q.done && !q.gaveUp; }).length + " photo(s)…");
     render(); pump();
   }
@@ -450,7 +525,7 @@
     if (!q) { if (S.queue.length) { S.queue = []; load(S.date); } return; }
     S.uploading = 1;
     shrink(q.file).then(b64).then(function (data) {
-      return api("POST", "/guide/api/photo", { availability_pk: q.pk, data: data, content_type: "image/jpeg", client_id: q.id });
+      return api("POST", "/guide/api/photo", { availability_pk: q.pk, d: q.d, data: data, content_type: "image/jpeg", client_id: q.id });
     }).then(function () { q.done = true; }).catch(function (e) {
       q.tries++; q.failed = true;
       if (e.status && e.status < 500 && e.status !== 408) { q.gaveUp = true; toast(e.message); return; }
