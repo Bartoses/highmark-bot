@@ -20505,6 +20505,10 @@ async function testRideRecap() {
         && !/display:\s*(flex|grid)/.test(r.html) && /max-width:600px/.test(r.html)));
     chk("simple: buttons are full-width tables with 16px text (≥48px tall: 14+20+14 + 2px border)", Object.values(simple).every(r => (r.html.match(/padding:14px 16px;font:700 16px\/20px/g) ?? []).length >= 2));
     chk("simple: no name → the generic headline", simple["simple-missing"].html.includes("Thanks for riding with us."));
+    const sunset = X.renderSimpleRecap(X.buildSimpleRecapData({ booking: { bookingId: "1", name: "Toni", startAt: "2026-12-26T21:30:00Z", endAt: "2026-12-27T00:30:00Z" },
+      tour: { type: "rea", label: "Sunset Ride" }, trip: {}, settings: {} })).html;
+    chk("simple: a Sunset Ride guest isn't pitched the Sunset Ride again (daytime tour instead); other REA tours still get 'Come back for sunset'",
+      !sunset.includes("Come back for sunset") && sunset.includes("Come back in daylight") && simple["simple-rea-map"].html.includes("Come back for sunset"));
     // hosted photo blocks
     const raw = simple["simple-rea-photo"].raw;
     chk("hosted photos: applyHostedPhotos is a no-op on v1 HTML and idempotent; invalid photo urls → the no-photo version",
