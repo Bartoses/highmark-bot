@@ -348,7 +348,7 @@
       "<h2>By month</h2><div class='card'>" + rows(r.by_month, function (x) { return monthName(x.key); }) + "</div>" +
       "<h2>By location</h2><div class='card'>" + rows(r.by_location, function (x) { return locLabel(x.key) || x.key; }) + "</div>" +
       "<h2>By tour</h2><div class='card'>" + rows(r.by_tour, function (x) { return x.key; }) + "</div>" +
-      "<h2>Where bookings came from</h2><div class='card'>" + rows(r.by_source, function (x) { return x.key; }, agents) + "<p class='hint'>From FareHarbor: partner (and agent), the website link used, paid in store, or direct.</p></div>" +
+      "<h2>Where bookings came from</h2><div class='card'>" + rows(r.by_source, function (x) { return x.key; }, agents) + "<p class='hint'>From FareHarbor: partner (and agent), the website link used, paid in store, or Direct (made in the FareHarbor dashboard).</p></div>" +
       "<h2>Staff workload</h2><div class='card'>" + (r.staff.length ? r.staff.map(function (x) { return "<div class='rrow'><span><b>" + esc(x.name) + "</b></span><span>" + x.rides + " ride" + (x.rides === 1 ? "" : "s") + " · " + x.bookings + " bookings · " + x.riders + " riders</span></div>"; }).join("") : "<p class='meta'>Nobody assigned yet.</p>") +
       "<p class='meta' style='margin-top:8px'>Not assigned: " + r.unassigned.bookings + " bookings · " + r.unassigned.riders + " riders</p></div>";
     $("main").innerHTML = h;

@@ -23,8 +23,13 @@ line (POST /guide/api/assign-booking; the departure-wide Assign still exists). S
 pickup address) and per departure. **Season → Report** (managers): so far vs still to come, by month, location, tour,
 source (with agents), staff workload, bookings with no guide. Loading spinner + top progress bar; every sub-screen is a
 history entry so the back button / swipe-back work, plus a swipe-right gesture inside the page.
-**Next: van runs** (Sean: group shuttle bookings into runs, one driver per run, 25-seat vans) — `db2_shuttle_runs.sql`
-written, NOT YET APPLIED, for Sean's review.
+**Answers (Sean, 2026-11-23):** "Direct" = made in the FareHarbor dashboard, keep the label. Guide picker keeps everyone
+(home location first) — people cross locations. No "who to chase" list for now. A guide's booking details = the FareHarbor
+booking + the shop sheet's **sled and trailer assignment** (when there is one) + **notes staff add**.
+**Next** — `db2_guide_ops.sql` (NOT YET APPLIED, for Sean's review): `shuttle_runs` (van runs, one driver per run, 25 seats),
+`booking_equipment` (sled/trailer per booking; synced with the shop sheet both ways, then the app replaces it), and
+`booking_staff_notes`. The sheet sync needs the "Weekly Shop Manifest" shared with the connected Google account (still
+"Permission denied" on 2026-11-23).
 
 ## Sean's feedback on the slice 1 preview (2026-11-23) → plan
 
