@@ -77,6 +77,9 @@
 <script>
 (function () {
   var T = new URLSearchParams(location.search).get("t") || "";
+  var TEAM = null;
+  try { TEAM = JSON.parse(localStorage.getItem("guideTeam") || "null"); } catch (e) { TEAM = null; }
+  if (!T && TEAM && TEAM.code && TEAM.phone) T = "team:" + TEAM.code + ":" + TEAM.phone;
   var S = { day: null, date: null, today: null, open: null, tab: "bookings", sub: "tours", admin: null, editTour: null, editStaff: null, uploading: 0, queue: [], drafts: {}, view: null, loc: null };
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
@@ -109,6 +112,7 @@
       }
       render();
     }).catch(function (e) {
+      if (T.indexOf("team:") === 0 && (e.status === 401 || e.status === 403)) { try { localStorage.removeItem("guideTeam"); } catch (x) {} T = ""; return renderTeamCode(e.message); }
       $("hd").innerHTML = "<h1>Ride Log</h1>";
       $("main").innerHTML = '<div class="card err">' + esc(e.message) + "</div>";
     });
@@ -141,8 +145,8 @@
   }
   function headerTop(title) {
     var me = (S.day && S.day.me) || {}, multi = (me.views || []).length > 1;
-    return "<h1>" + esc(title) + "</h1><div class='sub'><span>" + esc(me.name || "") + " · " + VIEW_INFO[S.view][0] + "</span>" +
-      (multi ? "<a href='#' id='switchRole'>Switch role</a>" : "") + "</div>";
+    return "<h1>" + esc(title) + "</h1><div class='sub'><span>" + esc(me.name || "") + " · " + VIEW_INFO[S.view][0] + "</span><span>" +
+      (multi ? "<a href='#' id='switchRole'>Switch role</a>" : "") + (T.indexOf("team:") === 0 ? " &nbsp;<a href='#' onclick='window.__signOut();return false'>Not you?</a>" : "") + "</span></div>";
   }
   function wireHeader() {
     if ($("switchRole")) $("switchRole").onclick = function (e) { e.preventDefault(); S.view = null; S.open = null; S.tab = "bookings"; store.set("guideView", ""); renderRolePicker(S.day.me.views); };
@@ -455,7 +459,32 @@
     }).then(function () { S.uploading = 0; render(); pump(); });
   }
   window.addEventListener("beforeunload", function (e) { if (S.uploading) { e.preventDefault(); e.returnValue = ""; } });
-  if (!T) { $("hd").innerHTML = "<h1>Ride Log</h1>"; $("main").innerHTML = "<div class='card err'>Open this page from the link in your briefing text.</div>"; }
+  // ── open team access: team code once, then "who are you?" ──
+  function renderTeamCode(msg) {
+    $("hd").innerHTML = "<h1>Ride Log</h1><div class='sub'><span>Colorado Sled Rentals · Rabbit Ears Adventures</span></div>";
+    $("bar").hidden = true;
+    $("main").innerHTML = (msg ? "<div class='card err'>" + esc(msg) + "</div>" : "") +
+      "<div class='card'><label class='f' for='code'>Team code</label><input id='code' type='text' autocomplete='off' autocapitalize='off' inputmode='text'>" +
+      "<p class='hint'>Ask a manager for it. You only enter it once on this phone.</p><button class='btn primary' id='go' style='margin-top:8px'>Continue</button></div>";
+    var go = function () {
+      var code = $("code").value.trim(); if (!code) return;
+      fetch("/guide/api/team?code=" + encodeURIComponent(code)).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || "Try again"); return j; }); })
+        .then(function (j) { renderWho(code, j.people || []); }).catch(function (e) { renderTeamCode(e.message); });
+    };
+    $("go").onclick = go; $("code").onkeydown = function (e) { if (e.key === "Enter") go(); };
+  }
+  function renderWho(code, people) {
+    $("main").innerHTML = "<h2>Who are you?</h2>" + (people.length ? people.map(function (p, i) {
+      return "<button class='role' data-i='" + i + "'><b>" + esc(p.name) + "</b><span>" + esc(p.role) + (p.home_location ? " · " + esc(p.home_location.replace("_", " ")) : "") + "</span></button>"; }).join("")
+      : "<div class='card'>No staff yet. A manager adds people in Settings, Staff.</div>");
+    each(".role[data-i]", function (b) { b.onclick = function () {
+      var p = people[Number(b.getAttribute("data-i"))];
+      try { localStorage.setItem("guideTeam", JSON.stringify({ code: code, phone: p.phone })); } catch (e) {}
+      T = "team:" + code + ":" + p.phone; S.view = null; load();
+    }; });
+  }
+  window.__signOut = function () { try { localStorage.removeItem("guideTeam"); localStorage.removeItem("guideView"); } catch (e) {} T = ""; S.view = null; S.day = null; renderTeamCode(); };
+  if (!T) renderTeamCode();
   else load();
 })();
 </script>

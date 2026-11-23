@@ -276,7 +276,29 @@ export function publicDeparture(d, me, view = me.access) {
 }
 
 // ── API handlers: (deps, body/query) → { status, body } ─────────────────────
-async function authed({ db1, now }, token) {
+// Open team access (Sean, 2026-11-23, until Google sign-in): one shared team code (GUIDE_TEAM_CODE on the web service),
+// then the person picks their name from the staff list. The page sends t = "team:<code>:<staff phone>".
+const teamCode = () => (process.env.GUIDE_TEAM_CODE || "").trim() || null;
+export function teamCodeOk(code, want = teamCode()) {
+  if (!want || typeof code !== "string" || code.length !== want.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(code), Buffer.from(want));
+}
+// GET /guide/api/team?code= → the names to pick from (only with the right code)
+export async function handleGuideTeam(deps, { code }) {
+  if (!teamCodeOk(String(code ?? "").trim())) return { status: 401, body: { error: "That team code isn't right." } };
+  const staff = await loadStaff(deps.db1, "csr_rea", deps.crm);
+  return { status: 200, body: { people: staff.filter(x => x.phone).map(x => ({ name: x.display_name, phone: x.phone, role: x.role, home_location: x.home_location })) } };
+}
+
+async function authed({ db1, crm, now }, token) {
+  if (typeof token === "string" && token.startsWith("team:")) {
+    const [, code, phone] = token.split(":");
+    if (!teamCodeOk(code)) return { error: { status: 401, body: { error: "That team code isn't right. Ask a manager for the current one." } } };
+    const person = (await loadStaff(db1, "csr_rea", crm)).find(x => x.phone === phone);
+    if (!person) return { error: { status: 403, body: { error: "Pick your name from the list (or ask a manager to add you in Settings, Staff)." } } };
+    // fully open for now (Sean): anyone with the code may choose any role; Google sign-in will tie roles to people
+    return { me: { phone: person.phone, display_name: person.display_name, label: null, role: person.role, access: "manager" }, date: localDate(now ?? new Date(), GUIDE_TZ) };
+  }
   const t = verifyGuideToken(token, { now });
   if (!t) return { error: { status: 401, body: { error: "This link has expired. Use the link in today's briefing text." } } };
   const me = await loadOperator(db1, t.phone);

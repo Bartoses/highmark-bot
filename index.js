@@ -96,7 +96,7 @@ import {
 } from "./adminEmailCampaigns.js";
 import { handleTrackClick, handleTrackOpen } from "./emailTracking.js";
 import { renderSharePage, renderRidePage, renderPhotosPage, loadShareContext } from "./rideRecap.js";
-import { handleGuideDay, handleGuideClaim, handleGuideLog, handleGuidePhoto, handleGuideMedia, handleGuideAdmin, handleGuideAdminTour, handleGuideAdminMap, handleGuideAdminSettings, handleGuideAdminStaff, handleGuideAssign } from "./guideApp.js";
+import { handleGuideDay, handleGuideClaim, handleGuideLog, handleGuidePhoto, handleGuideMedia, handleGuideAdmin, handleGuideAdminTour, handleGuideAdminMap, handleGuideAdminSettings, handleGuideAdminStaff, handleGuideAssign, handleGuideTeam } from "./guideApp.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -2287,6 +2287,7 @@ const guideWrap = (fn) => async (req, res) => {
 };
 app.get("/guide", (_req, res) => res.set("Cache-Control", "no-store").sendFile(path.join(__uiDir, "guide.html")));
 app.get("/guide/api/day", guideWrap((req) => handleGuideDay(guideDeps(), { t: req.query.t, d: req.query.d, as: req.query.as })));
+app.get("/guide/api/team", guideWrap((req) => handleGuideTeam(guideDeps(), { code: req.query.code })));
 app.get("/guide/api/admin", guideWrap((req) => handleGuideAdmin(guideDeps(), { t: req.query.t })));
 app.post("/guide/api/admin/tour", guideWrap((req) => handleGuideAdminTour(guideDeps(), req.body ?? {})));
 app.post("/guide/api/admin/map", guideWrap((req) => handleGuideAdminMap(guideDeps(), req.body ?? {})));
