@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0E131B">
+<title>Ride Log</title>
+<style>
+  :root { --ink:#0E131B; --muted:#5B6673; --line:#E3E6EA; --bg:#F4F6F8; --card:#FFFFFF; --acc:#F99E16; --acc-ink:#0E131B; --blue:#1670C2; --ok:#1F7A4D; --warn:#B4321F; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; -webkit-text-size-adjust:100%; }
+  header { position:sticky; top:0; z-index:5; background:var(--ink); color:#fff; padding:calc(12px + env(safe-area-inset-top)) 16px 12px; }
+  header h1 { margin:0; font-size:20px; letter-spacing:.3px; }
+  header .sub { color:#B8C2CC; font-size:14px; }
+  .days { display:flex; gap:8px; margin-top:10px; }
+  .days button { flex:1; min-height:40px; border-radius:10px; border:1px solid #3A4654; background:transparent; color:#fff; font-weight:700; font-size:15px; }
+  .days button[aria-pressed="true"] { background:#fff; color:var(--ink); }
+  main { max-width:640px; margin:0 auto; padding:12px 16px 120px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin:0 0 10px; }
+  button.card { width:100%; text-align:left; font:inherit; color:inherit; display:block; cursor:pointer; }
+  .row { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+  .time { font-weight:800; font-size:17px; }
+  .label { font-weight:700; }
+  .meta { color:var(--muted); font-size:14px; }
+  .pill { display:inline-block; font-size:12px; font-weight:800; letter-spacing:.4px; border-radius:999px; padding:3px 9px; white-space:nowrap; }
+  .pill.new { background:#EEF1F4; color:var(--muted); } .pill.started { background:#FFF3DF; color:#8A5A12; } .pill.done { background:#E2F3EA; color:var(--ok); }
+  .pill.mine { background:var(--ink); color:#fff; }
+  .btn { display:block; width:100%; min-height:48px; border:0; border-radius:12px; font-family:inherit; font-weight:700; font-size:16px; line-height:1; padding:14px; cursor:pointer; }
+  .btn.primary { background:var(--acc); color:var(--acc-ink); } .btn.dark { background:var(--ink); color:#fff; } .btn.ghost { background:#fff; color:var(--ink); border:2px solid var(--ink); }
+  .btn:disabled { opacity:.5; }
+  h2 { font-size:18px; margin:18px 0 8px; }
+  label.f { display:block; font-weight:700; font-size:14px; margin:12px 0 4px; }
+  input[type=text], input[type=number], textarea { width:100%; font-family:inherit; font-size:16px; padding:12px; border:1px solid #C9D0D7; border-radius:10px; background:#fff; }
+  textarea { min-height:72px; }
+  .hint { color:var(--muted); font-size:13px; margin-top:4px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { min-height:40px; padding:8px 14px; border-radius:999px; border:1px solid #C9D0D7; background:#fff; font-weight:600; font-size:15px; }
+  .chip[aria-pressed="true"] { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .ph { position:relative; aspect-ratio:4/3; border-radius:10px; overflow:hidden; background:#DDE2E7; }
+  .ph img { width:100%; height:100%; object-fit:cover; display:block; }
+  .ph .star, .ph .del { position:absolute; top:4px; min-width:36px; height:36px; border-radius:18px; border:0; background:rgba(14,19,27,.7); color:#fff; font-size:18px; }
+  .ph .star { left:4px; } .ph .del { right:4px; font-size:15px; }
+  .ph .star[aria-pressed="true"] { background:var(--acc); color:var(--ink); }
+  .ph.up { display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:13px; }
+  .riders label { display:flex; align-items:center; gap:10px; min-height:44px; border-bottom:1px solid var(--line); }
+  .riders input { width:22px; height:22px; }
+  .back { background:none; border:0; color:#fff; font-family:inherit; font-weight:700; font-size:15px; padding:6px 0; margin-bottom:4px; }
+  .bar { position:fixed; left:0; right:0; bottom:0; background:rgba(244,246,248,.96); border-top:1px solid var(--line); padding:10px 16px calc(10px + env(safe-area-inset-bottom)); }
+  .bar .in { max-width:640px; margin:0 auto; display:flex; gap:8px; } .bar .btn { flex:1; }
+  .toast { position:fixed; left:50%; transform:translateX(-50%); bottom:90px; background:var(--ink); color:#fff; padding:10px 16px; border-radius:10px; font-weight:600; display:none; z-index:20; max-width:90vw; }
+  .empty { text-align:center; color:var(--muted); padding:40px 10px; }
+  .err { background:#FDECEA; color:var(--warn); border-color:#F5C6C0; }
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<header>
+  <div id="hd"></div>
+</header>
+<main id="main"><div class="empty">Loading today's rides…</div></main>
+<div class="bar" id="bar" hidden><div class="in" id="barIn"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<input type="file" id="file" accept="image/*" multiple class="sr" aria-label="Add photos">
+<script>
+(function () {
+  var T = new URLSearchParams(location.search).get("t") || "";
+  var S = { day: null, date: null, today: null, open: null, uploading: 0, queue: [] };
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
+  var COND = [["fresh_snow", "Fresh snow"], ["bluebird", "Bluebird"], ["snowing", "Snowing"], ["windy", "Windy"], ["cold", "Cold"]];
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(function () { t.style.display = "none"; }, 2600); }
+  function time(iso) { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Denver" }).replace(":00", ""); } catch (e) { return ""; } }
+  function dayName(d) { try { return new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }); } catch (e) { return d; } }
+  function api(method, path, body) {
+    var opts = { method: method, headers: { "Content-Type": "application/json" } };
+    if (body) opts.body = JSON.stringify(Object.assign({ t: T }, body));
+    return fetch(path + (method === "GET" ? (path.indexOf("?") > -1 ? "&" : "?") + "t=" + encodeURIComponent(T) : ""), opts)
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) { var e = new Error(j.error || "Something went wrong"); e.status = r.status; throw e; } return j; }); });
+  }
+
+  function load(date) {
+    return api("GET", "/guide/api/day" + (date ? "?d=" + date : "")).then(function (j) {
+      S.day = j; S.date = j.date; S.today = j.today; render();
+    }).catch(function (e) {
+      $("hd").innerHTML = "<h1>Ride Log</h1>";
+      $("main").innerHTML = '<div class="card err">' + esc(e.message) + "</div>";
+    });
+  }
+  function dep(pk) { return (S.day.departures || []).filter(function (d) { return String(d.availability_pk) === String(pk); })[0]; }
+
+  // keep what the guide is typing across re-renders (uploads finishing re-draw the page)
+  S.drafts = {};
+  function captureDraft() {
+    if (!S.open || !$("miles")) return;
+    S.drafts[S.open] = { miles: $("miles").value, high_point_ft: $("hp").value, stops: $("stops").value, highlight: $("hl").value, group_note: $("note").value,
+      conditions: Array.prototype.filter.call(document.querySelectorAll("#cond .chip"), function (c) { return c.getAttribute("aria-pressed") === "true"; }).map(function (c) { return c.getAttribute("data-c"); }) };
+  }
+  function render() { captureDraft(); if (S.open && dep(S.open)) renderRide(dep(S.open)); else { S.open = null; renderList(); } }
+
+  function renderList() {
+    var me = S.day.me || {}, yest = S.today !== S.date;
+    $("hd").innerHTML = "<h1>Ride Log</h1><div class='sub'>" + esc(me.name || "") + " · " + esc(dayName(S.date)) + "</div>" +
+      "<div class='days'><button aria-pressed='" + yest + "' data-d='y'>Yesterday</button><button aria-pressed='" + !yest + "' data-d='t'>Today</button></div>";
+    Array.prototype.forEach.call($("hd").querySelectorAll(".days button"), function (b) {
+      b.onclick = function () { var y = new Date(S.today + "T12:00:00Z"); y.setUTCDate(y.getUTCDate() - 1); load(b.getAttribute("data-d") === "y" ? y.toISOString().slice(0, 10) : S.today); };
+    });
+    var list = S.day.departures || [];
+    $("bar").hidden = true;
+    if (!list.length) { $("main").innerHTML = "<div class='empty'>No rides for you " + (yest ? "yesterday" : "today") + ".</div>"; return; }
+    $("main").innerHTML = list.map(function (d) {
+      var who = d.mine ? "<span class='pill mine'>MINE</span>" : (d.assignees.length ? "<span class='meta'>" + esc(d.assignees.map(function (a) { return a.name || "Guide"; }).join(", ")) + "</span>" : "<span class='meta'>Unclaimed</span>");
+      return "<button class='card' data-pk='" + esc(d.availability_pk) + "'><div class='row'><div><div class='time'>" + esc(time(d.start_at)) + " · " + esc(d.label) + "</div>" +
+        "<div class='meta'>" + d.riders + " rider" + (d.riders === 1 ? "" : "s") + (d.names.length ? " · " + esc(d.names.slice(0, 5).join(", ")) + (d.names.length > 5 ? "…" : "") : "") + "</div></div>" +
+        "<span class='pill " + d.status + "'>" + (d.status === "done" ? "DONE" : d.status === "started" ? (d.photos.length + " PHOTO" + (d.photos.length === 1 ? "" : "S")) : "TO DO") + "</span></div>" +
+        "<div style='margin-top:6px'>" + who + "</div></button>";
+    }).join("");
+    Array.prototype.forEach.call($("main").querySelectorAll("button.card"), function (b) { b.onclick = function () { S.open = b.getAttribute("data-pk"); render(); scrollTo(0, 0); }; });
+  }
+
+  function renderRide(d) {
+    var me = S.day.me || {}, def = d.defaults || {}, dr = S.drafts[String(d.availability_pk)];
+    var log = dr ? { miles: dr.miles, high_point_ft: dr.high_point_ft, stops: dr.stops ? dr.stops.split(",").map(function (x) { return x.trim(); }).filter(Boolean) : [],
+      highlight: dr.highlight, group_note: dr.group_note, conditions: dr.conditions, status: (d.log || {}).status } : (d.log || {});
+    $("hd").innerHTML = "<button class='back' id='back'>‹ All rides</button><h1>" + esc(time(d.start_at)) + " · " + esc(d.label) + "</h1>" +
+      "<div class='sub'>" + d.riders + " rider" + (d.riders === 1 ? "" : "s") + " · " + esc(dayName(S.date)) + "</div>";
+    $("back").onclick = function () { if (S.uploading && !confirm("Photos are still uploading. Leave anyway?")) return; S.open = null; render(); };
+    var h = "";
+    if (!d.mine && me.access !== "manager") {
+      h += "<div class='card'><div class='label'>Is this your ride?</div><p class='meta'>Claim it so your photos go to these guests.</p>" +
+        "<button class='btn primary' id='claim'>This is my ride</button>" +
+        "<details style='margin-top:10px'><summary class='meta'>Only some riders are mine</summary><div class='riders' id='riders'>" +
+        d.bookings.map(function (b) { return "<label><input type='checkbox' value='" + esc(b.pk) + "'> " + esc(b.name) + (b.pax > 1 ? " +" + (b.pax - 1) : "") + "</label>"; }).join("") +
+        "</div><button class='btn dark' id='claimSome' style='margin-top:10px'>Claim the ticked riders</button></details></div>";
+    } else if (d.mine) {
+      var mine = d.assignees.filter(function (a) { return a.me; })[0] || {};
+      h += "<div class='meta' style='margin:4px 0 8px'>You're on this ride" + (mine.riders ? " (" + mine.riders.length + " of " + d.bookings.length + " bookings)" : "") + ". " +
+        "<a href='#' id='release' style='color:var(--muted)'>Not mine</a></div>";
+    }
+    // photos
+    h += "<h2>Photos</h2><div class='grid' id='grid'>" + d.photos.map(function (p) {
+      return "<div class='ph'><img src='" + esc(p.thumb) + "' alt='Ride photo' loading='lazy'>" +
+        "<button class='star' aria-label='Use as cover' aria-pressed='" + p.cover + "' data-id='" + esc(p.id) + "'>★</button>" +
+        (p.mine || me.access === "manager" ? "<button class='del' aria-label='Remove photo' data-id='" + esc(p.id) + "'>✕</button>" : "") + "</div>";
+    }).join("") + S.queue.filter(function (q) { return q.pk === String(d.availability_pk) && !q.done; }).map(function (q) {
+      return "<div class='ph up'>" + (q.failed ? "Retry…" : "Uploading…") + "</div>";
+    }).join("") + "</div>" +
+      "<p class='hint'>★ = the photo in the guests' email. Add the group shot first.</p>" +
+      "<button class='btn dark' id='add' style='margin-top:8px'>Add photos</button>";
+    // details
+    var cond = log.conditions || [];
+    h += "<h2>About the ride</h2><div class='card'>" +
+      "<label class='f' for='miles'>Miles</label><input id='miles' type='number' inputmode='decimal' value='" + esc(log.miles != null ? log.miles : "") + "' placeholder='" + esc(def.miles != null ? def.miles + " (usual)" : "") + "'>" +
+      "<label class='f' for='hp'>High point (ft)</label><input id='hp' type='number' inputmode='numeric' value='" + esc(log.high_point_ft != null ? log.high_point_ft : "") + "' placeholder='" + esc(def.high_point_ft != null ? def.high_point_ft + " (usual)" : "") + "'>" +
+      "<div class='hint'>Leave blank to use the usual numbers for this loop.</div>" +
+      "<label class='f' for='stops'>Stops (comma separated)</label><input id='stops' type='text' value='" + esc((log.stops && log.stops.length ? log.stops : []).join(", ")) + "' placeholder='" + esc((def.stops || []).join(", ")) + "'>" +
+      "<label class='f'>Conditions</label><div class='chips' id='cond'>" + COND.map(function (c) { return "<button class='chip' type='button' data-c='" + c[0] + "' aria-pressed='" + (cond.indexOf(c[0]) > -1) + "'>" + c[1] + "</button>"; }).join("") + "</div>" +
+      "<label class='f' for='hl'>Highlight (in the guests' email)</label><input id='hl' type='text' maxlength='140' value='" + esc(log.highlight || "") + "' placeholder='Moose at Rabbit Ears, first powder day…'>" +
+      "<label class='f' for='note'>Note about the group (internal, never sent)</label><textarea id='note' maxlength='500'>" + esc(log.group_note || "") + "</textarea></div>";
+    $("main").innerHTML = h;
+    $("bar").hidden = false;
+    $("barIn").innerHTML = "<button class='btn ghost' id='save'>Save</button><button class='btn primary' id='done'>" + (log.status === "done" ? "Saved ✓ Done" : "Save + done") + "</button>";
+    wireRide(d);
+  }
+
+  function wireRide(d) {
+    var pk = d.availability_pk;
+    if ($("claim")) $("claim").onclick = function () { api("POST", "/guide/api/claim", { availability_pk: pk }).then(function () { toast("It's yours"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
+    if ($("claimSome")) $("claimSome").onclick = function () {
+      var ticked = Array.prototype.map.call($("riders").querySelectorAll("input:checked"), function (i) { return i.value; });
+      if (!ticked.length) { toast("Tick your riders first"); return; }
+      api("POST", "/guide/api/claim", { availability_pk: pk, booking_pks: ticked }).then(function () { toast("Claimed " + ticked.length); return load(S.date); }).catch(function (e) { toast(e.message); });
+    };
+    if ($("release")) $("release").onclick = function (ev) { ev.preventDefault(); api("POST", "/guide/api/claim", { availability_pk: pk, release: true }).then(function () { return load(S.date); }); };
+    Array.prototype.forEach.call(document.querySelectorAll(".star"), function (b) { b.onclick = function () { api("POST", "/guide/api/media", { id: b.getAttribute("data-id"), action: "cover" }).then(function () { return load(S.date); }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll(".del"), function (b) { b.onclick = function () { if (!confirm("Remove this photo?")) return; api("POST", "/guide/api/media", { id: b.getAttribute("data-id"), action: "remove" }).then(function () { return load(S.date); }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll("#cond .chip"), function (c) { c.onclick = function () { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); }; });
+    $("add").onclick = function () { $("file").value = ""; $("file").onchange = function () { enqueue(pk, $("file").files); }; $("file").click(); };
+    var save = function (done) {
+      var body = { availability_pk: pk, done: done, miles: $("miles").value, high_point_ft: $("hp").value, highlight: $("hl").value, group_note: $("note").value,
+        stops: $("stops").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
+        conditions: Array.prototype.filter.call(document.querySelectorAll("#cond .chip"), function (c) { return c.getAttribute("aria-pressed") === "true"; }).map(function (c) { return c.getAttribute("data-c"); }) };
+      api("POST", "/guide/api/log", body).then(function () { delete S.drafts[String(pk)]; toast(done ? "Saved. Thanks!" : "Saved"); $("miles").id = "miles_saved"; return load(S.date); }).catch(function (e) { toast(e.message); });
+    };
+    $("save").onclick = function () { save(false); };
+    $("done").onclick = function () { save(true); };
+  }
+
+  // ── photo upload: shrink to a 1600px JPEG on the phone (iPhone HEIC included), then upload one at a time, retrying ──
+  function shrink(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var max = 1600, w = img.naturalWidth, h = img.naturalHeight, s = Math.min(1, max / Math.max(w, h));
+        var c = document.createElement("canvas"); c.width = Math.round(w * s); c.height = Math.round(h * s);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+        c.toBlob(function (b) { b ? resolve(b) : reject(new Error("could not read photo")); }, "image/jpeg", 0.82);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("This photo type can't be read")); };
+      img.src = url;
+    });
+  }
+  function b64(blob) { return new Promise(function (r) { var f = new FileReader(); f.onload = function () { r(String(f.result).split(",")[1]); }; f.readAsDataURL(blob); }); }
+  function uid() { return (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)); }
+  function enqueue(pk, files) {
+    Array.prototype.forEach.call(files || [], function (f) { if (/^image\//.test(f.type) || /\.(heic|heif|jpe?g|png)$/i.test(f.name)) S.queue.push({ pk: String(pk), file: f, id: uid(), tries: 0 }); });
+    toast("Uploading " + S.queue.filter(function (q) { return !q.done; }).length + " photo(s)…");
+    render(); pump();
+  }
+  function pump() {
+    if (S.uploading) return;
+    var q = S.queue.filter(function (x) { return !x.done && !x.gaveUp; })[0];
+    if (!q) { if (S.queue.length) { S.queue = S.queue.filter(function (x) { return !x.done; }); load(S.date); } return; }
+    S.uploading = 1;
+    shrink(q.file).then(b64).then(function (data) {
+      return api("POST", "/guide/api/photo", { availability_pk: q.pk, data: data, content_type: "image/jpeg", client_id: q.id });
+    }).then(function () { q.done = true; }).catch(function (e) {
+      q.tries++; q.failed = true;
+      if (e.status && e.status < 500 && e.status !== 408) { q.gaveUp = true; toast(e.message); }
+      else if (q.tries >= 6) { q.gaveUp = true; toast("A photo didn't upload. Check your signal and add it again."); }
+      return new Promise(function (r) { setTimeout(r, Math.min(30000, 2000 * Math.pow(2, q.tries))); });   // weak signal: back off and retry
+    }).then(function () { S.uploading = 0; render(); pump(); });
+  }
+  window.addEventListener("beforeunload", function (e) { if (S.uploading) { e.preventDefault(); e.returnValue = ""; } });
+  if (!T) { $("hd").innerHTML = "<h1>Ride Log</h1>"; $("main").innerHTML = "<div class='card err'>Open this page from the link in your briefing text.</div>"; }
+  else load();
+})();
+</script>
+</body>
+</html>

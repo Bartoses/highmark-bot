@@ -2,6 +2,11 @@
 
 Draft 2, 2026-11-23, written with Sean. Decisions marked **(Sean)** came from him; everything else is a proposal to confirm.
 
+## Status
+
+**Slice 1 built 2026-11-23** (PR: Guide Ride Log slice 1): A (briefing link only; portal page later), B, C2 (claim/split;
+FareHarbor field read), D1–D4 (photos; videos later), E, G. Not yet: videos, F (rider tags), C3 (manager board), D5/H (Drive), `LOG` keyword.
+
 ## Read first
 
 1. `Roadmap` → "Guide Ride Log" (the original idea) and "Ride Recap v2 — simple template".

@@ -113,7 +113,7 @@ function hmSendOne_(m) {
   var opts = { htmlBody: m.html, from: SEND_AS, name: m.from_name || SENDER_NAME, replyTo: m.reply_to || REPLY_TO };
   var text = m.text || '';
   var photo = null;
-  if (m.photo_hint && m.photo_hint.hosted) {
+  if (m.photo_hint && m.photo_hint.hosted && !m.photo_hint.hosted_photo) {   // a Guide app photo is already in the email
     var hosted = hmHostPhoto_(m);
     if (hosted) { opts.htmlBody = hosted.html; text = hosted.text || text; photo = true; }
   } else if (m.html && m.html.indexOf('<!--PHOTO_SLOT-->') !== -1) {

@@ -133,7 +133,8 @@ export function buildSimpleRecapData({ booking, tour, trip, settings, nextStorm 
   const subjects = { rea: "Your Rabbit Ears tour recap", backcountry: "Your backcountry day, recapped", rental: "Thanks for riding with CSR" };
   const photo = trip?.photo === false ? false : (typeof trip?.photo === "string" && trip.photo ? trip.photo : null);   // string = Drive file id (Guide app)
   return {
-    template: "simple", type, brand, look: LOOK[brand.key], first, kicker, h1, sub,
+    template: "simple", type, brand, look: LOOK[brand.key], first, kicker, h1, sub, guide,
+    highlight: String(trip?.highlight ?? "").trim() || null,                // from the guide's ride log (never the internal note)
     stats: buildStatLine({ miles: trip?.miles, highPointFt: trip?.high_point_ft, startAt: booking.startAt, endAt: booking.endAt }),
     photo, label: tour.label, date: ymd,
     // the route map is the hero of a REA recap without a photo; any other recap without a photo has no hero
@@ -176,7 +177,8 @@ export function renderSimpleRecap(d) {
   rows += `<tr><td style="padding:24px 24px 20px">` +
     `<div style="font:700 12px/1.4 ${font};letter-spacing:2px;color:${L.kicker};margin:0 0 12px">${e(d.kicker)}</div>` +
     `<h1 style="margin:0 0 12px;font:${L.h1} ${L.head};letter-spacing:${C.key === "rea" ? "0.5px" : "0"};text-transform:${L.up};color:${L.ink}">${e(d.h1)}</h1>` +
-    `<p style="margin:0;font:16px/1.5 ${font};color:${MUTED}">${e(d.sub)}</p></td></tr>`;
+    `<p style="margin:0;font:16px/1.5 ${font};color:${MUTED}">${e(d.sub)}</p>` +
+    (d.highlight ? `<p style="margin:12px 0 0;font:italic 16px/1.5 ${font};color:${L.ink}">“${e(d.highlight)}”${d.guide ? ` <span style="font-style:normal;color:${SUBTLE}">— ${e(d.guide)}</span>` : ""}</p>` : "") + `</td></tr>`;
   // A/B "layout": A = review after the photos (below), B = review right after the headline
   const feedback = `mailto:${RECAP_LINKS.infoEmail}?subject=${encodeURIComponent(`Feedback on my ride (#${d.bookingId})`)}`;
   const review = () => section(h2("Had a good day?") + p("A quick Google review helps our small local crew more than anything.") +

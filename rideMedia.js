@@ -87,7 +87,8 @@ export function isEmailSafeImageType(mimeType) {
  */
 export function pickRideMediaForBooking(rows, booking) {
   const pk = String(booking?.pk ?? ""), avail = booking?.availabilityPk != null ? String(booking.availabilityPk) : null;
-  const ok = (r) => r && r.drive_file_id && (r.kind ?? "photo") === "photo" && (!r.mime_type || isEmailSafeImageType(r.mime_type));
+  // a Drive file (drive_file_id) or a photo uploaded in the Guide app (hero_url, hosted in Supabase); never a hidden one
+  const ok = (r) => r && (r.drive_file_id || r.hero_url) && !r.hidden && (r.kind ?? "photo") === "photo" && (!r.mime_type || isEmailSafeImageType(r.mime_type));
   const rank = (a, b) => (b.cover === true) - (a.cover === true) || (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || String(a.file_name ?? "").localeCompare(String(b.file_name ?? ""));
   const list = (rows ?? []).filter(ok);
   const tagged = pk ? list.filter(r => Array.isArray(r.booking_pks) && r.booking_pks.map(String).includes(pk)) : [];

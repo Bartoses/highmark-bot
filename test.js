@@ -3267,6 +3267,7 @@ async function main() {
     await testWaiverImport();         // Smartwaiver → waivers + contacts: email-match dedupe, consent only from verified+ticked, never downgrade, no DOB/DL
     await testOutboundMessaging();    // send API + queue + Resend webhook + suppression: consent enforced server-side, idempotent, fail-closed
     await testRideRecap();            // Ride Recap: item mapping, eligibility, missing-data rules, links/UTM, settings, referral hook, Gmail contract, snapshots
+    await testGuideApp();             // Guide Ride Log slice 1: signed links, departures, claim/split, log, photos, recap uses them
     await testEmailTracking();        // opens + clicks: signed links (no open redirect), footer/unsubscribe untouched, bot filter, stats, public routes
   } catch (e) {
     fail("Test server", e.message);
@@ -18705,6 +18706,7 @@ function makeFhMockCrm(seed) {
       insert(row) { st.insert = row; return api; },
       upsert(rows, opts = {}) { st.upsert = { rows: Array.isArray(rows) ? rows : [rows], opts }; return api; },
       update(patch) { st.patch = patch; return api; },
+      delete() { st.del = true; return api; },
       maybeSingle() { return Promise.resolve({ data: run()[0] ?? null, error: null }); },
       single() {
         if (st.insert) {
@@ -18725,6 +18727,7 @@ function makeFhMockCrm(seed) {
       },
       then(resolve, reject) {
         try {
+          if (st.del) { const gone = new Set(run()); tables[table].splice(0, tables[table].length, ...tables[table].filter(r => !gone.has(r))); return resolve({ data: null, error: null }); }
           if (st.upsert) {
             const keys = String(st.upsert.opts.onConflict).split(",");
             if (!st.upsert.opts.ignoreDuplicates) {
@@ -19116,6 +19119,125 @@ async function testRideMedia() {
   chk("ridemedia: Apps Script hmPickPhotoName_ == rideMedia.pickRidePhotoName on every case", mismatches.length === 0, JSON.stringify(mismatches.map(c => c[1])));
   chk("ridemedia: Apps Script only accepts JPEG/PNG/GIF (same list as rideMedia)",
     JSON.stringify(Array.from(ctx.HM_EMAIL_IMAGE_TYPES)) === JSON.stringify(M.EMAIL_IMAGE_TYPES));
+}
+
+async function testGuideApp() {
+  const chk = (label, cond, detail = "") => cond ? pass(label) : fail(label, detail || "expected truthy");
+  const G = await import("./guideApp.js");
+  const R = await import("./rideRecap.js");
+  const S = await import("./emailSender.js");
+  const prevSecret = process.env.GUIDE_LINK_SECRET; process.env.GUIDE_LINK_SECRET = "guide-secret-0123456789abcdef";
+  try {
+    const NOW = new Date("2026-12-11T20:00:00Z");                   // 1pm Denver
+    const JAKE = "+19705550101", MIA = "+19705550102", SHOP = "+19705550103", BOSS = "+19705550104", WRENCH = "+19705550105";
+    // ── signed links ──
+    const tok = G.signGuideToken({ phone: JAKE, date: "2026-12-11" });
+    chk("guide link: valid today; tampered, wrong-day, or no-secret links refused",
+      G.verifyGuideToken(tok, { now: NOW })?.phone === JAKE && !G.verifyGuideToken(tok.slice(0, -2) + "xx", { now: NOW })
+      && !G.verifyGuideToken(tok, { now: new Date("2026-12-13T20:00:00Z") }) && !G.verifyGuideToken(tok, { now: NOW, secret: "other-secret-0123456789" })
+      && G.signGuideToken({ phone: JAKE, date: "2026-12-11", secret: null }) === null && !G.verifyGuideToken("garbage", { now: NOW }));
+    chk("guide link: still works until 3 am the next morning (late logging), not after",
+      !!G.verifyGuideToken(tok, { now: new Date("2026-12-12T09:30:00Z") }) && !G.verifyGuideToken(tok, { now: new Date("2026-12-12T10:30:00Z") }));
+    chk("guide access by role: guides, shop/reservations and managers yes; mechanic/fleet/marketing no",
+      G.accessFor("guide") === "guide" && G.accessFor("reservations") === "shop" && G.accessFor("general_manager") === "manager" && G.accessFor("owner") === "manager"
+      && G.accessFor("mechanic") === null && G.accessFor("fleet") === null && G.accessFor("marketing") === null);
+    const line = (o) => G.guideBriefingLine({ baseUrl: "https://app.test", phone: JAKE, role: "guide", timeOfDay: "morning", now: NOW, enabled: true, ...o });
+    chk("briefing: morning text gets the ride-log link for ride-log roles only, and only when GUIDE_APP_LINKS is on",
+      /^📸 Log today's rides \+ photos: https:\/\/app\.test\/guide\?t=/.test(line() ?? "") && line({ timeOfDay: "evening" }) === null
+      && line({ role: "mechanic" }) === null && line({ enabled: false }) === null);
+    // ── FareHarbor guide field (either place) + staff match ──
+    const fhRow = (av) => ({ raw_payload: { booking: { availability: av } } });
+    chk("FareHarbor guide: read from a custom field named guide/staff, else the headline",
+      G.fareharborGuideName(fhRow({ custom_field_instances: [{ custom_field: { name: "Lead Guide" }, display_value: "Jake" }] })) === "Jake"
+      && G.fareharborGuideName(fhRow({ headline: "Guide: Mia R" })) === "Mia R" && G.fareharborGuideName(fhRow({ headline: "Mia" })) === "Mia"
+      && G.fareharborGuideName(fhRow({ headline: "3 hours of fun! Bring warm gloves." })) === null && G.fareharborGuideName(fhRow({})) === null);
+    const staff = [{ phone: JAKE, display_name: "Jake Moss" }, { phone: MIA, display_name: "Mia Reyes" }, { phone: "+1", display_name: "Mia Lee" }];
+    chk("staff match: full name, or a unique first name; ambiguous or unknown → nobody",
+      G.matchStaffName("jake moss", staff)?.phone === JAKE && G.matchStaffName("Jake", staff)?.phone === JAKE && G.matchStaffName("Mia", staff) === null
+      && G.matchStaffName("Mia Reyes", staff)?.phone === MIA && G.matchStaffName("Zed", staff) === null);
+    // ── fixtures ──
+    const bk = (pk, avail, item, name, pax, start = "2026-12-11T18:00:00Z", extra = {}) => ({ fareharbor_pk: pk, company: "rabbitearsadventures", status: "booked",
+      start_at: start, end_at: new Date(new Date(start).getTime() + 3 * 36e5).toISOString(), customer_count: pax, updated_at: "2026-12-01T00:00:00Z",
+      raw_payload: { booking: { availability: { pk: avail, item: { name: item }, ...extra }, contact: { name, email: `${name.split(" ")[0].toLowerCase()}@guest.test`, phone: "+19705559999" }, customer_count: pax } } });
+    const TOURS = [{ client_id: "csr_rea", match: "Grand Tour", type: "rea", label: "Grand Tour", miles: 24, high_point_ft: 9880, map_url: null, active: true },
+      { client_id: "csr_rea", match: "Polaris", type: "rental", label: "Polaris rental", active: true }, { client_id: "csr_rea", match: "RZR", type: "skip", label: "RZR", priority: 10, active: true }];
+    const mkDbs = () => ({
+      crm: makeFhMockCrm({ bookings: [bk("#1", 5001, "3 Hour - Grand Tour", "Katrina Smith", 2), bk("#2", 5001, "3 Hour - Grand Tour", "Ben Ortiz", 1),
+        bk("#3", 6001, "Polaris 850 Khaos • Steamboat", "Lee Wong", 1, "2026-12-11T15:00:00Z"), bk("#4", 7001, "4-Place Trailer - Kremmling", "Tom Hart", 1),
+        bk("#5", 5009, "3 Hour - Grand Tour", "Old Ride", 1, "2026-12-09T18:00:00Z")], recap_tours: TOURS }),
+      db1: makeFhMockCrm({ operator_phones: [{ id: "o1", client_id: "csr_rea", phone: JAKE, role: "guide", display_name: "Jake" }, { id: "o2", client_id: "csr_rea", phone: MIA, role: "guide", display_name: "Mia" },
+        { id: "o3", client_id: "csr_rea", phone: SHOP, role: "reservations", display_name: "Sam" }, { id: "o4", client_id: "csr_rea", phone: BOSS, role: "general_manager", display_name: "Sean" },
+        { id: "o5", client_id: "csr_rea", phone: WRENCH, role: "mechanic", display_name: "Rob" }] }),
+    });
+    const t = (phone) => G.signGuideToken({ phone, date: "2026-12-11" });
+    const dbs = mkDbs(), deps = { ...dbs, now: NOW };
+    const deps2 = G.groupDepartures(dbs.crm.tables.bookings, TOURS);
+    const gt = deps2.find(d => d.availability_pk === "5001");
+    chk("departures: grouped by FareHarbor departure, riders summed, first names only, trailers left out",
+      deps2.length === 3 && gt.riders === 3 && JSON.stringify(gt.names) === '["Katrina","Ben"]' && gt.booking_pks.length === 2 && !deps2.some(d => d.availability_pk === "7001")
+      && JSON.stringify(gt.bookings) === '[{"pk":"#1","name":"Katrina","pax":2},{"pk":"#2","name":"Ben","pax":1}]');
+    // ── day view by role ──
+    const day = async (phone) => G.handleGuideDay(deps, { t: t(phone) });
+    const dj = await day(JAKE), ds = await day(SHOP), dm = await day(BOSS), dw = await day(WRENCH);
+    chk("day: a guide sees today's unclaimed tours (not rentals, not other days); shop sees the rental; a manager sees all; mechanic refused",
+      dj.status === 200 && dj.body.departures.map(d => d.availability_pk).join() === "5001" && ds.body.departures.some(d => d.availability_pk === "6001")
+      && dm.body.departures.length === 2 && dw.status === 403 && (await G.handleGuideDay(deps, { t: "bad" })).status === 401);
+    chk("day: no guest email or phone number ever reaches the page", !/@guest\.test|9705559999/.test(JSON.stringify([dj.body, ds.body, dm.body])));
+    chk("day: the loop's usual miles/high point come along as defaults", dj.body.departures[0].defaults.miles === 24 && dj.body.departures[0].defaults.high_point_ft === 9880);
+    // ── claim / split ──
+    await G.handleGuideClaim(deps, { t: t(JAKE), availability_pk: "5001", booking_pks: ["#1"] });
+    const afterJ = await day(JAKE), afterM = await day(MIA);
+    chk("claim: Jake claims only Katrina's booking (split ride); it shows as his; Mia no longer sees it as unclaimed",
+      dbs.crm.tables.ride_assignments.length === 1 && JSON.stringify(dbs.crm.tables.ride_assignments[0].booking_pks) === '["#1"]'
+      && afterJ.body.departures[0].mine === true && afterM.body.departures.length === 0);
+    await G.handleGuideClaim(deps, { t: t(JAKE), availability_pk: "5001" });
+    chk("claim: re-claiming the whole ride clears the split (empty = everyone)", JSON.stringify(dbs.crm.tables.ride_assignments[0].booking_pks) === "[]" && dbs.crm.tables.ride_assignments.length === 1);
+    chk("claim: a guide can't claim a rental or another day's ride",
+      (await G.handleGuideClaim(deps, { t: t(JAKE), availability_pk: "6001" })).status === 403 && (await G.handleGuideClaim(deps, { t: t(JAKE), availability_pk: "5009" })).status === 404);
+    // ── log ──
+    const lg = await G.handleGuideLog(deps, { t: t(JAKE), availability_pk: "5001", miles: "22.5", high_point_ft: "10,100", stops: ["Dumont Lake", " ", "Rabbit Ears Peak"],
+      highlight: "  Moose by the creek  ", group_note: "Katrina wants to try backcountry", conditions: ["fresh_snow", "volcano"], done: true });
+    const L = dbs.crm.tables.ride_logs[0];
+    chk("log: saved per departure + guide; junk cleaned (bad number dropped, unknown condition dropped, blank stops removed)",
+      lg.status === 200 && L.miles === 22.5 && L.high_point_ft === null && JSON.stringify(L.stops) === '["Dumont Lake","Rabbit Ears Peak"]' && L.highlight === "Moose by the creek"
+      && JSON.stringify(L.conditions) === '["fresh_snow"]' && L.status === "done" && L.guide_name === "Jake");
+    // ── photos ──
+    const fakeSet = { full: Buffer.from("f"), hero: Buffer.from("h"), thumbs: [Buffer.from("1"), Buffer.from("2"), Buffer.from("3")] };
+    const up = { process: async () => fakeSet, upload: async (_c, a) => ({ full: `https://cdn.test/${a.date}/${a.bookingRef}.jpg`, hero: `https://cdn.test/${a.date}/${a.bookingRef}-hero.jpg`, thumbs: ["https://cdn.test/t1.jpg", "https://cdn.test/t2.jpg", "https://cdn.test/t3.jpg"] }) };
+    const img = Buffer.from("jpeg-bytes").toString("base64");
+    const p1 = await G.handleGuidePhoto(deps, { t: t(JAKE), availability_pk: "5001", data: img, content_type: "image/jpeg", client_id: "c-1" }, up);
+    const p1b = await G.handleGuidePhoto(deps, { t: t(JAKE), availability_pk: "5001", data: img, content_type: "image/jpeg", client_id: "c-1" }, up);
+    const p2 = await G.handleGuidePhoto(deps, { t: t(JAKE), availability_pk: "5001", data: img, content_type: "image/jpeg", client_id: "c-2" }, up);
+    const M = dbs.crm.tables.ride_media;
+    chk("photo: hosted set stored on the departure; first photo is the cover; a retried upload (same phone id) is not duplicated",
+      p1.status === 200 && p1b.body.duplicate === true && M.length === 2 && M[0].hero_url === "https://cdn.test/2026-12-11/dep5001-hero.jpg" && M[0].cover === true
+      && M[0].availability_pk === "5001" && M[0].uploaded_by === JAKE && p2.status === 200);
+    chk("photo: HEIC/other types refused (the phone converts to JPEG first); a guide can't add to a rental",
+      (await G.handleGuidePhoto(deps, { t: t(JAKE), availability_pk: "5001", data: img, content_type: "image/heic" }, up)).status === 415
+      && (await G.handleGuidePhoto(deps, { t: t(JAKE), availability_pk: "6001", data: img, content_type: "image/jpeg" }, up)).status === 403);
+    await G.handleGuideMedia(deps, { t: t(JAKE), id: M[1].id, action: "cover" });
+    chk("photo: starring another photo moves the cover", M[1].cover === true && M[0].cover === false);
+    chk("photo: only the uploader or a manager can remove a photo",
+      (await G.handleGuideMedia(deps, { t: t(SHOP), id: M[1].id, action: "remove" })).status === 403 && (await G.handleGuideMedia(deps, { t: t(BOSS), id: M[0].id, action: "remove" })).status === 200 && M[0].hidden === true);
+    // ── recap uses it all (simple template) ──
+    dbs.crm.tables.recap_settings = [{ client_id: "csr_rea", send_hour: 18, dry_run: true, test_to: "sean@coloradosledrentals.com", template: "simple" }];
+    dbs.crm.tables.email_sends = []; dbs.crm.tables.recap_log = []; dbs.crm.tables.recap_review = [];
+    await R.runRideRecap(dbs.crm, { now: new Date("2026-12-12T02:00:00Z"), fetchImpl: async () => ({ ok: false }), baseUrl: "https://app.test" });
+    const sends = dbs.crm.tables.email_sends, kat = sends.find(x => x.reference === "#1"), ben = sends.find(x => x.reference === "#2");
+    chk("recap: the guide's starred photo is in the email with no Apps Script step (photo_hint.hosted_photo); a removed photo never is",
+      kat?.photo_hint?.hosted_photo?.hero === "https://cdn.test/2026-12-11/dep5001-hero.jpg" && !JSON.stringify(sends).includes("hidden-never"), JSON.stringify(kat?.photo_hint));
+    chk("recap: the guide's highlight, name and miles show; the internal group note never does",
+      kat.body_html.includes("Moose by the creek") && kat.body_html.includes("with guide Jake") && kat.body_html.includes("22.5 mi")
+      && !sends.some(x => (x.body_html + x.body_text).includes("backcountry") && (x.body_html + x.body_text).includes("Katrina wants")));
+    chk("recap: the other rider on the same departure gets the same photo and log", ben?.photo_hint?.hosted_photo?.hero === kat.photo_hint.hosted_photo.hero && ben.body_html.includes("Moose by the creek"));
+    const pulled = await S.pullGmailMessages(dbs.crm, null, { limit: 10, baseUrl: "https://app.test" });
+    chk("recap: what the (old or new) Apps Script pulls already has the photo in it", pulled.messages.some(m => m.html.includes("dep5001-hero.jpg")));
+    chk("recap side: a split log only reaches its own riders",
+      G.pickRideLogForBooking([{ availability_pk: "9", booking_pks: ["#7"], highlight: "A" }, { availability_pk: "9", booking_pks: [], highlight: "B" }], { pk: "#8", availabilityPk: "9" })?.highlight === "B"
+      && G.pickRideLogForBooking([{ availability_pk: "9", booking_pks: ["#7"], highlight: "A" }], { pk: "#8", availabilityPk: "9" }) === null);
+  } finally {
+    if (prevSecret === undefined) delete process.env.GUIDE_LINK_SECRET; else process.env.GUIDE_LINK_SECRET = prevSecret;
+  }
 }
 
 async function testCustomerFileImport() {
