@@ -13,6 +13,11 @@ owned by sean@coloradosledrentals.com. Local clone: `~/code/csr-emails` (clasp +
 - Keep `Higmark.gs` byte-identical to `docs/apps-script/Code.gs` in the highmark-bot repo (it's the source of truth,
   is pure ASCII, and has tests).
 
+## Status (checked 2026-11-23 via the Drive connector)
+The live `Higmark.gs` matches **change set 2** (repo commit `da31869`). **Change sets 3 and 4 are NOT live yet.** Both are applied by
+one step: replace `Higmark.js` with the current `docs/apps-script/Code.gs`. Until then: v1 photos are attached full-size (iPhone
+"Tap to download"), and simple-template recaps go out without the ride photo (REA Grand Tour shows the map). Waiting on Sean's Mac.
+
 ## Change set 1 (2026-11-22)
 1. **`Higmark.gs`** ← replace the whole file with `docs/apps-script/Code.gs` from highmark-bot, branch
    `claude/peaceful-franklin-0b2ch0` (or `main` once merged). Adds `drainQueue` (sends every queued Gmail row every
