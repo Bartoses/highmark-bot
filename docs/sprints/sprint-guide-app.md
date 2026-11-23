@@ -1,6 +1,6 @@
 # Sprint: Guide Ride Log app (photos, videos, ride details, rider notes)
 
-Draft 1, 2026-11-23, written with Sean. Decisions marked **(Sean)** came from him; everything else is a proposal to confirm.
+Draft 2, 2026-11-23, written with Sean. Decisions marked **(Sean)** came from him; everything else is a proposal to confirm.
 
 ## Read first
 
@@ -58,8 +58,11 @@ evening, with no file naming and no Apps Script photo step. And the CRM learns a
 
 ### C. Assignment (which ride is mine)
 
-1. Order of truth: FareHarbor guide field on the booking (when present: find where FareHarbor puts it,
-   e.g. `availability.custom_field_instances` or `headline`, and read it) → manager assignment → guide claim.
+1. Order of truth: FareHarbor guide field → manager assignment → guide claim. **(Sean)** The guide may be entered in
+   either place on the departure, so read both: a custom field on the availability whose name contains "guide" or
+   "staff" (`availability.custom_field_instances`), and the availability `headline`. Match the value to a staff
+   member by name (case-insensitive, first name or full name, `operator_phones.display_name`); no confident match =
+   ignore it and fall back to manager/claim. Show the source on the card ("from FareHarbor").
 2. **Claim.** An unassigned departure has a "This is my ride" button. A departure split between guides: each guide
    ticks their riders (stored as `booking_pks`, so photos only reach those guests).
 3. **Assignment board (portal).** Today's departures × guides; tap to assign. Assigned guides see it at the top.
@@ -79,13 +82,16 @@ evening, with no file naming and no Apps Script photo step. And the CRM learns a
 5. **Drive copy.** A cron step copies new files to `Tour Photos/<date>/<Label> <time> - <Guide> - <NN>.<ext>` and
    stores the Drive file id. Needs a Google service account with Content manager access on the shared drive that
    holds Tour Photos (`GOOGLE_SERVICE_ACCOUNT_JSON` on Railway). Copy failures retry and never block a recap.
+   **(Sean)** Tour Photos is in a shared drive: drive `0AJ8T1WA5ITQoUk9PVA`, folder `1QoyfkJfW2fNJDRabSC2c41JtusEhwGCL`.
+   Drive API calls need `supportsAllDrives=true`. Until the service account exists, uploads still work; the Drive
+   copy waits and catches up.
 6. Videos show on the guest's `/r/photos` page (play + Save) and the email button reads "See photos & video".
 
 ### E. About the ride
 
 1. Prefilled from the loop's `recap_tours` defaults (miles, high point, stops); the guide edits only what differed.
-2. Optional: conditions (fresh snow, sky: one tap each), one highlight line ("moose at Rabbit Ears"), a short note to
-   the group. Stored in `ride_logs` per departure (or per guide's riders when split).
+2. Optional: conditions (fresh snow, sky: one tap each), one highlight line ("moose at Rabbit Ears"), and a short
+   note about the group. **(Sean)** The note is **internal only**, never in the recap; only the highlight is shown. Stored in `ride_logs` per departure (or per guide's riders when split).
 3. These feed `buildTripDetails({ rideLog })`, so the recap's stat line, subline and stops are real. The guide's
    name fills "with guide Jake".
 
@@ -95,8 +101,8 @@ evening, with no file naming and no Apps Script photo step. And the CRM learns a
    (backcountry / rental / another tour), celebration/VIP (birthday / anniversary / VIP / repeat), and
    issue/follow-up (complaint / injury / damage / call them) + an optional note.
 2. Saved in `ride_log_riders`; tags are added to the guest's DB2 `contacts` row (by email/phone) for segments.
-3. An **issue** tag texts the on-duty manager right away (operator phones with a manager role) with the booking and
-   the note. Rider notes never appear in anything a guest sees (test enforced).
+3. An **issue** tag texts **all managers** right away **(Sean)** (operator phones with role owner, general_manager or
+   operations_manager) with the booking, tour and the note. Rider notes never appear in anything a guest sees (test enforced).
 
 ### G. Recap integration
 
@@ -134,12 +140,31 @@ evening, with no file naming and no Apps Script photo step. And the CRM learns a
 - Sean receives `[TEST]` recaps for a logged ride (photo + video + highlight) and an unlogged one, and OKs them.
 - Migration applied after Sean reviews it; README + CLAUDE.md + Roadmap updated.
 
-## Open questions for Sean
+## Answered (2026-11-23)
 
-1. Is Tour Photos in a **shared drive**? (A service account can't write to a personal My Drive.) Who can add the
-   service account?
-2. Who is "on duty" for issue alerts: all managers, or one person per location?
-3. Should guests see the guide's "note to the group" in the recap, or is it internal?
-4. Fill the loop defaults in `recap_tours` (miles, high point, stops) for Grand Tour, First Tracks, Tree Line, Sunset
-   Ride, Rabbit Ears Tour, On-Trail Guided, and the backcountry routes.
-5. Does FareHarbor have a guide/staff field you plan to use? If so, which one?
+- Tour Photos is in a shared drive (ids above). The service account still needs creating (steps in the setup note below).
+- Issue alerts go to all managers. The guide's group note is internal. FareHarbor guide may be in either field: read both.
+
+## Still open
+
+1. Loop defaults in `recap_tours` (miles, high point, stops) for Grand Tour, First Tracks, Tree Line, Sunset Ride,
+   Rabbit Ears Tour, On-Trail Guided and the backcountry routes. **(Sean: later.)** Until then the stat line shows
+   only what guides enter.
+2. Service account created and added to the shared drive (Sean, steps below).
+
+## Setup: Google service account (Sean, ~10 minutes)
+
+A service account is a Google "robot user" that the bot signs in as, so it can save files into the shared drive
+without anyone's password. It only sees what it's added to.
+
+1. Go to console.cloud.google.com signed in with your Workspace account. Create a project (e.g. "Highmark").
+2. APIs & Services → Library → search "Google Drive API" → Enable.
+3. IAM & Admin → Service Accounts → Create service account. Name it "highmark-photos". Skip the optional role steps.
+4. Open it → Keys → Add key → Create new key → JSON. A file downloads. Keep it private.
+   (If Google says key creation is disabled by policy, an organization admin must allow it under IAM → Organization
+   policies → "Disable service account key creation".)
+5. Copy the service account's email (ends in `.iam.gserviceaccount.com`). In Drive, open the shared drive →
+   Manage members → add that email as **Content manager**. If Drive refuses an outside address, turn on the shared
+   drive setting that allows people outside your organization, or ask the Workspace admin.
+6. In Railway, on both `highmark-bot` and `highmark-cron`, add a variable `GOOGLE_SERVICE_ACCOUNT_JSON` and paste
+   the whole contents of the JSON file. Never paste the key into chat or email.
