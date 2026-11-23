@@ -80,7 +80,7 @@ gear, add-ons, health notes, waivers, balance due), deliveries/shuttles (with ad
 details; photos + ride log on guided bookings.
 
 **Build order (proposal)**
-1. Slice 1 changes above (rename, Settings, assigned-first) + locations on bookings + staff list in the app.
+1. **DONE 2026-11-23 (PR #41):** slice 1 changes above (rename, Settings, assigned-first) + locations on bookings + staff list in the app.
 2. Manager day board (assign staff to bookings), "My day" screen.
 3. Deliveries + shuttles from booking answers, with drivers.
 4. Fleet board (sled units per booking per day) + sheet sync.

@@ -24,6 +24,21 @@ export const SHOP_ROLES = ["reservations", "sales"];
 export const GUIDE_ROLES = ["guide", "staff"];
 export const CONDITIONS = ["fresh_snow", "bluebird", "snowing", "windy", "cold"];
 
+// The four locations (Sean, 2026-11-23). Same keys as operator_phones.locations.
+export const LOCATIONS = Object.freeze([
+  { key: "steamboat", label: "Steamboat" },        // CSR shop: rentals
+  { key: "north_routt", label: "North Routt" },    // CSR guided backcountry
+  { key: "kremmling", label: "Kremmling" },        // CSR rentals
+  { key: "rabbit_ears", label: "Rabbit Ears" },    // the Ranch: REA tours
+]);
+export const STAFF_ROLES = ["guide", "shop", "driver", "mechanic", "manager"];
+// Where a booking happens: REA tours at the Ranch, guided backcountry in North Routt, rentals by the shop in the item name.
+export function departureLocation({ type, item }) {
+  if (type === "rea") return "rabbit_ears";
+  if (type === "backcountry") return "north_routt";
+  return /kremmling/i.test(String(item ?? "")) ? "kremmling" : "steamboat";
+}
+
 // The views a person may pick on entering the app (their own level and below). A manager can work as a guide or shop.
 export const VIEWS_FOR = { manager: ["manager", "guide", "shop"], shop: ["shop"], guide: ["guide"] };
 export const viewFor = (access, wanted) => ((VIEWS_FOR[access] ?? []).includes(wanted) ? wanted : access);
@@ -128,7 +143,7 @@ export function groupDepartures(bookingRows, tours, { tz = GUIDE_TZ } = {}) {
     const tour = matchTour(f.item, tours);
     if (!tour) continue;                                                 // trailers, fuel, gift cards… are not rides
     const d = deps.get(f.availabilityPk) ?? { availability_pk: f.availabilityPk, label: tour.label, type: tour.type, item: f.item,
-      start_at: f.startAt, end_at: f.endAt, riders: 0, names: [], booking_pks: [], bookings: [], tour, fh_guide: null, ride_date: f.startAt ? localDate(f.startAt, tz) : null };
+      start_at: f.startAt, end_at: f.endAt, riders: 0, names: [], booking_pks: [], bookings: [], tour, fh_guide: null, location: departureLocation({ type: tour.type, item: f.item }), ride_date: f.startAt ? localDate(f.startAt, tz) : null };
     d.riders += f.pax || 0;
     const first = cleanFirstName(f.name);
     if (first && !d.names.includes(first)) d.names.push(first);
@@ -174,9 +189,26 @@ export async function loadOperator(db1, phone, clientId = "csr_rea") {
   return { ...data, access: accessFor(data.role) };
 }
 
-async function loadStaff(db1, clientId) {
+async function loadStaff(db1, clientId, crm = null) {
   const { data } = await db1.from("operator_phones").select("phone, role, label, display_name").eq("client_id", clientId);
-  return data ?? [];
+  const ops = data ?? [];
+  if (!crm) return ops;
+  let staff = [];
+  try { const r = await crm.from("staff").select("*").eq("client_id", clientId); staff = r.error ? [] : (r.data ?? []); } catch { staff = []; }
+  return mergeStaff(staff, ops);
+}
+
+// One list: the app's staff table (name, role, home location, Google email) + anyone who only exists as an operator phone.
+const OP_ROLE_TO_STAFF = { guide: "guide", staff: "guide", reservations: "shop", sales: "shop", mechanic: "mechanic", fleet: "mechanic",
+  owner: "manager", general_manager: "manager", operations_manager: "manager", manager: "manager", marketing: "manager" };
+export function mergeStaff(staffRows, opRows) {
+  const out = (staffRows ?? []).filter(x => x.active !== false).map(x => ({ id: x.id, phone: x.phone ?? null, display_name: x.name, role: x.role,
+    home_location: x.home_location ?? null, google_email: x.google_email ?? null, source: x.source ?? "app" }));
+  for (const o of opRows ?? []) {
+    if (!o.phone || out.some(x => x.phone === o.phone)) continue;
+    out.push({ id: null, phone: o.phone, display_name: o.display_name ?? o.label ?? o.phone, role: OP_ROLE_TO_STAFF[o.role] ?? "guide", home_location: null, google_email: null, source: "briefing" });
+  }
+  return out.sort((a, b) => String(a.display_name).localeCompare(String(b.display_name)));
 }
 
 export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE_TZ }) {
@@ -186,7 +218,7 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     crm.from("bookings").select("fareharbor_pk, company, status, start_at, end_at, customer_count, product_title, updated_at, raw_payload")
       .like("fareharbor_pk", "#%").gte("start_at", from.toISOString()).lt("start_at", to.toISOString()),
     crm.from("recap_tours").select("*").eq("client_id", clientId),
-    loadStaff(db1, clientId),
+    loadStaff(db1, clientId, crm),
   ]);
   if (error) throw new Error(`bookings read failed: ${error.message}`);
   const deps = groupDepartures((rows ?? []).filter(r => r.start_at && localDate(r.start_at, tz) === date), (tours ?? []).filter(t => t.active !== false), { tz });
@@ -216,6 +248,7 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     d.logs = logs.filter(l => String(l.availability_pk) === String(d.availability_pk));
     d.media = media.filter(m => String(m.availability_pk) === String(d.availability_pk) && !m.hidden);
   }
+  deps.staff = staff;
   return deps;
 }
 
@@ -230,7 +263,7 @@ export function publicDeparture(d, me, view = me.access) {
         waiver_signed: b.waiver_signed ?? null, checked_in: b.checked_in ?? null, due_cents: b.due_cents ?? 0, equipment: b.equipment ?? null }
     : { pk: b.pk, name: b.name, pax: b.pax });
   return {
-    availability_pk: d.availability_pk, label: d.label, type: d.type, start_at: d.start_at, end_at: d.end_at,
+    availability_pk: d.availability_pk, label: d.label, type: d.type, start_at: d.start_at, end_at: d.end_at, location: d.location ?? null,
     riders: d.riders, names: d.names, booking_pks: d.booking_pks, bookings: manifest, details,
     defaults: { miles: d.tour?.miles ?? null, high_point_ft: d.tour?.high_point_ft ?? null, stops: d.tour?.stops ?? [] },
     assignees: (d.assignees ?? []).map(a => ({ name: a.name, source: a.source, me: a.phone === me.phone, riders: a.booking_pks?.length ? a.booking_pks : null })),
@@ -257,7 +290,13 @@ export async function handleGuideDay(deps, { t, d, as = null }) {
   const all = await loadDay(deps.crm, deps.db1, { date });
   const view = viewFor(a.me.access, as);
   const list = visibleDepartures(all, { access: view, phone: a.me.phone }).map(x => publicDeparture(x, a.me, view));
-  return { status: 200, body: { me: { name: a.me.display_name ?? a.me.label ?? null, access: a.me.access, views: VIEWS_FOR[a.me.access] ?? [], view }, date, today, departures: list } };
+  const meStaff = (all.staff ?? []).find(x => x.phone === a.me.phone);
+  return { status: 200, body: {
+    me: { name: meStaff?.display_name ?? a.me.display_name ?? a.me.label ?? null, access: a.me.access, views: VIEWS_FOR[a.me.access] ?? [], view, home_location: meStaff?.home_location ?? null },
+    date, today, locations: LOCATIONS, departures: list,
+    // managers assign people; everyone else only needs names (team view)
+    staff: (all.staff ?? []).map(x => ({ name: x.display_name, role: x.role, home_location: x.home_location, ...(view === "manager" ? { phone: x.phone } : {}) })),
+  } };
 }
 
 async function findDeparture(deps, me, date, availabilityPk) {
@@ -280,6 +319,35 @@ export async function handleGuideClaim(deps, { t, availability_pk, booking_pks =
   const row = { client_id: "csr_rea", availability_pk: String(availability_pk), ride_date: f.dep.ride_date, operator_phone: a.me.phone,
     guide_name: a.me.display_name ?? a.me.label ?? null, booking_pks: pks.length === f.dep.booking_pks.length ? [] : pks, source: "claim", assigned_by: a.me.phone };
   const { error } = await deps.crm.from("ride_assignments").upsert(row, { onConflict: "availability_pk,operator_phone" });
+  if (error) return { status: 500, body: { error: "could not save" } };
+  return { status: 200, body: { ok: true } };
+}
+
+// A manager puts a staff member on a departure (or only some of its riders), or takes them off.
+export async function handleGuideAssign(deps, { t, availability_pk, phone, booking_pks = null, remove = false }) {
+  const a = await authed(deps, t); if (a.error) return a.error;
+  if (a.me.access !== "manager") return { status: 403, body: { error: "Managers only" } };
+  const all = await loadDay(deps.crm, deps.db1, { date: a.date });
+  const dep = all.find(x => String(x.availability_pk) === String(availability_pk));
+  if (!dep) {
+    const y = await loadDay(deps.crm, deps.db1, { date: addDays(a.date, 1) });         // managers also plan tomorrow
+    const d2 = y.find(x => String(x.availability_pk) === String(availability_pk));
+    if (!d2) return { status: 404, body: { error: "booking not found" } };
+    return assignTo(deps, a, d2, y.staff, { phone, booking_pks, remove });
+  }
+  return assignTo(deps, a, dep, all.staff, { phone, booking_pks, remove });
+}
+async function assignTo(deps, a, dep, staff, { phone, booking_pks, remove }) {
+  const person = (staff ?? []).find(x => x.phone === phone);
+  if (!person) return { status: 400, body: { error: "pick someone from the staff list (with a phone number)" } };
+  if (remove) {
+    await deps.crm.from("ride_assignments").delete().eq("availability_pk", String(dep.availability_pk)).eq("operator_phone", phone);
+    return { status: 200, body: { ok: true } };
+  }
+  const pks = Array.isArray(booking_pks) ? booking_pks.filter(p => dep.booking_pks.includes(p)) : [];
+  const { error } = await deps.crm.from("ride_assignments").upsert({ client_id: "csr_rea", availability_pk: String(dep.availability_pk), ride_date: dep.ride_date,
+    operator_phone: phone, guide_name: person.display_name, booking_pks: pks.length === dep.booking_pks.length ? [] : pks, source: "manager", assigned_by: a.me.phone },
+    { onConflict: "availability_pk,operator_phone" });
   if (error) return { status: 500, body: { error: "could not save" } };
   return { status: 200, body: { ok: true } };
 }
@@ -383,8 +451,9 @@ export async function handleGuideAdmin(deps, { t }) {
     deps.crm.from("recap_tours").select("*").eq("client_id", "csr_rea"),
     deps.crm.from("recap_settings").select("*").eq("client_id", "csr_rea").maybeSingle(),
   ]);
+  const staff = await loadStaff(deps.db1, "csr_rea", deps.crm);
   return { status: 200, body: {
-    tours: groupTours(tours),
+    tours: groupTours(tours), staff, locations: LOCATIONS, roles: STAFF_ROLES,
     settings: st ? { send_hour: st.send_hour, template: st.template ?? "v1", features: st.features ?? [], dry_run: st.dry_run !== false, test_to: st.test_to,
       friend_code: st.friend_code, all_features: RECAP_FEATURES, templates: RECAP_TEMPLATES } : null,
   } };
@@ -433,6 +502,26 @@ export async function handleGuideAdminMap(deps, body, { sharpImpl = null, storag
   const { data, error } = await deps.crm.from("recap_tours").update({ map_url: url, updated_at: new Date().toISOString() }).eq("client_id", "csr_rea").eq("label", label).select("id");
   if (error || !data?.length) return { status: error ? 500 : 404, body: { error: error ? "could not save" : "tour not found" } };
   return { status: 200, body: { ok: true, map_url: url } };
+}
+
+// Add or edit a staff member (Settings → Staff). Phone = how they get the briefing link and how assignments find them.
+const e164 = (v) => { const d = String(v ?? "").replace(/[^\d+]/g, ""); if (/^\+\d{10,15}$/.test(d)) return d; const n = d.replace(/\D/g, ""); return n.length === 10 ? `+1${n}` : n.length === 11 && n.startsWith("1") ? `+${n}` : null; };
+export async function handleGuideAdminStaff(deps, body) {
+  const a = await requireManager(deps, body?.t); if (a.error) return a.error;
+  const name = text(body.name, 80);
+  if (!name) return { status: 400, body: { error: "name required" } };
+  if (!STAFF_ROLES.includes(body.role)) return { status: 400, body: { error: "pick a role" } };
+  if (body.home_location && !LOCATIONS.some(l => l.key === body.home_location)) return { status: 400, body: { error: "unknown location" } };
+  const phone = body.phone ? e164(body.phone) : null;
+  if (body.phone && !phone) return { status: 400, body: { error: "phone number looks wrong" } };
+  const email = body.google_email ? String(body.google_email).trim().toLowerCase() : null;
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { status: 400, body: { error: "Google email looks wrong" } };
+  const row = { client_id: "csr_rea", name, role: body.role, home_location: body.home_location || null, phone, google_email: email,
+    active: body.active !== false, source: "app", updated_at: new Date().toISOString() };
+  const q = body.id ? deps.crm.from("staff").update(row).eq("id", body.id).select("id") : deps.crm.from("staff").insert(row).select("id");
+  const { data, error } = await q;
+  if (error) return { status: /duplicate|unique/i.test(error.message) ? 409 : 500, body: { error: /duplicate|unique/i.test(error.message) ? "someone already has that phone number" : "could not save" } };
+  return { status: 200, body: { ok: true, id: Array.isArray(data) ? data[0]?.id : data?.id } };
 }
 
 // Recap settings a manager may change from the app. dry_run is deliberately NOT here (Sean only).

@@ -5,6 +5,7 @@
 --   ride_assignments  who led which FareHarbor departure (claim in the app; later the manager board / FareHarbor field)
 --   ride_logs         the guide's details per departure: miles, high point, stops, highlight (shown in the recap),
 --                     group note + conditions (internal). booking_pks = only those riders when a departure is split.
+--   staff             the app's staff list: name, role, home location, phone, Google email
 --   recap_tours       + route jsonb (stops with elevations, duration, description) set in the app's Tours screen
 --   ride_media        + hosted-photo columns: photos uploaded in the app live in Supabase Storage (recap-photos), so
 --                     drive_file_id becomes optional (Drive copy comes later via the service account).
@@ -59,6 +60,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS ride_media_client_upload_key ON public.ride_me
 -- Tour routes set by managers in the app (Tours screen): stops with elevations, duration, description.
 -- recap_tours.stops (names) stays the list the recap uses; route holds the richer version.
 ALTER TABLE public.recap_tours ADD COLUMN IF NOT EXISTS route jsonb;
+
+-- Staff list (Settings → Staff in the app; later synced with the Google Sheet). Phone = briefing link + assignments.
+CREATE TABLE IF NOT EXISTS public.staff (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id     text NOT NULL DEFAULT 'csr_rea',
+  name          text NOT NULL,
+  role          text NOT NULL CHECK (role IN ('guide', 'shop', 'driver', 'mechanic', 'manager')),
+  home_location text CHECK (home_location IN ('steamboat', 'north_routt', 'kremmling', 'rabbit_ears')),
+  phone         text,                              -- E.164
+  google_email  text,                              -- for Google sign-in later
+  active        boolean NOT NULL DEFAULT true,
+  source        text NOT NULL DEFAULT 'app',       -- app | sheet
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS staff_phone_key ON public.staff (client_id, phone) WHERE phone IS NOT NULL;
+ALTER TABLE public.staff ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.ride_assignments ENABLE ROW LEVEL SECURITY;   -- service role only
 ALTER TABLE public.ride_logs        ENABLE ROW LEVEL SECURITY;

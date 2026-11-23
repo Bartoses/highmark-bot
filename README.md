@@ -462,8 +462,15 @@ A phone page where guides, shop staff and managers log each ride (sprint: `docs/
   (health concerns flagged red, gear/boot rentals, shuttle/pickup, address), waiver / checked-in / balance due from
   `daily_manifest`, and tap-to-call. Full details only for your own rides, rentals at the shop, and managers; unclaimed rides
   show first names only. Promo codes, insurance and marketing answers are never shown.
-- **Manager screens:** **Tours**: one route per tour (all FareHarbor items with the same `recap_tours.label`): miles, high point,
+- **Locations:** every booking belongs to Steamboat (CSR rentals), North Routt (guided backcountry), Kremmling (CSR
+  rentals) or Rabbit Ears (the Ranch, REA tours). The list filters by location (default = the person's home location);
+  your own bookings always show.
+- **Assigned, not claimed:** managers assign staff on each booking ("Assigned" card); a guide's assigned bookings are
+  under "Your bookings". Taking an unassigned booking is the fallback. Source shown: assigned / from FareHarbor / took it.
+- **Staff:** Settings → Staff (name, role guide/shop/driver/mechanic/manager, home location, phone, Google email). People
+  who are only on the briefing phone list show too. Guides see teammates' names, never their phones.
+- **Manager screens:** Settings → **Tours**: one route per tour (all FareHarbor items with the same `recap_tours.label`): miles, high point,
   usual length, stops with elevations, internal notes, and the route map upload (PNG/JPEG → `recap-maps/<tour>.png`). These
-  are the defaults guides start from and what the recap shows. **Settings**: recap send hour, email design, sections.
+  are the defaults guides start from and what the recap shows. Settings → **Recap email**: send hour, email design, sections.
   Dry run (going live) is not in the app.
 - **Needs:** `db2_ride_logs.sql` applied. Not in slice 1: videos, rider tags, manager board, Drive sync, `LOG` text keyword.

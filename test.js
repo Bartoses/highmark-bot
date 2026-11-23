@@ -19233,6 +19233,33 @@ async function testGuideApp() {
     chk("photo: starring another photo moves the cover", M[1].cover === true && M[0].cover === false);
     chk("photo: only the uploader or a manager can remove a photo",
       (await G.handleGuideMedia(deps, { t: t(SHOP), id: M[1].id, action: "remove" })).status === 403 && (await G.handleGuideMedia(deps, { t: t(BOSS), id: M[0].id, action: "remove" })).status === 200 && M[0].hidden === true);
+    // ── locations, staff, manager assignment ──
+    chk("locations: REA tours = Rabbit Ears, guided backcountry = North Routt, rentals by the item's shop (Kremmling / Steamboat)",
+      G.departureLocation({ type: "rea", item: "3 Hour - Grand Tour" }) === "rabbit_ears" && G.departureLocation({ type: "backcountry", item: "Pro-Ride Private Guided Backcountry" }) === "north_routt"
+      && G.departureLocation({ type: "rental", item: "Polaris 850 Khaos Slash 155\" • Kremmling" }) === "kremmling" && G.departureLocation({ type: "rental", item: "Polaris 850 Khaos • Steamboat" }) === "steamboat"
+      && dm.body.departures.find(d => d.availability_pk === "5001").location === "rabbit_ears" && dm.body.locations.length === 4);
+    const merged = G.mergeStaff([{ id: "s1", name: "Jake Moss", role: "guide", home_location: "rabbit_ears", phone: JAKE }, { id: "s2", name: "Old Hand", role: "guide", active: false, phone: "+1" }],
+      [{ phone: JAKE, display_name: "Jake", role: "guide" }, { phone: SHOP, display_name: "Sam", role: "reservations" }]);
+    chk("staff: one list = the app's staff (inactive left out) + people only on the briefing list (role mapped), no duplicates by phone",
+      merged.length === 2 && merged.find(x => x.phone === JAKE).display_name === "Jake Moss" && merged.find(x => x.phone === SHOP).role === "shop" && merged.find(x => x.phone === SHOP).source === "briefing");
+    chk("day: guides see teammates' names but not their phones; managers get phones for assigning",
+      dj.body.staff.length > 0 && dj.body.staff.every(x => !("phone" in x)) && dm.body.staff.some(x => x.phone === JAKE));
+    const asg = await G.handleGuideAssign(deps, { t: t(BOSS), availability_pk: "5001", phone: MIA });
+    chk("assign: a manager puts Mia on the Grand Tour; it's in her bookings without claiming; guides can't assign",
+      asg.status === 200 && dbs.crm.tables.ride_assignments.some(x => x.operator_phone === MIA && x.source === "manager")
+      && (await day(MIA)).body.departures.find(d => d.availability_pk === "5001")?.mine === true
+      && (await G.handleGuideAssign(deps, { t: t(JAKE), availability_pk: "5001", phone: JAKE })).status === 403
+      && (await G.handleGuideAssign(deps, { t: t(BOSS), availability_pk: "5001", phone: "+19990000000" })).status === 400);
+    await G.handleGuideAssign(deps, { t: t(BOSS), availability_pk: "5001", phone: MIA, remove: true });
+    chk("assign: a manager can take someone off", !dbs.crm.tables.ride_assignments.some(x => x.operator_phone === MIA));
+    const st1 = await G.handleGuideAdminStaff(deps, { t: t(BOSS), name: "Chris Lane", role: "driver", home_location: "steamboat", phone: "(970) 555-0177", google_email: "Chris@CSR.test" });
+    chk("staff edit: phone normalized, email lowercased; bad role / location / phone refused; managers only",
+      st1.status === 200 && dbs.crm.tables.staff[0].phone === "+19705550177" && dbs.crm.tables.staff[0].google_email === "chris@csr.test"
+      && (await G.handleGuideAdminStaff(deps, { t: t(BOSS), name: "X", role: "pilot" })).status === 400
+      && (await G.handleGuideAdminStaff(deps, { t: t(BOSS), name: "X", role: "guide", home_location: "denver" })).status === 400
+      && (await G.handleGuideAdminStaff(deps, { t: t(BOSS), name: "X", role: "guide", phone: "12" })).status === 400
+      && (await G.handleGuideAdminStaff(deps, { t: t(JAKE), name: "X", role: "guide" })).status === 403);
+
     // ── manager admin: tours + settings ──
     dbs.crm.tables.recap_tours.push({ client_id: "csr_rea", match: 'Grand "Private" Tour', type: "rea", label: "Grand Tour", active: true });
     dbs.crm.tables.recap_settings = [{ client_id: "csr_rea", send_hour: 18, dry_run: true, test_to: "sean@coloradosledrentals.com", template: "simple", features: ["review", "share"] }];
