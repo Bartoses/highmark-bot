@@ -19082,6 +19082,23 @@ async function testRideMedia() {
     && !S({ folderDate: "2027-01-29", fileName: "Grand Tour 11am RZR - 01.jpg" }, hint)
     && !S({ folderDate: "2026-07-29", fileName: "Grand Tour 11am - 01.jpg" }, { ...hint, date: "2026-07-29" })
     && !S({ folderDate: "2027-01-29", fileName: "" }, hint) && !S({ folderDate: "2027-01-29", fileName: "x.jpg" }, null));
+  // ride_media (Guide app) → the exact photo per booking / departure
+  const media = [
+    { drive_file_id: "F-other", availability_pk: "777", booking_pks: ["#2"], kind: "photo", mime_type: "image/jpeg", file_name: "Grand Tour 11am - Mia - 01.jpg" },
+    { drive_file_id: "F-dep-2", availability_pk: "777", booking_pks: [], kind: "photo", mime_type: "image/jpeg", file_name: "Grand Tour 11am - Jake - 02.jpg" },
+    { drive_file_id: "F-dep-cover", availability_pk: "777", booking_pks: [], kind: "photo", mime_type: "image/jpeg", cover: true, file_name: "Grand Tour 11am - Jake - 05.jpg" },
+    { drive_file_id: "F-video", availability_pk: "777", booking_pks: [], kind: "video", file_name: "Grand Tour 11am - Jake - 01.mp4" },
+    { drive_file_id: "F-heic", availability_pk: "888", booking_pks: [], kind: "photo", mime_type: "image/heic" },
+    { drive_file_id: "F-mine", availability_pk: "777", booking_pks: ["#1", "#3"], kind: "photo", mime_type: "image/jpeg", file_name: "Grand Tour 11am - Jake - 09.jpg" },
+  ];
+  const PM = M.pickRideMediaForBooking;
+  chk("ride_media: a photo tagged with the booking wins; else the departure's cover; never another group's tagged photo, a video or HEIC",
+    PM(media, { pk: "#1", availabilityPk: "777" })?.drive_file_id === "F-mine" && PM(media, { pk: "#4", availabilityPk: "777" })?.drive_file_id === "F-dep-cover"
+    && PM(media.filter(r => r.drive_file_id !== "F-dep-cover" && r.drive_file_id !== "F-dep-2"), { pk: "#4", availabilityPk: "777" }) === null
+    && PM(media, { pk: "#5", availabilityPk: "888" }) === null && PM(media, { pk: "#6", availabilityPk: "999" }) === null && PM([], { pk: "#1" }) === null);
+  chk("ridemedia: upload gate accepts the exact Drive file the Guide app tagged (file_id), even if its name differs",
+    M.isStrictPhotoMatch({ folderDate: "x", fileName: "IMG_4411.jpg", fileId: "F-mine" }, { date: "2027-01-29", label: "Grand Tour", file_id: "F-mine" })
+    && !M.isStrictPhotoMatch({ folderDate: "x", fileName: "IMG_4411.jpg", fileId: "F-other" }, { date: "2027-01-29", label: "Grand Tour", file_id: "F-mine" }));
   const hh = M.buildPhotoHint({ label: "Grand Tour", startAt: am11, season: "winter", hosted: true });
   chk("ridemedia: photo_hint carries season + hosted only when asked", hh.season === "winter" && hh.hosted === true && !("hosted" in M.buildPhotoHint({ label: "Grand Tour", startAt: am11 })));
 
@@ -20549,6 +20566,15 @@ async function testRideRecap() {
       chk("experiments: each template learns separately (old rows without a template count as v1); simple runs all 3 tests",
         tv1.subject.A.sends === 1 && tv1.subject.B.sends === 0 && tsim.subject.B.sends === 1 && tsim.layout.B.sends === 1 && tsim.layout.B.wins === 1 && tsim.share_cta.A.sends === 1 && tsim.subject.A.sends === 0);
       chk("simple job: REA photo_hint carries the loop map so the upload can add it to the photo row", g1.photo_hint.map_url === X.GRAND_TOUR_MAP_URL);
+      // Guide app photo: a ride_media row for the booking's departure → the exact Drive file id in photo_hint
+      const db2 = jobDb({ settings: { template: "simple" } });
+      const b201 = db2.tables.bookings.find(b => b.fareharbor_pk === "#201");
+      b201.raw_payload = { ...b201.raw_payload, booking: { ...(b201.raw_payload?.booking ?? {}), availability: { ...(b201.raw_payload?.booking?.availability ?? {}), pk: 5551 } } };
+      db2.tables.ride_media = [{ client_id: "csr_rea", availability_pk: "5551", booking_pks: [], kind: "photo", mime_type: "image/jpeg", drive_file_id: "DRIVE-201", cover: true }];
+      await R.runDueRideRecaps(db2, { now: NOW, fetchImpl: stormFetch, baseUrl: "https://app.test" });
+      const s201 = db2.tables.email_sends.find(x => x.reference === "#201");
+      chk("simple job: the Guide app's ride_media photo for that departure is sent as photo_hint.file_id; other rides keep name matching",
+        s201?.photo_hint?.file_id === "DRIVE-201" && !db2.tables.email_sends.find(x => x.reference === "#204")?.photo_hint?.file_id, JSON.stringify(s201?.photo_hint));
     }
     // A/B arms inside the simple template + social
     const mkV = (variants) => X.renderSimpleRecap(X.buildSimpleRecapData({ booking: { bookingId: "392519085", name: "katrina", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z" },
@@ -20558,6 +20584,9 @@ async function testRideRecap() {
       hB.indexOf("Had a good day?") < hB.indexOf("RIDDEN") && hA.indexOf("Had a good day?") > hA.indexOf("RIDDEN") && hB.includes("Give a friend 10% off") && hA.includes("Share the code"));
     chk("simple A/B: every tracked link's utm_term names all 3 arms + the template (subject-B.layout-B.share_cta-B.simple)",
       hB.includes("utm_term=subject-B.layout-B.share_cta-B.simple") && !/utm_content=google-review(?![^"]*utm_term=)/.test(hB));
+    chk("simple: 'Stay in the loop' — newsletter button when newsletter is on, Instagram + Facebook buttons in every email",
+      simple["simple-csr-full"].html.includes("Stay in the loop") && simple["simple-csr-full"].html.includes(">Join the newsletter</a>")
+      && !simple["simple-missing"].html.includes(">Join the newsletter</a>") && Object.values(simple).every(r => r.html.includes(">Instagram</a>") && r.html.includes(">Facebook</a>")));
     chk("simple: Instagram share + Follow us (Instagram, Facebook) links in every email",
       Object.values(simple).filter(r => r.data.features.includes("share")).every(r => r.html.includes("Post your ride on Instagram")) &&
       Object.values(simple).every(r => r.html.includes("instagram.com/coloradosledrentals") && r.html.includes("facebook.com/coloradosledrentals")));

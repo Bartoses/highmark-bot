@@ -142,7 +142,7 @@ function hmHostPhoto_(m) {
     var blob = hmEmailPhoto_(found.file);
     if (!blob) return null;
     var r = hmApi_('POST', '/recaps/photo', {
-      send_id: m.send_id, folder_date: found.date, file_name: found.name,
+      send_id: m.send_id, folder_date: found.date, file_name: found.name, file_id: String(found.file.getId()),
       content_type: String(blob.getContentType() || 'image/jpeg'), data: Utilities.base64Encode(blob.getBytes())
     });
     return (r && r.html) ? r : null;

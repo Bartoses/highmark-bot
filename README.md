@@ -413,6 +413,15 @@ one sentence, one stat line, "Your photos are ready", "Had a good day?", "Bring 
   email's signature (`rideLinkSig`, HMAC with `EMAIL_TRACKING_SECRET`); a guessed booking id sees the map and stats only.
   Photo files get a random suffix in the public bucket for the same reason. Every page and email has "Follow us: Instagram · Facebook".
 
+- **"Stay in the loop":** "Join the newsletter" (when `newsletter` is in `features`) plus Instagram and Facebook buttons.
+- **Guide app → the right photo for the right email (`db2_ride_media.sql`, not applied yet).** Every FareHarbor booking
+  carries its departure id (`availability.pk`), so the Guide Ride Log app writes one `ride_media` row per uploaded file with
+  that `availability_pk`, the Drive `drive_file_id` and, when a departure is split between guides, the `booking_pks` it covers.
+  The recap job picks the photo per booking (`rideMedia.pickRideMediaForBooking`): a photo tagged with that booking → else the
+  departure's cover → never one tagged for other riders, never a video or HEIC. The file id goes into `photo_hint.file_id`, the
+  Apps Script uses that exact file, and the upload gate accepts it. No row → the strict file-name match (date folder + tour label
+  + start time).
+
 **Hidden-when-missing rules (simple):**
 
 | Block | Shown only when |

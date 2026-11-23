@@ -21,7 +21,7 @@
 // subject; TEST_MODE=true writes nothing at all (plan only).
 // ─────────────────────────────────────────────────────────────────────────────
 import crypto from "crypto";
-import { buildPhotoHint } from "./rideMedia.js";
+import { buildPhotoHint, pickRideMediaForBooking } from "./rideMedia.js";
 import { escapeHtml, buildUnsubscribeUrl } from "./emailTemplates.js";
 import { loadSuppressionSets, normEmail, isEmailAddress, escapeLike } from "./emailSuppression.js";
 import { resolveBaseUrl } from "./emailSender.js";
@@ -193,6 +193,7 @@ export function bookingFacts(row) {
     promoCode: String(promo?.display_value ?? promo?.value ?? "").trim() || null,
     emailOptIn: b.contact?.is_subscribed_for_email_updates === true,
     orderId: b.order?.display_id ?? null,
+    availabilityPk: b.availability?.pk != null ? String(b.availability.pk) : null,   // FareHarbor departure id (ride_media key)
     rebookedFrom: b.rebooked_from ?? null,
     updatedAt: row?.updated_at ?? null,
   };
@@ -990,6 +991,15 @@ export async function runRideRecap(crm, {
   const plan = planRecaps({ bookings: rows, tours: t, logged, suppressed: sup.all, now, tz: s.timezone });
   out.skipped = plan.skipped.length; out.review = plan.review.length;
 
+  // Guide app photos (ride_media): the exact Drive file per departure / booking. Table missing → name matching only.
+  let media = [];
+  const avails = [...new Set(plan.recaps.flatMap(rc => rc.bookings.map(b => b.availabilityPk)).filter(Boolean))];
+  if (avails.length) {
+    try {
+      const { data, error: mErr } = await crm.from("ride_media").select("*").eq("client_id", clientId).in("availability_pk", avails);
+      if (!mErr) media = data ?? [];
+    } catch { media = []; }
+  }
   const weatherByDate = new Map(), stormByPoint = new Map();
   const simple = s.template === "simple";
   const exp = plan.recaps.length ? await loadExperimentStats(crm, { clientId, nowMs: new Date(now).getTime(), template: s.template }) : { stats: {} };
@@ -1001,6 +1011,8 @@ export async function runRideRecap(crm, {
     const weather = !simple && wKey ? weatherByDate.get(wKey) : null;
     const unsubscribeUrl = out.preview ? null : await unsubscribeUrlFor(crm, rc.email, baseUrl);
     const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour });
+    const tagged = pickRideMediaForBooking(media, rc.primary);
+    if (tagged) trip.photo = String(tagged.drive_file_id);
     const variants = chooseVariants({ seed: rc.primary.pk, stats: exp.stats, modes: s.experiments });
     let data, msg;
     if (simple) {

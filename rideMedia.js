@@ -78,6 +78,24 @@ export function isEmailSafeImageType(mimeType) {
   return EMAIL_IMAGE_TYPES.includes(String(mimeType || "").toLowerCase());
 }
 
+// ── ride_media (db2_ride_media.sql): the Guide app's record of which file belongs to which departure / booking ──
+/**
+ * The photo for one booking's recap, from ride_media rows (pure). booking = { pk: '#392519085', availabilityPk: '123' }.
+ * 1) photos tagged with this booking; 2) photos for the whole departure (no booking_pks); never a photo tagged for other
+ * bookings, never a video, never a file type mail apps can't show. Cover first, then sort_order, then file name.
+ * → the row, or null (then the Apps Script falls back to the strict file-name match).
+ */
+export function pickRideMediaForBooking(rows, booking) {
+  const pk = String(booking?.pk ?? ""), avail = booking?.availabilityPk != null ? String(booking.availabilityPk) : null;
+  const ok = (r) => r && r.drive_file_id && (r.kind ?? "photo") === "photo" && (!r.mime_type || isEmailSafeImageType(r.mime_type));
+  const rank = (a, b) => (b.cover === true) - (a.cover === true) || (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || String(a.file_name ?? "").localeCompare(String(b.file_name ?? ""));
+  const list = (rows ?? []).filter(ok);
+  const tagged = pk ? list.filter(r => Array.isArray(r.booking_pks) && r.booking_pks.map(String).includes(pk)) : [];
+  if (tagged.length) return tagged.sort(rank)[0];
+  const departure = avail ? list.filter(r => String(r.availability_pk ?? "") === avail && !(Array.isArray(r.booking_pks) && r.booking_pks.length)) : [];
+  return departure.length ? departure.sort(rank)[0] : null;
+}
+
 // ── matcher: KEEP IDENTICAL to hmPickPhotoName_ in docs/apps-script/Code.gs ──
 const norm = (s) => String(s || "").toLowerCase().replace(/[_\-.]+/g, " ").replace(/\s+/g, " ").trim();
 const TIME_RE = /\b(\d{1,2})(?::|\s)?(\d{2})?\s?(am|pm)\b/;
@@ -116,7 +134,9 @@ export function pickRidePhotoName(names, hint) {
  * (b) its file name contains the tour label, (c) the season matches (a winter ride never takes a summer/RZR/UTV file or
  * a Jun–Sep folder). No match = no photo; there is never an "any image" fallback.
  */
-export function isStrictPhotoMatch({ folderDate, fileName }, hint) {
+export function isStrictPhotoMatch({ folderDate, fileName, fileId = null }, hint) {
+  // the exact Drive file the Guide app tagged for this booking (ride_media → photo_hint.file_id): no name guessing needed
+  if (hint?.file_id && fileId && String(fileId) === String(hint.file_id)) return true;
   if (!hint?.date || !hint?.label || !fileName) return false;
   if (String(folderDate || "") !== String(hint.date)) return false;
   if (!norm(fileName).includes(norm(hint.label))) return false;

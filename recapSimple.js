@@ -129,7 +129,7 @@ export function buildSimpleRecapData({ booking, tour, trip, settings, nextStorm 
   const share = shareMessage({ bookingId: booking.bookingId, type, settings: s });
   const sig = rideLinkSig(booking.bookingId, ...(linkSecret !== undefined ? [linkSecret] : []));
   const subjects = { rea: "Your Rabbit Ears tour recap", backcountry: "Your backcountry day, recapped", rental: "Thanks for riding with CSR" };
-  const photo = trip?.photo === false ? false : null;
+  const photo = trip?.photo === false ? false : (typeof trip?.photo === "string" && trip.photo ? trip.photo : null);   // string = Drive file id (Guide app)
   return {
     template: "simple", type, brand, look: LOOK[brand.key], first, kicker, h1, sub,
     stats: buildStatLine({ miles: trip?.miles, highPointFt: trip?.high_point_ft, startAt: booking.startAt, endAt: booking.endAt }),
@@ -223,11 +223,17 @@ export function renderSimpleRecap(d) {
   }
   // 9. book again
   rows += rule + section(h2(e(d.next.title)) + p(e(d.next.body)) + btn(e(d.next.cta), link(d.next.url, "book-next")));
+  // 9b. stay in the loop: newsletter (when on) + follow us as real buttons
+  const half = (label, href) => `<td width="50%" style="padding:0 4px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="${L.dark}" style="border-radius:10px;background:${L.dark}">` +
+    `<a href="${attr(href)}" style="display:block;padding:14px 8px;font:700 16px/20px ${font};color:#FFFFFF;text-decoration:none">${label}</a></td></tr></table></td>`;
+  rows += rule + section(h2("Stay in the loop") +
+    p(has("newsletter") ? "Storm alerts, new adventures and first dibs on powder days." : "Powder days, new trails and ride photos from the crew.") +
+    (has("newsletter") ? btn("Join the newsletter", link(RECAP_LINKS.newsletter, "newsletter"), { bg: "#FFFFFF", color: L.ink, border: L.ink }) + `<div style="height:10px;line-height:10px;font-size:10px">&nbsp;</div>` : "") +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0"><tr>` +
+    half("Instagram", link(RECAP_LINKS.instagram, "follow-instagram")) + half("Facebook", link(RECAP_LINKS.facebook, "follow-facebook")) + `</tr></table>`);
   // 10. footer — CAN-SPAM: physical address + working unsubscribe
   const unsub = d.unsubscribeUrl || `mailto:${RECAP_LINKS.infoEmail}?subject=Unsubscribe`;
   rows += `<tr><td bgcolor="${FOOT_BG}" style="background:${FOOT_BG};padding:24px;font:12px/1.7 ${font};color:${SUBTLE};text-align:center">` +
-    `Follow us: <a href="${attr(link(RECAP_LINKS.instagram, "follow-instagram"))}" style="color:${SUBTLE}">Instagram</a> · ` +
-    `<a href="${attr(link(RECAP_LINKS.facebook, "follow-facebook"))}" style="color:${SUBTLE}">Facebook</a><br>` +
     C.footer.map(e).join(" · ") + `<br>${RECAP_PHONE} · ${RECAP_SOCIAL}<br>` +
     `<a href="${attr(link(RECAP_LINKS.newsletter, "newsletter"))}" style="color:${SUBTLE}">Newsletter</a> · ` +
     `<a href="${attr(unsub)}" data-notrack style="color:${SUBTLE}">Unsubscribe</a></td></tr>`;
@@ -325,7 +331,7 @@ export async function handleRecapPhotoUpload(crm, body, { render, process: proc 
   if (!["sending", "queued"].includes(row.status)) return { status: 409, body: { error: `send is ${row.status}` } };
   const hint = typeof row.photo_hint === "string" ? (() => { try { return JSON.parse(row.photo_hint); } catch { return null; } })() : row.photo_hint;
   if (!hint?.hosted) return { status: 409, body: { error: "this recap does not use hosted photos" } };
-  if (!isStrictPhotoMatch({ folderDate: b.folder_date, fileName: b.file_name }, hint)) return { status: 422, body: { error: "photo_mismatch" } };
+  if (!isStrictPhotoMatch({ folderDate: b.folder_date, fileName: b.file_name, fileId: b.file_id ?? null }, hint)) return { status: 422, body: { error: "photo_mismatch" } };
   if (!/^image\/(jpeg|png)$/i.test(String(b.content_type ?? "image/jpeg"))) return { status: 415, body: { error: "JPEG or PNG only" } };
   const buf = Buffer.from(String(b.data), "base64");
   if (!buf.length || buf.length > PHOTO_SPEC.maxUploadBytes) return { status: 413, body: { error: "photo empty or too large" } };

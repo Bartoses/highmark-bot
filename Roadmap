@@ -1001,7 +1001,9 @@ strict photo matching for both templates, REA route-map hero (Grand Tour map upl
 apply `db2_ride_recap_v2.sql`, Sean pushes Code.gs change set 4, Sean flips `template` to `simple` when happy.
 Open: real stop names + elevations per loop, maps for First Tracks / Tree Line / Sunset, snow data source, CSR vs REA review links.
 
-**Guide Ride Log** (NEXT after Ride Recap). A phone-first page where guides log each ride mid-day or end of day, so
+**Guide Ride Log** (NEXT after Ride Recap). **Photo contract (built server-side 2026-11-23):** for each uploaded file write a DB2 `ride_media` row
+(`db2_ride_media.sql`) with the FareHarbor departure `availability_pk` (list today's departures from `bookings` grouped by it),
+`drive_file_id`, `label`, `start_at`, `guide`, `cover`, and `booking_pks` when a departure is split between guides. A phone-first page where guides log each ride mid-day or end of day, so
 recaps are real and real-time, and the CRM fills up with useful detail.
 - **Getting there:** a link in the guide's morning SMS briefing (guides are already `operator_phones` with role `guide`),
   e.g. "Log today's rides: <link>". It's signed per guide per day, so there's no password to remember. Also reachable
