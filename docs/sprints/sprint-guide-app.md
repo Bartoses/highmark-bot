@@ -111,6 +111,25 @@ evening, with no file naming and no Apps Script photo step. And the CRM learns a
 2. A log saved after the recap went out does not resend it (one recap per guest). It still feeds the photos page and
    the CRM.
 
+### H. Two-way sync with Google Drive (Sean, 2026-11-23)
+
+Photos can come in either way and end up in both places.
+
+1. **App → Drive** (D5): every upload is copied to `Tour Photos/<date>/` with the contract name. The copy is tagged
+   with a Drive `appProperties` marker (`highmark_media_id`), so the sync below never re-imports it.
+2. **Drive → app**: a cron step (every 10 min) asks Drive what changed in the shared drive (Drive Changes API, one
+   saved page token, `supportsAllDrives=true`). For each new image or video under `Tour Photos/<YYYY-MM-DD>/` without
+   the marker: download → same processing as an app upload (JPEG/resize; HEIC converted) → Supabase Storage →
+   `ride_media` row.
+3. **Which ride it belongs to:** the date folder + tour label + start time in the file name, matched against that
+   day's departures (`availability_pk`), the same strict rules as today. One clear match = attached to that departure.
+   No or several matches = an **Unsorted photos** tray in the app for that day; a guide or manager taps the right ride.
+4. **Deletes and edits:** a file deleted or moved to the trash in Drive is hidden from the app and from recaps not yet
+   sent (never from one already sent). Starring a cover in the app sets `cover`; renaming a file in Drive doesn't
+   change which ride it's attached to once sorted.
+5. Recaps don't care where a photo came from: they read `ride_media`. A photo that lands in Drive before 6 pm is in
+   that evening's recap.
+
 ## Data (DB2, migration file for review)
 
 - `ride_logs`: id, client_id, ride_date, availability_pk, booking_pks[] (empty = whole departure), guide (name +
@@ -132,6 +151,8 @@ evening, with no file naming and no Apps Script photo step. And the CRM learns a
 6. Rider notes and issue notes never appear in any guest-facing HTML or text.
 7. Issue tag sends one manager alert (TEST_MODE: queued, not sent).
 8. Drive copy: file named by the `rideMedia` contract; a failure retries and never blocks the recap.
+8b. Drive → app: a hand-dropped photo is imported once (re-runs and the bot's own copies are skipped by the marker),
+    attached by date + label + time, ambiguous ones land in Unsorted, a Drive delete hides it from unsent recaps.
 9. Full suite: baseline count or higher, 0 failures.
 
 ## Definition of done
