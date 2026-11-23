@@ -35,6 +35,11 @@ is coming). Staff notes per booking (the booking's guide, shop for rentals, mana
 Sheet sync still waits on access to the "Weekly Shop Manifest".
 **Return runs + driver notifications (Sean, 2026-11-23):** "Plan van runs" also makes the matching **return run** (From the
 trailhead, same van name + riders, leaves when the ride ends). Drivers are told **in the app only** (no briefing text).
+**Shuttles by location (Sean, 2026-11-23):** vans never mix locations — one run per **location + ride start time**.
+Settings → **Shuttles** (per location): minutes before the ride, optional fixed pickup times (the latest one that still
+leaves that gap wins; else minutes-before), where the van leaves from, meeting spots (used when the booking has no lodging
+address), return minutes after the ride, seats per van. Table `shuttle_settings` + `shuttle_runs.location` —
+`db2_shuttle_settings.sql`, NOT YET APPLIED (until then the app plans by location + start time with no pickup times).
 **Was next** — `db2_guide_ops.sql`: `shuttle_runs` (van runs, one driver per run, 25 seats),
 `booking_equipment` (sled/trailer per booking; synced with the shop sheet both ways, then the app replaces it), and
 `booking_staff_notes`. The sheet sync needs the "Weekly Shop Manifest" shared with the connected Google account (still

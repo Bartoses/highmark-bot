@@ -293,6 +293,7 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     b.return_run = brief(on.find(x => x.kind === "from_trail") ?? null);
   }
   deps.runs = runs;
+  deps.shuttle = await loadShuttleSettings(crm, clientId);
   for (const d of deps) {
     d.assignees = resolveAssignees(d, assignments, staff);
     d.logs = logs.filter(l => String(l.availability_pk) === String(d.availability_pk));
@@ -509,29 +510,37 @@ export const RUN_KINDS = ["to_trail", "from_trail", "between_locations", "evenin
 // A run as the page sees it: stops in order with the rider's first name, seats, pickup address (drivers need it).
 export function publicRun(r, deps) {
   const byPk = new Map(); for (const d of deps ?? []) for (const b of d.bookings) byPk.set(b.pk, { b, d });
+  const loc = r.location ?? (r.booking_pks ?? []).map(pk => byPk.get(pk)?.d.location).find(Boolean) ?? null;
+  const st = deps?.shuttle?.by?.[loc] ?? null, spot = st?.meeting_spots?.[0] ?? null;
+  // pickup spot: the guest's lodging when the booking has one, else the location's meeting spot (Sean, 2026-11-23)
   const stopFor = (pk) => { const x = byPk.get(pk); return x ? { booking_pk: pk, name: x.b.full_name, phone: x.b.phone ?? null, seats: x.b.shuttle?.seats || x.b.pax || 0,
-    address: x.b.shuttle?.address ?? null, ride: `${x.d.label}`, ride_at: x.d.start_at } : { booking_pk: pk, name: "(booking moved or cancelled)", seats: 0, address: null }; };
+    address: x.b.shuttle?.address ?? spot, meeting_spot: !x.b.shuttle?.address && !!spot, ride: `${x.d.label}`, ride_at: x.d.start_at }
+    : { booking_pk: pk, name: "(booking moved or cancelled)", seats: 0, address: null }; };
   const order = (r.stops ?? []).map(s => s.booking_pk).filter(pk => (r.booking_pks ?? []).includes(pk));
   const pks = [...order, ...(r.booking_pks ?? []).filter(pk => !order.includes(pk))];
   const stops = pks.map(stopFor);
-  return { id: r.id, kind: r.kind, vehicle: r.vehicle ?? null, depart_at: r.depart_at ?? null, seats: r.seats ?? VAN_SEATS, driver_name: r.driver_name ?? null,
+  return { id: r.id, kind: r.kind, location: loc, start_point: st?.start_point ?? null, vehicle: r.vehicle ?? null, depart_at: r.depart_at ?? null, seats: r.seats ?? VAN_SEATS, driver_name: r.driver_name ?? null,
     driver_phone: r.driver_phone ?? null, notes: r.notes ?? null, booking_pks: pks, stops, used: stops.reduce((n, x) => n + (x.seats || 0), 0) };
 }
 // Suggest van runs for shuttle requests not on a run yet: by departure time, filling 25-seat vans (a party is never split).
-export function suggestRuns(deps, runs, { seats = VAN_SEATS } = {}) {
+// Vans never mix locations (Sean, 2026-11-23): one run per location + ride start time. settings = shuttleSettings by location.
+export function suggestRuns(deps, runs, { seats: defSeats = VAN_SEATS, settings = {}, date = null } = {}) {
   const taken = new Set((runs ?? []).flatMap(r => r.booking_pks ?? []));
   const groups = new Map();
   for (const d of deps ?? []) for (const b of d.bookings) {
     if (!b.shuttle?.seats || taken.has(b.pk)) continue;
-    const key = String(d.start_at);
-    (groups.get(key) ?? groups.set(key, { start_at: d.start_at, end_at: d.end_at ?? null, items: [], aps: new Set() }).get(key)).items.push({ b, d });
+    const key = `${d.location ?? ""}|${d.start_at}`;
+    (groups.get(key) ?? groups.set(key, { location: d.location ?? null, start_at: d.start_at, end_at: d.end_at ?? null, items: [] }).get(key)).items.push({ b, d });
   }
   const out = [];
-  for (const g of [...groups.values()].sort((x, y) => String(x.start_at).localeCompare(String(y.start_at)))) {
+  for (const g of [...groups.values()].sort((x, y) => String(x.start_at).localeCompare(String(y.start_at)) || String(x.location).localeCompare(String(y.location)))) {
+    const st = settings[g.location] ?? null, seats = st?.seats ?? defSeats;
+    const depart = pickupTimeFor(g.start_at, st, date ?? (g.start_at ? localDate(g.start_at, GUIDE_TZ) : null));
+    const ret = g.end_at && st?.return_after_minutes ? new Date(Date.parse(g.end_at) + st.return_after_minutes * 60000).toISOString() : g.end_at;
     let cur = null;
     for (const { b, d } of g.items.sort((x, y) => y.b.shuttle.seats - x.b.shuttle.seats)) {
       const n = b.shuttle.seats;
-      if (!cur || cur.used + n > seats) { cur = { kind: "to_trail", depart_at: null, seats, booking_pks: [], availability_pks: [], used: 0, ride_at: g.start_at, ride_end: g.end_at }; out.push(cur); }
+      if (!cur || cur.used + n > seats) { cur = { kind: "to_trail", location: g.location, depart_at: depart, seats, booking_pks: [], availability_pks: [], used: 0, ride_at: g.start_at, ride_end: ret }; out.push(cur); }
       cur.booking_pks.push(b.pk); cur.used += n;
       if (!cur.availability_pks.includes(String(d.availability_pk))) cur.availability_pks.push(String(d.availability_pk));
     }
@@ -540,7 +549,55 @@ export function suggestRuns(deps, runs, { seats = VAN_SEATS } = {}) {
 }
 // Sean (2026-11-23): every run to the trailhead gets a matching return run, leaving when the ride ends.
 export function returnRunFor(r) {
-  return { kind: "from_trail", depart_at: r.ride_end ?? null, seats: r.seats, booking_pks: [...r.booking_pks], availability_pks: [...r.availability_pks], used: r.used };
+  return { kind: "from_trail", location: r.location ?? null, depart_at: r.ride_end ?? null, seats: r.seats, booking_pks: [...r.booking_pks], availability_pks: [...r.availability_pks], used: r.used };
+}
+// ── shuttle settings per location (db2_shuttle_settings.sql; empty until applied) ──
+const hhmm = (v) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? "").trim()); return m && +m[1] < 24 && +m[2] < 60 ? `${m[1].padStart(2, "0")}:${m[2]}` : null; };
+const toMin = (h) => { const [a, b] = h.split(":").map(Number); return a * 60 + b; };
+const localMinutes = (iso, tz = GUIDE_TZ) => { const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(iso));
+  return Number(p.find(x => x.type === "hour").value) * 60 + Number(p.find(x => x.type === "minute").value); };
+// Pickup time for a ride: the latest fixed pickup that still leaves lead_minutes before the start; else lead_minutes before; else null.
+export function pickupTimeFor(rideStartIso, setting, date) {
+  if (!rideStartIso || !setting) return null;
+  const lead = Number.isFinite(setting.lead_minutes) ? setting.lead_minutes : null;
+  const fixed = (setting.pickup_times ?? []).map(hhmm).filter(Boolean);
+  if (fixed.length && date) {
+    const latest = localMinutes(rideStartIso) - (lead ?? 0);
+    const ok = fixed.filter(h => toMin(h) <= latest).sort((x, y) => toMin(y) - toMin(x))[0];
+    if (ok) return localTimeToIso(date, ok);
+  }
+  return lead != null ? new Date(Date.parse(rideStartIso) - lead * 60000).toISOString() : null;
+}
+export function normalizeShuttleSetting(body) {
+  const loc = String(body?.location ?? "");
+  if (!LOCATIONS.some(l => l.key === loc)) return { error: "pick a location" };
+  const int = (v, lo, hi) => { if (v === null || v === undefined || v === "") return null; const n = Number.parseInt(v, 10); return Number.isInteger(n) && n >= lo && n <= hi ? n : NaN; };
+  const lead = int(body.lead_minutes, 0, 300), ret = int(body.return_after_minutes, 0, 240), seats = int(body.seats, 1, 60);
+  if (Number.isNaN(lead)) return { error: "minutes before the ride: 0–300" };
+  if (Number.isNaN(ret)) return { error: "minutes after the ride: 0–240" };
+  if (Number.isNaN(seats)) return { error: "seats: 1–60" };
+  const list = (v) => (Array.isArray(v) ? v : String(v ?? "").split(/[\n,]/)).map(x => String(x).trim()).filter(Boolean);
+  const times = list(body.pickup_times);
+  const bad = times.find(x => !hhmm(x));
+  if (bad) return { error: `"${bad}" isn't a time (use 6:45 or 13:15)` };
+  return { row: { client_id: "csr_rea", location: loc, lead_minutes: lead, pickup_times: [...new Set(times.map(hhmm))].sort(), start_point: text(body.start_point, 160),
+    meeting_spots: list(body.meeting_spots).map(x => x.slice(0, 120)).slice(0, 10), return_after_minutes: ret ?? 0, seats: seats ?? VAN_SEATS, active: body.active !== false } };
+}
+async function loadShuttleSettings(crm, clientId = "csr_rea") {
+  try {
+    const { data, error } = await crm.from("shuttle_settings").select("*").eq("client_id", clientId);
+    if (error) return { ok: false, by: {} };
+    return { ok: true, by: Object.fromEntries((data ?? []).filter(r => r.active !== false).map(r => [r.location, r])) };
+  } catch { return { ok: false, by: {} }; }
+}
+// POST /guide/api/admin/shuttle — managers set one location's shuttle settings.
+export async function handleGuideAdminShuttle(deps, body) {
+  const a = await requireManager(deps, body?.t); if (a.error) return a.error;
+  const n = normalizeShuttleSetting(body);
+  if (n.error) return { status: 400, body: { error: n.error } };
+  const { error } = await deps.crm.from("shuttle_settings").upsert({ ...n.row, updated_by: a.me.phone, updated_at: new Date().toISOString() }, { onConflict: "client_id,location" });
+  if (error) return { status: 500, body: { error: /shuttle_settings/.test(error.message ?? "") ? "Shuttle settings aren't switched on yet (db2_shuttle_settings.sql)" : "could not save" } };
+  return { status: 200, body: { ok: true } };
 }
 async function unitSuggestions(crm) {
   try {
@@ -615,10 +672,11 @@ export async function handleGuideRun(deps, body) {
   const all = await loadDay(deps.crm, deps.db1, { date });
   if (body.action === "suggest") {
     // only to-trailhead runs count as "taken" — a return run alone doesn't stop a booking from being planned
-    const made = suggestRuns(all, (all.runs ?? []).filter(r => r.kind === "to_trail"));
+    const made = suggestRuns(all, (all.runs ?? []).filter(r => r.kind === "to_trail"), { settings: all.shuttle?.by ?? {}, date });
     const vans = new Set((all.runs ?? []).map(r => r.vehicle).filter(Boolean));
     let n = 0;
     const insert = async (r, vehicle) => (await deps.crm.from("shuttle_runs").insert({ client_id: "csr_rea", run_date: date, kind: r.kind, seats: r.seats, vehicle,
+      ...(all.shuttle?.ok ? { location: r.location ?? null } : {}),
       depart_at: r.depart_at ?? null, booking_pks: r.booking_pks, availability_pks: r.availability_pks, stops: r.booking_pks.map(pk => ({ booking_pk: pk })), created_by: a.me.phone })).error;
     for (const r of made) {
       let vehicle; do vehicle = `Van ${++n}`; while (vans.has(vehicle)); vans.add(vehicle);
@@ -639,7 +697,8 @@ export async function handleGuideRun(deps, body) {
   const row = { client_id: "csr_rea", run_date: date, kind, seats, vehicle: body.vehicle ? String(body.vehicle).slice(0, 40) : null,
     depart_at: localTimeToIso(date, body.depart_time), driver_phone: driver?.phone ?? null, driver_name: driver?.display_name ?? null,
     booking_pks: pks, availability_pks: [...new Set(all.filter(x => x.booking_pks.some(p => pks.includes(p))).map(x => String(x.availability_pk)))],
-    stops: pks.map(pk => ({ booking_pk: pk })), notes: body.notes ? String(body.notes).slice(0, 300) : null, updated_at: new Date().toISOString() };
+    stops: pks.map(pk => ({ booking_pk: pk })), notes: body.notes ? String(body.notes).slice(0, 300) : null, updated_at: new Date().toISOString(),
+    ...(all.shuttle?.ok ? { location: all.find(x => x.booking_pks.some(p => pks.includes(p)))?.location ?? null } : {}) };
   const q = body.id ? deps.crm.from("shuttle_runs").update(row).eq("id", String(body.id)).eq("run_date", date)
     : deps.crm.from("shuttle_runs").insert({ ...row, created_by: a.me.phone });
   const { error } = await q;
@@ -865,8 +924,9 @@ export async function handleGuideAdmin(deps, { t }) {
     deps.crm.from("recap_settings").select("*").eq("client_id", "csr_rea").maybeSingle(),
   ]);
   const staff = await loadStaff(deps.db1, "csr_rea", deps.crm);
+  const sh = await loadShuttleSettings(deps.crm);
   return { status: 200, body: {
-    tours: groupTours(tours), staff, locations: LOCATIONS, roles: STAFF_ROLES,
+    tours: groupTours(tours), staff, locations: LOCATIONS, roles: STAFF_ROLES, shuttle: { ready: sh.ok, by: sh.by },
     settings: st ? { send_hour: st.send_hour, template: st.template ?? "v1", features: st.features ?? [], dry_run: st.dry_run !== false, test_to: st.test_to,
       friend_code: st.friend_code, all_features: RECAP_FEATURES, templates: RECAP_TEMPLATES } : null,
   } };

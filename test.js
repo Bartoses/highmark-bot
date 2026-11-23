@@ -19406,7 +19406,7 @@ async function testGuideApp() {
         && ret && ret.vehicle === "Van 1" && ret.booking_pks.join() === "#1" && ret.depart_at === "2026-12-11T21:00:00.000Z" && ob.crm.tables.shuttle_runs.length === 2
         && (await G.handleGuideRun(od, { t: t(BOSS), action: "suggest" })).body.created === 0, JSON.stringify(ob.crm.tables.shuttle_runs));
       chk("van runs: return run = same riders, leaves at the ride's end", JSON.stringify(G.returnRunFor({ kind: "to_trail", seats: 25, booking_pks: ["#a"], availability_pks: ["1"], used: 3, ride_end: "X" }))
-        === '{"kind":"from_trail","depart_at":"X","seats":25,"booking_pks":["#a"],"availability_pks":["1"],"used":3}');
+        === '{"kind":"from_trail","location":null,"depart_at":"X","seats":25,"booking_pks":["#a"],"availability_pks":["1"],"used":3}');
       const sv = await G.handleGuideRun(od, { t: t(BOSS), id: run.id, vehicle: "Van 1", kind: "to_trail", depart_time: "07:15", driver_phone: DAN, booking_pks: ["#1", "#2", "#nope"] });
       chk("van runs: a manager sets the driver, leave time and riders (bookings from other days ignored); unknown driver refused",
         sv.status === 200 && run.driver_name === "Dan Driver" && run.depart_at === "2026-12-11T14:15:00.000Z" && run.booking_pks.join() === "#1,#2"
@@ -19425,6 +19425,41 @@ async function testGuideApp() {
         bd.body.units.sled.includes("K-12") && bd.body.units.trailer.includes("4-place #2") && jd2.units === null);
       const del = await G.handleGuideRun(od, { t: t(BOSS), id: run.id, remove: true });
       chk("van runs: a manager can delete a run", del.status === 200 && ob.crm.tables.shuttle_runs.length === 1);
+    }
+
+    // ── shuttle settings per location (db2_shuttle_settings.sql) ──
+    {
+      const ST = { north_routt: { lead_minutes: 75, pickup_times: [], seats: 25, return_after_minutes: 15, meeting_spots: ["Steamboat shop"], start_point: "Shop" },
+        rabbit_ears: { lead_minutes: 30, pickup_times: ["06:45", "11:15"], seats: 12, return_after_minutes: 0 } };
+      chk("pickup time: minutes before the ride; or the latest fixed time that still leaves that gap; nothing set = no time",
+        G.pickupTimeFor("2026-12-30T15:00:00Z", ST.north_routt, "2026-12-30") === "2026-12-30T13:45:00.000Z"                 // 8:00 → 6:45 (75 min)
+        && G.pickupTimeFor("2026-12-30T16:00:00Z", ST.rabbit_ears, "2026-12-30") === "2026-12-30T13:45:00.000Z"               // 9:00 → fixed 6:45
+        && G.pickupTimeFor("2026-12-30T19:00:00Z", ST.rabbit_ears, "2026-12-30") === "2026-12-30T18:15:00.000Z"               // 12:00 → fixed 11:15
+        && G.pickupTimeFor("2026-12-30T13:50:00Z", ST.rabbit_ears, "2026-12-30") === "2026-12-30T13:20:00.000Z"               // 6:50 → no fixed fits → 30 min before
+        && G.pickupTimeFor("2026-12-30T15:00:00Z", null, "2026-12-30") === null && G.pickupTimeFor("2026-12-30T15:00:00Z", { pickup_times: [] }, "2026-12-30") === null);
+      const mk = (pk, seats) => ({ pk, pax: seats, shuttle: { seats, address: null } });
+      const sd2 = [{ availability_pk: "1", location: "north_routt", start_at: "2026-12-30T15:00:00Z", end_at: "2026-12-30T22:00:00Z", bookings: [mk("#n1", 2), mk("#n2", 4)] },
+        { availability_pk: "2", location: "rabbit_ears", start_at: "2026-12-30T15:00:00Z", end_at: "2026-12-30T18:00:00Z", bookings: [mk("#r1", 8), mk("#r2", 6)] }];
+      const plan = G.suggestRuns(sd2, [], { settings: ST, date: "2026-12-30" });
+      chk("van runs: never mix locations (same start time, two locations = two vans); seats per location; pickup + return times from settings",
+        plan.length === 3 && plan.every(r => r.booking_pks.every(pk => pk.startsWith(r.location === "north_routt" ? "#n" : "#r")))
+        && plan.filter(r => r.location === "rabbit_ears").length === 2 && plan.find(r => r.location === "north_routt").depart_at === "2026-12-30T13:45:00.000Z"
+        && plan.find(r => r.location === "north_routt").ride_end === "2026-12-30T22:15:00.000Z" && G.returnRunFor(plan[0]).location === plan[0].location, JSON.stringify(plan));
+      chk("shuttle settings: times cleaned + sorted; bad time, bad minutes or unknown location refused",
+        JSON.stringify(G.normalizeShuttleSetting({ location: "rabbit_ears", lead_minutes: "30", pickup_times: "11:15, 6:45", meeting_spots: "Ranch lot\n\nGondola", seats: "12" }).row.pickup_times) === '["06:45","11:15"]'
+        && G.normalizeShuttleSetting({ location: "rabbit_ears", meeting_spots: "Ranch lot\nGondola" }).row.meeting_spots.length === 2
+        && /isn't a time/.test(G.normalizeShuttleSetting({ location: "rabbit_ears", pickup_times: "7am" }).error)
+        && G.normalizeShuttleSetting({ location: "rabbit_ears", lead_minutes: "999" }).error && G.normalizeShuttleSetting({ location: "denver" }).error
+        && G.normalizeShuttleSetting({ location: "kremmling" }).row.lead_minutes === null);
+      const sb2 = mkDbs(), sdp = { ...sb2, now: NOW };
+      const ok = await G.handleGuideAdminShuttle(sdp, { t: t(BOSS), location: "rabbit_ears", lead_minutes: 30, pickup_times: "6:45", meeting_spots: "Ranch lot" });
+      chk("shuttle settings: managers save a location (once per location); guides can't",
+        ok.status === 200 && sb2.crm.tables.shuttle_settings.length === 1 && sb2.crm.tables.shuttle_settings[0].pickup_times[0] === "06:45"
+        && (await G.handleGuideAdminShuttle(sdp, { t: t(BOSS), location: "rabbit_ears", lead_minutes: 40 })).status === 200 && sb2.crm.tables.shuttle_settings.length === 1
+        && sb2.crm.tables.shuttle_settings[0].lead_minutes === 40 && (await G.handleGuideAdminShuttle(sdp, { t: t(JAKE), location: "rabbit_ears" })).status === 403);
+      const pr = G.publicRun({ id: "r", kind: "to_trail", booking_pks: ["#n1"], stops: [] }, Object.assign([sd2[0]], { shuttle: { by: ST } }));
+      chk("van run stops: no lodging address on the booking → the location's meeting spot (marked), and where the van leaves from",
+        pr.location === "north_routt" && pr.stops[0].address === "Steamboat shop" && pr.stops[0].meeting_spot === true && pr.start_point === "Shop");
     }
 
     // ── locations, staff, manager assignment ──
