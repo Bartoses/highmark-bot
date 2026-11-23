@@ -275,6 +275,22 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     if (m.equipment) b.equipment = String(m.equipment).slice(0, 120);
     if (m.booking_notes) b.notes = [{ label: "Booking note", value: String(m.booking_notes).slice(0, 300), health: false }, ...b.notes].slice(0, 8);
   }
+  // sled / trailer per booking, staff notes, van runs (db2_guide_ops.sql; each read degrades to empty if missing)
+  const byPks = async (table) => {
+    if (!pks.length) return [];
+    try { const { data, error: e } = await crm.from(table).select("*").in("booking_pk", pks); return e ? [] : (data ?? []); } catch { return []; }
+  };
+  const [equip, snotes, runs] = await Promise.all([byPks("booking_equipment"), byPks("booking_staff_notes"),
+    (async () => { try { const { data, error: e } = await crm.from("shuttle_runs").select("*").eq("client_id", clientId).eq("run_date", date); return e ? [] : (data ?? []); } catch { return []; } })()]);
+  for (const d of deps) for (const b of d.bookings) {
+    b.units = equip.filter(x => x.booking_pk === b.pk).map(x => ({ id: x.id, kind: x.kind, unit: x.unit, note: x.note ?? null, source: x.source }))
+      .sort((x, y) => x.kind.localeCompare(y.kind) || x.unit.localeCompare(y.unit, undefined, { numeric: true }));
+    b.staff_notes = snotes.filter(x => x.booking_pk === b.pk && !x.hidden).sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)))
+      .map(x => ({ id: x.id, note: x.note, by: x.author_name ?? null, by_phone: x.author_phone ?? null, at: x.created_at }));
+    const r = runs.find(x => (x.booking_pks ?? []).includes(b.pk));
+    b.run = r ? { id: r.id, kind: r.kind, vehicle: r.vehicle ?? null, depart_at: r.depart_at ?? null, driver: r.driver_name ?? null } : null;
+  }
+  deps.runs = runs;
   for (const d of deps) {
     d.assignees = resolveAssignees(d, assignments, staff);
     d.logs = logs.filter(l => String(l.availability_pk) === String(d.availability_pk));
@@ -295,7 +311,8 @@ export function publicDeparture(d, me, view = me.access) {
   const manifest = (d.bookings ?? []).map(b => details
     ? { pk: b.pk, name: b.full_name, pax: b.pax, phone: b.phone, item: d.type === "rental" ? b.item : null, notes: b.notes ?? [],
         waiver_signed: b.waiver_signed ?? null, checked_in: b.checked_in ?? null, due_cents: b.due_cents ?? 0, equipment: b.equipment ?? null,
-        shuttle: b.shuttle ?? null, guides: guidesFor(b.pk),
+        shuttle: b.shuttle ?? null, guides: guidesFor(b.pk), units: b.units ?? [], run: b.run ?? null,
+        staff_notes: (b.staff_notes ?? []).map(n => ({ id: n.id, note: n.note, by: n.by, at: n.at, mine: n.by_phone === me.phone })),
         ...(money ? { total_cents: b.total_cents ?? 0, paid_cents: b.paid_cents ?? 0, source: b.source ?? null, booked_at: b.booked_at ?? null } : {}) }
     : { pk: b.pk, name: b.name, pax: b.pax });
   const sum = (k) => (d.bookings ?? []).reduce((n, b) => n + (Number(b[k]) || 0), 0);
@@ -484,6 +501,144 @@ export async function handleGuideSeason(deps, { t, as = null }) {
     next: out.find(x => x.date > today) ?? null, next_mine: out.find(x => x.date > today && x.mine) ?? null } };
 }
 
+// ── van runs, sleds/trailers, staff notes (db2_guide_ops.sql) ──
+export const VAN_SEATS = 25;
+export const RUN_KINDS = ["to_trail", "from_trail", "between_locations", "evening_pickup"];
+// A run as the page sees it: stops in order with the rider's first name, seats, pickup address (drivers need it).
+export function publicRun(r, deps) {
+  const byPk = new Map(); for (const d of deps ?? []) for (const b of d.bookings) byPk.set(b.pk, { b, d });
+  const stopFor = (pk) => { const x = byPk.get(pk); return x ? { booking_pk: pk, name: x.b.full_name, phone: x.b.phone ?? null, seats: x.b.shuttle?.seats || x.b.pax || 0,
+    address: x.b.shuttle?.address ?? null, ride: `${x.d.label}`, ride_at: x.d.start_at } : { booking_pk: pk, name: "(booking moved or cancelled)", seats: 0, address: null }; };
+  const order = (r.stops ?? []).map(s => s.booking_pk).filter(pk => (r.booking_pks ?? []).includes(pk));
+  const pks = [...order, ...(r.booking_pks ?? []).filter(pk => !order.includes(pk))];
+  const stops = pks.map(stopFor);
+  return { id: r.id, kind: r.kind, vehicle: r.vehicle ?? null, depart_at: r.depart_at ?? null, seats: r.seats ?? VAN_SEATS, driver_name: r.driver_name ?? null,
+    driver_phone: r.driver_phone ?? null, notes: r.notes ?? null, booking_pks: pks, stops, used: stops.reduce((n, x) => n + (x.seats || 0), 0) };
+}
+// Suggest van runs for shuttle requests not on a run yet: by departure time, filling 25-seat vans (a party is never split).
+export function suggestRuns(deps, runs, { seats = VAN_SEATS } = {}) {
+  const taken = new Set((runs ?? []).flatMap(r => r.booking_pks ?? []));
+  const groups = new Map();
+  for (const d of deps ?? []) for (const b of d.bookings) {
+    if (!b.shuttle?.seats || taken.has(b.pk)) continue;
+    const key = String(d.start_at);
+    (groups.get(key) ?? groups.set(key, { start_at: d.start_at, items: [], aps: new Set() }).get(key)).items.push({ b, d });
+  }
+  const out = [];
+  for (const g of [...groups.values()].sort((x, y) => String(x.start_at).localeCompare(String(y.start_at)))) {
+    let cur = null;
+    for (const { b, d } of g.items.sort((x, y) => y.b.shuttle.seats - x.b.shuttle.seats)) {
+      const n = b.shuttle.seats;
+      if (!cur || cur.used + n > seats) { cur = { kind: "to_trail", depart_at: null, seats, booking_pks: [], availability_pks: [], used: 0, ride_at: g.start_at }; out.push(cur); }
+      cur.booking_pks.push(b.pk); cur.used += n;
+      if (!cur.availability_pks.includes(String(d.availability_pk))) cur.availability_pks.push(String(d.availability_pk));
+    }
+  }
+  return out;
+}
+async function unitSuggestions(crm) {
+  try {
+    const { data, error } = await crm.from("booking_equipment").select("kind, unit").order("updated_at", { ascending: false }).limit(500);
+    if (error) return { sled: [], trailer: [], other: [] };
+    const o = { sled: [], trailer: [], other: [] };
+    for (const r of data ?? []) if (o[r.kind] && !o[r.kind].includes(r.unit)) o[r.kind].push(r.unit);
+    for (const k of Object.keys(o)) o[k].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+    return o;
+  } catch { return { sled: [], trailer: [], other: [] }; }
+}
+// the booking (and its departure) on a day this person may see in full
+async function findBooking(deps, a, d, bookingPk) {
+  const date = d ? allowedDate(d, a.date, a.me.access) : a.date;
+  const all = await loadDay(deps.crm, deps.db1, { date });
+  const dep = all.find(x => x.booking_pks.includes(bookingPk));
+  if (!dep) return { error: { status: 404, body: { error: "booking not found" } } };
+  const mine = (dep.assignees ?? []).some(x => x.phone === a.me.phone);
+  if (!(a.me.access === "manager" || mine || (a.me.access === "shop" && dep.type === "rental"))) return { error: { status: 403, body: { error: "not your booking" } } };
+  return { dep, all, date, booking: dep.bookings.find(b => b.pk === bookingPk) };
+}
+// POST /guide/api/equipment — a sled / trailer on a booking (managers + shop). { booking_pk, kind, unit, note? } or { remove_id }
+export async function handleGuideEquipment(deps, { t, d = null, booking_pk, kind = "sled", unit, note = null, remove_id = null }) {
+  const a = await authed(deps, t); if (a.error) return a.error;
+  if (!["manager", "shop"].includes(a.me.access)) return { status: 403, body: { error: "Managers and the shop assign sleds" } };
+  const f = await findBooking(deps, a, d, String(booking_pk ?? "")); if (f.error) return f.error;
+  if (remove_id) {
+    await deps.crm.from("booking_equipment").delete().eq("id", String(remove_id)).eq("booking_pk", f.booking.pk);
+    return { status: 200, body: { ok: true } };
+  }
+  const u = String(unit ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
+  if (!u) return { status: 400, body: { error: "Type the sled or trailer name" } };
+  if (!["sled", "trailer", "other"].includes(kind)) return { status: 400, body: { error: "kind must be sled, trailer or other" } };
+  const { error } = await deps.crm.from("booking_equipment").upsert({ client_id: "csr_rea", booking_pk: f.booking.pk, ride_date: f.dep.ride_date, kind, unit: u,
+    note: note ? String(note).slice(0, 200) : null, source: "app", updated_by: a.me.phone, updated_at: new Date().toISOString() }, { onConflict: "booking_pk,kind,unit" });
+  if (error) return { status: 500, body: { error: "could not save" } };
+  return { status: 200, body: { ok: true } };
+}
+// POST /guide/api/note — an internal note on a booking (anyone who sees the booking in full). { booking_pk, note } or { remove_id }
+export async function handleGuideNote(deps, { t, d = null, booking_pk, note, remove_id = null }) {
+  const a = await authed(deps, t); if (a.error) return a.error;
+  const f = await findBooking(deps, a, d, String(booking_pk ?? "")); if (f.error) return f.error;
+  if (remove_id) {
+    const q = deps.crm.from("booking_staff_notes").update({ hidden: true }).eq("id", String(remove_id)).eq("booking_pk", f.booking.pk);
+    await (a.me.access === "manager" ? q : q.eq("author_phone", a.me.phone));
+    return { status: 200, body: { ok: true } };
+  }
+  const n = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
+  if (!n) return { status: 400, body: { error: "Write a note first" } };
+  const meStaff = (f.all.staff ?? []).find(x => x.phone === a.me.phone);
+  const { error } = await deps.crm.from("booking_staff_notes").insert({ client_id: "csr_rea", booking_pk: f.booking.pk, ride_date: f.dep.ride_date, note: n,
+    author_phone: a.me.phone, author_name: meStaff?.display_name ?? a.me.display_name ?? null });
+  if (error) return { status: 500, body: { error: "could not save" } };
+  return { status: 200, body: { ok: true } };
+}
+// POST /guide/api/run — managers: { d, action: "suggest" } makes runs for shuttle requests not on one;
+// { d, id?, kind, vehicle, seats, depart_time "HH:MM", driver_phone, booking_pks[], notes } saves one; { d, id, remove: true } deletes.
+export function localTimeToIso(date, hhmm, tz = GUIDE_TZ) {
+  if (!/^\d{1,2}:\d{2}$/.test(String(hhmm ?? ""))) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  if (h > 23 || m > 59) return null;
+  for (const off of [6, 7]) {                                          // Mountain Time: UTC-7 (MST) or UTC-6 (MDT)
+    const iso = new Date(Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1, +date.slice(8, 10), h + off, m)).toISOString();
+    if (localHour(new Date(iso), tz) === h && localDate(iso, tz) === date) return iso;
+  }
+  return null;
+}
+export async function handleGuideRun(deps, body) {
+  const a = await authed(deps, body?.t); if (a.error) return a.error;
+  if (a.me.access !== "manager") return { status: 403, body: { error: "Managers only" } };
+  const date = body.d ? allowedDate(body.d, a.date, "manager") : a.date;
+  const all = await loadDay(deps.crm, deps.db1, { date });
+  if (body.action === "suggest") {
+    const made = suggestRuns(all, all.runs);
+    let n = 0;
+    for (const r of made) {
+      const vehicle = `Van ${(all.runs?.length ?? 0) + (++n)}`;
+      const { error } = await deps.crm.from("shuttle_runs").insert({ client_id: "csr_rea", run_date: date, kind: r.kind, seats: r.seats, vehicle,
+        booking_pks: r.booking_pks, availability_pks: r.availability_pks, stops: r.booking_pks.map(pk => ({ booking_pk: pk })), created_by: a.me.phone });
+      if (error) return { status: 500, body: { error: "could not save" } };
+    }
+    return { status: 200, body: { ok: true, created: made.length } };
+  }
+  if (body.remove && body.id) {
+    await deps.crm.from("shuttle_runs").delete().eq("id", String(body.id)).eq("run_date", date);
+    return { status: 200, body: { ok: true } };
+  }
+  const kind = RUN_KINDS.includes(body.kind) ? body.kind : "to_trail";
+  const dayPks = new Set(all.flatMap(x => x.booking_pks));
+  const pks = [...new Set((Array.isArray(body.booking_pks) ? body.booking_pks : []).map(String))].filter(pk => dayPks.has(pk));
+  const seats = Math.max(1, Math.min(60, Number.parseInt(body.seats, 10) || VAN_SEATS));
+  const driver = body.driver_phone ? (all.staff ?? []).find(x => x.phone === body.driver_phone) : null;
+  if (body.driver_phone && !driver) return { status: 400, body: { error: "pick the driver from the staff list" } };
+  const row = { client_id: "csr_rea", run_date: date, kind, seats, vehicle: body.vehicle ? String(body.vehicle).slice(0, 40) : null,
+    depart_at: localTimeToIso(date, body.depart_time), driver_phone: driver?.phone ?? null, driver_name: driver?.display_name ?? null,
+    booking_pks: pks, availability_pks: [...new Set(all.filter(x => x.booking_pks.some(p => pks.includes(p))).map(x => String(x.availability_pk)))],
+    stops: pks.map(pk => ({ booking_pk: pk })), notes: body.notes ? String(body.notes).slice(0, 300) : null, updated_at: new Date().toISOString() };
+  const q = body.id ? deps.crm.from("shuttle_runs").update(row).eq("id", String(body.id)).eq("run_date", date)
+    : deps.crm.from("shuttle_runs").insert({ ...row, created_by: a.me.phone });
+  const { error } = await q;
+  if (error) return { status: 500, body: { error: "could not save" } };
+  return { status: 200, body: { ok: true } };
+}
+
 export async function handleGuideDay(deps, { t, d, as = null }) {
   const a = await authed(deps, t); if (a.error) return a.error;
   const view = viewFor(a.me.access, as);
@@ -499,6 +654,9 @@ export async function handleGuideDay(deps, { t, d, as = null }) {
   return { status: 200, body: {
     me: { name: meStaff?.display_name ?? a.me.display_name ?? a.me.label ?? null, access: a.me.access, views: VIEWS_FOR[a.me.access] ?? [], view, home_location: meStaff?.home_location ?? null },
     date, today, locations: LOCATIONS, departures: list, next,
+    runs: view === "manager" ? (all.runs ?? []).map(r => publicRun(r, all)) : [],
+    my_runs: (all.runs ?? []).filter(r => r.driver_phone === a.me.phone).map(r => publicRun(r, all)),
+    units: view === "manager" || view === "shop" ? await unitSuggestions(deps.crm) : null,
     // managers assign people; everyone else only needs names (team view)
     staff: (all.staff ?? []).map(x => ({ name: x.display_name, role: x.role, home_location: x.home_location, ...(view === "manager" ? { phone: x.phone } : {}) })),
   } };

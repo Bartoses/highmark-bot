@@ -33,7 +33,7 @@
   .btn:disabled { opacity:.5; }
   h2 { font-size:18px; margin:18px 0 8px; }
   label.f { display:block; font-weight:700; font-size:14px; margin:12px 0 4px; }
-  input[type=text], input[type=number], textarea, select { width:100%; font-family:inherit; font-size:16px; padding:12px; border:1px solid #C9D0D7; border-radius:10px; background:#fff; color:var(--ink); }
+  input[type=text], input[type=number], input[type=time], input:not([type]), textarea, select { width:100%; font-family:inherit; font-size:16px; padding:12px; border:1px solid #C9D0D7; border-radius:10px; background:#fff; color:var(--ink); }
   textarea { min-height:72px; }
   .hint { color:var(--muted); font-size:13px; margin-top:4px; }
   .chips { display:flex; flex-wrap:wrap; gap:8px; }
@@ -90,6 +90,16 @@
   .stat div { background:#F4F6F8; border-radius:10px; padding:8px; } .stat b { display:block; font-size:18px; } .stat span { font-size:12px; color:var(--muted); }
   .rrow { display:grid; grid-template-columns:1fr auto; gap:2px 10px; padding:8px 0; border-top:1px solid var(--line); font-size:14px; }
   .rrow:first-of-type { border-top:0; } .rrow i { grid-column:1 / -1; height:6px; border-radius:3px; background:var(--acc); display:block; }
+  .unit { display:inline-flex; align-items:center; gap:4px; font-size:14px; font-weight:700; background:#FFF3DF; color:#7A4E0F; border-radius:8px; padding:4px 8px; margin:6px 6px 0 0; }
+  .unit button, .snote button { border:0; background:none; color:inherit; font-size:15px; padding:0 2px; min-width:24px; min-height:24px; }
+  .addrow { display:grid; grid-template-columns:88px minmax(0,1fr) auto; gap:6px; margin-top:8px; }
+  .addrow select, .addrow input { padding:8px 10px; font-size:16px; min-width:0; }
+  .snote { font-size:14px; background:#F4F6F8; border-radius:8px; padding:6px 8px; margin-top:6px; display:flex; justify-content:space-between; gap:8px; }
+  .snote .by { color:var(--muted); font-size:12px; }
+  .run { border-left:4px solid var(--acc); }
+  .stop { border-top:1px solid var(--line); padding:8px 0; font-size:14px; } .stop:first-child { border-top:0; }
+  .pick label { display:flex; align-items:center; gap:10px; min-height:44px; border-bottom:1px solid var(--line); font-size:15px; }
+  .pick input { width:22px; height:22px; flex:none; }
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 </style>
 </head>
@@ -106,7 +116,7 @@
   var TEAM = null;
   try { TEAM = JSON.parse(localStorage.getItem("guideTeam") || "null"); } catch (e) { TEAM = null; }
   if (!T && TEAM && TEAM.code && TEAM.phone) T = "team:" + TEAM.code + ":" + TEAM.phone;
-  var S = { day: null, date: null, today: null, open: null, tab: "bookings", sub: "tours", admin: null, editTour: null, editStaff: null, uploading: 0, queue: [], drafts: {}, view: null, loc: null, season: false, seasonData: null, seasonTab: "days" };
+  var S = { day: null, date: null, today: null, open: null, tab: "bookings", sub: "tours", admin: null, editTour: null, editStaff: null, uploading: 0, queue: [], drafts: {}, view: null, loc: null, season: false, seasonData: null, seasonTab: "days", editRun: null };
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   var COND = [["fresh_snow", "Fresh snow"], ["bluebird", "Bluebird"], ["snowing", "Snowing"], ["windy", "Windy"], ["cold", "Cold"]];
@@ -133,7 +143,7 @@
   function popLevel() {
     if (S.open && S.uploading && !confirm("Photos are still uploading. Leave anyway?")) { try { history.pushState({ sub: 1 }, ""); } catch (e) {} return; }
     captureDraft();
-    if (S.editTour) S.editTour = null; else if (S.editStaff) S.editStaff = null;
+    if (S.editRun) S.editRun = null; else if (S.editTour) S.editTour = null; else if (S.editStaff) S.editStaff = null;
     else if (S.open) S.open = null; else if (S.season) S.season = false;
     render();
   }
@@ -144,7 +154,7 @@
     document.addEventListener("touchstart", function (e) { var t = e.touches[0]; if (e.touches.length !== 1 || t.clientX < 30 || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) { x0 = null; return; } x0 = t.clientX; y0 = t.clientY; t0 = Date.now(); }, { passive: true });
     document.addEventListener("touchend", function (e) {
       if (x0 === null) return; var t = e.changedTouches[0], dx = t.clientX - x0, dy = Math.abs(t.clientY - y0); x0 = null;
-      if (dx > 90 && dy < 50 && Date.now() - t0 < 600 && (S.open || S.season || S.editTour || S.editStaff)) goBack();
+      if (dx > 90 && dy < 50 && Date.now() - t0 < 600 && (S.open || S.season || S.editTour || S.editStaff || S.editRun)) goBack();
     }, { passive: true });
   })();
   function each(sel, fn) { Array.prototype.forEach.call(document.querySelectorAll(sel), fn); }
@@ -181,6 +191,7 @@
       if (S.sub === "staff") return S.editStaff ? renderStaffEdit() : renderStaff();
       return renderSettings();
     }
+    if (S.editRun) return renderRunEdit();
     if (S.season) return renderSeason();
     if (S.open && dep(S.open)) renderRide(dep(S.open)); else { S.open = null; renderList(); }
   }
@@ -271,13 +282,14 @@
       head = "<div class='card'><div class='stat'><div><b>" + money(tot.t) + "</b><span>booked · " + tot.b + " bookings</span></div><div><b>" + money(tot.p) + "</b><span>paid</span></div><div><b class='" + (tot.o ? "owe" : "") + "'>" + money(tot.o) + "</b><span>still owed</span></div></div>" +
         "<p class='meta' style='margin:8px 0 0'>" + list.length + " departure" + (list.length === 1 ? "" : "s") + " · " + riders + " riders" + (tot.sh ? " · 🚐 " + tot.sh + " shuttle seats" : "") + "</p></div>";
     }
+    head = myRunsHtml() + head + (mgr ? shuttleCard(list) : "");
     if (S.view === "manager") $("main").innerHTML = chips + head + list.map(card).join("");
     else {
       var mineL = list.filter(function (d) { return d.mine; }), open = list.filter(function (d) { return !d.mine; });
       $("main").innerHTML = chips + head + "<h2 style='margin-top:4px'>Your bookings</h2>" + (mineL.length ? mineL.map(card).join("") : "<div class='card meta'>Nothing assigned to you on this day yet.</div>" + nextCard) +
         (open.length ? "<h2>Not assigned yet</h2>" + open.map(card).join("") : "");
     }
-    wireChips(); wireNext();
+    wireChips(); wireNext(); wireRuns();
     each("button.card[data-pk]", function (b) { b.onclick = function () { enter(function () { S.open = b.getAttribute("data-pk"); }); }; });
   }
 
@@ -331,6 +343,87 @@
   function srcLabel(src) { return src ? src.label + (src.agent ? " · " + src.agent : "") + (src.ref ? " (" + src.ref + ")" : "") : ""; }
   function srcList(d) { var seen = {}; return (d.bookings || []).map(function (b) { var l = b.source && b.source.label; if (!l || seen[l]) return ""; seen[l] = 1; return "<span class='src'>" + esc(l) + "</span>"; }).join(""); }
 
+  // ── sleds / trailers, staff notes, van runs ──
+  var KIND = { sled: "🛷 Sled", trailer: "🚚 Trailer", other: "Unit" };
+  var RUNK = { to_trail: "To the trailhead", from_trail: "From the trailhead", between_locations: "Between locations", evening_pickup: "Evening pickup" };
+  function canEquip() { return S.view === "manager" || S.view === "shop"; }
+  function bookingExtras(b) {
+    var h = "";
+    if (b.run) h += "<div class='shut'>🚐 <b>" + esc(b.run.vehicle || "Van") + "</b>" + (b.run.depart_at ? " · leaves " + esc(time(b.run.depart_at)) : "") + (b.run.driver ? " · driver " + esc(b.run.driver) : " · no driver yet") + "</div>";
+    h += "<div>" + (b.units || []).map(function (u) { return "<span class='unit'>" + KIND[u.kind] + " " + esc(u.unit) + (canEquip() ? "<button aria-label='Remove' data-unit-del='" + esc(u.id) + "' data-b='" + esc(b.pk) + "'>×</button>" : "") + "</span>"; }).join("") + "</div>";
+    if (canEquip()) {
+      var dl = "dl" + b.pk.replace(/\W/g, "");
+      h += "<div class='addrow'><select id='uk" + esc(b.pk) + "' aria-label='Kind'><option value='sled'>Sled</option><option value='trailer'>Trailer</option><option value='other'>Other</option></select>" +
+        "<input id='uv" + esc(b.pk) + "' list='" + dl + "' placeholder='Sled / trailer #' maxlength='40' autocomplete='off'><button class='btn small dark' data-unit-add='" + esc(b.pk) + "'>Add</button></div>" +
+        "<datalist id='" + dl + "'>" + [].concat((S.day.units || {}).sled || [], (S.day.units || {}).trailer || [], (S.day.units || {}).other || []).map(function (u) { return "<option value='" + esc(u) + "'>"; }).join("") + "</datalist>";
+    }
+    (b.staff_notes || []).forEach(function (n) {
+      h += "<div class='snote'><span>" + esc(n.note) + "<br><span class='by'>" + esc(n.by || "Staff") + " · " + esc(dayName(String(n.at).slice(0, 10))) + "</span></span>" +
+        (n.mine || S.view === "manager" ? "<button aria-label='Remove note' data-note-del='" + esc(n.id) + "' data-b='" + esc(b.pk) + "'>×</button>" : "") + "</div>";
+    });
+    h += "<div class='addrow' style='grid-template-columns:minmax(0,1fr) auto'><input id='nt" + esc(b.pk) + "' placeholder='Add a note for the team' maxlength='500'><button class='btn small ghost' data-note-add='" + esc(b.pk) + "'>Add note</button></div>";
+    return h;
+  }
+  function runLine(r) {
+    return esc(r.vehicle || "Van") + " · " + esc(RUNK[r.kind] || "") + (r.depart_at ? " · " + esc(time(r.depart_at)) : "") + " · " + r.used + "/" + r.seats + " seats · " +
+      (r.driver_name ? "driver " + esc(r.driver_name) : "<span class='owe'>no driver</span>");
+  }
+  function shuttleCard(list) {
+    var seats = list.reduce(function (n, d) { return n + (d.shuttle_seats || 0); }, 0), runs = S.day.runs || [];
+    if (!seats && !runs.length) return "";
+    var onRun = {}; runs.forEach(function (r) { r.booking_pks.forEach(function (p) { onRun[p] = 1; }); });
+    var waiting = []; list.forEach(function (d) { d.bookings.forEach(function (b) { if (b.shuttle && b.shuttle.seats && !onRun[b.pk]) waiting.push(b); }); });
+    return "<div class='card'><div class='row'><div class='label'>🚐 Shuttles</div><span class='meta'>" + seats + " seat" + (seats === 1 ? "" : "s") + " requested</span></div>" +
+      runs.map(function (r) { return "<button class='card run' style='margin:8px 0 0' data-run='" + esc(r.id) + "'><div class='time' style='font-size:15px'>" + runLine(r) + "</div>" +
+        "<div class='meta'>" + r.stops.map(function (x) { return esc(String(x.name).split(" ")[0]) + " (" + x.seats + ")"; }).join(", ") + "</div></button>"; }).join("") +
+      (waiting.length ? "<p class='meta' style='margin:8px 0 0'><span class='owe'>" + waiting.length + " booking" + (waiting.length === 1 ? "" : "s") + " not on a van yet</span>: " + esc(waiting.map(function (b) { return String(b.name).split(" ")[0] + " (" + b.shuttle.seats + ")"; }).join(", ")) + "</p>" +
+        "<button class='btn dark' id='planRuns' style='margin-top:8px'>Plan van runs</button>" : "") +
+      "<button class='btn small ghost' id='newRun' style='margin-top:8px'>+ New run</button></div>";
+  }
+  function myRunsHtml() {
+    var mine = S.day.my_runs || []; if (!mine.length) return "";
+    return "<h2 style='margin-top:4px'>Your van runs</h2>" + mine.map(function (r) {
+      return "<div class='card run'><div class='time' style='font-size:15px'>" + runLine(r) + "</div>" + (r.notes ? "<div class='note'>" + esc(r.notes) + "</div>" : "") +
+        r.stops.map(function (x, i) { return "<div class='stop'><b>" + (i + 1) + ". " + esc(x.name) + "</b> · " + x.seats + " seat" + (x.seats === 1 ? "" : "s") + (x.ride ? " · " + esc(x.ride) + (x.ride_at ? " " + esc(time(x.ride_at)) : "") : "") +
+          (x.address ? "<div><a href='https://maps.google.com/?q=" + encodeURIComponent(x.address) + "' target='_blank' rel='noopener'>" + esc(x.address) + "</a></div>" : "<div class='meta'>No pickup address on the booking</div>") +
+          (x.phone ? "<a class='btn small ghost' style='margin-top:6px' href='tel:" + esc(x.phone) + "'>Call " + esc(String(x.name).split(" ")[0]) + "</a>" : "") + "</div>"; }).join("") + "</div>";
+    }).join("");
+  }
+  function wireRuns() {
+    if ($("planRuns")) $("planRuns").onclick = function () { api("POST", "/guide/api/run", { action: "suggest", d: S.date }).then(function (j) { toast(j.created ? "Planned " + j.created + " van run" + (j.created === 1 ? "" : "s") + ". Pick drivers." : "Nothing to plan"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
+    if ($("newRun")) $("newRun").onclick = function () { enter(function () { S.editRun = { kind: "to_trail", seats: 25, booking_pks: [] }; }); };
+    each("[data-run]", function (b) { b.onclick = function () { var r = (S.day.runs || []).filter(function (x) { return x.id === b.getAttribute("data-run"); })[0]; if (r) enter(function () { S.editRun = JSON.parse(JSON.stringify(r)); }); }; });
+  }
+  function renderRunEdit() {
+    var r = S.editRun, all = [];
+    (S.day.departures || []).forEach(function (d) { d.bookings.forEach(function (b) { all.push({ b: b, d: d }); }); });
+    all.sort(function (x, y) { return ((y.b.shuttle && y.b.shuttle.seats ? 1 : 0) - (x.b.shuttle && x.b.shuttle.seats ? 1 : 0)) || String(x.d.start_at).localeCompare(String(y.d.start_at)); });
+    var dep = r.depart_at ? new Date(r.depart_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "America/Denver" }) : "";
+    var drivers = (S.day.staff || []).filter(function (x) { return x.phone; }).sort(function (a, b) { return ((b.role === "driver") - (a.role === "driver")) || String(a.name).localeCompare(String(b.name)); });
+    $("hd").innerHTML = "<button class='back' id='back'>‹ Bookings</button><h1>" + (r.id ? esc(r.vehicle || "Van run") : "New van run") + "</h1><div class='sub'><span>" + esc(dayName(S.date)) + "</span></div>";
+    $("back").onclick = goBack;
+    $("main").innerHTML = "<div class='card'>" +
+      "<label class='f' for='rv'>Van</label><input id='rv' type='text' maxlength='40' value='" + esc(r.vehicle || "") + "' placeholder='Van 1'>" +
+      "<label class='f' for='rk'>Run</label><select id='rk'>" + Object.keys(RUNK).map(function (k) { return "<option value='" + k + "'" + (r.kind === k ? " selected" : "") + ">" + RUNK[k] + "</option>"; }).join("") + "</select>" +
+      "<label class='f' for='rt'>Leaves at</label><input id='rt' type='time' value='" + esc(dep) + "'>" +
+      "<label class='f' for='rs'>Seats</label><input id='rs' type='number' inputmode='numeric' value='" + esc(r.seats || 25) + "'>" +
+      "<label class='f' for='rd'>Driver</label><select id='rd'><option value=''>No driver yet</option>" + drivers.map(function (x) { return "<option value='" + esc(x.phone) + "'" + (r.driver_phone === x.phone ? " selected" : "") + ">" + esc(x.name) + " · " + esc(x.role) + "</option>"; }).join("") + "</select>" +
+      "<label class='f' for='rn'>Note for the driver</label><input id='rn' type='text' maxlength='300' value='" + esc(r.notes || "") + "'></div>" +
+      "<h2>Who rides</h2><div class='card pick'>" + (all.length ? all.map(function (x) {
+        var b = x.b, s = b.shuttle && b.shuttle.seats ? b.shuttle.seats : 0;
+        return "<label><input type='checkbox' value='" + esc(b.pk) + "'" + (r.booking_pks.indexOf(b.pk) > -1 ? " checked" : "") + "> <span><b>" + esc(b.name) + "</b> · " + (s ? s + " shuttle seat" + (s === 1 ? "" : "s") : "party of " + b.pax + ", no shuttle asked") +
+          "<br><span class='meta'>" + esc(time(x.d.start_at)) + " " + esc(x.d.label) + (b.shuttle && b.shuttle.address ? " · " + esc(b.shuttle.address) : "") + (b.run && b.run.id !== r.id ? " · already on " + esc(b.run.vehicle || "a van") : "") + "</span></span></label>"; }).join("") : "<p class='meta'>No bookings this day.</p>") +
+      "<p class='hint'>Pickups go in this order.</p></div>" + (r.id ? "<button class='btn ghost' id='delRun' style='margin-top:8px'>Delete this run</button>" : "");
+    $("bar").hidden = false;
+    $("barIn").innerHTML = "<button class='btn primary' id='saveRun'>Save run</button>";
+    $("saveRun").onclick = function () {
+      var pks = Array.prototype.map.call(document.querySelectorAll(".pick input:checked"), function (i) { return i.value; });
+      api("POST", "/guide/api/run", { d: S.date, id: r.id || null, vehicle: $("rv").value, kind: $("rk").value, depart_time: $("rt").value, seats: $("rs").value, driver_phone: $("rd").value || null, notes: $("rn").value, booking_pks: pks })
+        .then(function () { toast("Run saved"); goBack(); return load(S.date); }).catch(function (e) { toast(e.message); });
+    };
+    if ($("delRun")) $("delRun").onclick = function () { if (!confirm("Delete this van run?")) return; api("POST", "/guide/api/run", { d: S.date, id: r.id, remove: true }).then(function () { goBack(); return load(S.date); }).catch(function (e) { toast(e.message); }); };
+  }
+
   // ── managers: season report ──
   function renderReport(sd) {
     var r = sd.report; if (!r) { $("main").innerHTML = "<div class='empty'>No report for this view.</div>"; return; }
@@ -378,6 +471,7 @@
       } else if (d.details && (b.guides || []).length) h += "<div class='meta' style='margin-top:4px'>Guide: " + esc(b.guides.map(function (g) { return g.me ? "you" : g.name; }).join(", ")) + "</div>";
       (b.notes || []).filter(function (n) { return !(b.shuttle && /shuttle|address|pickup evening/i.test(n.label)); }).forEach(function (n) { h += "<div class='note" + (n.health ? " health" : "") + "'><b>" + esc(n.label) + ":</b> " + esc(n.value) + "</div>"; });
       if (b.equipment) h += "<div class='note'><b>Gear:</b> " + esc(b.equipment) + "</div>";
+      if (d.details) h += bookingExtras(b);
       if (b.phone) h += "<a class='btn small ghost' style='margin-top:8px' href='tel:" + esc(b.phone) + "'>Call " + esc(String(b.name).split(" ")[0]) + "</a>";
       return h + "</div>";
     }).join("") + (d.details ? "" : "<p class='hint'>Claim the ride to see full names, phone numbers and notes.</p>") + "</div>";
@@ -417,7 +511,7 @@
         "<a href='#' id='release' style='color:var(--muted)'>Not mine</a></div>";
     }
     if (S.view === "manager" && d.total_cents != null) h += "<div class='card'><div class='stat'><div><b>" + money(d.total_cents) + "</b><span>booked</span></div><div><b>" + money(d.paid_cents) + "</b><span>paid</span></div><div><b class='" + (d.due_cents ? "owe" : "") + "'>" + money(d.due_cents) + "</b><span>owed</span></div></div>" +
-      (d.shuttle_seats ? "<p class='meta' style='margin:8px 0 0'>🚐 " + d.shuttle_seats + " shuttle seat" + (d.shuttle_seats === 1 ? "" : "s") + " requested. Van runs + driver come next.</p>" : "") + "</div>";
+      (d.shuttle_seats ? "<p class='meta' style='margin:8px 0 0'>🚐 " + d.shuttle_seats + " shuttle seat" + (d.shuttle_seats === 1 ? "" : "s") + " requested · " + (d.bookings.every(function (b) { return !(b.shuttle && b.shuttle.seats) || b.run; }) ? "all on a van" : "plan van runs on the day list") + "</p>" : "") + "</div>";
     h += manifestHtml(d);
     var live = canLog();
     h += "<h2>Photos</h2><div class='grid' id='grid'>" + d.photos.map(function (p) {
@@ -455,6 +549,18 @@
     if ($("assign")) $("assign").onclick = function () { var ph = $("who").value; if (!ph) { toast("Pick a person"); return; }
       api("POST", "/guide/api/assign", { availability_pk: pk, phone: ph, d: S.date }).then(function () { toast("Assigned"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
     each(".unassign", function (b) { b.onclick = function () { api("POST", "/guide/api/assign", { availability_pk: pk, phone: b.getAttribute("data-phone"), remove: true, d: S.date }).then(function () { return load(S.date); }); }; });
+    each("[data-unit-add]", function (btn) { btn.onclick = function () {
+      var pkb = btn.getAttribute("data-unit-add"), k = $("uk" + pkb), v = $("uv" + pkb);
+      if (!v.value.trim()) { toast("Type the sled or trailer name"); return; }
+      api("POST", "/guide/api/equipment", { booking_pk: pkb, kind: k.value, unit: v.value, d: S.date }).then(function () { toast("Added"); return load(S.date); }).catch(function (e) { toast(e.message); }); }; });
+    each("[data-unit-del]", function (btn) { btn.onclick = function () {
+      api("POST", "/guide/api/equipment", { booking_pk: btn.getAttribute("data-b"), remove_id: btn.getAttribute("data-unit-del"), d: S.date }).then(function () { return load(S.date); }).catch(function (e) { toast(e.message); }); }; });
+    each("[data-note-add]", function (btn) { btn.onclick = function () {
+      var pkb = btn.getAttribute("data-note-add"), v = $("nt" + pkb);
+      if (!v.value.trim()) { toast("Write a note first"); return; }
+      api("POST", "/guide/api/note", { booking_pk: pkb, note: v.value, d: S.date }).then(function () { toast("Note added"); return load(S.date); }).catch(function (e) { toast(e.message); }); }; });
+    each("[data-note-del]", function (btn) { btn.onclick = function () { if (!confirm("Remove this note?")) return;
+      api("POST", "/guide/api/note", { booking_pk: btn.getAttribute("data-b"), remove_id: btn.getAttribute("data-note-del"), d: S.date }).then(function () { return load(S.date); }).catch(function (e) { toast(e.message); }); }; });
     each("select.bg", function (sel) { sel.onchange = function () {
       api("POST", "/guide/api/assign-booking", { availability_pk: pk, booking_pk: sel.getAttribute("data-b"), phone: sel.value || null, d: S.date })
         .then(function () { toast(sel.value ? "Guide set" : "Removed"); return load(S.date); }).catch(function (e) { toast(e.message); load(S.date); }); }; });
