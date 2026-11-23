@@ -708,7 +708,7 @@ unchanged). Stored HTML carries `<!--RR_PHOTO-->`/`<!--RR_NOPHOTO-->` blocks; `r
 route map / nothing. Code.gs `hmHostPhoto_` uploads to `/api/v1/recaps/photo` (`handleRecapPhotoUpload`: strict match →
 `sharp` (optionalDependency) → Storage `recap-photos/<date>/<pk>*.jpg`). Photo matching is now strict for BOTH templates
 (`pickRidePhotoName` lost its first-word fallback; `photo_hint.season='winter'` refuses RZR/UTV/summer names; `isStrictPhotoMatch`
-on upload). Code.gs change set 4 needs Sean's clasp push. Simple sends log `variants.template='simple'` and count only toward
+on upload). **Live Apps Script is still change set 2 (checked 2026-11-23): change sets 3 + 4 need Sean's clasp push from his Mac (docs/apps-script/HANDOFF.md).** Simple sends log `variants.template='simple'` and count only toward
 the subject experiment. README "Templates: v1 and simple" has the switch + hidden-when-missing table. Follow-up (Sean, 2026-11-23): simple now runs all 3 A/B tests,
 learning per template (`tallyExperiments(..., {template})`); `/r/photos` gallery + signed links (`rideLinkSig`/`verifyRideLinkSig`, the
 photo only shows on signed links); the REA map is the share-story picture when there's no photo and the 3rd photo-row thumbnail
