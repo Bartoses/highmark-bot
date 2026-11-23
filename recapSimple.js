@@ -119,7 +119,9 @@ export function buildSimpleRecapData({ booking, tour, trip, settings, nextStorm 
   }[type];
   const storm = !rea && nextStorm && Number(nextStorm.inches) >= STORM_MIN_INCHES && nextStorm.day ? nextStorm : null;
   const next = rea
-    ? { title: "Come back for sunset", body: "The 3-Hour Sunset Ride shows the mountains in a whole new light.", cta: "Book a sunset ride", url: RECAP_LINKS.book.rea }
+    ? (/sunset/i.test(tour.label)   // they just did the Sunset Ride: don't pitch it back to them
+      ? { title: "Come back in daylight", body: "See the meadows and forest trails in full sun on a daytime tour.", cta: "Book a daytime tour", url: RECAP_LINKS.book.rea }
+      : { title: "Come back for sunset", body: "The 3-Hour Sunset Ride shows the mountains in a whole new light.", cta: "Book a sunset ride", url: RECAP_LINKS.book.rea })
     : storm
       ? { title: `Next storm: ~${storm.inches}″ ${storm.day}`, body: "Powder days fill up first. Grab your sleds before they’re gone.", cta: "Book your next ride",
           url: type === "backcountry" ? RECAP_LINKS.book.guided : RECAP_LINKS.book.csr }
