@@ -85,7 +85,7 @@ details; photos + ride log on guided bookings.
 3. Deliveries + shuttles from booking answers, with drivers.
 4. Fleet board (sled units per booking per day) + sheet sync.
 5. Google Sheet sync for staff + assignments + deliveries.
-6. Google sign-in. Later: maintenance.
+6. Google sign-in (Sean: company @coloradosledrentals.com accounts + personal Gmail listed in Staff). Replaces the team code (built 2026-11-23: open /guide address, team code, pick your name, any role). Later: maintenance.
 
 **Open questions**
 1. Share "Weekly Shop Manifest 25/26" with the Google account connected to Claude (still "Permission denied" on

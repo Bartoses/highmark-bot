@@ -457,6 +457,10 @@ A phone page where guides, shop staff and managers log each ride (sprint: `docs/
 - **Recaps:** the 6 pm job reads `ride_logs`, `ride_assignments` and `ride_media` for each booking's departure. The starred
   photo goes straight into the email (`photo_hint.hosted_photo`, no Apps Script step, works with today's live script), and
   the log fills the guide name, stats, stops and highlight.
+- **Open address (until Google sign-in):** `https://highmark-bot-production.up.railway.app/guide`. Enter the **team code**
+  (`GUIDE_TEAM_CODE` on the web service; change it there any time, which signs everyone out), pick your name from the staff
+  list, then your role. Remembered on the phone; "Not you?" switches person. The morning briefing link still works too.
+  Google sign-in (company accounts + listed personal Gmail) replaces the code later.
 - **Roles on entry:** the person picks Guide, Shop or Manager (only up to their own level; remembered on the phone).
 - **Manifest:** each ride lists its bookings: full name, party size, sled (rentals), FareHarbor booking answers a guide needs
   (health concerns flagged red, gear/boot rentals, shuttle/pickup, address), waiver / checked-in / balance due from

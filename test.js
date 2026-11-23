@@ -19233,6 +19233,22 @@ async function testGuideApp() {
     chk("photo: starring another photo moves the cover", M[1].cover === true && M[0].cover === false);
     chk("photo: only the uploader or a manager can remove a photo",
       (await G.handleGuideMedia(deps, { t: t(SHOP), id: M[1].id, action: "remove" })).status === 403 && (await G.handleGuideMedia(deps, { t: t(BOSS), id: M[0].id, action: "remove" })).status === 200 && M[0].hidden === true);
+    // ── open team access (team code + pick your name), until Google sign-in ──
+    {
+      const prevCode = process.env.GUIDE_TEAM_CODE; process.env.GUIDE_TEAM_CODE = "ranch-2027";
+      try {
+        const team = await G.handleGuideTeam(deps, { code: "ranch-2027" });
+        chk("team code: the right code lists staff to pick from; a wrong or missing code doesn't",
+          team.status === 200 && team.body.people.some(x => x.phone === JAKE) && (await G.handleGuideTeam(deps, { code: "nope" })).status === 401 && (await G.handleGuideTeam(deps, {})).status === 401);
+        const tv = await G.handleGuideDay(deps, { t: `team:ranch-2027:${JAKE}`, as: "manager" });
+        chk("team code: once you pick your name you can choose any role (open for now); wrong code or unknown person refused",
+          tv.status === 200 && tv.body.me.name === "Jake" && JSON.stringify(tv.body.me.views) === '["manager","guide","shop"]' && tv.body.me.view === "manager"
+          && (await G.handleGuideDay(deps, { t: `team:wrong:${JAKE}` })).status === 401 && (await G.handleGuideDay(deps, { t: "team:ranch-2027:+19990000000" })).status === 403);
+        delete process.env.GUIDE_TEAM_CODE;
+        chk("team code: no GUIDE_TEAM_CODE set = open access is off", (await G.handleGuideTeam(deps, { code: "" })).status === 401 && (await G.handleGuideDay(deps, { t: "team::" + JAKE })).status === 401);
+      } finally { if (prevCode === undefined) delete process.env.GUIDE_TEAM_CODE; else process.env.GUIDE_TEAM_CODE = prevCode; }
+    }
+
     // ── locations, staff, manager assignment ──
     chk("locations: REA tours = Rabbit Ears, guided backcountry = North Routt, rentals by the item's shop (Kremmling / Steamboat)",
       G.departureLocation({ type: "rea", item: "3 Hour - Grand Tour" }) === "rabbit_ears" && G.departureLocation({ type: "backcountry", item: "Pro-Ride Private Guided Backcountry" }) === "north_routt"
