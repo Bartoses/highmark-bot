@@ -12,7 +12,8 @@
     "test:cloud": "NODE_USE_ENV_PROXY=1 TZ=America/Denver ANTHROPIC_API_KEY=${HIGHMARK_ANTHROPIC_API_KEY:-${ANTHROPIC_API_KEY:-sk-ant-not-set}} node test.js",
     "chat": "node chat.js",
     "ui": "TEST_MODE=true node --env-file=.env index.js",
-    "refresh-token": "node mpwrTokenRefresh.js"
+    "refresh-token": "node mpwrTokenRefresh.js",
+    "recap:preview": "node scripts/recap-preview.js"
   },
   "engines": {
     "node": ">=20"
@@ -31,5 +32,8 @@
   },
   "devDependencies": {
     "playwright": "^1.60.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.33.5"
   }
 }

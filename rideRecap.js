@@ -20,10 +20,12 @@
 // Safety: recap_settings.dry_run (default TRUE) sends every recap to test_to with "[TEST]" in the
 // subject; TEST_MODE=true writes nothing at all (plan only).
 // ─────────────────────────────────────────────────────────────────────────────
-import { buildPhotoHint } from "./rideMedia.js";
+import crypto from "crypto";
+import { buildPhotoHint, pickRideMediaForBooking } from "./rideMedia.js";
 import { escapeHtml, buildUnsubscribeUrl } from "./emailTemplates.js";
 import { loadSuppressionSets, normEmail, isEmailAddress, escapeLike } from "./emailSuppression.js";
 import { resolveBaseUrl } from "./emailSender.js";
+import { buildSimpleRecapData, renderSimpleRecap, fetchNextStorm, normalizeTemplate } from "./recapSimple.js";
 
 export const RECAP_TYPES = ["rea", "backcountry", "rental"];
 export const RECAP_FEATURES = ["review", "share", "prints", "merch", "newsletter"];
@@ -33,6 +35,7 @@ export const DEFAULT_RECAP_SETTINGS = Object.freeze({
   enabled: true, send_hour: 18, timezone: "America/Denver", dry_run: true, test_to: "sean@coloradosledrentals.com",
   features: [...RECAP_FEATURES], friend_code: "FRIEND10", friend_percent: 10, reward_code: null,
   weather_lat: null, weather_lon: null, weather_points: [], lookback_days: 1, last_run_on: null,
+  template: "v1",                                                    // v1 | simple (recapSimple.js) — db2_ride_recap_v2.sql
 });
 
 export const RECAP_LINKS = Object.freeze({
@@ -46,6 +49,8 @@ export const RECAP_LINKS = Object.freeze({
   newsletter: "https://coloradosledrentals.com/newsletter-signup/",
   merch: "https://coloradosledrentals.com/",
   infoEmail: "info@coloradosledrentals.com",
+  instagram: "https://www.instagram.com/coloradosledrentals/",
+  facebook: "https://www.facebook.com/coloradosledrentals/",
 });
 
 export const RECAP_BRANDS = Object.freeze({
@@ -101,6 +106,7 @@ export function normalizeRecapSettings(row = {}) {
   const lat = Number(row?.weather_lat), lon = Number(row?.weather_lon);
   s.weather_lat = row?.weather_lat != null && Number.isFinite(lat) ? lat : null;
   s.weather_lon = row?.weather_lon != null && Number.isFinite(lon) ? lon : null;
+  s.template = normalizeTemplate(row?.template);                      // anything unknown = v1 (today's email)
   s.experiments = row?.experiments && typeof row.experiments === "object" && !Array.isArray(row.experiments) ? { ...row.experiments } : {};
   s.weather_points = (Array.isArray(row?.weather_points) ? row.weather_points : [])
     .map(p => ({ name: p?.name ? String(p.name) : null, type: p?.type ? String(p.type) : null, match: p?.match ? String(p.match) : null, lat: Number(p?.lat), lon: Number(p?.lon) }))
@@ -187,6 +193,7 @@ export function bookingFacts(row) {
     promoCode: String(promo?.display_value ?? promo?.value ?? "").trim() || null,
     emailOptIn: b.contact?.is_subscribed_for_email_updates === true,
     orderId: b.order?.display_id ?? null,
+    availabilityPk: b.availability?.pk != null ? String(b.availability.pk) : null,   // FareHarbor departure id (ride_media key)
     rebookedFrom: b.rebooked_from ?? null,
     updatedAt: row?.updated_at ?? null,
   };
@@ -452,13 +459,16 @@ export function goalHit(goal, clickUrls) {
   return clickUrls.some(u => { try { return goal.includes(new URL(u).searchParams.get("utm_content")); } catch { return false; } });
 }
 
-// Pure: fold log rows + click events into per-arm stats.
-export function tallyExperiments(logRows, clicksBySend) {
+// Pure: fold log rows + click events into per-arm stats. Each template learns on its own (a v1 "layout B" and a simple
+// "layout B" are different emails), so only rows of `template` count; rows logged before templates existed are v1.
+export const variantTemplate = (v) => (v?.template === "simple" ? "simple" : "v1");
+export function tallyExperiments(logRows, clicksBySend, { template = "v1" } = {}) {
   const stats = {};
   for (const k of Object.keys(RECAP_EXPERIMENTS)) stats[k] = { A: { sends: 0, wins: 0 }, B: { sends: 0, wins: 0 } };
   const seen = new Set();
   for (const r of logRows ?? []) {
     if (!r?.send_id || r.dry_run !== false || !r.variants || seen.has(r.send_id)) continue;   // one email may cover several bookings
+    if (variantTemplate(r.variants) !== template) continue;
     seen.add(r.send_id);
     const v = normalizeVariants(r.variants), clicks = clicksBySend.get(r.send_id) ?? [];
     for (const [k, def] of Object.entries(RECAP_EXPERIMENTS)) {
@@ -469,13 +479,13 @@ export function tallyExperiments(logRows, clicksBySend) {
   return stats;
 }
 
-export async function loadExperimentStats(crm, { clientId = "csr_rea", sinceDays = 365, nowMs = Date.now() } = {}) {
+export async function loadExperimentStats(crm, { clientId = "csr_rea", sinceDays = 365, nowMs = Date.now(), template = "v1" } = {}) {
   const since = new Date(nowMs - sinceDays * 864e5).toISOString();
   const logs = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await crm.from("recap_log").select("send_id, dry_run, variants").eq("client_id", clientId).eq("dry_run", false)
       .gte("queued_at", since).order("queued_at", { ascending: true }).range(from, from + 999);
-    if (error) return { stats: tallyExperiments([], new Map()), error: error.message };   // variants column missing → no stats yet
+    if (error) return { stats: tallyExperiments([], new Map(), { template }), error: error.message };   // variants column missing → no stats yet
     logs.push(...(data ?? []));
     if ((data?.length ?? 0) < 1000) break;
   }
@@ -484,7 +494,7 @@ export async function loadExperimentStats(crm, { clientId = "csr_rea", sinceDays
     const { data } = await crm.from("email_events").select("send_id, url, is_bot").eq("type", "click").in("send_id", ids.slice(i, i + 200));
     for (const e of data ?? []) { if (e.is_bot) continue; if (!clicks.has(e.send_id)) clicks.set(e.send_id, []); clicks.get(e.send_id).push(e.url); }
   }
-  return { stats: tallyExperiments(logs, clicks) };
+  return { stats: tallyExperiments(logs, clicks, { template }) };
 }
 
 export function experimentReport(stats, modes = {}) {
@@ -631,8 +641,26 @@ export function renderRideRecapText(d) {
 // Gmail (web + apps) removes sms: hrefs from emails, so the email's "Text it to a friend" button is an https link to this page.
 // In the phone's browser it offers the native share sheet (Messages, WhatsApp, …), a "Text it" sms: link, and copy-to-clipboard.
 // Nothing here is secret: the booking id only labels the referral (ref=friend-<id>); a reward still needs a real booking.
-export function sharePageUrl(baseUrl, { bookingId, type }) {
-  return `${String(baseUrl || resolveBaseUrl()).replace(/\/$/, "")}/r/share?b=${encodeURIComponent(bookingId)}&t=${encodeURIComponent(type)}`;
+export function sharePageUrl(baseUrl, { bookingId, type, sig = null }) {
+  return `${String(baseUrl || resolveBaseUrl()).replace(/\/$/, "")}/r/share?b=${encodeURIComponent(bookingId)}&t=${encodeURIComponent(type)}${sig ? `&s=${encodeURIComponent(sig)}` : ""}`;
+}
+// "See & download photos" page (GET /r/photos). Always signed: it can show the guest's own photo.
+export function photosPageUrl(baseUrl, { bookingId, type, sig }) {
+  return `${String(baseUrl || resolveBaseUrl()).replace(/\/$/, "")}/r/photos?b=${encodeURIComponent(bookingId)}&t=${encodeURIComponent(type)}&s=${encodeURIComponent(sig ?? "")}`;
+}
+
+// A guest's ride photo is personal, so the public pages (/r/share, /r/ride, /r/photos) only show it when the link carries
+// this signature (HMAC of the booking id; EMAIL_TRACKING_SECRET, else OUTBOUND_API_KEY). The email's links are signed;
+// a guessed booking id gets the map and the stats, never the photo. No secret configured = photos are never shown.
+const rideLinkSecret = () => (process.env.EMAIL_TRACKING_SECRET || process.env.OUTBOUND_API_KEY || "").trim() || null;
+export function rideLinkSig(bookingId, secret = rideLinkSecret()) {
+  if (!secret || !/^\d{1,15}$/.test(String(bookingId ?? ""))) return null;
+  return crypto.createHmac("sha256", secret).update(`ride-photos:${bookingId}`).digest("base64url").slice(0, 22);
+}
+export function verifyRideLinkSig(bookingId, sig, secret = rideLinkSecret()) {
+  const want = rideLinkSig(bookingId, secret);
+  if (!want || typeof sig !== "string" || sig.length !== want.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want));
 }
 
 export function shareMessage({ bookingId, type, settings }) {
@@ -644,7 +672,8 @@ export function shareMessage({ bookingId, type, settings }) {
 
 // ── ride share context: what a public page may show about a ride (no names, emails or phones) ──
 const MON_LONG = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-export function shareContextFrom({ bookingId, type, row = null, tours = [], settings = null }) {
+const httpsUrl = (u) => (/^https:\/\/[^\s"'<>]+$/.test(String(u ?? "")) ? String(u) : null);
+export function shareContextFrom({ bookingId, type, row = null, tours = [], settings = null, hostedPhoto = null, sig = null }) {
   const b = String(bookingId ?? ""), t = String(type ?? "");
   if (!/^\d{1,15}$/.test(b) || !RECAP_TYPES.includes(t)) return null;
   const s = normalizeRecapSettings(settings);
@@ -662,13 +691,22 @@ export function shareContextFrom({ bookingId, type, row = null, tours = [], sett
   const hrs = facts ? hoursLabel(facts.startAt, facts.endAt) : "";
   if (hrs) stats.push([hrs, "on the snow"]);
   if (facts?.pax > 0) stats.push([String(facts.pax), facts.pax === 1 ? "rider" : "riders"]);
-  return { bookingId: b, type: rtype, brand, label, dateLabel, stats: stats.slice(0, 4), photoUrl: null, settings: s };
+  // photo: from the hosted recap photo (DB, email_sends.photo_hint.hosted_photo), only for a signed link. map: recap_tours.map_url (REA).
+  return { bookingId: b, type: rtype, brand, label, dateLabel, stats: stats.slice(0, 4), settings: s,
+    sig: sig || null, photoUrl: sig ? httpsUrl(hostedPhoto?.full) : null, mapUrl: rtype === "rea" ? httpsUrl(tour?.map_url) : null };
 }
 
-export async function loadShareContext(crm, { bookingId, type, clientId = "csr_rea" }) {
-  let row = null, tours = [], settings = null;
+export async function loadShareContext(crm, { bookingId, type, sig = null, clientId = "csr_rea" }) {
+  let row = null, tours = [], settings = null, hostedPhoto = null;
+  const signed = verifyRideLinkSig(bookingId, sig) ? sig : null;
   if (crm && /^\d{1,15}$/.test(String(bookingId ?? ""))) {
     try {
+      if (signed) {
+        const { data: sends } = await crm.from("email_sends").select("photo_hint, created_at").eq("category", "recap").eq("reference", `#${bookingId}`)
+          .order("created_at", { ascending: false }).limit(5);
+        const hint = (sends ?? []).map(r => (typeof r.photo_hint === "string" ? (() => { try { return JSON.parse(r.photo_hint); } catch { return null; } })() : r.photo_hint)).find(h => h?.hosted_photo);
+        hostedPhoto = hint?.hosted_photo ?? null;
+      }
       const [bk, tr, st] = await Promise.all([
         crm.from("bookings").select("fareharbor_pk, company, status, start_at, end_at, customer_count, product_title, raw_payload").eq("fareharbor_pk", `#${bookingId}`).maybeSingle(),
         crm.from("recap_tours").select("*").eq("client_id", clientId),
@@ -677,11 +715,11 @@ export async function loadShareContext(crm, { bookingId, type, clientId = "csr_r
       row = bk.data ?? null; tours = (tr.data ?? []).filter(x => x.active !== false); settings = st.data ?? null;
     } catch { /* generic page */ }
   }
-  return shareContextFrom({ bookingId, type, row, tours, settings });
+  return shareContextFrom({ bookingId, type, row, tours, settings, hostedPhoto, sig: signed });
 }
 
-export const ridePageUrl = (baseUrl, { bookingId, type }) =>
-  `${String(baseUrl || resolveBaseUrl()).replace(/\/$/, "")}/r/ride?b=${encodeURIComponent(bookingId)}&t=${encodeURIComponent(type)}`;
+export const ridePageUrl = (baseUrl, { bookingId, type, sig = null }) =>
+  `${String(baseUrl || resolveBaseUrl()).replace(/\/$/, "")}/r/ride?b=${encodeURIComponent(bookingId)}&t=${encodeURIComponent(type)}${sig ? `&s=${encodeURIComponent(sig)}` : ""}`;
 export const ogImageUrl = (baseUrl, brandKey) => `${String(baseUrl || resolveBaseUrl()).replace(/\/$/, "")}/r/og/${brandKey === "rea" ? "rea" : "csr"}.png`;
 
 const pageHead = (title, C, extra = "") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
@@ -694,6 +732,10 @@ const statTiles = (C, stats) => stats.length ? `<table role="presentation" width
   stats.map((x, i) => (i && i % 2 === 0 ? "</tr><tr>" : "") + `<td style="padding:4px;width:50%"><div style="background:${C.dark2};border-radius:12px;padding:12px;text-align:center"><div style="font:${C.key === "rea" ? "400 28px" : "700 22px"}/1 ${C.head};color:#FFFFFF">${escapeHtml(x[0])}</div><div style="font-size:12px;color:#9FB3C8;margin-top:4px">${escapeHtml(x[1])}</div></div></td>`).join("") +
   `</tr></table>` : "";
 
+const followUs = (C) => `<p style="text-align:center;color:#9FB3C8;font-size:15px;margin:28px 0 0">Follow us: ` +
+  `<a href="${attr(RECAP_LINKS.instagram)}" target="_blank" rel="noopener" style="color:#FFFFFF">Instagram</a>` +
+  `<span style="color:#5B6B7C;padding:0 8px">·</span><a href="${attr(RECAP_LINKS.facebook)}" target="_blank" rel="noopener" style="color:#FFFFFF">Facebook</a></p>`;
+
 // GET /r/share — "Bring a friend" (text/share/copy) + "Share your ride" (story image, Facebook, X, copy link).
 // Gmail removes sms: hrefs from emails, so the email's buttons are https links to this page.
 export function renderSharePage(input) {
@@ -704,9 +746,12 @@ export function renderSharePage(input) {
   const sms = `sms:?&body=${encodeURIComponent(text)}`;
   const rideUrl = trackLink(ridePageUrl(baseUrl, ctx), { type: ctx.type, content: "social-link" });
   const fb = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(trackLink(ridePageUrl(baseUrl, ctx), { type: ctx.type, content: "social-facebook" }))}`;
+  const photos = ctx.sig && (ctx.photoUrl || ctx.mapUrl) ? photosPageUrl(baseUrl, ctx) : null;
   const story = { brand: C.name, label: ctx.label, date: ctx.dateLabel, stats: ctx.stats, code: s.friend_code, pct: s.friend_percent,
     dark: C.dark, dark2: C.dark2, acc: C.acc, btn: C.btn, head: C.key === "rea" ? "Bebas Neue" : "Roboto", upper: C.key === "rea",
-    site: C.key === "rea" ? "rabbitearsadventures.com" : "coloradosledrentals.com", ...(ctx.photoUrl ? { photo: ctx.photoUrl } : {}) };
+    site: C.key === "rea" ? "rabbitearsadventures.com" : "coloradosledrentals.com",
+    // the story picture: the guest's ride photo (signed link) → else the loop's route map (REA) → else the drawn ridge
+    ...(ctx.photoUrl ? { photo: ctx.photoUrl, fit: "cover" } : ctx.mapUrl ? { photo: ctx.mapUrl, fit: "contain" } : {}) };
   const B = (label, attrs, primary) => pageButton(C, label, attrs, primary);
   const small = (label, attrs) => `<a ${attrs} style="color:#C9D6E3;font-size:15px;text-decoration:underline;cursor:pointer">${label}</a>`;
   const eyebrow = (t) => `<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">${t}</div>`;
@@ -723,9 +768,10 @@ export function renderSharePage(input) {
     `<canvas id="story" width="1080" height="1920" style="display:none"></canvas>` +
     B("Share to Instagram", `id="shareStory" href="#"`, true) +
     `<p id="storyTip" style="display:none;color:#C9D6E3;font-size:15px;margin:0 0 14px;text-align:center">Press and hold the picture above, tap <b>Save to Photos</b>, then post it as your Instagram story.</p>` +
-    `<div style="text-align:center">${small("Facebook", `href="${attr(fb)}" target="_blank" rel="noopener"`)}<span style="color:#5B6B7C;padding:0 10px">·</span>${small("Copy link", `id="copyLink" href="#"`)}</div>` +
-    `</div>` +
-    `<p style="color:#9FB3C8;font-size:13px;margin:28px 0 0">${C.footer.map(e).join("<br>")}</p></div>` +
+    `<div style="text-align:center">${small("Facebook", `href="${attr(fb)}" target="_blank" rel="noopener"`)}<span style="color:#5B6B7C;padding:0 10px">·</span>${small("Copy link", `id="copyLink" href="#"`)}` +
+    (photos ? `<span style="color:#5B6B7C;padding:0 10px">·</span>${small("Your photos", `href="${attr(photos)}"`)}` : "") + `</div>` +
+    `</div>` + followUs(C) +
+    `<p style="color:#9FB3C8;font-size:13px;margin:20px 0 0">${C.footer.map(e).join("<br>")}</p></div>` +
     `<script>(function(){var t=${jsonForScript(text)},R=${jsonForScript(Object.fromEntries(Object.entries(story).filter(([, v]) => v != null)))},L=${jsonForScript(rideUrl)};` +
     `function copy(v,el){var d=function(){el.textContent="Copied!";};if(navigator.clipboard){navigator.clipboard.writeText(v).then(d,function(){});}else{var a=document.createElement("textarea");a.value=v;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove();d();}}` +
     `var s=document.getElementById("share");if(navigator.share){s.addEventListener("click",function(ev){ev.preventDefault();navigator.share({text:t}).catch(function(){});});}` +
@@ -741,7 +787,8 @@ const STORY_SCRIPT = `var c=document.getElementById("story"),x=c.getContext("2d"
   `function wrap(txt,y,px,max){var words=txt.split(" "),line="",lines=[];words.forEach(function(w){var tt=line?line+" "+w:w;if(x.measureText(tt).width>max&&line){lines.push(line);line=w;}else line=tt;});lines.push(line);lines.forEach(function(l,i){x.fillText(l,90,y+i*px*1.05);});return y+(lines.length-1)*px*1.05;}` +
   `function ridge(){x.globalAlpha=0.16;x.fillStyle=R.acc;x.beginPath();x.moveTo(0,1560);x.lineTo(0,1400);x.lineTo(170,1250);x.lineTo(330,1360);x.lineTo(520,1190);x.lineTo(700,1340);x.lineTo(880,1230);x.lineTo(1080,1330);x.lineTo(1080,1560);x.closePath();x.fill();x.globalAlpha=1;}` +
   `function draw(img){x.fillStyle=R.dark;x.fillRect(0,0,1080,1920);var top=330;if(!img)ridge();` +
-  `if(img){var h=1000,sc=Math.max(1080/img.width,h/img.height);x.drawImage(img,(1080-img.width*sc)/2,0,img.width*sc,img.height*sc);var g=x.createLinearGradient(0,600,0,1000);g.addColorStop(0,"rgba(0,0,0,0)");g.addColorStop(1,R.dark);x.fillStyle=g;x.fillRect(0,600,1080,400);top=1020;}` +
+  `if(img&&R.fit==="contain"){var mh=Math.round(img.height*1080/img.width);x.drawImage(img,0,0,1080,mh);top=mh+110;}` +
+  `else if(img){var h=1000,sc=Math.max(1080/img.width,h/img.height);x.drawImage(img,(1080-img.width*sc)/2,0,img.width*sc,img.height*sc);var g=x.createLinearGradient(0,600,0,1000);g.addColorStop(0,"rgba(0,0,0,0)");g.addColorStop(1,R.dark);x.fillStyle=g;x.fillRect(0,600,1080,400);top=1020;}` +
   `x.fillStyle=R.acc;x.font="700 40px Arial,sans-serif";x.fillText(R.brand.toUpperCase(),90,top);` +
   `x.fillStyle="#FFFFFF";x.font=font(R.upper?"400":"700",R.upper?170:120);var lbl=R.upper?R.label.toUpperCase():R.label;var y=wrap(lbl,top+(R.upper?190:150),R.upper?170:120,900);` +
   `if(R.date){x.fillStyle="#C9D6E3";x.font="400 52px Arial,sans-serif";x.fillText(R.date,90,y+90);y+=90;}` +
@@ -764,9 +811,10 @@ export function renderRidePage(input) {
   const baseUrl = input?.baseUrl, C = ctx.brand, s = ctx.settings, e = escapeHtml;
   const title = `${ctx.label} with ${C.name}`;
   const desc = `${ctx.dateLabel ? `${ctx.dateLabel}. ` : ""}Book your own ride and save ${s.friend_percent}% with code ${s.friend_code}.`;
-  const img = ctx.photoUrl || ogImageUrl(baseUrl, C.key);
+  const img = ctx.photoUrl || ctx.mapUrl || ogImageUrl(baseUrl, C.key);
+  const ogSize = img === ogImageUrl(baseUrl, C.key) ? [["og:image:width", "1200"], ["og:image:height", "630"]] : [];
   const book = trackLink(ctx.type === "rea" ? RECAP_LINKS.book.rea : RECAP_LINKS.book.csr, { type: ctx.type, content: "ride-page-book", friendRef: ctx.bookingId });
-  const og = [["og:type", "website"], ["og:title", title], ["og:description", desc], ["og:image", img], ["og:image:width", "1200"], ["og:image:height", "630"],
+  const og = [["og:type", "website"], ["og:title", title], ["og:description", desc], ["og:image", img], ...ogSize,
     ["og:url", ridePageUrl(baseUrl, ctx)], ["og:site_name", C.name]].map(([p, v]) => `<meta property="${p}" content="${attr(v)}">`).join("") +
     `<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${attr(title)}"><meta name="twitter:description" content="${attr(desc)}"><meta name="twitter:image" content="${attr(img)}"><meta name="description" content="${attr(desc)}">`;
   return pageHead(title, C, og) +
@@ -777,8 +825,34 @@ export function renderRidePage(input) {
     statTiles(C, ctx.stats) +
     `<p style="color:#C9D6E3;margin:0 0 14px">Want to ride too? Save ${s.friend_percent}% on your booking with this code:</p>` +
     `<div style="border:2px dashed ${C.acc};border-radius:12px;text-align:center;font:700 26px 'Courier New',Courier,monospace;letter-spacing:3px;padding:14px 0;margin:0 0 16px">${e(s.friend_code)}</div>` +
-    pageButton(C, "Book your ride", `href="${attr(book)}"`, true) +
-    `<p style="color:#9FB3C8;font-size:13px;margin:24px 0 0">${C.footer.map(e).join("<br>")}<br>${RECAP_PHONE}</p></div></body></html>`;
+    pageButton(C, "Book your ride", `href="${attr(book)}"`, true) + followUs(C) +
+    `<p style="color:#9FB3C8;font-size:13px;margin:20px 0 0">${C.footer.map(e).join("<br>")}<br>${RECAP_PHONE}</p></div></body></html>`;
+}
+
+// GET /r/photos?b=&t=&s= — "See & download photos": the guest's hosted ride photo (signed link only) + the loop's route map,
+// each with a Save/Share button (native share sheet → Save Image on a phone; a download elsewhere). Data comes from the DB.
+export function renderPhotosPage(input) {
+  const ctx = input?.label ? input : shareContextFrom(input ?? {});
+  if (!ctx) return null;
+  const baseUrl = input?.baseUrl, C = ctx.brand, e = escapeHtml;
+  const items = [];
+  if (ctx.photoUrl) items.push({ url: ctx.photoUrl, alt: `Photo from your ${ctx.label}`, name: `${ctx.label} photo.jpg` });
+  if (ctx.mapUrl) items.push({ url: ctx.mapUrl, alt: `Map of your ${ctx.label} loop`, name: `${ctx.label} map.png` });
+  const share = sharePageUrl(baseUrl, ctx);
+  return pageHead(`Your ${ctx.label} photos`, C, `<meta name="robots" content="noindex">`) +
+    `<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">${e(C.name.toUpperCase())}</div>` +
+    `<h1 style="font:${C.key === "rea" ? "400 40px" : "700 30px"}/1.1 ${C.head};text-transform:${C.up};margin:8px 0 6px">Your ${e(ctx.label)}</h1>` +
+    (ctx.dateLabel ? `<p style="color:#C9D6E3;margin:0 0 20px">${e(ctx.dateLabel)}</p>` : "") +
+    (items.length ? items.map((it, i) => `<img src="${attr(it.url)}" alt="${attr(it.alt)}" style="display:block;width:100%;height:auto;border-radius:12px;margin:0 0 12px">` +
+      pageButton(C, "Save or share", `class="save" data-i="${i}" href="${attr(it.url)}" target="_blank" rel="noopener"`, i === 0)).join(`<div style="height:12px"></div>`)
+      : `<p style="color:#C9D6E3">Your photos aren't ready yet. Check back soon.</p>`) +
+    `<div style="height:16px"></div>` + pageButton(C, "Share your ride", `href="${attr(share)}#ride"`, false) + followUs(C) +
+    `<p style="color:#9FB3C8;font-size:13px;margin:20px 0 0">${C.footer.map(e).join("<br>")}<br>${RECAP_PHONE}</p></div>` +
+    `<script>(function(){var I=${jsonForScript(items)};Array.prototype.forEach.call(document.querySelectorAll(".save"),function(a){a.addEventListener("click",function(ev){` +
+    `var it=I[+a.getAttribute("data-i")];if(!window.fetch||!window.File)return;ev.preventDefault();fetch(it.url).then(function(r){return r.blob();}).then(function(b){` +
+    `var f=new File([b],it.name,{type:b.type||"image/jpeg"});if(navigator.canShare&&navigator.canShare({files:[f]})){return navigator.share({files:[f]}).catch(function(){});}` +
+    `var u=URL.createObjectURL(b),d=document.createElement("a");d.href=u;d.download=it.name;document.body.appendChild(d);d.click();d.remove();setTimeout(function(){URL.revokeObjectURL(u);},4000);` +
+    `}).catch(function(){window.open(it.url,"_blank");});});});})();</script></body></html>`;
 }
 
 const jsonForScript = (v) => JSON.stringify(v).replace(/</g, "\\u003c");   // safe inside <script> (ES2019+ allows U+2028/2029 in strings)
@@ -917,22 +991,51 @@ export async function runRideRecap(crm, {
   const plan = planRecaps({ bookings: rows, tours: t, logged, suppressed: sup.all, now, tz: s.timezone });
   out.skipped = plan.skipped.length; out.review = plan.review.length;
 
-  const weatherByDate = new Map();
-  const exp = plan.recaps.length ? await loadExperimentStats(crm, { clientId, nowMs: new Date(now).getTime() }) : { stats: {} };
+  // Guide app photos (ride_media): the exact Drive file per departure / booking. Table missing → name matching only.
+  let media = [];
+  const avails = [...new Set(plan.recaps.flatMap(rc => rc.bookings.map(b => b.availabilityPk)).filter(Boolean))];
+  if (avails.length) {
+    try {
+      const { data, error: mErr } = await crm.from("ride_media").select("*").eq("client_id", clientId).in("availability_pk", avails);
+      if (!mErr) media = data ?? [];
+    } catch { media = []; }
+  }
+  const weatherByDate = new Map(), stormByPoint = new Map();
+  const simple = s.template === "simple";
+  const exp = plan.recaps.length ? await loadExperimentStats(crm, { clientId, nowMs: new Date(now).getTime(), template: s.template }) : { stats: {} };
   for (const rc of plan.recaps) {
     const date = localDate(rc.primary.startAt ?? rc.primary.endAt, s.timezone);
     const pt = weatherPointFor({ item: rc.primary.item, type: rc.tour.type }, s);
     const wKey = pt ? `${date}|${pt.lat}|${pt.lon}` : null;
-    if (wKey && !weatherByDate.has(wKey)) weatherByDate.set(wKey, await fetchRecapWeather({ lat: pt.lat, lon: pt.lon, date, fetchImpl }));
-    const weather = wKey ? weatherByDate.get(wKey) : null;
+    if (!simple && wKey && !weatherByDate.has(wKey)) weatherByDate.set(wKey, await fetchRecapWeather({ lat: pt.lat, lon: pt.lon, date, fetchImpl }));
+    const weather = !simple && wKey ? weatherByDate.get(wKey) : null;
     const unsubscribeUrl = out.preview ? null : await unsubscribeUrlFor(crm, rc.email, baseUrl);
     const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour });
+    const tagged = pickRideMediaForBooking(media, rc.primary);
+    if (tagged) trip.photo = String(tagged.drive_file_id);
     const variants = chooseVariants({ seed: rc.primary.pk, stats: exp.stats, modes: s.experiments });
-    const data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl, variants });
-    const msg = renderRideRecap(data);
-    const photoHint = data.photo === false ? null : buildPhotoHint({ label: rc.tour.label, startAt: rc.primary.startAt ?? rc.primary.endAt, fileId: typeof data.photo === "string" ? data.photo : null });
+    let data, msg;
+    if (simple) {
+      // "Next storm" (CSR only): a live forecast fetched now, from the ride's weather point. None → the line is hidden.
+      let nextStorm = null;
+      if (rc.tour.type !== "rea" && pt) {
+        const sKey = `${pt.lat}|${pt.lon}`;
+        if (!stormByPoint.has(sKey)) stormByPoint.set(sKey, await fetchNextStorm({ lat: pt.lat, lon: pt.lon, fromYmd: localDate(now, s.timezone), fetchImpl }));
+        nextStorm = stormByPoint.get(sKey);
+      }
+      data = buildSimpleRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, nextStorm, unsubscribeUrl, baseUrl, variants });
+      msg = renderSimpleRecap(data);
+    } else {
+      data = buildRecapData({ booking: rc.primary, tour: rc.tour, trip, settings: s, weather, pax: rc.pax, unsubscribeUrl, baseUrl, variants });
+      msg = renderRideRecap(data);
+    }
+    // season "winter": every recap ride is on snow, so the photo matcher refuses summer/RZR/UTV files (both templates).
+    const photoHint = data.photo === false ? null : buildPhotoHint({ label: rc.tour.label, startAt: rc.primary.startAt ?? rc.primary.endAt,
+      fileId: typeof data.photo === "string" ? data.photo : null, season: "winter", hosted: simple });
+    if (simple && photoHint && data.mapUrl) photoHint.map_url = data.mapUrl;   // the upload adds the map to the photo row
+    const loggedVariants = simple ? { ...data.variants, template: "simple" } : data.variants;
     const to = s.dry_run ? s.test_to : rc.email;
-    const summary = { booking_id: rc.primary.pk, bookings: rc.bookings.map(b => b.pk), email: rc.email, to, type: rc.tour.type, subject: (s.dry_run ? "[TEST] " : "") + msg.subject, photo_hint: photoHint, weather: !!weather, variants: data.variants };
+    const summary = { booking_id: rc.primary.pk, bookings: rc.bookings.map(b => b.pk), email: rc.email, to, type: rc.tour.type, subject: (s.dry_run ? "[TEST] " : "") + msg.subject, photo_hint: photoHint, weather: !!weather, variants: loggedVariants, template: s.template };
     out.recaps.push(summary);
     if (out.preview) continue;
 
@@ -941,7 +1044,7 @@ export async function runRideRecap(crm, {
       reference: rc.primary.pk, idempotencyKey: `recap-${rc.primary.pk}`, dryRun: s.dry_run });
     const logRows = rc.bookings.map(b => ({
       booking_id: b.pk, client_id: clientId, email: rc.email, sent_to: to, type: rc.tour.type, send_id: q.row.id,
-      primary_booking_id: rc.primary.pk, dry_run: s.dry_run, weather: !!weather, queued_at: new Date(now).toISOString(), variants: data.variants,
+      primary_booking_id: rc.primary.pk, dry_run: s.dry_run, weather: !!weather, queued_at: new Date(now).toISOString(), variants: loggedVariants,
     }));
     let { error: lgErr } = await crm.from("recap_log").upsert(logRows, { onConflict: "booking_id", ignoreDuplicates: true });
     if (lgErr && /variants/i.test(lgErr.message)) {   // db2_ride_recap_ab.sql not applied yet → log without the variant

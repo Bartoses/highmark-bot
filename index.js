@@ -95,7 +95,7 @@ import {
   handlePortalGetEmailDomain, handlePortalCreateEmailDomain, handlePortalVerifyEmailDomain, handlePortalDeleteEmailDomain,
 } from "./adminEmailCampaigns.js";
 import { handleTrackClick, handleTrackOpen } from "./emailTracking.js";
-import { renderSharePage, renderRidePage, loadShareContext } from "./rideRecap.js";
+import { renderSharePage, renderRidePage, renderPhotosPage, loadShareContext } from "./rideRecap.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -104,6 +104,8 @@ app.set("trust proxy", 1); // Railway sits behind a proxy — required for expre
 // further down; the closure only reads it when a request arrives.
 app.post("/webhooks/resend", express.raw({ type: "application/json", limit: "1mb" }), (req, res) => handleResendWebhook(req, res, { crm: crmSupabase }));
 app.use(express.urlencoded({ extended: false }));
+// Ride Recap photo uploads (base64 JPEG from the Apps Script) are bigger than express.json()'s 100 KB default.
+app.use("/api/v1/recaps/photo", express.json({ limit: "20mb" }));
 app.use(express.json());
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2257,16 +2259,22 @@ app.get("/newsletter", (_req, res) => res.sendFile(path.join(__uiDir, "newslette
 // Ride Recap share pages (Gmail strips sms: links from emails, so the email links here). Public; they show only the tour, date,
 // ride stats and the referral code — never a guest's name, email or phone.
 app.get("/r/share", async (req, res) => {
-  const ctx = await loadShareContext(crmSupabase, { bookingId: req.query.b, type: req.query.t });
+  const ctx = await loadShareContext(crmSupabase, { bookingId: req.query.b, type: req.query.t, sig: req.query.s });
   const html = ctx && renderSharePage({ ...ctx, baseUrl: resolveBaseUrl() });
   if (!html) return res.status(404).type("text/plain").send("This share link isn't valid.");
   res.set("Cache-Control", "no-store").type("html").send(html);
 });
 app.get("/r/ride", async (req, res) => {
-  const ctx = await loadShareContext(crmSupabase, { bookingId: req.query.b, type: req.query.t });
+  const ctx = await loadShareContext(crmSupabase, { bookingId: req.query.b, type: req.query.t, sig: req.query.s });
   const html = ctx && renderRidePage({ ...ctx, baseUrl: resolveBaseUrl() });
   if (!html) return res.status(404).type("text/plain").send("This ride link isn't valid.");
   res.set("Cache-Control", "public, max-age=300").type("html").send(html);
+});
+app.get("/r/photos", async (req, res) => {
+  const ctx = await loadShareContext(crmSupabase, { bookingId: req.query.b, type: req.query.t, sig: req.query.s });
+  const html = ctx && renderPhotosPage({ ...ctx, baseUrl: resolveBaseUrl() });
+  if (!html) return res.status(404).type("text/plain").send("This photo link isn't valid.");
+  res.set("Cache-Control", "no-store").type("html").send(html);
 });
 // Route-map images for recap emails (placeholders until real routes exist; see docs/og/route-placeholders.html).
 app.get("/r/route/:name.png", (req, res) => {
