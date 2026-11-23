@@ -51,7 +51,25 @@ location with a staff picker on each, plus unassigned items at the top.
 - Each job: time, type, from → to, address, sleds/trailer, guest + phone, booking link, assigned driver, status
   (to do / out / done). Drivers see their runs in time order.
 
-**Shop maintenance schedule (new, Sean: all of these)**
+**Fleet board: which sled goes to which guest (from Sean's "Weekly Shop Manifest 25/26" sheet)**
+Today this lives in a Google Sheet with one tab per location (Steamboat, Kremmling, Guide, REA): one row per sled unit
+(Khaos 155 #1-#27, Khaos 165 #28-#32, 650 SP 155 #33, S4 Voyager #34-#37, demo/owner units like 146/155/165 Boost, 155
+ICEAGE, 9R 146/155), one column per day, and each cell holds the guest on that sled. Cell colors mark the booking type:
+Guided, Trailer, Pick up, Guide Sled, PU night before, Special Order, Kremmling; "Damage Cap" and "Warranty" mark the
+add-ons. The app's version:
+- **Units** per location (from MPWR vehicles where possible, else entered in Settings): unit number, model, length.
+- **Each day:** rentals and guided bookings need N sleds of a model (from the FareHarbor item + party size); the shop
+  drags or taps a unit onto each booking. Same colors/labels as the sheet, plus Damage Cap / Warranty badges from the
+  booking.
+- Conflicts shown (a unit double-booked, a unit with an open work order, more sleds booked than units).
+- Guides see which sleds their group is on; drivers see which sleds go on which delivery.
+- Sync with the sheet both ways while the shop still uses it.
+
+**Shuttles:** big 25-person vans (Sean). A van run can carry several bookings; each run gets a driver and a van.
+
+**Team view (Sean):** guides can see the other guides' schedules in a separate view; "My day" stays theirs.
+
+**Shop maintenance: LATER (Sean, 2026-11-23).** Kept for a later slice:
 - MPWR work orders (already synced to `work_orders`) shown per location by due date.
 - Recurring checklist per sled (pre-ride check, oil/belt every N hours or days, end-of-day wash), checked off in the app.
 - A manager assigns each job to a mechanic/shop person; it shows in their schedule.
@@ -65,16 +83,14 @@ details; photos + ride log on guided bookings.
 1. Slice 1 changes above (rename, Settings, assigned-first) + locations on bookings + staff list in the app.
 2. Manager day board (assign staff to bookings), "My day" screen.
 3. Deliveries + shuttles from booking answers, with drivers.
-4. Maintenance: MPWR work orders by location + recurring checklist + assignment.
-5. Google Sheet sync (staff + assignments + deliveries) once the sheet layout is settled.
-6. Google sign-in.
+4. Fleet board (sled units per booking per day) + sheet sync.
+5. Google Sheet sync for staff + assignments + deliveries.
+6. Google sign-in. Later: maintenance.
 
 **Open questions**
-1. Share last year's schedule sheet with the Google account connected to Claude (it returned "Permission denied"), so the
-   sync can match its columns.
-2. Recurring maintenance: which tasks and intervals (hours, days, or both)? Does MPWR track engine hours?
-3. Shuttles: which vehicles, and does a shuttle run belong to one booking or group several?
-4. Should guides see each other's schedules, or only their own?
+1. Share "Weekly Shop Manifest 25/26" with the Google account connected to Claude (still "Permission denied" on
+   2026-11-23), so the sync can read the Kremmling / Guide / REA tabs too.
+2. (Answered: maintenance later; shuttles = 25-person vans; guides can see others in a separate view.)
 
 ## Read first
 
