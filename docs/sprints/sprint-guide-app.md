@@ -7,6 +7,75 @@ Draft 2, 2026-11-23, written with Sean. Decisions marked **(Sean)** came from hi
 **Slice 1 built 2026-11-23** (PR: Guide Ride Log slice 1): A (briefing link only; portal page later), B, C2 (claim/split;
 FareHarbor field read), D1–D4 (photos; videos later), E, G. Not yet: videos, F (rider tags), C3 (manager board), D5/H (Drive), `LOG` keyword.
 
+## Sean's feedback on the slice 1 preview (2026-11-23) → plan
+
+**What the app is for:** each person's day: the bookings, tours, deliveries and jobs they're assigned, their schedule, and
+everything they need to prepare (orders, add-ons, gear, health notes, pickups). Photos and the ride log are one part of it.
+
+**Changes to slice 1 (small, do first)**
+- Rename **Rides → Bookings**. Move **Tours** into **Settings** (Settings = Tours/routes + Recap email + Staff + Locations).
+- **Assigned, not claimed.** Managers assign guides; the guide opens the app and their bookings are already there.
+  Claiming stays only as a fallback for a ride nobody was assigned to.
+- **Notifications: app only (Sean).** No extra texts on assignment; the morning briefing link still opens the app.
+
+**Locations (four, Sean)**
+| Location | What runs there | Bookings that belong to it |
+|---|---|---|
+| Steamboat | CSR shop: rentals | FareHarbor items ending "• Steamboat" |
+| North Routt | CSR guided backcountry (guides) | "Private Guided Backcountry…" items |
+| Kremmling | CSR rentals | items ending "• Kremmling" (+ Kremmling trailers) |
+| Rabbit Ears (the Ranch) | REA tours | REA tours (Grand Tour, First Tracks, Tree Line, Sunset…) |
+- Each booking gets a location (item name rules, same as `mpwrSync.deriveLocationFromTitle`; override per tour in Settings).
+- Each staff member has a **home location**; a **day assignment** can put them somewhere else ("Jake → North Routt today").
+  Their screens default to where they're working that day; managers see all four with a location filter.
+
+**Staff (Sean: in the app AND a Google Sheet)**
+- One staff list: name, role (guide / shop / driver / mechanic / manager), home location, phone, Google email, active.
+- Edited in the app (Settings → Staff) and synced with a Google Sheet tab (both directions, newest edit wins, the app
+  shows where each change came from). Replaces editing operator phones in the portal for these people (the briefing
+  keeps reading the same phones).
+- **Google sign-in (later):** staff sign in with their Google account (matched by Google email) to see their profile,
+  schedule and pages without needing today's link.
+
+**Assignments (Sean: from the booking, a Google Sheet, or the app)**
+Order of truth for who's on a booking / delivery / job: the app (a manager's change) → the Google Sheet → FareHarbor's
+guide/staff field. Every assignment shows its source. Managers get a **day board**: today's (or tomorrow's) bookings per
+location with a staff picker on each, plus unassigned items at the top.
+
+**Sled delivery + shuttle schedule (new)**
+- Jobs: **delivery to a trailhead or lodging**, **pickup the night before** ("Pickup Evening Prior"), **returns**,
+  **moves between locations**, and **shuttles** (lodging → trailhead) that need a **driver**.
+- Most come straight from the booking: FareHarbor answers "Sled Delivery", "Pickup Evening Prior", "Shuttle from lodging
+  to trail(head)", "On Trail Address" / delivery address, the sleds on the order, the time. Others are added in the app or
+  read from the Google Sheet.
+- Each job: time, type, from → to, address, sleds/trailer, guest + phone, booking link, assigned driver, status
+  (to do / out / done). Drivers see their runs in time order.
+
+**Shop maintenance schedule (new, Sean: all of these)**
+- MPWR work orders (already synced to `work_orders`) shown per location by due date.
+- Recurring checklist per sled (pre-ride check, oil/belt every N hours or days, end-of-day wash), checked off in the app.
+- A manager assigns each job to a mechanic/shop person; it shows in their schedule.
+
+**Each person's "My day" screen**
+Time-ordered list of everything assigned to them at their location today: bookings (with manifest + prep: orders, rental
+gear, add-ons, health notes, waivers, balance due), deliveries/shuttles (with addresses), maintenance jobs. Tap in for
+details; photos + ride log on guided bookings.
+
+**Build order (proposal)**
+1. Slice 1 changes above (rename, Settings, assigned-first) + locations on bookings + staff list in the app.
+2. Manager day board (assign staff to bookings), "My day" screen.
+3. Deliveries + shuttles from booking answers, with drivers.
+4. Maintenance: MPWR work orders by location + recurring checklist + assignment.
+5. Google Sheet sync (staff + assignments + deliveries) once the sheet layout is settled.
+6. Google sign-in.
+
+**Open questions**
+1. Share last year's schedule sheet with the Google account connected to Claude (it returned "Permission denied"), so the
+   sync can match its columns.
+2. Recurring maintenance: which tasks and intervals (hours, days, or both)? Does MPWR track engine hours?
+3. Shuttles: which vehicles, and does a shuttle run belong to one booking or group several?
+4. Should guides see each other's schedules, or only their own?
+
 ## Read first
 
 1. `Roadmap` → "Guide Ride Log" (the original idea) and "Ride Recap v2 — simple template".
