@@ -404,6 +404,15 @@ one sentence, one stat line, "Your photos are ready", "Had a good day?", "Bring 
   as `<tour-slug>.png` (e.g. `first-tracks.png`), and put its public URL in `recap_tours.map_url` for that loop's row(s).
   The Grand Tour map is `docs/maps/rea-grand-tour-map.png` → `recap-maps/grand-tour.png`.
 
+- **A/B testing keeps learning in both templates.** The simple template runs the same three experiments (subject, layout =
+  review before/after the stats, share_cta = "Share the code" vs "Give a friend 10% off"). Each template learns
+  separately (`recap_log.variants.template`), and `GET /api/v1/recaps/experiments` reports the template in use plus `by_template`.
+- **Photos page + sharing:** "See & download photos" opens `/r/photos` (the hosted ride photo + the loop map, each with Save or
+  share). `/r/share` makes the Instagram story from the ride photo, else the loop map. Everything is read from the DB
+  (`email_sends.photo_hint.hosted_photo`, `recap_tours.map_url`). A guest photo only appears on a page whose link carries the
+  email's signature (`rideLinkSig`, HMAC with `EMAIL_TRACKING_SECRET`); a guessed booking id sees the map and stats only.
+  Photo files get a random suffix in the public bucket for the same reason. Every page and email has "Follow us: Instagram · Facebook".
+
 **Hidden-when-missing rules (simple):**
 
 | Block | Shown only when |

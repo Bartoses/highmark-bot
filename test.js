@@ -20543,9 +20543,57 @@ async function testRideRecap() {
       const pm = pulled.messages.find(x => x.send_id === g1.id);
       chk("simple job: an Apps Script without hosted-photo support still sends a correct no-photo email (map hero, no markers)",
         pm && !/RR_PHOTO|__RR_/.test(pm.html) && pm.html.includes("grand-tour.png") && pm.photo_hint?.hosted === true);
-      chk("experiments: a simple-template send only counts toward the subject test",
-        JSON.stringify(R.tallyExperiments([{ send_id: "a", dry_run: false, variants: { subject: "B", template: "simple" } }], new Map()).layout) === JSON.stringify({ A: { sends: 0, wins: 0 }, B: { sends: 0, wins: 0 } }));
+      const logs = [{ send_id: "a", dry_run: false, variants: { subject: "B", layout: "B", share_cta: "A", template: "simple" } }, { send_id: "b", dry_run: false, variants: { subject: "A", layout: "A", share_cta: "A" } }];
+      const clicks = new Map([["a", ["https://x.test/?utm_content=google-review"]]]);
+      const tv1 = R.tallyExperiments(logs, clicks), tsim = R.tallyExperiments(logs, clicks, { template: "simple" });
+      chk("experiments: each template learns separately (old rows without a template count as v1); simple runs all 3 tests",
+        tv1.subject.A.sends === 1 && tv1.subject.B.sends === 0 && tsim.subject.B.sends === 1 && tsim.layout.B.sends === 1 && tsim.layout.B.wins === 1 && tsim.share_cta.A.sends === 1 && tsim.subject.A.sends === 0);
+      chk("simple job: REA photo_hint carries the loop map so the upload can add it to the photo row", g1.photo_hint.map_url === X.GRAND_TOUR_MAP_URL);
     }
+    // A/B arms inside the simple template + social
+    const mkV = (variants) => X.renderSimpleRecap(X.buildSimpleRecapData({ booking: { bookingId: "392519085", name: "katrina", startAt: "2027-01-29T18:00:00Z", endAt: "2027-01-29T21:00:00Z" },
+      tour: { type: "rea", label: "Grand Tour", miles: 24, high_point_ft: 9880 }, trip: { photo: null, miles: 24, high_point_ft: 9880 }, settings: { features: ["review", "share"] }, variants, linkSecret: "k-0123456789abcdef" })).html;
+    const hA = mkV({ subject: "A", layout: "A", share_cta: "A" }), hB = mkV({ subject: "B", layout: "B", share_cta: "B" });
+    chk("simple A/B: layout B puts 'Had a good day?' before the stat line, A after; share_cta B = 'Give a friend 10% off'",
+      hB.indexOf("Had a good day?") < hB.indexOf("RIDDEN") && hA.indexOf("Had a good day?") > hA.indexOf("RIDDEN") && hB.includes("Give a friend 10% off") && hA.includes("Share the code"));
+    chk("simple A/B: every tracked link's utm_term names all 3 arms + the template (subject-B.layout-B.share_cta-B.simple)",
+      hB.includes("utm_term=subject-B.layout-B.share_cta-B.simple") && !/utm_content=google-review(?![^"]*utm_term=)/.test(hB));
+    chk("simple: Instagram share + Follow us (Instagram, Facebook) links in every email",
+      Object.values(simple).filter(r => r.data.features.includes("share")).every(r => r.html.includes("Post your ride on Instagram")) &&
+      Object.values(simple).every(r => r.html.includes("instagram.com/coloradosledrentals") && r.html.includes("facebook.com/coloradosledrentals")));
+    chk("simple: 'See & download photos' opens the signed /r/photos page; thumbnails for REA = photo, photo, map",
+      /href="[^"]*\/r\/photos\?b=392519085&amp;t=rental&amp;s=[A-Za-z0-9_-]{22}/.test(simple["simple-csr-full"].html) && simple["simple-rea-photo"].html.includes("rea-map-thumb.jpg"));
+    // share / ride / photos pages read the photo + map from the DB; the photo needs a signed link
+    await withEnv({ EMAIL_TRACKING_SECRET: "page-secret-0123456789abcdef" }, async () => {
+      const sig = R.rideLinkSig("392519085");
+      const pageDb = makeFhMockCrm({
+        bookings: [{ fareharbor_pk: "#392519085", company: "rabbitearsadventures", status: "booked", start_at: "2027-01-29T18:00:00Z", end_at: "2027-01-29T21:00:00Z", customer_count: 2,
+          raw_payload: { booking: { availability: { item: { name: "3 Hour Grand Tour" } }, contact: { name: "Kat", email: "k@x.test" } } } }],
+        recap_tours: TOURS.map((t, i) => ({ id: `t${i}`, client_id: "csr_rea", active: true, stops: [], ...t, ...(t.match === "Grand Tour" ? { map_url: X.GRAND_TOUR_MAP_URL } : {}) })),
+        recap_settings: [{ client_id: "csr_rea" }],
+        email_sends: [{ id: "e1", category: "recap", reference: "#392519085", created_at: "2027-01-30T01:00:00Z", photo_hint: { hosted: true, hosted_photo: X.SAMPLE_PHOTOS } }],
+      });
+      const signed = await R.loadShareContext(pageDb, { bookingId: "392519085", type: "rea", sig });
+      const guessed = await R.loadShareContext(pageDb, { bookingId: "392519085", type: "rea", sig: "x".repeat(22) });
+      chk("share pages: a signed link shows the guest's hosted photo (from email_sends); a guessed/unsigned link never does — map + stats only",
+        signed?.photoUrl === X.SAMPLE_PHOTOS.full && signed.mapUrl === X.GRAND_TOUR_MAP_URL && guessed?.photoUrl === null && guessed.mapUrl === X.GRAND_TOUR_MAP_URL
+        && !R.verifyRideLinkSig("392519086", sig) && R.rideLinkSig("392519085", null) === null, JSON.stringify({ p: signed?.photoUrl, m: signed?.mapUrl }));
+      const share = R.renderSharePage({ ...guessed, baseUrl: "https://app.test" });
+      chk("share page: the story image uses the loop map (fit whole) when there's no photo; Follow us links present",
+        share.includes(`"photo":"${X.GRAND_TOUR_MAP_URL}"`) && share.includes('"fit":"contain"') && share.includes("instagram.com/coloradosledrentals") && share.includes("facebook.com/coloradosledrentals"));
+      const sharePhoto = R.renderSharePage({ ...signed, baseUrl: "https://app.test" });
+      chk("share page: with a signed link the story uses the ride photo, the posted ride link stays signed, and 'Your photos' is offered",
+        sharePhoto.includes(`"photo":"${X.SAMPLE_PHOTOS.full}"`) && sharePhoto.includes(`s=${sig}`) && sharePhoto.includes("/r/photos?b=392519085"));
+      const gallery = R.renderPhotosPage({ ...signed, baseUrl: "https://app.test" });
+      chk("photos page: the ride photo and the loop map, each with Save or share; no photo for an unsigned link",
+        gallery.includes(X.SAMPLE_PHOTOS.full) && gallery.includes(X.GRAND_TOUR_MAP_URL) && (gallery.match(/Save or share/g) ?? []).length === 2
+        && !R.renderPhotosPage({ ...guessed, baseUrl: "https://app.test" }).includes(X.SAMPLE_PHOTOS.full));
+      const ride = R.renderRidePage({ ...guessed, baseUrl: "https://app.test" });
+      chk("ride page: the link preview image is the photo (signed) or the map, never a name/email; default card keeps 1200x630",
+        ride.includes(`property="og:image" content="${X.GRAND_TOUR_MAP_URL}"`) && !ride.includes("k@x.test") && !ride.includes("Kat<")
+        && R.renderRidePage({ bookingId: "1", type: "rental", baseUrl: "https://app.test" }).includes('og:image:width'));
+    });
+
     // simple snapshots (6 cases, photos applied)
     const sdir = new URL("./snapshots/ride-recap/", import.meta.url); const smism = [];
     for (const [name, r] of Object.entries(simple)) {

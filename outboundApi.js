@@ -302,9 +302,17 @@ export function buildOutboundRouter({ crm, db1, getClient, sendOne = sendEmail, 
   // Ride Recap A/B experiments: sends, clicks, click rate and chance-to-be-best per version (real sends only).
   router.get("/recaps/experiments", async (_req, res) => {
     try {
-      const { data: settings } = await crm.from("recap_settings").select("experiments").eq("client_id", "csr_rea").maybeSingle();
-      const { stats, error } = await loadExperimentStats(crm, { clientId: "csr_rea" });
-      res.json({ experiments: experimentReport(stats, settings?.experiments ?? {}), ...(error ? { note: "variant tracking not set up yet (db2_ride_recap_ab.sql)" } : {}) });
+      const { data: settings } = await crm.from("recap_settings").select("*").eq("client_id", "csr_rea").maybeSingle();
+      // each template learns separately; "experiments" = the template in use now, by_template = both
+      const current = settings?.template === "simple" ? "simple" : "v1";
+      const by = {};
+      let note = null;
+      for (const template of ["v1", "simple"]) {
+        const { stats, error } = await loadExperimentStats(crm, { clientId: "csr_rea", template });
+        if (error) note = "variant tracking not set up yet (db2_ride_recap_ab.sql)";
+        by[template] = experimentReport(stats, settings?.experiments ?? {});
+      }
+      res.json({ template: current, experiments: by[current], by_template: by, ...(note ? { note } : {}) });
     } catch (e) { console.error("[OUTBOUND] recaps/experiments error:", e.message); return bad(res, "report failed", 500); }
   });
 
