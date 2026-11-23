@@ -26,6 +26,7 @@ import { escapeHtml, buildUnsubscribeUrl } from "./emailTemplates.js";
 import { loadSuppressionSets, normEmail, isEmailAddress, escapeLike } from "./emailSuppression.js";
 import { resolveBaseUrl } from "./emailSender.js";
 import { buildSimpleRecapData, renderSimpleRecap, fetchNextStorm, normalizeTemplate } from "./recapSimple.js";
+import { pickRideLogForBooking, rideLogToTrip, hostedPhotoFromMedia } from "./guideApp.js";
 
 export const RECAP_TYPES = ["rea", "backcountry", "rental"];
 export const RECAP_FEATURES = ["review", "share", "prints", "merch", "newsletter"];
@@ -992,14 +993,14 @@ export async function runRideRecap(crm, {
   out.skipped = plan.skipped.length; out.review = plan.review.length;
 
   // Guide app photos (ride_media): the exact Drive file per departure / booking. Table missing → name matching only.
-  let media = [];
+  // Guide app ride logs + assignments too (db2_ride_logs.sql). Any table missing → that part is simply skipped.
+  let media = [], rideLogs = [], assigns = [];
   const avails = [...new Set(plan.recaps.flatMap(rc => rc.bookings.map(b => b.availabilityPk)).filter(Boolean))];
-  if (avails.length) {
-    try {
-      const { data, error: mErr } = await crm.from("ride_media").select("*").eq("client_id", clientId).in("availability_pk", avails);
-      if (!mErr) media = data ?? [];
-    } catch { media = []; }
-  }
+  const loadBy = async (table) => {
+    try { const { data, error: e } = await crm.from(table).select("*").eq("client_id", clientId).in("availability_pk", avails); return e ? [] : (data ?? []); }
+    catch { return []; }
+  };
+  if (avails.length) [media, rideLogs, assigns] = await Promise.all([loadBy("ride_media"), loadBy("ride_logs"), loadBy("ride_assignments")]);
   const weatherByDate = new Map(), stormByPoint = new Map();
   const simple = s.template === "simple";
   const exp = plan.recaps.length ? await loadExperimentStats(crm, { clientId, nowMs: new Date(now).getTime(), template: s.template }) : { stats: {} };
@@ -1010,9 +1011,15 @@ export async function runRideRecap(crm, {
     if (!simple && wKey && !weatherByDate.has(wKey)) weatherByDate.set(wKey, await fetchRecapWeather({ lat: pt.lat, lon: pt.lon, date, fetchImpl }));
     const weather = !simple && wKey ? weatherByDate.get(wKey) : null;
     const unsubscribeUrl = out.preview ? null : await unsubscribeUrlFor(crm, rc.email, baseUrl);
-    const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour });
+    const log = pickRideLogForBooking(rideLogs, rc.primary);
+    const trip = buildTripDetails({ booking: rc.primary, tour: rc.tour, rideLog: rideLogToTrip(log) });
+    if (!trip.guide) {                                                  // no log yet: the guide who claimed the ride
+      const a = assigns.find(x => String(x.availability_pk) === String(rc.primary.availabilityPk) && (!(x.booking_pks ?? []).length || x.booking_pks.includes(rc.primary.pk)));
+      if (a?.guide_name) trip.guide = a.guide_name;
+    }
     const tagged = pickRideMediaForBooking(media, rc.primary);
-    if (tagged) trip.photo = String(tagged.drive_file_id);
+    const hosted = hostedPhotoFromMedia(tagged);                        // uploaded in the Guide app → already hosted
+    if (tagged?.drive_file_id) trip.photo = String(tagged.drive_file_id);
     const variants = chooseVariants({ seed: rc.primary.pk, stats: exp.stats, modes: s.experiments });
     let data, msg;
     if (simple) {
@@ -1033,6 +1040,7 @@ export async function runRideRecap(crm, {
     const photoHint = data.photo === false ? null : buildPhotoHint({ label: rc.tour.label, startAt: rc.primary.startAt ?? rc.primary.endAt,
       fileId: typeof data.photo === "string" ? data.photo : null, season: "winter", hosted: simple });
     if (simple && photoHint && data.mapUrl) photoHint.map_url = data.mapUrl;   // the upload adds the map to the photo row
+    if (simple && photoHint && hosted) photoHint.hosted_photo = hosted;        // Guide app photo: in the email with no Apps Script step
     const loggedVariants = simple ? { ...data.variants, template: "simple" } : data.variants;
     const to = s.dry_run ? s.test_to : rc.email;
     const summary = { booking_id: rc.primary.pk, bookings: rc.bookings.map(b => b.pk), email: rc.email, to, type: rc.tour.type, subject: (s.dry_run ? "[TEST] " : "") + msg.subject, photo_hint: photoHint, weather: !!weather, variants: loggedVariants, template: s.template };

@@ -96,6 +96,7 @@ import {
 } from "./adminEmailCampaigns.js";
 import { handleTrackClick, handleTrackOpen } from "./emailTracking.js";
 import { renderSharePage, renderRidePage, renderPhotosPage, loadShareContext } from "./rideRecap.js";
+import { handleGuideDay, handleGuideClaim, handleGuideLog, handleGuidePhoto, handleGuideMedia, handleGuideAdmin, handleGuideAdminTour, handleGuideAdminMap, handleGuideAdminSettings, handleGuideAdminStaff, handleGuideAssign } from "./guideApp.js";
 
 const app = express();
 app.set("trust proxy", 1); // Railway sits behind a proxy — required for express-rate-limit + req.ip to work correctly
@@ -106,6 +107,7 @@ app.post("/webhooks/resend", express.raw({ type: "application/json", limit: "1mb
 app.use(express.urlencoded({ extended: false }));
 // Ride Recap photo uploads (base64 JPEG from the Apps Script) are bigger than express.json()'s 100 KB default.
 app.use("/api/v1/recaps/photo", express.json({ limit: "20mb" }));
+app.use(["/guide/api/photo", "/guide/api/admin/map"], express.json({ limit: "20mb" }));   // Guide app photo uploads (base64 JPEG)
 app.use(express.json());
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2276,6 +2278,25 @@ app.get("/r/photos", async (req, res) => {
   if (!html) return res.status(404).type("text/plain").send("This photo link isn't valid.");
   res.set("Cache-Control", "no-store").type("html").send(html);
 });
+// ── Guide Ride Log (guideApp.js) — signed link from the morning briefing; see docs/sprints/sprint-guide-app.md ──
+const guideDeps = () => ({ crm: crmSupabase, db1: supabase, now: new Date() });
+const guideSend = (res, r) => res.status(r.status).set("Cache-Control", "no-store").json(r.body);
+const guideWrap = (fn) => async (req, res) => {
+  if (!crmSupabase) return res.status(503).json({ error: "CRM not configured" });
+  try { guideSend(res, await fn(req)); } catch (e) { console.error("[GUIDE]", e.message); res.status(500).json({ error: "Something went wrong. Try again." }); }
+};
+app.get("/guide", (_req, res) => res.set("Cache-Control", "no-store").sendFile(path.join(__uiDir, "guide.html")));
+app.get("/guide/api/day", guideWrap((req) => handleGuideDay(guideDeps(), { t: req.query.t, d: req.query.d, as: req.query.as })));
+app.get("/guide/api/admin", guideWrap((req) => handleGuideAdmin(guideDeps(), { t: req.query.t })));
+app.post("/guide/api/admin/tour", guideWrap((req) => handleGuideAdminTour(guideDeps(), req.body ?? {})));
+app.post("/guide/api/admin/map", guideWrap((req) => handleGuideAdminMap(guideDeps(), req.body ?? {})));
+app.post("/guide/api/admin/settings", guideWrap((req) => handleGuideAdminSettings(guideDeps(), req.body ?? {})));
+app.post("/guide/api/admin/staff", guideWrap((req) => handleGuideAdminStaff(guideDeps(), req.body ?? {})));
+app.post("/guide/api/assign", guideWrap((req) => handleGuideAssign(guideDeps(), req.body ?? {})));
+app.post("/guide/api/claim", guideWrap((req) => handleGuideClaim(guideDeps(), req.body ?? {})));
+app.post("/guide/api/log", guideWrap((req) => handleGuideLog(guideDeps(), req.body ?? {})));
+app.post("/guide/api/photo", guideWrap((req) => handleGuidePhoto(guideDeps(), req.body ?? {})));
+app.post("/guide/api/media", guideWrap((req) => handleGuideMedia(guideDeps(), req.body ?? {})));
 // Route-map images for recap emails (placeholders until real routes exist; see docs/og/route-placeholders.html).
 app.get("/r/route/:name.png", (req, res) => {
   if (!["rea-placeholder", "backcountry-placeholder"].includes(req.params.name)) return res.status(404).end();

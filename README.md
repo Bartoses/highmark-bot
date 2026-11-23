@@ -436,3 +436,41 @@ one sentence, one stat line, "Your photos are ready", "Had a good day?", "Bring 
 
 Never shown: "Ride #N" (no booking-history source yet), snow depth / % of normal (no confirmed live station source yet),
 emoji (a test fails on any character above U+FFFF).
+
+## Guide Ride Log (guideApp.js + public/guide.html, slice 1 — 2026-11-23)
+
+A phone page where guides, shop staff and managers log each ride (sprint: `docs/sprints/sprint-guide-app.md`).
+
+- **Getting in:** a signed link in the **morning briefing text** ("📸 Log today's rides + photos: …"), valid for that
+  phone for that day until 3 am. Turn the line on with `GUIDE_APP_LINKS=true` on the **highmark-cron** service. The
+  link is signed with `GUIDE_LINK_SECRET` (falls back to `EMAIL_TRACKING_SECRET`). Roles: guide → their rides + unclaimed
+  tours; reservations/shop → rentals + unclaimed; owner/GM/ops manager → everything; mechanic/fleet/marketing → no link.
+- **Today screen:** today's (or yesterday's) FareHarbor departures grouped by the departure id, with riders' first names
+  only (no guest emails or phones reach the page).
+- **This is my ride:** a guide claims a departure, or only some riders when a departure is split between guides. Saving a log
+  or adding a photo also claims it. If FareHarbor's guide field is filled (a custom field named guide/staff, or the
+  departure headline), that name is matched to a staff member first.
+- **Photos:** picked on the phone, shrunk to a 1600px JPEG there (iPhone HEIC works), uploaded one by one with retries
+  (weak signal), stored in Supabase Storage `recap-photos` as the hero/full/thumbnail set. ★ picks the email's photo.
+- **About the ride:** miles, high point, stops (blank = the loop's usual numbers from `recap_tours`), conditions, a
+  highlight (shown in the recap as a quote with the guide's name) and an internal note (never sent).
+- **Recaps:** the 6 pm job reads `ride_logs`, `ride_assignments` and `ride_media` for each booking's departure. The starred
+  photo goes straight into the email (`photo_hint.hosted_photo`, no Apps Script step, works with today's live script), and
+  the log fills the guide name, stats, stops and highlight.
+- **Roles on entry:** the person picks Guide, Shop or Manager (only up to their own level; remembered on the phone).
+- **Manifest:** each ride lists its bookings: full name, party size, sled (rentals), FareHarbor booking answers a guide needs
+  (health concerns flagged red, gear/boot rentals, shuttle/pickup, address), waiver / checked-in / balance due from
+  `daily_manifest`, and tap-to-call. Full details only for your own rides, rentals at the shop, and managers; unclaimed rides
+  show first names only. Promo codes, insurance and marketing answers are never shown.
+- **Locations:** every booking belongs to Steamboat (CSR rentals), North Routt (guided backcountry), Kremmling (CSR
+  rentals) or Rabbit Ears (the Ranch, REA tours). The list filters by location (default = the person's home location);
+  your own bookings always show.
+- **Assigned, not claimed:** managers assign staff on each booking ("Assigned" card); a guide's assigned bookings are
+  under "Your bookings". Taking an unassigned booking is the fallback. Source shown: assigned / from FareHarbor / took it.
+- **Staff:** Settings → Staff (name, role guide/shop/driver/mechanic/manager, home location, phone, Google email). People
+  who are only on the briefing phone list show too. Guides see teammates' names, never their phones.
+- **Manager screens:** Settings → **Tours**: one route per tour (all FareHarbor items with the same `recap_tours.label`): miles, high point,
+  usual length, stops with elevations, internal notes, and the route map upload (PNG/JPEG → `recap-maps/<tour>.png`). These
+  are the defaults guides start from and what the recap shows. Settings → **Recap email**: send hour, email design, sections.
+  Dry run (going live) is not in the app.
+- **Needs:** `db2_ride_logs.sql` applied. Not in slice 1: videos, rider tags, manager board, Drive sync, `LOG` text keyword.

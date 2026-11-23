@@ -10,6 +10,7 @@
 //   buildActionCardBriefing(client, ctx, opts)               → role-aware action-card SMS (OI 2.0)
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { guideBriefingLine } from "./guideApp.js";
 import { getAllClients } from "./clients.js";
 import {
   detectOperatorIntent,
@@ -2497,6 +2498,13 @@ export async function generateDailyBriefing(client, supabase, twilioClient, crmS
       timeOfDay, displayName: options.displayName, label: options.label,
       digestTypes: options.digestTypes ?? ["all"],
     });
+  }
+
+  // Guide Ride Log link (guideApp.js) — morning briefing, ride-log roles, only when GUIDE_APP_LINKS=true
+  if (toPhone && options.role) {
+    const line = guideBriefingLine({ baseUrl: process.env.PUBLIC_BASE_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "https://highmark-bot-production.up.railway.app"),
+      phone: toPhone, role: options.role, timeOfDay });
+    if (line) briefing = `${briefing}\n\n${line}`;
   }
 
   const status = process.env.TEST_MODE === "true" ? "test" : "sent";
