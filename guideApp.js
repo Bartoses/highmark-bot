@@ -306,21 +306,132 @@ async function authed({ db1, crm, now }, token) {
   return { me, date: t.date };
 }
 
+// Which day may be opened: managers any day within ~a season either side; everyone else yesterday to 60 days ahead.
+export function allowedDate(d, today, access) {
+  if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d) || Number.isNaN(Date.parse(`${d}T12:00:00Z`))) return today;
+  const [lo, hi] = access === "manager" ? [addDays(today, -400), addDays(today, 400)] : [addDays(today, -1), addDays(today, 60)];
+  return d >= lo && d <= hi ? d : today;
+}
+
+// The ski season a date belongs to: Nov 1 → Apr 30. From July on it's the coming season (2026-11-23 → 2026/27).
+export function seasonRange(today) {
+  const y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7));
+  const start = m >= 7 ? y : y - 1;
+  return { from: `${start}-11-01`, to: `${start + 1}-04-30`, label: `${start}/${String(start + 1).slice(2)}` };
+}
+
+// FareHarbor booking rows with start_at in [fromIso, toIso), paged past PostgREST's 1,000-row cap.
+const BOOKING_COLS = "fareharbor_pk, company, status, start_at, end_at, customer_count, product_title, updated_at, raw_payload";
+async function loadBookingRows(crm, fromIso, toIso, { max = 6000 } = {}) {
+  const out = [];
+  for (let off = 0; off < max; off += 1000) {
+    const { data, error } = await crm.from("bookings").select(BOOKING_COLS).like("fareharbor_pk", "#%")
+      .gte("start_at", fromIso).lt("start_at", toIso).order("start_at", { ascending: true }).range(off, off + 999);
+    if (error) throw new Error(`bookings read failed: ${error.message}`);
+    out.push(...(data ?? []));
+    if ((data ?? []).length < 1000) break;
+  }
+  return out;
+}
+const dayStartIso = (date, tz = GUIDE_TZ) => { const x = new Date(`${date}T00:00:00Z`); x.setUTCHours(x.getUTCHours() - 12); return x.toISOString(); };
+
+// Group many days of booking rows into { date: departures[] } with assignees resolved (one assignments read).
+async function loadDays(crm, db1, { from, to, clientId = "csr_rea", tz = GUIDE_TZ, staff = null }) {
+  const end = new Date(`${addDays(to, 1)}T00:00:00Z`); end.setUTCHours(end.getUTCHours() + 12);
+  const [rows, { data: tours }, st] = await Promise.all([
+    loadBookingRows(crm, dayStartIso(from, tz), end.toISOString()),
+    crm.from("recap_tours").select("*").eq("client_id", clientId),
+    staff ? Promise.resolve(staff) : loadStaff(db1, clientId, crm),
+  ]);
+  const byDate = new Map();
+  for (const r of rows) {
+    if (!r.start_at) continue;
+    const ld = localDate(r.start_at, tz);
+    if (ld < from || ld > to) continue;
+    (byDate.get(ld) ?? byDate.set(ld, []).get(ld)).push(r);
+  }
+  const activeTours = (tours ?? []).filter(t => t.active !== false);
+  const days = new Map();
+  for (const [ld, list] of byDate) { const g = groupDepartures(list, activeTours, { tz }); if (g.length) days.set(ld, g); }
+  let assignments = [];
+  if (days.size) {
+    try {
+      const { data, error } = await crm.from("ride_assignments").select("*").eq("client_id", clientId).gte("ride_date", from).lte("ride_date", to);
+      assignments = error ? [] : (data ?? []);
+    } catch { assignments = []; }
+  }
+  for (const g of days.values()) for (const d of g) d.assignees = resolveAssignees(d, assignments, st);
+  return { days, staff: st };
+}
+
+// One line per day for the Season screen / the "next booking" shortcut. deps = visible departures of that day.
+export function summarizeDay(date, deps, phone) {
+  const by_location = {};
+  for (const d of deps) if (d.location) by_location[d.location] = (by_location[d.location] ?? 0) + (d.riders || 0);
+  const first = deps[0];
+  return { date, departures: deps.length, bookings: deps.reduce((n, d) => n + (d.booking_pks?.length ?? 0), 0),
+    riders: deps.reduce((n, d) => n + (d.riders || 0), 0), by_location,
+    first: first ? { start_at: first.start_at, label: first.label } : null,
+    mine: deps.filter(d => d.assignees?.some(a => a.phone === phone)).length };
+}
+
+// The next day after `date` with something this person can see (looks ahead up to `days`).
+export async function findNextDay(deps, { date, access, phone, days = 120 }) {
+  const from = addDays(date, 1), to = addDays(date, days);
+  const { days: map } = await loadDays(deps.crm, deps.db1, { from, to });
+  for (const ld of [...map.keys()].sort()) {
+    const vis = visibleDepartures(map.get(ld), { access, phone });
+    if (vis.length) return summarizeDay(ld, vis, phone);
+  }
+  return null;
+}
+
+// GET /guide/api/season — every day of the season with bookings. Managers: the whole season, past + future.
+// Guides / shop: from today on, only what they can see. Cached briefly (a season read is ~1–2k rows).
+const seasonCache = new Map();
+export async function handleGuideSeason(deps, { t, as = null }) {
+  const a = await authed(deps, t); if (a.error) return a.error;
+  const view = viewFor(a.me.access, as);
+  const today = a.date, range = seasonRange(today);
+  const key = `${range.from}|${today}`;
+  let hit = deps.cache === false ? null : seasonCache.get(key);
+  if (!hit || Date.now() - hit.at > 120_000) {
+    hit = { at: Date.now(), data: await loadDays(deps.crm, deps.db1, { from: range.from, to: range.to }) };
+    if (deps.cache !== false) { seasonCache.clear(); seasonCache.set(key, hit); }
+  }
+  const out = [];
+  for (const ld of [...hit.data.days.keys()].sort()) {
+    if (view !== "manager" && ld < today) continue;
+    const vis = visibleDepartures(hit.data.days.get(ld), { access: view, phone: a.me.phone });
+    if (vis.length) out.push(summarizeDay(ld, vis, a.me.phone));
+  }
+  const totals = out.reduce((s, x) => ({ days: s.days + 1, bookings: s.bookings + x.bookings, riders: s.riders + x.riders }), { days: 0, bookings: 0, riders: 0 });
+  return { status: 200, body: { season: range, today, view, locations: LOCATIONS, days: out, totals,
+    next: out.find(x => x.date > today) ?? null, next_mine: out.find(x => x.date > today && x.mine) ?? null } };
+}
+
 export async function handleGuideDay(deps, { t, d, as = null }) {
   const a = await authed(deps, t); if (a.error) return a.error;
-  const today = a.date, date = d && (d === today || d === addDays(today, -1)) ? d : today;
-  const all = await loadDay(deps.crm, deps.db1, { date });
   const view = viewFor(a.me.access, as);
+  const today = a.date, date = allowedDate(d, today, view === "manager" ? "manager" : a.me.access);
+  const all = await loadDay(deps.crm, deps.db1, { date });
   const list = visibleDepartures(all, { access: view, phone: a.me.phone }).map(x => publicDeparture(x, a.me, view));
   const meStaff = (all.staff ?? []).find(x => x.phone === a.me.phone);
+  // nothing (for you) on this day → point at the next day that has something
+  let next = null;
+  if (!list.length || (view === "guide" && !list.some(x => x.mine))) {
+    try { next = await findNextDay(deps, { date, access: view, phone: a.me.phone }); } catch { next = null; }
+  }
   return { status: 200, body: {
     me: { name: meStaff?.display_name ?? a.me.display_name ?? a.me.label ?? null, access: a.me.access, views: VIEWS_FOR[a.me.access] ?? [], view, home_location: meStaff?.home_location ?? null },
-    date, today, locations: LOCATIONS, departures: list,
+    date, today, locations: LOCATIONS, departures: list, next,
     // managers assign people; everyone else only needs names (team view)
     staff: (all.staff ?? []).map(x => ({ name: x.display_name, role: x.role, home_location: x.home_location, ...(view === "manager" ? { phone: x.phone } : {}) })),
   } };
 }
 
+// Photos + ride details: today's rides, or yesterday's (added the morning after).
+export const rideDay = (d, today) => (d === addDays(today, -1) ? d : today);
 async function findDeparture(deps, me, date, availabilityPk) {
   const all = await loadDay(deps.crm, deps.db1, { date });
   const dep = all.find(x => String(x.availability_pk) === String(availabilityPk));
@@ -330,9 +441,9 @@ async function findDeparture(deps, me, date, availabilityPk) {
 }
 
 // "This is my ride" — optionally only some riders (split departure). Re-claiming updates the rider list.
-export async function handleGuideClaim(deps, { t, availability_pk, booking_pks = null, release = false }) {
+export async function handleGuideClaim(deps, { t, availability_pk, booking_pks = null, release = false, d = null }) {
   const a = await authed(deps, t); if (a.error) return a.error;
-  const f = await findDeparture(deps, a.me, a.date, availability_pk); if (f.error) return f.error;
+  const f = await findDeparture(deps, a.me, d ? allowedDate(d, a.date, a.me.access) : a.date, availability_pk); if (f.error) return f.error;   // future rides can be taken too
   if (release) {
     await deps.crm.from("ride_assignments").delete().eq("availability_pk", String(availability_pk)).eq("operator_phone", a.me.phone);
     return { status: 200, body: { ok: true } };
@@ -346,10 +457,10 @@ export async function handleGuideClaim(deps, { t, availability_pk, booking_pks =
 }
 
 // A manager puts a staff member on a departure (or only some of its riders), or takes them off.
-export async function handleGuideAssign(deps, { t, availability_pk, phone, booking_pks = null, remove = false }) {
+export async function handleGuideAssign(deps, { t, availability_pk, phone, booking_pks = null, remove = false, d = null }) {
   const a = await authed(deps, t); if (a.error) return a.error;
   if (a.me.access !== "manager") return { status: 403, body: { error: "Managers only" } };
-  const all = await loadDay(deps.crm, deps.db1, { date: a.date });
+  const all = await loadDay(deps.crm, deps.db1, { date: d ? allowedDate(d, a.date, "manager") : a.date });   // any day of the season
   const dep = all.find(x => String(x.availability_pk) === String(availability_pk));
   if (!dep) {
     const y = await loadDay(deps.crm, deps.db1, { date: addDays(a.date, 1) });         // managers also plan tomorrow
@@ -379,7 +490,7 @@ const text = (v, max) => { const s = String(v ?? "").replace(/\s+/g, " ").trim()
 
 export async function handleGuideLog(deps, body) {
   const a = await authed(deps, body?.t); if (a.error) return a.error;
-  const f = await findDeparture(deps, a.me, a.date, body.availability_pk); if (f.error) return f.error;
+  const f = await findDeparture(deps, a.me, rideDay(body?.d, a.date), body.availability_pk); if (f.error) return f.error;
   const mine = f.dep.assignees.find(x => x.phone === a.me.phone);
   const row = {
     client_id: "csr_rea", ride_date: f.dep.ride_date, availability_pk: String(f.dep.availability_pk), guide_phone: a.me.phone,
@@ -402,7 +513,7 @@ async function fetchBuf(url, fetchImpl) { try { const r = await fetchImpl(url); 
 // One photo (base64 JPEG/PNG from the phone, already shrunk there). → stored set + a ride_media row.
 export async function handleGuidePhoto(deps, body, { process: proc = processRidePhoto, upload = uploadRidePhotos, fetchImpl = globalThis.fetch } = {}) {
   const a = await authed(deps, body?.t); if (a.error) return a.error;
-  const f = await findDeparture(deps, a.me, a.date, body.availability_pk); if (f.error) return f.error;
+  const f = await findDeparture(deps, a.me, rideDay(body?.d, a.date), body.availability_pk); if (f.error) return f.error;
   if (!/^image\/(jpeg|png)$/i.test(String(body.content_type ?? ""))) return { status: 415, body: { error: "Photos must be JPEG or PNG" } };
   const buf = Buffer.from(String(body.data ?? ""), "base64");
   if (!buf.length || buf.length > PHOTO_SPEC.maxUploadBytes) return { status: 413, body: { error: "photo empty or too large" } };

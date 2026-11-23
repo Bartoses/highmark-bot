@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- DB2 — Guide Ride Log, slice 1 (guideApp.js, docs/sprints/sprint-guide-app.md). NOT YET APPLIED — for Sean's review.
+-- DB2 — Guide Ride Log, slice 1 (guideApp.js, docs/sprints/sprint-guide-app.md). APPLIED 2026-11-23.
 -- Additive. Until applied, /guide shows today's departures but can't save claims, logs or photos.
 --
 --   ride_assignments  who led which FareHarbor departure (claim in the app; later the manager board / FareHarbor field)

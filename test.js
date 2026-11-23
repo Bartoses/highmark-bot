@@ -19249,6 +19249,62 @@ async function testGuideApp() {
       } finally { if (prevCode === undefined) delete process.env.GUIDE_TEAM_CODE; else process.env.GUIDE_TEAM_CODE = prevCode; }
     }
 
+    // ── any day, the next booking, and the season view ──
+    {
+      chk("season: Nov 1 → Apr 30, from July on it's the coming season",
+        JSON.stringify(G.seasonRange("2026-11-23")) === '{"from":"2026-11-01","to":"2027-04-30","label":"2026/27"}'
+        && G.seasonRange("2027-02-10").from === "2026-11-01" && G.seasonRange("2026-06-30").from === "2025-11-01" && G.seasonRange("2026-07-01").from === "2026-11-01");
+      chk("dates: guides open yesterday → 60 days ahead; managers any day of the season; junk → today",
+        G.allowedDate("2026-12-10", "2026-12-11", "guide") === "2026-12-10" && G.allowedDate("2026-12-09", "2026-12-11", "guide") === "2026-12-11"
+        && G.allowedDate("2027-01-20", "2026-12-11", "guide") === "2027-01-20" && G.allowedDate("2027-03-01", "2026-12-11", "guide") === "2026-12-11"
+        && G.allowedDate("2026-11-20", "2026-12-11", "manager") === "2026-11-20" && G.allowedDate("2026-13-45", "2026-12-11", "manager") === "2026-12-11"
+        && G.allowedDate("x' or 1=1", "2026-12-11", "manager") === "2026-12-11");
+      chk("photos + ride details: today's rides or yesterday's (the morning after), nothing older or ahead",
+        G.rideDay("2026-12-10", "2026-12-11") === "2026-12-10" && G.rideDay("2026-12-01", "2026-12-11") === "2026-12-11" && G.rideDay("2026-12-15", "2026-12-11") === "2026-12-11" && G.rideDay(undefined, "2026-12-11") === "2026-12-11");
+      const sb = mkDbs();
+      sb.crm.tables.bookings.push(bk("#6", 5100, "3 Hour - Grand Tour", "Ann Lake", 2, "2026-12-15T18:00:00Z"), bk("#7", 6100, "Polaris 850 Khaos • Kremmling", "Bo Diaz", 1, "2027-01-10T16:00:00Z"),
+        bk("#8", 5200, "3 Hour - Grand Tour", "Past Pat", 4, "2026-11-20T18:00:00Z"), bk("#9", 5300, "3 Hour - Grand Tour", "Summer Sam", 1, "2027-06-01T18:00:00Z"),
+        bk("#10", 5400, "3 Hour - Grand Tour", "Oct Olive", 1, "2026-10-25T18:00:00Z"));
+      for (let i = 0; i < 1005; i++) sb.crm.tables.bookings.push(bk(`#9${String(i).padStart(4, "0")}`, 5500, "3 Hour - Grand Tour", `Big Group${i}`, 1, "2027-02-01T18:00:00Z"));
+      const sd = { ...sb, now: NOW, cache: false };
+      const sm = await G.handleGuideSeason(sd, { t: t(BOSS) });
+      const dates = sm.body.days.map(x => x.date);
+      chk("season (manager): every day of 2026/27 with bookings, past and future; nothing outside the season",
+        sm.status === 200 && sm.body.season.label === "2026/27" && dates.join() === "2026-11-20,2026-12-09,2026-12-11,2026-12-15,2027-01-10,2027-02-01" && sm.body.next.date === "2026-12-15", dates.join());
+      const d11 = sm.body.days.find(x => x.date === "2026-12-11");
+      chk("season: each day carries bookings, riders, riders by location and the first ride",
+        d11.bookings === 3 && d11.riders === 4 && d11.by_location.rabbit_ears === 3 && d11.by_location.steamboat === 1 && d11.first.label === "Polaris rental"
+        && sm.body.days.find(x => x.date === "2027-01-10").by_location.kremmling === 1, JSON.stringify(d11));
+      chk("season: reads past the 1,000-row page limit (a 1,005-booking day counts every booking)",
+        sm.body.days.find(x => x.date === "2027-02-01")?.bookings === 1005 && sm.body.totals.bookings === 1005 + 1 + 1 + 3 + 1 + 1);
+      chk("season: guest names, phones and emails never reach it", !/Katrina|Smith|9705559999|@guest/.test(JSON.stringify(sm.body)));
+      const sj = await G.handleGuideSeason(sd, { t: t(JAKE) });
+      chk("season (guide): from today on, only rides a guide can see (no rentals, no past days)",
+        sj.status === 200 && sj.body.days.map(x => x.date).join() === "2026-12-11,2026-12-15,2027-02-01" && sj.body.next.date === "2026-12-15" && sj.body.next_mine === null
+        && (await G.handleGuideSeason(sd, { t: t(WRENCH) })).status === 403 && (await G.handleGuideSeason(sd, { t: "bad" })).status === 401);
+      // nothing on a day → the next one
+      const empty = await G.handleGuideDay(sd, { t: t(BOSS), d: "2026-12-12" });
+      chk("day: a manager can open any day; an empty day points at the next booking",
+        empty.body.date === "2026-12-12" && empty.body.departures.length === 0 && empty.body.next?.date === "2026-12-15" && empty.body.next.first.label === "Grand Tour" && empty.body.next.riders === 2
+        && (await G.handleGuideDay(sd, { t: t(BOSS), d: "2026-11-20" })).body.departures.length === 1);
+      chk("day: a guide can look ahead (Dec 15) but not back past yesterday",
+        (await G.handleGuideDay(sd, { t: t(JAKE), d: "2026-12-15" })).body.departures.map(x => x.availability_pk).join() === "5100"
+        && (await G.handleGuideDay(sd, { t: t(JAKE), d: "2026-11-20" })).body.date === "2026-12-11");
+      // future rides: a guide takes one ahead of time; a manager assigns any day
+      const fc = await G.handleGuideClaim(sd, { t: t(JAKE), availability_pk: "5100", d: "2026-12-15" });
+      const fa = await G.handleGuideAssign(sd, { t: t(BOSS), availability_pk: "6100", phone: SHOP, d: "2027-01-10" });
+      const ra = sb.crm.tables.ride_assignments;
+      chk("future rides: a guide can take one ahead of time; a manager can assign any day of the season",
+        fc.status === 200 && fa.status === 200 && ra.some(r => r.availability_pk === "5100" && r.operator_phone === JAKE && r.ride_date === "2026-12-15")
+        && ra.some(r => r.availability_pk === "6100" && r.operator_phone === SHOP && r.ride_date === "2027-01-10"), JSON.stringify([fc, fa]));
+      const sj2 = await G.handleGuideSeason(sd, { t: t(JAKE) });
+      chk("season (guide): a ride you took shows as yours (next_mine); a ride someone else took drops off their list",
+        sj2.body.next_mine?.date === "2026-12-15" && sj2.body.days.find(x => x.date === "2026-12-15").mine === 1
+        && !(await G.handleGuideSeason(sd, { t: t(MIA) })).body.days.some(x => x.date === "2026-12-15"));
+      const quiet = await G.handleGuideDay(sd, { t: t(JAKE) });
+      chk("day: a guide with nothing of their own today still gets the next booking day", quiet.body.departures.every(x => !x.mine) && quiet.body.next?.date === "2026-12-15" && quiet.body.next.mine === 1);
+    }
+
     // ── locations, staff, manager assignment ──
     chk("locations: REA tours = Rabbit Ears, guided backcountry = North Routt, rentals by the item's shop (Kremmling / Steamboat)",
       G.departureLocation({ type: "rea", item: "3 Hour - Grand Tour" }) === "rabbit_ears" && G.departureLocation({ type: "backcountry", item: "Pro-Ride Private Guided Backcountry" }) === "north_routt"
