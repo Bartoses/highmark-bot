@@ -26,7 +26,14 @@ history entry so the back button / swipe-back work, plus a swipe-right gesture i
 **Answers (Sean, 2026-11-23):** "Direct" = made in the FareHarbor dashboard, keep the label. Guide picker keeps everyone
 (home location first) — people cross locations. No "who to chase" list for now. A guide's booking details = the FareHarbor
 booking + the shop sheet's **sled and trailer assignment** (when there is one) + **notes staff add**.
-**Next** — `db2_guide_ops.sql` (NOT YET APPLIED, for Sean's review): `shuttle_runs` (van runs, one driver per run, 25 seats),
+**Built 2026-11-23 (db2_guide_ops.sql applied):** van runs — "Plan van runs" packs a day's shuttle requests into 25-seat
+vans by departure time (a party is never split), a manager sets the van, leave time, driver, riders + order and a driver
+note; the driver sees "Your van runs" (stops in order, seats, map link to the pickup address, tap-to-call); each booking
+shows its van + driver. Sleds/trailers per booking (managers + shop add, everyone on the booking sees; name suggestions
+from units already used until the shop's unit list is ready — Sean: every unit has a fixed name like "K-12", a full list
+is coming). Staff notes per booking (the booking's guide, shop for rentals, managers; remove your own, managers any).
+Sheet sync still waits on access to the "Weekly Shop Manifest".
+**Was next** — `db2_guide_ops.sql`: `shuttle_runs` (van runs, one driver per run, 25 seats),
 `booking_equipment` (sled/trailer per booking; synced with the shop sheet both ways, then the app replaces it), and
 `booking_staff_notes`. The sheet sync needs the "Weekly Shop Manifest" shared with the connected Google account (still
 "Permission denied" on 2026-11-23).

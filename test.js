@@ -19357,6 +19357,71 @@ async function testGuideApp() {
         !(await G.handleGuideSeason(pd, { t: t(JAKE) })).body.report && !(await G.handleGuideSeason(pd, { t: t(BOSS), as: "guide" })).body.report);
     }
 
+    // ── van runs, sleds / trailers, staff notes (db2_guide_ops.sql) ──
+    {
+      const mkB = (pk, seats, pax) => ({ pk, pax, shuttle: seats ? { seats, address: "Lodge " + pk } : null });
+      const sdeps = [{ availability_pk: "1", start_at: "2026-12-11T15:00:00Z", label: "Tour", bookings: [mkB("#a", 12, 12), mkB("#b", 10, 10), mkB("#c", 6, 6), mkB("#d", 0, 4)] },
+        { availability_pk: "2", start_at: "2026-12-11T18:00:00Z", label: "Tour", bookings: [mkB("#e", 2, 2)] }];
+      const sug = G.suggestRuns(sdeps, []);
+      chk("van runs: shuttle requests packed into 25-seat vans by departure time; a party is never split; no-shuttle bookings left off",
+        sug.length === 3 && sug[0].booking_pks.join() === "#a,#b" && sug[0].used === 22 && sug[1].booking_pks.join() === "#c" && sug[2].booking_pks.join() === "#e" && !sug.some(r => r.booking_pks.includes("#d")), JSON.stringify(sug));
+      chk("van runs: bookings already on a run aren't planned again", G.suggestRuns(sdeps, [{ booking_pks: ["#a", "#b", "#c"] }]).map(r => r.booking_pks.join()).join("|") === "#e");
+      chk("van runs: a run's leave time is entered in Mountain time (winter and summer)",
+        G.localTimeToIso("2026-12-30", "07:15") === "2026-12-30T14:15:00.000Z" && G.localTimeToIso("2027-07-04", "07:15") === "2027-07-04T13:15:00.000Z" && G.localTimeToIso("2026-12-30", "25:00") === null && G.localTimeToIso("2026-12-30", "") === null);
+      const ob = mkDbs();
+      ob.crm.tables.bookings[0].raw_payload.booking.custom_field_values = [{ custom_field: { name: "Shuttle from Lodging to Trailhead" }, display_value: "2" }, { custom_field: { name: "pow Address" }, display_value: "Rabbit Ears Motel" }];
+      ob.crm.tables.staff = [{ id: "st9", client_id: "csr_rea", name: "Dan Driver", role: "driver", phone: "+19705550109", active: true }];
+      const DAN = "+19705550109";
+      const od = { ...ob, now: NOW, cache: false };
+      // equipment
+      const e1 = await G.handleGuideEquipment(od, { t: t(SHOP), booking_pk: "#3", kind: "sled", unit: "  K-12 " });
+      const e2 = await G.handleGuideEquipment(od, { t: t(BOSS), booking_pk: "#1", kind: "trailer", unit: "4-place #2" });
+      const eg = await G.handleGuideEquipment(od, { t: t(JAKE), booking_pk: "#1", kind: "sled", unit: "K-1" });
+      const eb = await G.handleGuideEquipment(od, { t: t(SHOP), booking_pk: "#3", kind: "sled", unit: "" });
+      chk("sleds/trailers: shop and managers put a unit on a booking (trimmed); guides can't; a blank name is refused",
+        e1.status === 200 && e2.status === 200 && eg.status === 403 && eb.status === 400 && ob.crm.tables.booking_equipment.some(x => x.booking_pk === "#3" && x.unit === "K-12" && x.source === "app" && x.ride_date === "2026-12-11"));
+      chk("sleds/trailers: the shop can't touch a guided tour's booking (not theirs)", (await G.handleGuideEquipment(od, { t: t(SHOP), booking_pk: "#1", kind: "sled", unit: "K-3" })).status === 403);
+      // notes
+      await G.handleGuideClaim(od, { t: t(JAKE), availability_pk: "5001" });
+      const n1 = await G.handleGuideNote(od, { t: t(JAKE), booking_pk: "#1", note: "Katrina wants the faster group" });
+      const n2 = await G.handleGuideNote(od, { t: t(MIA), booking_pk: "#1", note: "hi" });
+      const n3 = await G.handleGuideNote(od, { t: t(BOSS), booking_pk: "#1", note: "Birthday!" });
+      chk("staff notes: the booking's guide and managers add notes; another guide can't; a blank note is refused",
+        n1.status === 200 && n2.status === 403 && n3.status === 200 && (await G.handleGuideNote(od, { t: t(JAKE), booking_pk: "#1", note: "  " })).status === 400 && ob.crm.tables.booking_staff_notes.length === 2);
+      const jd = (await G.handleGuideDay(od, { t: t(JAKE) })).body.departures.find(x => x.availability_pk === "5001").bookings.find(b => b.pk === "#1");
+      chk("booking details: the guide sees the sled/trailer and the team's notes (with who wrote them, their own removable)",
+        jd.units.map(u => u.kind + ":" + u.unit).join() === "trailer:4-place #2" && jd.staff_notes.length === 2 && jd.staff_notes[0].by === "Jake" && jd.staff_notes[0].mine === true && jd.staff_notes[1].mine === false);
+      const bossNote = ob.crm.tables.booking_staff_notes.find(x => x.note === "Birthday!");
+      await G.handleGuideNote(od, { t: t(JAKE), booking_pk: "#1", remove_id: bossNote.id });
+      const jakeNote = ob.crm.tables.booking_staff_notes.find(x => x.note.startsWith("Katrina"));
+      await G.handleGuideNote(od, { t: t(JAKE), booking_pk: "#1", remove_id: jakeNote.id });
+      chk("staff notes: you can remove your own note, not someone else's (managers can remove any)", !bossNote.hidden && jakeNote.hidden === true);
+      // van runs
+      chk("van runs: managers only", (await G.handleGuideRun(od, { t: t(JAKE), action: "suggest" })).status === 403);
+      const sg = await G.handleGuideRun(od, { t: t(BOSS), action: "suggest" });
+      const run = ob.crm.tables.shuttle_runs[0];
+      chk("van runs: 'Plan van runs' makes a run for the shuttle request (Van 1, 25 seats, that booking)",
+        sg.status === 200 && sg.body.created === 1 && run.vehicle === "Van 1" && run.seats === 25 && run.booking_pks.join() === "#1" && run.run_date === "2026-12-11"
+        && (await G.handleGuideRun(od, { t: t(BOSS), action: "suggest" })).body.created === 0);
+      const sv = await G.handleGuideRun(od, { t: t(BOSS), id: run.id, vehicle: "Van 1", kind: "to_trail", depart_time: "07:15", driver_phone: DAN, booking_pks: ["#1", "#2", "#nope"] });
+      chk("van runs: a manager sets the driver, leave time and riders (bookings from other days ignored); unknown driver refused",
+        sv.status === 200 && run.driver_name === "Dan Driver" && run.depart_at === "2026-12-11T14:15:00.000Z" && run.booking_pks.join() === "#1,#2"
+        && (await G.handleGuideRun(od, { t: t(BOSS), id: run.id, driver_phone: "+10000000000", booking_pks: ["#1"] })).status === 400);
+      const prevTC = process.env.GUIDE_TEAM_CODE; process.env.GUIDE_TEAM_CODE = "van-test-1";
+      const dd = await G.handleGuideDay(od, { t: `team:van-test-1:${DAN}`, as: "guide" });           // drivers come in with the team code
+      if (prevTC === undefined) delete process.env.GUIDE_TEAM_CODE; else process.env.GUIDE_TEAM_CODE = prevTC;
+      const mr = dd.body.my_runs[0];
+      chk("van runs: the driver sees their run with stops in order, seats and the pickup address",
+        dd.status === 200 && mr && mr.stops.length === 2 && mr.stops[0].name === "Katrina Smith" && mr.stops[0].seats === 2 && mr.stops[0].address === "Rabbit Ears Motel" && mr.used === 3 && dd.body.runs.length === 0, JSON.stringify(dd.body).slice(0, 300));
+      const bd = await G.handleGuideDay(od, { t: t(BOSS) }), jd2 = (await G.handleGuideDay(od, { t: t(JAKE) })).body;
+      chk("van runs: managers see every run; guests' bookings show their van + driver; guides don't get the run list",
+        bd.body.runs.length === 1 && jd2.runs.length === 0 && jd2.departures.find(x => x.availability_pk === "5001").bookings.find(b => b.pk === "#1").run.driver === "Dan Driver");
+      chk("sleds: managers and shop get name suggestions from units already used; guides don't",
+        bd.body.units.sled.includes("K-12") && bd.body.units.trailer.includes("4-place #2") && jd2.units === null);
+      const del = await G.handleGuideRun(od, { t: t(BOSS), id: run.id, remove: true });
+      chk("van runs: a manager can delete a run", del.status === 200 && ob.crm.tables.shuttle_runs.length === 0);
+    }
+
     // ── locations, staff, manager assignment ──
     chk("locations: REA tours = Rabbit Ears, guided backcountry = North Routt, rentals by the item's shop (Kremmling / Steamboat)",
       G.departureLocation({ type: "rea", item: "3 Hour - Grand Tour" }) === "rabbit_ears" && G.departureLocation({ type: "backcountry", item: "Pro-Ride Private Guided Backcountry" }) === "north_routt"
