@@ -1,6 +1,6 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- DB2 — Ride Recap v2: simple template switch + route maps (rideRecap.js, sprint-ride-recap-v2-simple.md)
--- Additive + idempotent. Production keeps sending v1 until Sean sets template = 'simple' himself.
+-- Additive + idempotent. APPLIED to DB2 2026-11-23; csr_rea set to template = 'simple' the same day (Sean's go-ahead).
 --
 --   recap_settings.template  'v1' (default, today's email, unchanged) | 'simple' (one photo, one stat line, one ask per section)
 --   recap_tours.map_url      public PNG of the loop's illustrated route map (Supabase Storage recap-maps/<tour-slug>.png).

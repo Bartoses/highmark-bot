@@ -1,6 +1,6 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- DB2 — ride_media: which photo/video belongs to which ride and booking (Guide Ride Log app → Ride Recap)
--- NOT YET APPLIED — for Sean's review. Additive; until it exists recaps fall back to Drive file-name matching.
+-- APPLIED to DB2 2026-11-23. Additive; until it exists recaps fall back to Drive file-name matching.
 --
 -- The Guide app writes ONE ROW PER FILE it uploads to Drive (Tour Photos/<YYYY-MM-DD>/…):
 --   availability_pk  FareHarbor departure id = bookings.raw_payload…availability.pk (every FH booking has it). All
