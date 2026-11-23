@@ -19305,6 +19305,58 @@ async function testGuideApp() {
       chk("day: a guide with nothing of their own today still gets the next booking day", quiet.body.departures.every(x => !x.mine) && quiet.body.next?.date === "2026-12-15" && quiet.body.next.mine === 1);
     }
 
+    // ── prices, source, shuttle, guide per booking, season report (Sean, 2026-11-23) ──
+    {
+      chk("source: FareHarbor partner (+ agent) named plainly; website link; in store; else direct",
+        JSON.stringify(G.bookingSource({ affiliate_company: { name: "TripAdvisor Experiences/Viator - USD - API" } })) === '{"kind":"partner","label":"Viator / TripAdvisor","agent":null}'
+        && G.bookingSource({ affiliate_company: { name: "Moving Mountains" }, agent: { name: "Stephanie K" } }).agent === "Stephanie K"
+        && G.bookingSource({ affiliate_company: { name: "Colorado Sled Rentals" } }).label === "Colorado Sled Rentals"
+        && G.bookingSource({ online_booking_references: "https://coloradosledrentals.com" }).ref === "coloradosledrentals.com"
+        && G.bookingSource({ payments: [{ type: "in-store" }] }).label === "In store" && G.bookingSource({}).label === "Direct");
+      const cf = (name, v) => ({ custom_field: { name }, display_value: v });
+      chk("shuttle: seats from the shuttle question (number, or the party size for 'Yes') + the pickup address; evening pickup for rentals; 'No' = none",
+        JSON.stringify(G.shuttleInfo({ custom_field_values: [cf("Shuttle from Lodging to Trailhead", "2"), cf("pow Address", "Rabbit Ears Motel")] }, 4)) === '{"seats":2,"address":"Rabbit Ears Motel","evening_pickup":false}'
+        && G.shuttleInfo({ custom_field_values: [cf("Shuttle from lodging to trail", "Yes")] }, 3).seats === 3
+        && G.shuttleInfo({ custom_field_values: [cf("Shuttle from lodging to trail", "No")] }, 3) === null
+        && G.shuttleInfo({ custom_field_values: [cf("Pickup Evening Prior", "Yes")] }, 1).evening_pickup === true);
+      const dep = { availability_pk: "9", booking_pks: ["#a", "#b", "#c"] };
+      const ops = (rows, pk, ph) => JSON.stringify(G.planBookingAssign(dep, rows, pk, ph));
+      chk("guide per booking: new person gets just that booking; the whole-departure guide keeps the others; all three = whole departure again; nobody = removed",
+        ops([], "#a", "P1") === '[{"op":"set","phone":"P1","booking_pks":["#a"]}]'
+        && ops([{ availability_pk: "9", operator_phone: "P0", booking_pks: [] }], "#a", "P1") === '[{"op":"set","phone":"P0","booking_pks":["#b","#c"]},{"op":"set","phone":"P1","booking_pks":["#a"]}]'
+        && ops([{ availability_pk: "9", operator_phone: "P1", booking_pks: ["#a", "#b"] }], "#c", "P1") === '[{"op":"set","phone":"P1","booking_pks":[]}]'
+        && ops([{ availability_pk: "9", operator_phone: "P0", booking_pks: ["#a"] }], "#a", null) === '[{"op":"delete","phone":"P0"}]'
+        && ops([{ availability_pk: "9", operator_phone: "P0", booking_pks: ["#b"] }], "#a", "P1") === '[{"op":"set","phone":"P1","booking_pks":["#a"]}]');
+      const pb = mkDbs();
+      const money = (r, total, paid) => { r.raw_payload.booking.receipt_total = total; r.raw_payload.booking.amount_paid = paid; return r; };
+      pb.crm.tables.bookings.forEach(r => money(r, 50000, 20000));
+      pb.crm.tables.bookings[0].raw_payload.booking.affiliate_company = { name: "Four Seasons Steamboat" };
+      pb.crm.tables.bookings[1].raw_payload.booking.custom_field_values = [cf("Shuttle from lodging to trail", "Yes")];
+      const pd = { ...pb, now: NOW, cache: false };
+      const mgrDay = await G.handleGuideDay(pd, { t: t(BOSS) }), gd = mgrDay.body.departures.find(d => d.availability_pk === "5001");
+      chk("prices: a manager sees each booking's total, paid, owed + source, and the departure totals",
+        gd.total_cents === 100000 && gd.paid_cents === 40000 && gd.due_cents === 60000 && gd.bookings[0].total_cents === 50000 && gd.bookings[0].source.label === "Four Seasons"
+        && gd.bookings[1].shuttle.seats === 1 && gd.shuttle_seats === 1, JSON.stringify(gd).slice(0, 300));
+      const asGuide = await G.handleGuideDay(pd, { t: t(BOSS), as: "guide" }), sh = await G.handleGuideDay(pd, { t: t(SHOP) });
+      chk("prices: no dollar amounts or sources for guides or shop (owes flag only), even a manager working as a guide",
+        !/total_cents|paid_cents|"source"/.test(JSON.stringify([asGuide.body, sh.body, (await G.handleGuideDay(pd, { t: t(JAKE) })).body])));
+      const ab = await G.handleGuideAssignBooking(pd, { t: t(BOSS), availability_pk: "5001", booking_pk: "#2", phone: MIA });
+      const ab2 = await G.handleGuideAssignBooking(pd, { t: t(BOSS), availability_pk: "5001", booking_pk: "#1", phone: JAKE });
+      const after = (await G.handleGuideDay(pd, { t: t(BOSS) })).body.departures.find(d => d.availability_pk === "5001");
+      chk("guide per booking (API): each booking shows its own guide; guides can't use it",
+        ab.status === 200 && ab2.status === 200 && after.bookings.find(b => b.pk === "#2").guides.map(g => g.name).join() === "Mia"
+        && after.bookings.find(b => b.pk === "#1").guides.map(g => g.name).join() === "Jake"
+        && (await G.handleGuideAssignBooking(pd, { t: t(JAKE), availability_pk: "5001", booking_pk: "#1", phone: JAKE })).status === 403
+        && (await G.handleGuideAssignBooking(pd, { t: t(BOSS), availability_pk: "5001", booking_pk: "#99", phone: JAKE })).status === 404);
+      const rep = await G.handleGuideSeason(pd, { t: t(BOSS) }), r = rep.body.report;
+      chk("season report (managers): money so far vs still to come, by month / location / tour / source, staff workload, unassigned",
+        r && r.all.total_cents === 200000 && r.past.bookings === 1 && r.upcoming.bookings === 3 && r.by_source.some(x => x.key === "Four Seasons" && x.bookings === 1)
+        && r.by_location.some(x => x.key === "rabbit_ears") && r.by_month[0].key === "2026-12" && r.staff.find(x => x.name === "Mia").riders === 1
+        && r.staff.find(x => x.name === "Jake").rides === 1 && rep.body.days.find(x => x.date === "2026-12-11").total_cents === 150000, JSON.stringify(r).slice(0, 400));
+      chk("season report: not sent to guides or a manager working as a guide",
+        !(await G.handleGuideSeason(pd, { t: t(JAKE) })).body.report && !(await G.handleGuideSeason(pd, { t: t(BOSS), as: "guide" })).body.report);
+    }
+
     // ── locations, staff, manager assignment ──
     chk("locations: REA tours = Rabbit Ears, guided backcountry = North Routt, rentals by the item's shop (Kremmling / Steamboat)",
       G.departureLocation({ type: "rea", item: "3 Hour - Grand Tour" }) === "rabbit_ears" && G.departureLocation({ type: "backcountry", item: "Pro-Ride Private Guided Backcountry" }) === "north_routt"

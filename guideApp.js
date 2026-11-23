@@ -128,6 +128,35 @@ export function matchStaffName(name, staff) {
   return first.length === 1 ? first[0] : null;
 }
 
+// Where a booking came from (managers only): FareHarbor partner (+ agent), the website link it came through, in store, or direct.
+const PARTNER_NAMES = [[/viator|tripadvisor/i, "Viator / TripAdvisor"], [/moving mountains/i, "Moving Mountains"], [/four seasons/i, "Four Seasons"],
+  [/polaris/i, "Polaris Adventures"], [/expedia/i, "Expedia"], [/getyourguide/i, "GetYourGuide"]];
+export function bookingSource(b) {
+  const aff = String(b?.affiliate_company?.name ?? "").trim(), agent = String(b?.agent?.name ?? "").trim();
+  if (aff) {
+    const name = (PARTNER_NAMES.find(([re]) => re.test(aff)) ?? [null, aff.replace(/\s+-\s+.*$/, "")])[1];
+    return { kind: "partner", label: name, agent: agent || null };
+  }
+  const ref = String(b?.online_booking_references ?? "").trim();
+  if (ref) return { kind: "website", label: "Website", ref: ref.replace(/^https?:\/\//, "").slice(0, 40), agent: null };
+  if ((b?.payments ?? []).some(p => p?.type === "in-store")) return { kind: "in_store", label: "In store", agent: null };
+  return { kind: "direct", label: "Direct", agent: null };
+}
+export const sourceKey = (src) => (src.kind === "partner" ? src.label : src.label);
+// Shuttle from lodging (REA/guided): seats + pickup address. Rentals: "Pickup Evening Prior".
+export function shuttleInfo(b, pax = 0) {
+  let seats = 0, address = null, eveningPickup = false;
+  for (const f of b?.custom_field_values ?? []) {
+    const label = String(f?.custom_field?.name ?? f?.name ?? ""), raw = f?.display_value ?? f?.value ?? "";
+    const v = String(typeof raw === "boolean" ? (raw ? "Yes" : "") : raw).trim();
+    if (!v || /^(no|none|n\/a|false|0)$/i.test(v)) continue;
+    if (/shuttle/i.test(label)) seats = Number.parseInt(v, 10) > 0 ? Number.parseInt(v, 10) : (pax || 1);
+    else if (/address/i.test(label)) address = v.slice(0, 160);
+    else if (/pickup evening prior/i.test(label)) eveningPickup = true;
+  }
+  return seats ? { seats, address, evening_pickup: eveningPickup } : (eveningPickup ? { seats: 0, address, evening_pickup: true } : null);
+}
+
 // ── departures (pure) ────────────────────────────────────────────────────────
 // bookingRows: DB2 rows for one local day. → [{ availability_pk, label, type, item, start_at, end_at, riders, names[], booking_pks[], tour, fh_guide }]
 export function groupDepartures(bookingRows, tours, { tz = GUIDE_TZ } = {}) {
@@ -150,8 +179,11 @@ export function groupDepartures(bookingRows, tours, { tz = GUIDE_TZ } = {}) {
     d.booking_pks.push(f.pk);
     const raw = row?.raw_payload?.booking ?? row?.raw_payload ?? {};
     // manifest line; full name / phone / notes are only sent to the page for the person's own rides (publicDeparture)
+    const total = Number(raw.receipt_total) || 0, paid = Number(raw.amount_paid) || 0;
     d.bookings.push({ pk: f.pk, name: first || "Guest", full_name: String(f.name || "").trim() || first || "Guest", pax: f.pax || 0,
-      phone: f.phone || null, item: f.item, notes: manifestNotes(raw) });
+      phone: f.phone || null, item: f.item, notes: manifestNotes(raw),
+      total_cents: total, paid_cents: paid, due_cents: Math.max(0, total - paid), source: bookingSource(raw), booked_at: raw.created_at ?? null,
+      shuttle: shuttleInfo(raw, f.pax || 0) });
     d.fh_guide = d.fh_guide ?? fareharborGuideName(row);
     deps.set(f.availabilityPk, d);
   }
@@ -239,7 +271,7 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     const m = byPk.get(b.pk);
     if (!m) continue;
     b.waiver_signed = m.waiver_signed ?? null; b.checked_in = m.checked_in ?? null;
-    b.due_cents = Number(m.balance_due_cents) > 0 ? Number(m.balance_due_cents) : 0;
+    if (m.balance_due_cents != null) b.due_cents = Math.max(0, Number(m.balance_due_cents) || 0);
     if (m.equipment) b.equipment = String(m.equipment).slice(0, 120);
     if (m.booking_notes) b.notes = [{ label: "Booking note", value: String(m.booking_notes).slice(0, 300), health: false }, ...b.notes].slice(0, 8);
   }
@@ -258,13 +290,20 @@ export function publicDeparture(d, me, view = me.access) {
   const mine = (d.assignees ?? []).some(a => a.phone === me.phone);
   // the full manifest (names, phones, notes, waiver, balance) only for rides you're on, rentals at the shop, or managers
   const details = me.access === "manager" || mine || (view === "shop" && d.type === "rental");
+  const money = view === "manager" && me.access === "manager";            // prices + source: managers only (Sean, 2026-11-23)
+  const guidesFor = (pk) => (d.assignees ?? []).filter(a => !a.booking_pks?.length || a.booking_pks.includes(pk)).map(a => ({ name: a.name, me: a.phone === me.phone }));
   const manifest = (d.bookings ?? []).map(b => details
     ? { pk: b.pk, name: b.full_name, pax: b.pax, phone: b.phone, item: d.type === "rental" ? b.item : null, notes: b.notes ?? [],
-        waiver_signed: b.waiver_signed ?? null, checked_in: b.checked_in ?? null, due_cents: b.due_cents ?? 0, equipment: b.equipment ?? null }
+        waiver_signed: b.waiver_signed ?? null, checked_in: b.checked_in ?? null, due_cents: b.due_cents ?? 0, equipment: b.equipment ?? null,
+        shuttle: b.shuttle ?? null, guides: guidesFor(b.pk),
+        ...(money ? { total_cents: b.total_cents ?? 0, paid_cents: b.paid_cents ?? 0, source: b.source ?? null, booked_at: b.booked_at ?? null } : {}) }
     : { pk: b.pk, name: b.name, pax: b.pax });
+  const sum = (k) => (d.bookings ?? []).reduce((n, b) => n + (Number(b[k]) || 0), 0);
   return {
     availability_pk: d.availability_pk, label: d.label, type: d.type, start_at: d.start_at, end_at: d.end_at, location: d.location ?? null,
     riders: d.riders, names: d.names, booking_pks: d.booking_pks, bookings: manifest, details,
+    shuttle_seats: (d.bookings ?? []).reduce((n, b) => n + (b.shuttle?.seats || 0), 0),
+    ...(money ? { total_cents: sum("total_cents"), paid_cents: sum("paid_cents"), due_cents: sum("due_cents") } : {}),
     defaults: { miles: d.tour?.miles ?? null, high_point_ft: d.tour?.high_point_ft ?? null, stops: d.tour?.stops ?? [] },
     assignees: (d.assignees ?? []).map(a => ({ name: a.name, source: a.source, me: a.phone === me.phone, riders: a.booking_pks?.length ? a.booking_pks : null })),
     mine,
@@ -386,6 +425,34 @@ export async function findNextDay(deps, { date, access, phone, days = 120 }) {
   return null;
 }
 
+// Managers' season report: money + riders by month / location / tour / source, staff workload, unassigned. Pure.
+export function seasonReport(daysMap, today) {
+  const blank = () => ({ bookings: 0, riders: 0, total_cents: 0, paid_cents: 0, due_cents: 0 });
+  const add = (o, b) => { o.bookings++; o.riders += b.pax || 0; o.total_cents += b.total_cents || 0; o.paid_cents += b.paid_cents || 0; o.due_cents += b.due_cents || 0; return o; };
+  const bucket = (m, k, extra = {}) => m.get(k) ?? m.set(k, { key: k, ...extra, ...blank() }).get(k);
+  const r = { past: blank(), upcoming: blank(), all: blank() };
+  const month = new Map(), loc = new Map(), tour = new Map(), src = new Map(), staff = new Map(), unassigned = { bookings: 0, riders: 0, upcoming_bookings: 0 };
+  for (const [date, deps] of daysMap) for (const d of deps) {
+    const when = date < today ? "past" : "upcoming";
+    for (const b of d.bookings) {
+      add(r.all, b); add(r[when], b);
+      add(bucket(month, date.slice(0, 7)), b); add(bucket(loc, d.location ?? "other"), b); add(bucket(tour, d.label), b);
+      const s = b.source ?? { label: "Direct" };
+      const sb = add(bucket(src, s.label, { agents: {} }), b);
+      if (s.agent) sb.agents[s.agent] = (sb.agents[s.agent] ?? 0) + 1;
+      const who = (d.assignees ?? []).filter(x => !x.booking_pks?.length || x.booking_pks.includes(b.pk));
+      if (!who.length) { unassigned.bookings++; unassigned.riders += b.pax || 0; if (when === "upcoming") unassigned.upcoming_bookings++; }
+      for (const w of who) {
+        const st = bucket(staff, w.name ?? w.phone, { deps: new Set() });
+        st.bookings++; st.riders += b.pax || 0; st.deps.add(d.availability_pk);
+      }
+    }
+  }
+  const list = (m) => [...m.values()].sort((x, y) => y.total_cents - x.total_cents || y.bookings - x.bookings);
+  return { ...r, by_month: [...month.values()].sort((x, y) => x.key.localeCompare(y.key)), by_location: list(loc), by_tour: list(tour), by_source: list(src),
+    staff: [...staff.values()].map(x => ({ name: x.key, rides: x.deps.size, bookings: x.bookings, riders: x.riders })).sort((x, y) => y.riders - x.riders), unassigned };
+}
+
 // GET /guide/api/season — every day of the season with bookings. Managers: the whole season, past + future.
 // Guides / shop: from today on, only what they can see. Cached briefly (a season read is ~1–2k rows).
 const seasonCache = new Map();
@@ -406,7 +473,14 @@ export async function handleGuideSeason(deps, { t, as = null }) {
     if (vis.length) out.push(summarizeDay(ld, vis, a.me.phone));
   }
   const totals = out.reduce((s, x) => ({ days: s.days + 1, bookings: s.bookings + x.bookings, riders: s.riders + x.riders }), { days: 0, bookings: 0, riders: 0 });
+  const money = view === "manager" && a.me.access === "manager";
+  if (money) for (const x of out) {
+    const ds = hit.data.days.get(x.date) ?? [];
+    x.total_cents = ds.reduce((n, d) => n + d.bookings.reduce((m, b) => m + (b.total_cents || 0), 0), 0);
+    x.due_cents = ds.reduce((n, d) => n + d.bookings.reduce((m, b) => m + (b.due_cents || 0), 0), 0);
+  }
   return { status: 200, body: { season: range, today, view, locations: LOCATIONS, days: out, totals,
+    ...(money ? { report: seasonReport(hit.data.days, today) } : {}),
     next: out.find(x => x.date > today) ?? null, next_mine: out.find(x => x.date > today && x.mine) ?? null } };
 }
 
@@ -469,6 +543,46 @@ export async function handleGuideAssign(deps, { t, availability_pk, phone, booki
     return assignTo(deps, a, d2, y.staff, { phone, booking_pks, remove });
   }
   return assignTo(deps, a, dep, all.staff, { phone, booking_pks, remove });
+}
+// Per booking (Sean: "a guide assignment … per booking, not just day"): put one booking with a person (or nobody).
+// Whoever had it loses just that booking; a whole-departure assignment becomes an explicit list of the others.
+export function planBookingAssign(dep, assignments, bookingPk, phone) {
+  const all = dep.booking_pks, rows = (assignments ?? []).filter(x => String(x.availability_pk) === String(dep.availability_pk));
+  const ops = [];
+  for (const r of rows) {
+    const covers = !r.booking_pks?.length || r.booking_pks.includes(bookingPk);
+    if (!covers || r.operator_phone === phone) continue;
+    const rest = (r.booking_pks?.length ? r.booking_pks : all).filter(p => p !== bookingPk);
+    ops.push(rest.length ? { op: "set", phone: r.operator_phone, booking_pks: rest } : { op: "delete", phone: r.operator_phone });
+  }
+  if (phone) {
+    const mine = rows.find(r => r.operator_phone === phone);
+    const now = mine ? (mine.booking_pks?.length ? mine.booking_pks : all) : [];
+    const next = [...new Set([...(mine && !mine.booking_pks?.length ? all : now), bookingPk])].filter(p => all.includes(p));
+    ops.push({ op: "set", phone, booking_pks: next.length === all.length ? [] : next });
+  }
+  return ops;
+}
+export async function handleGuideAssignBooking(deps, { t, availability_pk, booking_pk, phone = null, d = null }) {
+  const a = await authed(deps, t); if (a.error) return a.error;
+  if (a.me.access !== "manager") return { status: 403, body: { error: "Managers only" } };
+  const all = await loadDay(deps.crm, deps.db1, { date: d ? allowedDate(d, a.date, "manager") : a.date });
+  const dep = all.find(x => String(x.availability_pk) === String(availability_pk));
+  if (!dep || !dep.booking_pks.includes(booking_pk)) return { status: 404, body: { error: "booking not found" } };
+  const person = phone ? (all.staff ?? []).find(x => x.phone === phone) : null;
+  if (phone && !person) return { status: 400, body: { error: "pick someone from the staff list (with a phone number)" } };
+  const { data: rows } = await deps.crm.from("ride_assignments").select("*").eq("availability_pk", String(dep.availability_pk));
+  for (const o of planBookingAssign(dep, rows ?? [], booking_pk, phone)) {
+    if (o.op === "delete") { await deps.crm.from("ride_assignments").delete().eq("availability_pk", String(dep.availability_pk)).eq("operator_phone", o.phone); continue; }
+    const who = (all.staff ?? []).find(x => x.phone === o.phone);
+    const prev = (rows ?? []).find(r => r.operator_phone === o.phone);
+    const { error } = await deps.crm.from("ride_assignments").upsert({ client_id: "csr_rea", availability_pk: String(dep.availability_pk), ride_date: dep.ride_date,
+      operator_phone: o.phone, guide_name: who?.display_name ?? prev?.guide_name ?? null, booking_pks: o.booking_pks,
+      source: o.phone === phone ? "manager" : (prev?.source ?? "manager"), assigned_by: o.phone === phone ? a.me.phone : (prev?.assigned_by ?? a.me.phone) },
+      { onConflict: "availability_pk,operator_phone" });
+    if (error) return { status: 500, body: { error: "could not save" } };
+  }
+  return { status: 200, body: { ok: true } };
 }
 async function assignTo(deps, a, dep, staff, { phone, booking_pks, remove }) {
   const person = (staff ?? []).find(x => x.phone === phone);

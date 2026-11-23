@@ -15,6 +15,17 @@ all future and past bookings for the 2026/27 season").** ‹ › step through an
 Guides can take a future ride ahead of time; managers can assign any day. Photos + ride details stay today/yesterday only, and
 now save to the day being viewed (they used to be looked up on today's date, so morning-after uploads for yesterday failed).
 
+**Booking details for managers (2026-11-23, Sean).** Per booking: total, paid, owed, where it came from (FareHarbor partner +
+agent, e.g. Viator / Moving Mountains · agent; the website link; in store; else Direct; FareHarbor's "Colorado Sled Rentals"
+partner label kept as-is until Sean knows what it means) and when it was booked. **Managers only** (guides/shop keep the
+"owes" flag). Day totals card (booked / paid / owed / shuttle seats). **Guide per booking**: a Guide picker on each manifest
+line (POST /guide/api/assign-booking; the departure-wide Assign still exists). Shuttle requests show per booking (seats +
+pickup address) and per departure. **Season → Report** (managers): so far vs still to come, by month, location, tour,
+source (with agents), staff workload, bookings with no guide. Loading spinner + top progress bar; every sub-screen is a
+history entry so the back button / swipe-back work, plus a swipe-right gesture inside the page.
+**Next: van runs** (Sean: group shuttle bookings into runs, one driver per run, 25-seat vans) — `db2_shuttle_runs.sql`
+written, NOT YET APPLIED, for Sean's review.
+
 ## Sean's feedback on the slice 1 preview (2026-11-23) → plan
 
 **What the app is for:** each person's day: the bookings, tours, deliveries and jobs they're assigned, their schedule, and
