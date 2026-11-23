@@ -15,13 +15,33 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import crypto from "crypto";
 import { bookingFacts, matchTour, localDate, addDays, localHour, cleanFirstName } from "./rideRecap.js";
-import { processRidePhoto, uploadRidePhotos, PHOTO_SPEC } from "./recapSimple.js";
+import { processRidePhoto, uploadRidePhotos, PHOTO_SPEC, storagePublicUrl, MAP_BUCKET, tourSlug, RECAP_TEMPLATES } from "./recapSimple.js";
+import { RECAP_FEATURES } from "./rideRecap.js";
 
 export const GUIDE_TZ = "America/Denver";
 export const MANAGER_ROLES = ["owner", "general_manager", "operations_manager", "manager"];
 export const SHOP_ROLES = ["reservations", "sales"];
 export const GUIDE_ROLES = ["guide", "staff"];
 export const CONDITIONS = ["fresh_snow", "bluebird", "snowing", "windy", "cold"];
+
+// The views a person may pick on entering the app (their own level and below). A manager can work as a guide or shop.
+export const VIEWS_FOR = { manager: ["manager", "guide", "shop"], shop: ["shop"], guide: ["guide"] };
+export const viewFor = (access, wanted) => ((VIEWS_FOR[access] ?? []).includes(wanted) ? wanted : access);
+
+// FareHarbor booking questions a guide needs on the ride (health, gear, pickup…); never promo codes, insurance, marketing.
+const MANIFEST_FIELD_RE = /health|medical|allerg|rental equipment|boot|monosuit|helmet|size|height|weight|shuttle|pickup|delivery|address|rack|experience|skill|age|note/i;
+const SKIP_FIELD_RE = /promo|insurance|hear about|newsletter|marketing/i;
+export function manifestNotes(b) {
+  const out = [];
+  for (const f of b?.custom_field_values ?? []) {
+    const label = String(f?.custom_field?.name ?? f?.name ?? "").trim();
+    const raw = f?.display_value ?? f?.value ?? "";
+    const value = String(typeof raw === "boolean" ? (raw ? "Yes" : "") : raw).trim();
+    if (!label || !value || /^(no|none|n\/a|false|0)$/i.test(value) || SKIP_FIELD_RE.test(label) || !MANIFEST_FIELD_RE.test(label)) continue;
+    out.push({ label: label.replace(/\s*\((new|optional)\)\s*/ig, " ").trim(), value: value.slice(0, 200), health: /health|medical|allerg/i.test(label) });
+  }
+  return out.slice(0, 8);
+}
 
 export function accessFor(role) {
   const r = String(role ?? "").toLowerCase();
@@ -113,7 +133,10 @@ export function groupDepartures(bookingRows, tours, { tz = GUIDE_TZ } = {}) {
     const first = cleanFirstName(f.name);
     if (first && !d.names.includes(first)) d.names.push(first);
     d.booking_pks.push(f.pk);
-    d.bookings.push({ pk: f.pk, name: first || "Guest", pax: f.pax || 0 });  // first names only, never email/phone
+    const raw = row?.raw_payload?.booking ?? row?.raw_payload ?? {};
+    // manifest line; full name / phone / notes are only sent to the page for the person's own rides (publicDeparture)
+    d.bookings.push({ pk: f.pk, name: first || "Guest", full_name: String(f.name || "").trim() || first || "Guest", pax: f.pax || 0,
+      phone: f.phone || null, item: f.item, notes: manifestNotes(raw) });
     d.fh_guide = d.fh_guide ?? fareharborGuideName(row);
     deps.set(f.availabilityPk, d);
   }
@@ -173,6 +196,21 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     try { const { data, error: e } = await crm.from(table).select(cols).in("availability_pk", avails); return e ? [] : (data ?? []); } catch { return []; }
   };
   const [assignments, logs, media] = await Promise.all([pick("ride_assignments", "*"), pick("ride_logs", "*"), pick("ride_media", "*")]);
+  // waiver / check-in / balance due / equipment from the ops manifest (daily_manifest view), when the booking is linked
+  const pks = deps.flatMap(d => d.booking_pks);
+  let mf = [];
+  if (pks.length) {
+    try { const { data } = await crm.from("daily_manifest").select("fareharbor_pk, waiver_signed, checked_in, balance_due_cents, equipment, booking_notes").in("fareharbor_pk", pks); mf = data ?? []; } catch { mf = []; }
+  }
+  const byPk = new Map(mf.map(m => [m.fareharbor_pk, m]));
+  for (const d of deps) for (const b of d.bookings) {
+    const m = byPk.get(b.pk);
+    if (!m) continue;
+    b.waiver_signed = m.waiver_signed ?? null; b.checked_in = m.checked_in ?? null;
+    b.due_cents = Number(m.balance_due_cents) > 0 ? Number(m.balance_due_cents) : 0;
+    if (m.equipment) b.equipment = String(m.equipment).slice(0, 120);
+    if (m.booking_notes) b.notes = [{ label: "Booking note", value: String(m.booking_notes).slice(0, 300), health: false }, ...b.notes].slice(0, 8);
+  }
   for (const d of deps) {
     d.assignees = resolveAssignees(d, assignments, staff);
     d.logs = logs.filter(l => String(l.availability_pk) === String(d.availability_pk));
@@ -182,14 +220,21 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
 }
 
 // What the page gets for one departure (never emails/phones of guests; staff phones only as "is it me").
-export function publicDeparture(d, me) {
+export function publicDeparture(d, me, view = me.access) {
   const myLog = d.logs?.find(l => l.guide_phone === me.phone) ?? null;
+  const mine = (d.assignees ?? []).some(a => a.phone === me.phone);
+  // the full manifest (names, phones, notes, waiver, balance) only for rides you're on, rentals at the shop, or managers
+  const details = me.access === "manager" || mine || (view === "shop" && d.type === "rental");
+  const manifest = (d.bookings ?? []).map(b => details
+    ? { pk: b.pk, name: b.full_name, pax: b.pax, phone: b.phone, item: d.type === "rental" ? b.item : null, notes: b.notes ?? [],
+        waiver_signed: b.waiver_signed ?? null, checked_in: b.checked_in ?? null, due_cents: b.due_cents ?? 0, equipment: b.equipment ?? null }
+    : { pk: b.pk, name: b.name, pax: b.pax });
   return {
     availability_pk: d.availability_pk, label: d.label, type: d.type, start_at: d.start_at, end_at: d.end_at,
-    riders: d.riders, names: d.names, booking_pks: d.booking_pks, bookings: d.bookings ?? [],
+    riders: d.riders, names: d.names, booking_pks: d.booking_pks, bookings: manifest, details,
     defaults: { miles: d.tour?.miles ?? null, high_point_ft: d.tour?.high_point_ft ?? null, stops: d.tour?.stops ?? [] },
     assignees: (d.assignees ?? []).map(a => ({ name: a.name, source: a.source, me: a.phone === me.phone, riders: a.booking_pks?.length ? a.booking_pks : null })),
-    mine: (d.assignees ?? []).some(a => a.phone === me.phone),
+    mine,
     log: myLog ? { miles: myLog.miles, high_point_ft: myLog.high_point_ft, stops: myLog.stops ?? [], highlight: myLog.highlight, group_note: myLog.group_note,
       conditions: myLog.conditions ?? [], booking_pks: myLog.booking_pks ?? [], status: myLog.status } : null,
     photos: (d.media ?? []).filter(m => m.kind !== "video" && m.thumb_urls?.length).map(m => ({ id: m.id, thumb: m.thumb_urls[0], full: m.public_url, cover: !!m.cover, mine: m.uploaded_by === me.phone })),
@@ -206,12 +251,13 @@ async function authed({ db1, now }, token) {
   return { me, date: t.date };
 }
 
-export async function handleGuideDay(deps, { t, d }) {
+export async function handleGuideDay(deps, { t, d, as = null }) {
   const a = await authed(deps, t); if (a.error) return a.error;
   const today = a.date, date = d && (d === today || d === addDays(today, -1)) ? d : today;
   const all = await loadDay(deps.crm, deps.db1, { date });
-  const list = visibleDepartures(all, { access: a.me.access, phone: a.me.phone }).map(x => publicDeparture(x, a.me));
-  return { status: 200, body: { me: { name: a.me.display_name ?? a.me.label ?? null, access: a.me.access }, date, today, departures: list } };
+  const view = viewFor(a.me.access, as);
+  const list = visibleDepartures(all, { access: view, phone: a.me.phone }).map(x => publicDeparture(x, a.me, view));
+  return { status: 200, body: { me: { name: a.me.display_name ?? a.me.label ?? null, access: a.me.access, views: VIEWS_FOR[a.me.access] ?? [], view }, date, today, departures: list } };
 }
 
 async function findDeparture(deps, me, date, availabilityPk) {
@@ -257,7 +303,7 @@ export async function handleGuideLog(deps, body) {
   const { error } = await deps.crm.from("ride_logs").upsert(row, { onConflict: "availability_pk,guide_phone" });
   if (error) return { status: 500, body: { error: "could not save" } };
   // Saving a log for a ride nobody claimed = claiming it (guides shouldn't need two taps)
-  if (!mine && a.me.access !== "manager") await handleGuideClaim(deps, { t: body.t, availability_pk: body.availability_pk });
+  if (!mine && viewFor(a.me.access, body.as) !== "manager") await handleGuideClaim(deps, { t: body.t, availability_pk: body.availability_pk });
   return { status: 200, body: { ok: true } };
 }
 
@@ -290,7 +336,7 @@ export async function handleGuidePhoto(deps, body, { process: proc = processRide
   };
   const { data, error } = await deps.crm.from("ride_media").insert(row).select("id").single();
   if (error) return { status: 500, body: { error: "could not save the photo" } };
-  if (!mine && a.me.access !== "manager") await handleGuideClaim(deps, { t: body.t, availability_pk: body.availability_pk });
+  if (!mine && viewFor(a.me.access, body.as) !== "manager") await handleGuideClaim(deps, { t: body.t, availability_pk: body.availability_pk });
   return { status: 200, body: { ok: true, id: data.id, thumb: urls.thumbs[0] } };
 }
 
@@ -305,6 +351,99 @@ export async function handleGuideMedia(deps, { t, id, action }) {
     await deps.crm.from("ride_media").update({ cover: false }).eq("availability_pk", m.availability_pk);
     await deps.crm.from("ride_media").update({ cover: true }).eq("id", id);
   } else return { status: 400, body: { error: "unknown action" } };
+  return { status: 200, body: { ok: true } };
+}
+
+// ── admin (managers): tour routes + recap settings ──────────────────────────
+// A tour = all recap_tours rows with the same label (e.g. "Grand Tour" and 'Grand "Private" Tour' share one route).
+export function groupTours(rows) {
+  const by = new Map();
+  for (const r of rows ?? []) {
+    if (!r || r.type === "skip" || r.active === false) continue;
+    const k = String(r.label || r.match);
+    const g = by.get(k) ?? { label: k, type: r.type, ids: [], matches: [], miles: r.miles ?? null, high_point_ft: r.high_point_ft ?? null,
+      stops: Array.isArray(r.stops) ? r.stops : [], route: r.route ?? null, map_url: r.map_url ?? null };
+    g.ids.push(r.id); g.matches.push(r.match);
+    if (!g.map_url && r.map_url) g.map_url = r.map_url;
+    by.set(k, g);
+  }
+  const order = { rea: 0, backcountry: 1, rental: 2 };
+  return [...by.values()].sort((a, b) => (order[a.type] - order[b.type]) || a.label.localeCompare(b.label));
+}
+
+async function requireManager(deps, t) {
+  const a = await authed(deps, t); if (a.error) return a;
+  if (a.me.access !== "manager") return { error: { status: 403, body: { error: "Managers only" } } };
+  return a;
+}
+
+export async function handleGuideAdmin(deps, { t }) {
+  const a = await requireManager(deps, t); if (a.error) return a.error;
+  const [{ data: tours }, { data: st }] = await Promise.all([
+    deps.crm.from("recap_tours").select("*").eq("client_id", "csr_rea"),
+    deps.crm.from("recap_settings").select("*").eq("client_id", "csr_rea").maybeSingle(),
+  ]);
+  return { status: 200, body: {
+    tours: groupTours(tours),
+    settings: st ? { send_hour: st.send_hour, template: st.template ?? "v1", features: st.features ?? [], dry_run: st.dry_run !== false, test_to: st.test_to,
+      friend_code: st.friend_code, all_features: RECAP_FEATURES, templates: RECAP_TEMPLATES } : null,
+  } };
+}
+
+// Route + stats for one tour (every row with that label). stops: [{ name, elevation_ft }].
+export async function handleGuideAdminTour(deps, body) {
+  const a = await requireManager(deps, body?.t); if (a.error) return a.error;
+  const label = text(body.label, 80);
+  if (!label) return { status: 400, body: { error: "label required" } };
+  const stops = (Array.isArray(body.stops) ? body.stops : []).map(x => ({ name: text(x?.name, 60), elevation_ft: num(x?.elevation_ft, 20000) ? Math.round(num(x.elevation_ft, 20000)) : null }))
+    .filter(x => x.name).slice(0, 12);
+  const patch = {
+    miles: num(body.miles, 500), high_point_ft: num(body.high_point_ft, 20000) ? Math.round(num(body.high_point_ft, 20000)) : null,
+    stops: stops.map(x => x.name),
+    route: { stops, duration_hours: num(body.duration_hours, 24), description: text(body.description, 400), updated_by: a.me.display_name ?? a.me.phone, updated_at: new Date().toISOString() },
+    updated_at: new Date().toISOString(),
+  };
+  let { data, error } = await deps.crm.from("recap_tours").update(patch).eq("client_id", "csr_rea").eq("label", label).select("id");
+  if (error && /route/.test(error.message)) {                         // db2_ride_logs.sql not applied yet → save the basics
+    const { route: _r, ...basic } = patch;
+    ({ data, error } = await deps.crm.from("recap_tours").update(basic).eq("client_id", "csr_rea").eq("label", label).select("id"));
+  }
+  if (error) return { status: 500, body: { error: "could not save" } };
+  if (!data?.length) return { status: 404, body: { error: "tour not found" } };
+  return { status: 200, body: { ok: true, rows: data.length } };
+}
+
+// Route map image (PNG/JPEG) → 1080px wide PNG in recap-maps/<tour-slug>.png → map_url on every row with that label.
+export async function handleGuideAdminMap(deps, body, { sharpImpl = null, storageBase = undefined } = {}) {
+  const a = await requireManager(deps, body?.t); if (a.error) return a.error;
+  const label = text(body.label, 80);
+  if (!label) return { status: 400, body: { error: "label required" } };
+  if (!/^image\/(png|jpeg)$/i.test(String(body.content_type ?? ""))) return { status: 415, body: { error: "PNG or JPEG only (export an SVG to PNG first)" } };
+  const buf = Buffer.from(String(body.data ?? ""), "base64");
+  if (!buf.length || buf.length > 15 * 1024 * 1024) return { status: 413, body: { error: "image empty or too large" } };
+  let png;
+  try {
+    const sharp = sharpImpl ?? (await import("sharp")).default;
+    png = await sharp(buf).rotate().resize({ width: 1080, withoutEnlargement: false }).png({ compressionLevel: 9 }).toBuffer();
+  } catch (e) { return { status: 422, body: { error: `not a usable image: ${e.message}` } }; }
+  const path = `${tourSlug(label)}.png`;
+  const { error: upErr } = await deps.crm.storage.from(MAP_BUCKET).upload(path, png, { contentType: "image/png", upsert: true, cacheControl: "300" });
+  if (upErr) return { status: 500, body: { error: `map upload failed: ${upErr.message}` } };
+  const url = `${storagePublicUrl(MAP_BUCKET, path, storageBase)}?v=${Date.now()}`;   // new URL each upload so email clients don't show a cached old map
+  const { data, error } = await deps.crm.from("recap_tours").update({ map_url: url, updated_at: new Date().toISOString() }).eq("client_id", "csr_rea").eq("label", label).select("id");
+  if (error || !data?.length) return { status: error ? 500 : 404, body: { error: error ? "could not save" : "tour not found" } };
+  return { status: 200, body: { ok: true, map_url: url } };
+}
+
+// Recap settings a manager may change from the app. dry_run is deliberately NOT here (Sean only).
+export async function handleGuideAdminSettings(deps, body) {
+  const a = await requireManager(deps, body?.t); if (a.error) return a.error;
+  const patch = { updated_at: new Date().toISOString() };
+  if (body.send_hour !== undefined) { const h = Number(body.send_hour); if (!Number.isInteger(h) || h < 0 || h > 23) return { status: 400, body: { error: "send hour 0-23" } }; patch.send_hour = h; }
+  if (body.template !== undefined) { if (!RECAP_TEMPLATES.includes(body.template)) return { status: 400, body: { error: "unknown template" } }; patch.template = body.template; }
+  if (body.features !== undefined) patch.features = (Array.isArray(body.features) ? body.features : []).filter(f => RECAP_FEATURES.includes(f));
+  const { error } = await deps.crm.from("recap_settings").update(patch).eq("client_id", "csr_rea");
+  if (error) return { status: 500, body: { error: "could not save" } };
   return { status: 200, body: { ok: true } };
 }
 

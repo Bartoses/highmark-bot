@@ -5,6 +5,7 @@
 --   ride_assignments  who led which FareHarbor departure (claim in the app; later the manager board / FareHarbor field)
 --   ride_logs         the guide's details per departure: miles, high point, stops, highlight (shown in the recap),
 --                     group note + conditions (internal). booking_pks = only those riders when a departure is split.
+--   recap_tours       + route jsonb (stops with elevations, duration, description) set in the app's Tours screen
 --   ride_media        + hosted-photo columns: photos uploaded in the app live in Supabase Storage (recap-photos), so
 --                     drive_file_id becomes optional (Drive copy comes later via the service account).
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -54,6 +55,10 @@ ALTER TABLE public.ride_media
   ADD COLUMN IF NOT EXISTS hidden           boolean NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS updated_at       timestamptz NOT NULL DEFAULT now();
 CREATE UNIQUE INDEX IF NOT EXISTS ride_media_client_upload_key ON public.ride_media (availability_pk, client_upload_id) WHERE client_upload_id IS NOT NULL;
+
+-- Tour routes set by managers in the app (Tours screen): stops with elevations, duration, description.
+-- recap_tours.stops (names) stays the list the recap uses; route holds the richer version.
+ALTER TABLE public.recap_tours ADD COLUMN IF NOT EXISTS route jsonb;
 
 ALTER TABLE public.ride_assignments ENABLE ROW LEVEL SECURITY;   -- service role only
 ALTER TABLE public.ride_logs        ENABLE ROW LEVEL SECURITY;

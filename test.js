@@ -19175,14 +19175,28 @@ async function testGuideApp() {
     const gt = deps2.find(d => d.availability_pk === "5001");
     chk("departures: grouped by FareHarbor departure, riders summed, first names only, trailers left out",
       deps2.length === 3 && gt.riders === 3 && JSON.stringify(gt.names) === '["Katrina","Ben"]' && gt.booking_pks.length === 2 && !deps2.some(d => d.availability_pk === "7001")
-      && JSON.stringify(gt.bookings) === '[{"pk":"#1","name":"Katrina","pax":2},{"pk":"#2","name":"Ben","pax":1}]');
+      && gt.bookings[0].name === "Katrina" && gt.bookings[0].full_name === "Katrina Smith" && gt.bookings[0].pax === 2 && gt.bookings[1].name === "Ben");
     // ── day view by role ──
     const day = async (phone) => G.handleGuideDay(deps, { t: t(phone) });
     const dj = await day(JAKE), ds = await day(SHOP), dm = await day(BOSS), dw = await day(WRENCH);
     chk("day: a guide sees today's unclaimed tours (not rentals, not other days); shop sees the rental; a manager sees all; mechanic refused",
       dj.status === 200 && dj.body.departures.map(d => d.availability_pk).join() === "5001" && ds.body.departures.some(d => d.availability_pk === "6001")
       && dm.body.departures.length === 2 && dw.status === 403 && (await G.handleGuideDay(deps, { t: "bad" })).status === 401);
-    chk("day: no guest email or phone number ever reaches the page", !/@guest\.test|9705559999/.test(JSON.stringify([dj.body, ds.body, dm.body])));
+    chk("day: no guest email ever reaches the page; an unclaimed ride shows first names only (no phone, no notes)",
+      !/@guest\.test/.test(JSON.stringify([dj.body, ds.body, dm.body])) && !/9705559999|Smith/.test(JSON.stringify(dj.body)) && dj.body.departures[0].details === false);
+    chk("day: managers and shop (rentals) get the full manifest: full name, tap-to-call phone",
+      dm.body.departures.find(d => d.availability_pk === "5001").bookings[0].name === "Katrina Smith" && dm.body.departures[0].bookings[0].phone === "+19705559999"
+      && ds.body.departures.find(d => d.availability_pk === "6001").bookings[0].phone === "+19705559999");
+    chk("roles: managers may work as guide/shop/manager; guides and shop only as themselves; a guide asking for 'manager' still gets guide",
+      JSON.stringify(dm.body.me.views) === '["manager","guide","shop"]' && JSON.stringify(dj.body.me.views) === '["guide"]'
+      && (await G.handleGuideDay(deps, { t: t(JAKE), as: "manager" })).body.me.view === "guide"
+      && (await G.handleGuideDay(deps, { t: t(BOSS), as: "guide" })).body.departures.map(d => d.availability_pk).join() === "5001");
+    chk("manifest notes: health/gear/pickup kept (health flagged); promo, insurance, marketing and 'No' answers dropped",
+      JSON.stringify(G.manifestNotes({ custom_field_values: [
+        { custom_field: { name: "Health Concerns" }, display_value: "Bad knee" }, { custom_field: { name: "Promo Code" }, display_value: "FRIEND10" },
+        { custom_field: { name: "Yes, Add Cancellation Insurance To Protect My Trip." }, display_value: "Yes" }, { custom_field: { name: "Monosuit / Boot Rentals" }, display_value: "Boots size 10" },
+        { custom_field: { name: "Shuttle from lodging to trail" }, display_value: "No" }, { custom_field: { name: "How did you hear about us?" }, display_value: "Google" } ] }))
+      === '[{"label":"Health Concerns","value":"Bad knee","health":true},{"label":"Monosuit / Boot Rentals","value":"Boots size 10","health":false}]');
     chk("day: the loop's usual miles/high point come along as defaults", dj.body.departures[0].defaults.miles === 24 && dj.body.departures[0].defaults.high_point_ft === 9880);
     // ── claim / split ──
     await G.handleGuideClaim(deps, { t: t(JAKE), availability_pk: "5001", booking_pks: ["#1"] });
@@ -19219,6 +19233,32 @@ async function testGuideApp() {
     chk("photo: starring another photo moves the cover", M[1].cover === true && M[0].cover === false);
     chk("photo: only the uploader or a manager can remove a photo",
       (await G.handleGuideMedia(deps, { t: t(SHOP), id: M[1].id, action: "remove" })).status === 403 && (await G.handleGuideMedia(deps, { t: t(BOSS), id: M[0].id, action: "remove" })).status === 200 && M[0].hidden === true);
+    // ── manager admin: tours + settings ──
+    dbs.crm.tables.recap_tours.push({ client_id: "csr_rea", match: 'Grand "Private" Tour', type: "rea", label: "Grand Tour", active: true });
+    dbs.crm.tables.recap_settings = [{ client_id: "csr_rea", send_hour: 18, dry_run: true, test_to: "sean@coloradosledrentals.com", template: "simple", features: ["review", "share"] }];
+    const adm = await G.handleGuideAdmin(deps, { t: t(BOSS) });
+    const gtour = adm.body.tours.find(x => x.label === "Grand Tour");
+    chk("admin: managers only; tours grouped by label (both Grand Tour items share one route), RZR left out",
+      (await G.handleGuideAdmin(deps, { t: t(JAKE) })).status === 403 && gtour.matches.length === 2 && !adm.body.tours.some(x => x.label === "RZR") && adm.body.settings.template === "simple");
+    const sv = await G.handleGuideAdminTour(deps, { t: t(BOSS), label: "Grand Tour", miles: "24", high_point_ft: "9880", duration_hours: "3",
+      stops: [{ name: "Ranch base", elevation_ft: "9400" }, { name: "  " }, { name: "Yampa Valley View", elevation_ft: "9880" }] });
+    const gRows = dbs.crm.tables.recap_tours.filter(x => x.label === "Grand Tour");
+    chk("admin tour: route saved on every row of that tour (stops with elevations; names feed the recap)",
+      sv.status === 200 && gRows.length === 2 && gRows.every(x => x.miles === 24 && x.high_point_ft === 9880 && JSON.stringify(x.stops) === '["Ranch base","Yampa Valley View"]' && x.route?.stops?.[0]?.elevation_ft === 9400));
+    let mapUp = null;
+    dbs.crm.storage = { from: () => ({ upload: async (p, b, o) => (mapUp = { p, o }, { error: null }) }) };
+    const fakeSharp = () => ({ rotate() { return this; }, resize() { return this; }, png() { return this; }, toBuffer: async () => Buffer.from("png") });
+    const mp = await G.handleGuideAdminMap(deps, { t: t(BOSS), label: "Grand Tour", content_type: "image/png", data: Buffer.from("x").toString("base64") }, { sharpImpl: fakeSharp, storageBase: "https://s.test" });
+    chk("admin map: stored as recap-maps/<tour>.png with a fresh URL on every row; SVG refused",
+      mp.status === 200 && mapUp?.p === "grand-tour.png" && gRows.every(x => x.map_url === mp.body.map_url) && /^https:\/\/s\.test\/storage\/v1\/object\/public\/recap-maps\/grand-tour\.png\?v=\d+$/.test(mp.body.map_url)
+      && (await G.handleGuideAdminMap(deps, { t: t(BOSS), label: "Grand Tour", content_type: "image/svg+xml", data: "eA==" })).status === 415);
+    const ss = await G.handleGuideAdminSettings(deps, { t: t(BOSS), send_hour: 19, template: "v1", features: ["review", "bogus"], dry_run: false });
+    chk("admin settings: send hour, design and sections change; dry run can NOT be changed from the app",
+      ss.status === 200 && dbs.crm.tables.recap_settings[0].send_hour === 19 && dbs.crm.tables.recap_settings[0].template === "v1"
+      && JSON.stringify(dbs.crm.tables.recap_settings[0].features) === '["review"]' && dbs.crm.tables.recap_settings[0].dry_run === true
+      && (await G.handleGuideAdminSettings(deps, { t: t(BOSS), send_hour: 25 })).status === 400 && (await G.handleGuideAdminSettings(deps, { t: t(JAKE), send_hour: 18 })).status === 403);
+    dbs.crm.tables.recap_settings[0].template = "simple";
+
     // ── recap uses it all (simple template) ──
     dbs.crm.tables.recap_settings = [{ client_id: "csr_rea", send_hour: 18, dry_run: true, test_to: "sean@coloradosledrentals.com", template: "simple" }];
     dbs.crm.tables.email_sends = []; dbs.crm.tables.recap_log = []; dbs.crm.tables.recap_review = [];

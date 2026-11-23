@@ -457,4 +457,13 @@ A phone page where guides, shop staff and managers log each ride (sprint: `docs/
 - **Recaps:** the 6 pm job reads `ride_logs`, `ride_assignments` and `ride_media` for each booking's departure. The starred
   photo goes straight into the email (`photo_hint.hosted_photo`, no Apps Script step, works with today's live script), and
   the log fills the guide name, stats, stops and highlight.
+- **Roles on entry:** the person picks Guide, Shop or Manager (only up to their own level; remembered on the phone).
+- **Manifest:** each ride lists its bookings: full name, party size, sled (rentals), FareHarbor booking answers a guide needs
+  (health concerns flagged red, gear/boot rentals, shuttle/pickup, address), waiver / checked-in / balance due from
+  `daily_manifest`, and tap-to-call. Full details only for your own rides, rentals at the shop, and managers; unclaimed rides
+  show first names only. Promo codes, insurance and marketing answers are never shown.
+- **Manager screens:** **Tours**: one route per tour (all FareHarbor items with the same `recap_tours.label`): miles, high point,
+  usual length, stops with elevations, internal notes, and the route map upload (PNG/JPEG → `recap-maps/<tour>.png`). These
+  are the defaults guides start from and what the recap shows. **Settings**: recap send hour, email design, sections.
+  Dry run (going live) is not in the app.
 - **Needs:** `db2_ride_logs.sql` applied. Not in slice 1: videos, rider tags, manager board, Drive sync, `LOG` text keyword.

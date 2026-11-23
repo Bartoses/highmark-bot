@@ -7,15 +7,16 @@
 <meta name="theme-color" content="#0E131B">
 <title>Ride Log</title>
 <style>
-  :root { --ink:#0E131B; --muted:#5B6673; --line:#E3E6EA; --bg:#F4F6F8; --card:#FFFFFF; --acc:#F99E16; --acc-ink:#0E131B; --blue:#1670C2; --ok:#1F7A4D; --warn:#B4321F; }
+  :root { --ink:#0E131B; --muted:#5B6673; --line:#E3E6EA; --bg:#F4F6F8; --card:#FFFFFF; --acc:#F99E16; --acc-ink:#0E131B; --ok:#1F7A4D; --warn:#B4321F; --warnbg:#FDECEA; }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; -webkit-text-size-adjust:100%; }
-  header { position:sticky; top:0; z-index:5; background:var(--ink); color:#fff; padding:calc(12px + env(safe-area-inset-top)) 16px 12px; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; font-size:16px; line-height:1.45; -webkit-text-size-adjust:100%; }
+  header { position:sticky; top:0; z-index:5; background:var(--ink); color:#fff; padding:calc(12px + env(safe-area-inset-top)) 16px 10px; }
   header h1 { margin:0; font-size:20px; letter-spacing:.3px; }
-  header .sub { color:#B8C2CC; font-size:14px; }
-  .days { display:flex; gap:8px; margin-top:10px; }
-  .days button { flex:1; min-height:40px; border-radius:10px; border:1px solid #3A4654; background:transparent; color:#fff; font-weight:700; font-size:15px; }
-  .days button[aria-pressed="true"] { background:#fff; color:var(--ink); }
+  header .sub { color:#B8C2CC; font-size:14px; display:flex; justify-content:space-between; gap:8px; }
+  header .sub a { color:#fff; }
+  .seg { display:flex; gap:6px; margin-top:10px; }
+  .seg button { flex:1; min-height:40px; border-radius:10px; border:1px solid #3A4654; background:transparent; color:#fff; font-family:inherit; font-weight:700; font-size:15px; }
+  .seg button[aria-pressed="true"] { background:#fff; color:var(--ink); }
   main { max-width:640px; margin:0 auto; padding:12px 16px 120px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin:0 0 10px; }
   button.card { width:100%; text-align:left; font:inherit; color:inherit; display:block; cursor:pointer; }
@@ -25,17 +26,18 @@
   .meta { color:var(--muted); font-size:14px; }
   .pill { display:inline-block; font-size:12px; font-weight:800; letter-spacing:.4px; border-radius:999px; padding:3px 9px; white-space:nowrap; }
   .pill.new { background:#EEF1F4; color:var(--muted); } .pill.started { background:#FFF3DF; color:#8A5A12; } .pill.done { background:#E2F3EA; color:var(--ok); }
-  .pill.mine { background:var(--ink); color:#fff; }
-  .btn { display:block; width:100%; min-height:48px; border:0; border-radius:12px; font-family:inherit; font-weight:700; font-size:16px; line-height:1; padding:14px; cursor:pointer; }
+  .pill.mine { background:var(--ink); color:#fff; } .pill.bad { background:var(--warnbg); color:var(--warn); } .pill.good { background:#E2F3EA; color:var(--ok); }
+  .btn { display:block; width:100%; min-height:48px; border:0; border-radius:12px; font-family:inherit; font-weight:700; font-size:16px; line-height:1.2; padding:14px; cursor:pointer; text-align:center; text-decoration:none; }
   .btn.primary { background:var(--acc); color:var(--acc-ink); } .btn.dark { background:var(--ink); color:#fff; } .btn.ghost { background:#fff; color:var(--ink); border:2px solid var(--ink); }
+  .btn.small { min-height:40px; padding:9px 12px; font-size:15px; width:auto; display:inline-block; }
   .btn:disabled { opacity:.5; }
   h2 { font-size:18px; margin:18px 0 8px; }
   label.f { display:block; font-weight:700; font-size:14px; margin:12px 0 4px; }
-  input[type=text], input[type=number], textarea { width:100%; font-family:inherit; font-size:16px; padding:12px; border:1px solid #C9D0D7; border-radius:10px; background:#fff; }
+  input[type=text], input[type=number], textarea, select { width:100%; font-family:inherit; font-size:16px; padding:12px; border:1px solid #C9D0D7; border-radius:10px; background:#fff; color:var(--ink); }
   textarea { min-height:72px; }
   .hint { color:var(--muted); font-size:13px; margin-top:4px; }
   .chips { display:flex; flex-wrap:wrap; gap:8px; }
-  .chip { min-height:40px; padding:8px 14px; border-radius:999px; border:1px solid #C9D0D7; background:#fff; font-weight:600; font-size:15px; }
+  .chip { min-height:40px; padding:8px 14px; border-radius:999px; border:1px solid #C9D0D7; background:#fff; font-family:inherit; font-weight:600; font-size:15px; color:var(--ink); }
   .chip[aria-pressed="true"] { background:var(--ink); color:#fff; border-color:var(--ink); }
   .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
   .ph { position:relative; aspect-ratio:4/3; border-radius:10px; overflow:hidden; background:#DDE2E7; }
@@ -44,6 +46,11 @@
   .ph .star { left:4px; } .ph .del { right:4px; font-size:15px; }
   .ph .star[aria-pressed="true"] { background:var(--acc); color:var(--ink); }
   .ph.up { display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:13px; }
+  .rider { border-top:1px solid var(--line); padding:12px 0; }
+  .rider:first-child { border-top:0; padding-top:0; }
+  .rider .nm { font-weight:700; }
+  .note { font-size:14px; margin-top:4px; } .note b { font-weight:700; }
+  .note.health { background:var(--warnbg); color:var(--warn); border-radius:8px; padding:6px 8px; }
   .riders label { display:flex; align-items:center; gap:10px; min-height:44px; border-bottom:1px solid var(--line); }
   .riders input { width:22px; height:22px; }
   .back { background:none; border:0; color:#fff; font-family:inherit; font-weight:700; font-size:15px; padding:6px 0; margin-bottom:4px; }
@@ -51,83 +58,156 @@
   .bar .in { max-width:640px; margin:0 auto; display:flex; gap:8px; } .bar .btn { flex:1; }
   .toast { position:fixed; left:50%; transform:translateX(-50%); bottom:90px; background:var(--ink); color:#fff; padding:10px 16px; border-radius:10px; font-weight:600; display:none; z-index:20; max-width:90vw; }
   .empty { text-align:center; color:var(--muted); padding:40px 10px; }
-  .err { background:#FDECEA; color:var(--warn); border-color:#F5C6C0; }
+  .err { background:var(--warnbg); color:var(--warn); border-color:#F5C6C0; }
+  .stoprow { display:grid; grid-template-columns:1fr 110px 44px; gap:6px; margin-bottom:6px; }
+  .stoprow button { border:1px solid #C9D0D7; background:#fff; border-radius:10px; font-size:18px; color:var(--muted); }
+  .map { width:100%; border-radius:10px; display:block; margin:8px 0; border:1px solid var(--line); }
+  .role { display:block; width:100%; text-align:left; background:#fff; border:2px solid var(--line); border-radius:14px; padding:16px; margin:0 0 10px; font-family:inherit; color:var(--ink); cursor:pointer; }
+  .role b { display:block; font-size:18px; } .role span { color:var(--muted); font-size:14px; }
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 </style>
 </head>
 <body>
-<header>
-  <div id="hd"></div>
-</header>
-<main id="main"><div class="empty">Loading today's rides…</div></main>
+<header><div id="hd"></div></header>
+<main id="main"><div class="empty">Loading…</div></main>
 <div class="bar" id="bar" hidden><div class="in" id="barIn"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <input type="file" id="file" accept="image/*" multiple class="sr" aria-label="Add photos">
+<input type="file" id="mapfile" accept="image/png,image/jpeg" class="sr" aria-label="Upload route map">
 <script>
 (function () {
   var T = new URLSearchParams(location.search).get("t") || "";
-  var S = { day: null, date: null, today: null, open: null, uploading: 0, queue: [] };
+  var S = { day: null, date: null, today: null, open: null, tab: "rides", admin: null, editTour: null, uploading: 0, queue: [], drafts: {}, view: null };
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   var COND = [["fresh_snow", "Fresh snow"], ["bluebird", "Bluebird"], ["snowing", "Snowing"], ["windy", "Windy"], ["cold", "Cold"]];
+  var VIEW_INFO = { guide: ["Guide", "My rides today: manifest, photos and the ride log"], shop: ["Shop", "Rentals at pick-up and return: manifest and photos"], manager: ["Manager", "Every ride, plus tour routes and settings"] };
+  var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
   function toast(msg) { var t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(function () { t.style.display = "none"; }, 2600); }
   function time(iso) { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Denver" }).replace(":00", ""); } catch (e) { return ""; } }
   function dayName(d) { try { return new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }); } catch (e) { return d; } }
   function api(method, path, body) {
     var opts = { method: method, headers: { "Content-Type": "application/json" } };
-    if (body) opts.body = JSON.stringify(Object.assign({ t: T }, body));
-    return fetch(path + (method === "GET" ? (path.indexOf("?") > -1 ? "&" : "?") + "t=" + encodeURIComponent(T) : ""), opts)
-      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) { var e = new Error(j.error || "Something went wrong"); e.status = r.status; throw e; } return j; }); });
+    if (body) opts.body = JSON.stringify(Object.assign({ t: T, as: S.view }, body));
+    var url = path + (method === "GET" ? (path.indexOf("?") > -1 ? "&" : "?") + "t=" + encodeURIComponent(T) + (S.view ? "&as=" + S.view : "") : "");
+    return fetch(url, opts).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) { var e = new Error(j.error || "Something went wrong"); e.status = r.status; throw e; } return j; }); });
   }
+  function each(sel, fn) { Array.prototype.forEach.call(document.querySelectorAll(sel), fn); }
 
+  // ── load + routing ──
   function load(date) {
     return api("GET", "/guide/api/day" + (date ? "?d=" + date : "")).then(function (j) {
-      S.day = j; S.date = j.date; S.today = j.today; render();
+      S.day = j; S.date = j.date; S.today = j.today;
+      var views = (j.me && j.me.views) || [];
+      if (!S.view) {
+        var saved = store.get("guideView");
+        if (views.length === 1) S.view = views[0];
+        else if (saved && views.indexOf(saved) > -1) S.view = saved;
+        else return renderRolePicker(views);
+        if (j.me.view !== S.view) return load(date);              // first answer used the default view
+      }
+      render();
     }).catch(function (e) {
       $("hd").innerHTML = "<h1>Ride Log</h1>";
       $("main").innerHTML = '<div class="card err">' + esc(e.message) + "</div>";
     });
   }
-  function dep(pk) { return (S.day.departures || []).filter(function (d) { return String(d.availability_pk) === String(pk); })[0]; }
-
-  // keep what the guide is typing across re-renders (uploads finishing re-draw the page)
-  S.drafts = {};
+  function dep(pk) { return ((S.day && S.day.departures) || []).filter(function (d) { return String(d.availability_pk) === String(pk); })[0]; }
   function captureDraft() {
     if (!S.open || !$("miles")) return;
     S.drafts[S.open] = { miles: $("miles").value, high_point_ft: $("hp").value, stops: $("stops").value, highlight: $("hl").value, group_note: $("note").value,
       conditions: Array.prototype.filter.call(document.querySelectorAll("#cond .chip"), function (c) { return c.getAttribute("aria-pressed") === "true"; }).map(function (c) { return c.getAttribute("data-c"); }) };
   }
-  function render() { captureDraft(); if (S.open && dep(S.open)) renderRide(dep(S.open)); else { S.open = null; renderList(); } }
+  function render() {
+    captureDraft();
+    if (S.tab === "tours" && S.view === "manager") return S.editTour ? renderTourEdit() : renderTours();
+    if (S.tab === "settings" && S.view === "manager") return renderSettings();
+    if (S.open && dep(S.open)) renderRide(dep(S.open)); else { S.open = null; renderList(); }
+  }
 
+  // ── role picker ──
+  function renderRolePicker(views) {
+    var me = (S.day && S.day.me) || {};
+    $("hd").innerHTML = "<h1>Ride Log</h1><div class='sub'><span>" + esc(me.name || "") + "</span></div>";
+    $("bar").hidden = true;
+    $("main").innerHTML = "<h2>What are you working as today?</h2>" + views.map(function (v) {
+      return "<button class='role' data-v='" + v + "'><b>" + VIEW_INFO[v][0] + "</b><span>" + VIEW_INFO[v][1] + "</span></button>";
+    }).join("") + "<p class='hint'>You can switch any time from the top of the screen.</p>";
+    each(".role", function (b) { b.onclick = function () { S.view = b.getAttribute("data-v"); store.set("guideView", S.view); S.tab = "rides"; load(S.date); }; });
+  }
+  function headerTop(title) {
+    var me = (S.day && S.day.me) || {}, multi = (me.views || []).length > 1;
+    return "<h1>" + esc(title) + "</h1><div class='sub'><span>" + esc(me.name || "") + " · " + VIEW_INFO[S.view][0] + "</span>" +
+      (multi ? "<a href='#' id='switchRole'>Switch role</a>" : "") + "</div>";
+  }
+  function wireHeader() {
+    if ($("switchRole")) $("switchRole").onclick = function (e) { e.preventDefault(); S.view = null; S.open = null; S.tab = "rides"; store.set("guideView", ""); renderRolePicker(S.day.me.views); };
+    each(".tabs button", function (b) { b.onclick = function () { S.tab = b.getAttribute("data-tab"); S.open = null; S.editTour = null; if (S.tab !== "rides" && !S.admin) loadAdmin(); else render(); }; });
+  }
+  function tabs() {
+    if (S.view !== "manager") return "";
+    return "<div class='seg tabs'>" + [["rides", "Rides"], ["tours", "Tours"], ["settings", "Settings"]].map(function (t) {
+      return "<button data-tab='" + t[0] + "' aria-pressed='" + (S.tab === t[0]) + "'>" + t[1] + "</button>"; }).join("") + "</div>";
+  }
+
+  // ── rides list ──
   function renderList() {
-    var me = S.day.me || {}, yest = S.today !== S.date;
-    $("hd").innerHTML = "<h1>Ride Log</h1><div class='sub'>" + esc(me.name || "") + " · " + esc(dayName(S.date)) + "</div>" +
-      "<div class='days'><button aria-pressed='" + yest + "' data-d='y'>Yesterday</button><button aria-pressed='" + !yest + "' data-d='t'>Today</button></div>";
-    Array.prototype.forEach.call($("hd").querySelectorAll(".days button"), function (b) {
+    var yest = S.today !== S.date;
+    $("hd").innerHTML = headerTop("Ride Log") + tabs() +
+      "<div class='seg days'><button aria-pressed='" + yest + "' data-d='y'>Yesterday</button><button aria-pressed='" + !yest + "' data-d='t'>Today · " + esc(dayName(S.today)) + "</button></div>";
+    wireHeader();
+    each(".days button", function (b) {
       b.onclick = function () { var y = new Date(S.today + "T12:00:00Z"); y.setUTCDate(y.getUTCDate() - 1); load(b.getAttribute("data-d") === "y" ? y.toISOString().slice(0, 10) : S.today); };
     });
     var list = S.day.departures || [];
     $("bar").hidden = true;
-    if (!list.length) { $("main").innerHTML = "<div class='empty'>No rides for you " + (yest ? "yesterday" : "today") + ".</div>"; return; }
-    $("main").innerHTML = list.map(function (d) {
+    if (!list.length) { $("main").innerHTML = "<div class='empty'>No rides " + (yest ? "yesterday" : "today") + " for this view.</div>"; return; }
+    var riders = list.reduce(function (n, d) { return n + d.riders; }, 0);
+    $("main").innerHTML = "<p class='meta' style='margin:2px 0 10px'>" + list.length + " ride" + (list.length === 1 ? "" : "s") + " · " + riders + " riders</p>" + list.map(function (d) {
       var who = d.mine ? "<span class='pill mine'>MINE</span>" : (d.assignees.length ? "<span class='meta'>" + esc(d.assignees.map(function (a) { return a.name || "Guide"; }).join(", ")) + "</span>" : "<span class='meta'>Unclaimed</span>");
+      var flags = "";
+      if (d.details) {
+        var noW = d.bookings.filter(function (b) { return b.waiver_signed === false; }).length, due = d.bookings.filter(function (b) { return b.due_cents > 0; }).length,
+          health = d.bookings.some(function (b) { return (b.notes || []).some(function (n) { return n.health; }); });
+        if (noW) flags += " <span class='pill bad'>" + noW + " NO WAIVER</span>";
+        if (due) flags += " <span class='pill bad'>" + due + " OWES</span>";
+        if (health) flags += " <span class='pill bad'>HEALTH NOTE</span>";
+      }
       return "<button class='card' data-pk='" + esc(d.availability_pk) + "'><div class='row'><div><div class='time'>" + esc(time(d.start_at)) + " · " + esc(d.label) + "</div>" +
         "<div class='meta'>" + d.riders + " rider" + (d.riders === 1 ? "" : "s") + (d.names.length ? " · " + esc(d.names.slice(0, 5).join(", ")) + (d.names.length > 5 ? "…" : "") : "") + "</div></div>" +
         "<span class='pill " + d.status + "'>" + (d.status === "done" ? "DONE" : d.status === "started" ? (d.photos.length + " PHOTO" + (d.photos.length === 1 ? "" : "S")) : "TO DO") + "</span></div>" +
-        "<div style='margin-top:6px'>" + who + "</div></button>";
+        "<div style='margin-top:6px'>" + who + flags + "</div></button>";
     }).join("");
-    Array.prototype.forEach.call($("main").querySelectorAll("button.card"), function (b) { b.onclick = function () { S.open = b.getAttribute("data-pk"); render(); scrollTo(0, 0); }; });
+    each("button.card", function (b) { b.onclick = function () { S.open = b.getAttribute("data-pk"); render(); scrollTo(0, 0); }; });
   }
 
+  // ── one ride: claim, manifest, photos, ride log ──
+  function manifestHtml(d) {
+    return "<h2>Manifest</h2><div class='card'>" + d.bookings.map(function (b) {
+      var h = "<div class='rider'><div class='row'><div><span class='nm'>" + esc(b.name) + "</span>" + (b.pax > 1 ? " <span class='meta'>party of " + b.pax + "</span>" : "") +
+        (b.item ? "<div class='meta'>" + esc(b.item) + "</div>" : "") + "</div><div>";
+      if (d.details) {
+        if (b.waiver_signed === true) h += "<span class='pill good'>WAIVER ✓</span> ";
+        if (b.waiver_signed === false) h += "<span class='pill bad'>NO WAIVER</span> ";
+        if (b.due_cents > 0) h += "<span class='pill bad'>OWES $" + Math.round(b.due_cents / 100) + "</span> ";
+        if (b.checked_in) h += "<span class='pill good'>IN</span>";
+      }
+      h += "</div></div>";
+      (b.notes || []).forEach(function (n) { h += "<div class='note" + (n.health ? " health" : "") + "'><b>" + esc(n.label) + ":</b> " + esc(n.value) + "</div>"; });
+      if (b.equipment) h += "<div class='note'><b>Gear:</b> " + esc(b.equipment) + "</div>";
+      if (b.phone) h += "<a class='btn small ghost' style='margin-top:8px' href='tel:" + esc(b.phone) + "'>Call " + esc(String(b.name).split(" ")[0]) + "</a>";
+      return h + "</div>";
+    }).join("") + (d.details ? "" : "<p class='hint'>Claim the ride to see full names, phone numbers and notes.</p>") + "</div>";
+  }
   function renderRide(d) {
-    var me = S.day.me || {}, def = d.defaults || {}, dr = S.drafts[String(d.availability_pk)];
+    var def = d.defaults || {}, dr = S.drafts[String(d.availability_pk)];
     var log = dr ? { miles: dr.miles, high_point_ft: dr.high_point_ft, stops: dr.stops ? dr.stops.split(",").map(function (x) { return x.trim(); }).filter(Boolean) : [],
       highlight: dr.highlight, group_note: dr.group_note, conditions: dr.conditions, status: (d.log || {}).status } : (d.log || {});
     $("hd").innerHTML = "<button class='back' id='back'>‹ All rides</button><h1>" + esc(time(d.start_at)) + " · " + esc(d.label) + "</h1>" +
-      "<div class='sub'>" + d.riders + " rider" + (d.riders === 1 ? "" : "s") + " · " + esc(dayName(S.date)) + "</div>";
-    $("back").onclick = function () { if (S.uploading && !confirm("Photos are still uploading. Leave anyway?")) return; S.open = null; render(); };
+      "<div class='sub'><span>" + d.riders + " rider" + (d.riders === 1 ? "" : "s") + " · " + esc(dayName(S.date)) + "</span></div>";
+    $("back").onclick = function () { if (S.uploading && !confirm("Photos are still uploading. Leave anyway?")) return; captureDraft(); S.open = null; render(); };
     var h = "";
-    if (!d.mine && me.access !== "manager") {
+    if (!d.mine && S.view !== "manager") {
       h += "<div class='card'><div class='label'>Is this your ride?</div><p class='meta'>Claim it so your photos go to these guests.</p>" +
         "<button class='btn primary' id='claim'>This is my ride</button>" +
         "<details style='margin-top:10px'><summary class='meta'>Only some riders are mine</summary><div class='riders' id='riders'>" +
@@ -137,23 +217,24 @@
       var mine = d.assignees.filter(function (a) { return a.me; })[0] || {};
       h += "<div class='meta' style='margin:4px 0 8px'>You're on this ride" + (mine.riders ? " (" + mine.riders.length + " of " + d.bookings.length + " bookings)" : "") + ". " +
         "<a href='#' id='release' style='color:var(--muted)'>Not mine</a></div>";
+    } else if (d.assignees.length) {
+      h += "<div class='meta' style='margin:4px 0 8px'>Guide: " + esc(d.assignees.map(function (a) { return a.name || "?"; }).join(", ")) + "</div>";
     }
-    // photos
+    h += manifestHtml(d);
     h += "<h2>Photos</h2><div class='grid' id='grid'>" + d.photos.map(function (p) {
       return "<div class='ph'><img src='" + esc(p.thumb) + "' alt='Ride photo' loading='lazy'>" +
         "<button class='star' aria-label='Use as cover' aria-pressed='" + p.cover + "' data-id='" + esc(p.id) + "'>★</button>" +
-        (p.mine || me.access === "manager" ? "<button class='del' aria-label='Remove photo' data-id='" + esc(p.id) + "'>✕</button>" : "") + "</div>";
-    }).join("") + S.queue.filter(function (q) { return q.pk === String(d.availability_pk) && !q.done; }).map(function (q) {
-      return "<div class='ph up'>" + (q.failed ? "Retry…" : "Uploading…") + "</div>";
+        (p.mine || S.view === "manager" ? "<button class='del' aria-label='Remove photo' data-id='" + esc(p.id) + "'>✕</button>" : "") + "</div>";
+    }).join("") + S.queue.filter(function (q) { return q.pk === String(d.availability_pk) && !q.done && !q.gaveUp; }).map(function (q) {
+      return "<div class='ph up'>" + (q.failed ? "Retrying…" : "Uploading…") + "</div>";
     }).join("") + "</div>" +
       "<p class='hint'>★ = the photo in the guests' email. Add the group shot first.</p>" +
       "<button class='btn dark' id='add' style='margin-top:8px'>Add photos</button>";
-    // details
     var cond = log.conditions || [];
     h += "<h2>About the ride</h2><div class='card'>" +
       "<label class='f' for='miles'>Miles</label><input id='miles' type='number' inputmode='decimal' value='" + esc(log.miles != null ? log.miles : "") + "' placeholder='" + esc(def.miles != null ? def.miles + " (usual)" : "") + "'>" +
       "<label class='f' for='hp'>High point (ft)</label><input id='hp' type='number' inputmode='numeric' value='" + esc(log.high_point_ft != null ? log.high_point_ft : "") + "' placeholder='" + esc(def.high_point_ft != null ? def.high_point_ft + " (usual)" : "") + "'>" +
-      "<div class='hint'>Leave blank to use the usual numbers for this loop.</div>" +
+      "<div class='hint'>Leave blank to use the usual numbers for this tour.</div>" +
       "<label class='f' for='stops'>Stops (comma separated)</label><input id='stops' type='text' value='" + esc((log.stops && log.stops.length ? log.stops : []).join(", ")) + "' placeholder='" + esc((def.stops || []).join(", ")) + "'>" +
       "<label class='f'>Conditions</label><div class='chips' id='cond'>" + COND.map(function (c) { return "<button class='chip' type='button' data-c='" + c[0] + "' aria-pressed='" + (cond.indexOf(c[0]) > -1) + "'>" + c[1] + "</button>"; }).join("") + "</div>" +
       "<label class='f' for='hl'>Highlight (in the guests' email)</label><input id='hl' type='text' maxlength='140' value='" + esc(log.highlight || "") + "' placeholder='Moose at Rabbit Ears, first powder day…'>" +
@@ -163,7 +244,6 @@
     $("barIn").innerHTML = "<button class='btn ghost' id='save'>Save</button><button class='btn primary' id='done'>" + (log.status === "done" ? "Saved ✓ Done" : "Save + done") + "</button>";
     wireRide(d);
   }
-
   function wireRide(d) {
     var pk = d.availability_pk;
     if ($("claim")) $("claim").onclick = function () { api("POST", "/guide/api/claim", { availability_pk: pk }).then(function () { toast("It's yours"); return load(S.date); }).catch(function (e) { toast(e.message); }); };
@@ -173,18 +253,97 @@
       api("POST", "/guide/api/claim", { availability_pk: pk, booking_pks: ticked }).then(function () { toast("Claimed " + ticked.length); return load(S.date); }).catch(function (e) { toast(e.message); });
     };
     if ($("release")) $("release").onclick = function (ev) { ev.preventDefault(); api("POST", "/guide/api/claim", { availability_pk: pk, release: true }).then(function () { return load(S.date); }); };
-    Array.prototype.forEach.call(document.querySelectorAll(".star"), function (b) { b.onclick = function () { api("POST", "/guide/api/media", { id: b.getAttribute("data-id"), action: "cover" }).then(function () { return load(S.date); }); }; });
-    Array.prototype.forEach.call(document.querySelectorAll(".del"), function (b) { b.onclick = function () { if (!confirm("Remove this photo?")) return; api("POST", "/guide/api/media", { id: b.getAttribute("data-id"), action: "remove" }).then(function () { return load(S.date); }); }; });
-    Array.prototype.forEach.call(document.querySelectorAll("#cond .chip"), function (c) { c.onclick = function () { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); }; });
+    each(".star", function (b) { b.onclick = function () { api("POST", "/guide/api/media", { id: b.getAttribute("data-id"), action: "cover" }).then(function () { return load(S.date); }); }; });
+    each(".del", function (b) { b.onclick = function () { if (!confirm("Remove this photo?")) return; api("POST", "/guide/api/media", { id: b.getAttribute("data-id"), action: "remove" }).then(function () { return load(S.date); }); }; });
+    each("#cond .chip", function (c) { c.onclick = function () { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); }; });
     $("add").onclick = function () { $("file").value = ""; $("file").onchange = function () { enqueue(pk, $("file").files); }; $("file").click(); };
     var save = function (done) {
       var body = { availability_pk: pk, done: done, miles: $("miles").value, high_point_ft: $("hp").value, highlight: $("hl").value, group_note: $("note").value,
         stops: $("stops").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
         conditions: Array.prototype.filter.call(document.querySelectorAll("#cond .chip"), function (c) { return c.getAttribute("aria-pressed") === "true"; }).map(function (c) { return c.getAttribute("data-c"); }) };
-      api("POST", "/guide/api/log", body).then(function () { delete S.drafts[String(pk)]; toast(done ? "Saved. Thanks!" : "Saved"); $("miles").id = "miles_saved"; return load(S.date); }).catch(function (e) { toast(e.message); });
+      api("POST", "/guide/api/log", body).then(function () { delete S.drafts[String(pk)]; $("miles").id = "miles_saved"; toast(done ? "Saved. Thanks!" : "Saved"); return load(S.date); }).catch(function (e) { toast(e.message); });
     };
     $("save").onclick = function () { save(false); };
     $("done").onclick = function () { save(true); };
+  }
+
+  // ── manager: tours (one route per tour) ──
+  function loadAdmin() { return api("GET", "/guide/api/admin").then(function (j) { S.admin = j; render(); }).catch(function (e) { toast(e.message); }); }
+  var TYPE = { rea: "Rabbit Ears tours", backcountry: "Guided backcountry", rental: "Rentals" };
+  function renderTours() {
+    $("hd").innerHTML = headerTop("Tours") + tabs(); wireHeader(); $("bar").hidden = true;
+    if (!S.admin) { $("main").innerHTML = "<div class='empty'>Loading…</div>"; return; }
+    var last = null, h = "<p class='meta'>Each tour runs the same route, so set it once. Guides only change it if a ride was different. These numbers fill the guests' recap.</p>";
+    S.admin.tours.forEach(function (t, i) {
+      if (t.type !== last) { h += "<h2>" + TYPE[t.type] + "</h2>"; last = t.type; }
+      var stats = [t.miles ? t.miles + " mi" : null, t.high_point_ft ? Number(t.high_point_ft).toLocaleString() + " ft" : null, t.stops.length ? t.stops.length + " stops" : null].filter(Boolean);
+      h += "<button class='card' data-i='" + i + "'><div class='row'><div><div class='label'>" + esc(t.label) + "</div><div class='meta'>" + (stats.length ? esc(stats.join(" · ")) : "Not set up yet") + "</div></div>" +
+        "<span class='pill " + (t.map_url ? "good'>MAP" : "new'>NO MAP") + "</span></div></button>";
+    });
+    $("main").innerHTML = h;
+    each("button.card", function (b) { b.onclick = function () { S.editTour = S.admin.tours[Number(b.getAttribute("data-i"))]; render(); scrollTo(0, 0); }; });
+  }
+  function stopRow(s) { return "<div class='stoprow'><input type='text' class='sname' placeholder='Stop name' value='" + esc(s.name || "") + "'><input type='number' class='selev' inputmode='numeric' placeholder='Elev. ft' value='" + esc(s.elevation_ft || "") + "'><button type='button' class='sdel' aria-label='Remove stop'>✕</button></div>"; }
+  function renderTourEdit() {
+    var t = S.editTour, r = t.route || {};
+    var stops = (r.stops && r.stops.length ? r.stops : t.stops.map(function (n) { return { name: n }; }));
+    $("hd").innerHTML = "<button class='back' id='back'>‹ Tours</button><h1>" + esc(t.label) + "</h1><div class='sub'><span>" + esc(TYPE[t.type]) + " · " + t.matches.length + " FareHarbor item" + (t.matches.length === 1 ? "" : "s") + "</span></div>";
+    $("back").onclick = function () { S.editTour = null; render(); };
+    $("main").innerHTML = "<div class='card'>" +
+      "<label class='f' for='tmiles'>Miles</label><input id='tmiles' type='number' inputmode='decimal' value='" + esc(t.miles != null ? t.miles : "") + "'>" +
+      "<label class='f' for='thp'>High point (ft)</label><input id='thp' type='number' inputmode='numeric' value='" + esc(t.high_point_ft != null ? t.high_point_ft : "") + "'>" +
+      "<label class='f' for='tdur'>Usual length (hours)</label><input id='tdur' type='number' inputmode='decimal' value='" + esc(r.duration_hours != null ? r.duration_hours : "") + "'>" +
+      "<label class='f'>Stops, in order</label><div id='stops'>" + stops.map(stopRow).join("") + "</div>" +
+      "<button type='button' class='btn small ghost' id='addStop'>+ Add stop</button>" +
+      "<label class='f' for='tdesc'>About this tour (internal, for guides)</label><textarea id='tdesc' maxlength='400'>" + esc(r.description || "") + "</textarea></div>" +
+      "<h2>Route map</h2><div class='card'>" + (t.map_url ? "<img class='map' src='" + esc(t.map_url) + "' alt='Route map'>" : "<p class='meta'>No map yet.</p>") +
+      "<p class='hint'>PNG or JPEG, about 1080 x 660. Shown in the recap when there's no ride photo, and guests can share it.</p>" +
+      "<button class='btn dark' id='upMap'>" + (t.map_url ? "Replace map" : "Upload map") + "</button></div>";
+    $("bar").hidden = false; $("barIn").innerHTML = "<button class='btn primary' id='saveTour'>Save tour</button>";
+    $("addStop").onclick = function () { $("stops").insertAdjacentHTML("beforeend", stopRow({})); wireStops(); };
+    wireStops();
+    $("upMap").onclick = function () { $("mapfile").value = ""; $("mapfile").onchange = function () { uploadMap(t, $("mapfile").files[0]); }; $("mapfile").click(); };
+    $("saveTour").onclick = function () {
+      var st = Array.prototype.map.call(document.querySelectorAll(".stoprow"), function (row) { return { name: row.querySelector(".sname").value, elevation_ft: row.querySelector(".selev").value }; }).filter(function (x) { return x.name.trim(); });
+      api("POST", "/guide/api/admin/tour", { label: t.label, miles: $("tmiles").value, high_point_ft: $("thp").value, duration_hours: $("tdur").value, description: $("tdesc").value, stops: st })
+        .then(function () { toast("Tour saved"); S.editTour = null; S.admin = null; S.tab = "tours"; return loadAdmin(); }).catch(function (e) { toast(e.message); });
+    };
+  }
+  function wireStops() { each(".sdel", function (b) { b.onclick = function () { b.parentNode.remove(); }; }); }
+  function uploadMap(t, file) {
+    if (!file) return;
+    toast("Uploading map…");
+    var fr = new FileReader();
+    fr.onload = function () {
+      api("POST", "/guide/api/admin/map", { label: t.label, content_type: file.type || "image/png", data: String(fr.result).split(",")[1] })
+        .then(function (j) { t.map_url = j.map_url; toast("Map saved"); render(); }).catch(function (e) { toast(e.message); });
+    };
+    fr.readAsDataURL(file);
+  }
+
+  // ── manager: recap settings ──
+  function renderSettings() {
+    $("hd").innerHTML = headerTop("Settings") + tabs(); wireHeader();
+    if (!S.admin) { $("main").innerHTML = "<div class='empty'>Loading…</div>"; $("bar").hidden = true; return; }
+    var st = S.admin.settings;
+    if (!st) { $("main").innerHTML = "<div class='card err'>Recap settings not found.</div>"; return; }
+    var FEAT = { review: "Google review ask", share: "Bring a friend (" + esc(st.friend_code) + ")", newsletter: "Newsletter signup", merch: "Gear from your ride", prints: "Photo prints offer" };
+    var hours = ""; for (var hh = 12; hh <= 22; hh++) hours += "<option value='" + hh + "'" + (st.send_hour === hh ? " selected" : "") + ">" + ((hh % 12) || 12) + (hh < 12 ? " am" : " pm") + "</option>";
+    $("main").innerHTML = "<h2>Ride Recap emails</h2><div class='card'>" +
+      "<div class='row'><div class='label'>Sending to guests</div>" + (st.dry_run ? "<span class='pill bad'>TEST ONLY</span>" : "<span class='pill good'>LIVE</span>") + "</div>" +
+      "<p class='hint'>" + (st.dry_run ? "Every recap goes to " + esc(st.test_to) + " with [TEST] in the subject. Going live is switched on by Sean." : "Guests get their recap the evening of their ride.") + "</p>" +
+      "<label class='f' for='sh'>Send at</label><select id='sh'>" + hours + "</select>" +
+      "<label class='f' for='tpl'>Email design</label><select id='tpl'>" + st.templates.map(function (x) { return "<option value='" + x + "'" + (st.template === x ? " selected" : "") + ">" + (x === "simple" ? "Simple (new)" : "Classic (v1)") + "</option>"; }).join("") + "</select>" +
+      "<label class='f'>Sections</label><div class='chips' id='feat'>" + st.all_features.map(function (f) {
+        return "<button type='button' class='chip' data-f='" + f + "' aria-pressed='" + (st.features.indexOf(f) > -1) + "'>" + (FEAT[f] || f) + "</button>"; }).join("") + "</div>" +
+      "<p class='hint'>Gear and prints stay off until they're ready to sell.</p></div>";
+    each("#feat .chip", function (c) { c.onclick = function () { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); }; });
+    $("bar").hidden = false; $("barIn").innerHTML = "<button class='btn primary' id='saveSet'>Save settings</button>";
+    $("saveSet").onclick = function () {
+      var feats = Array.prototype.filter.call(document.querySelectorAll("#feat .chip"), function (c) { return c.getAttribute("aria-pressed") === "true"; }).map(function (c) { return c.getAttribute("data-f"); });
+      api("POST", "/guide/api/admin/settings", { send_hour: Number($("sh").value), template: $("tpl").value, features: feats })
+        .then(function () { toast("Settings saved"); S.admin = null; return loadAdmin(); }).catch(function (e) { toast(e.message); });
+    };
   }
 
   // ── photo upload: shrink to a 1600px JPEG on the phone (iPhone HEIC included), then upload one at a time, retrying ──
@@ -202,23 +361,23 @@
     });
   }
   function b64(blob) { return new Promise(function (r) { var f = new FileReader(); f.onload = function () { r(String(f.result).split(",")[1]); }; f.readAsDataURL(blob); }); }
-  function uid() { return (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)); }
+  function uid() { return (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)); }
   function enqueue(pk, files) {
     Array.prototype.forEach.call(files || [], function (f) { if (/^image\//.test(f.type) || /\.(heic|heif|jpe?g|png)$/i.test(f.name)) S.queue.push({ pk: String(pk), file: f, id: uid(), tries: 0 }); });
-    toast("Uploading " + S.queue.filter(function (q) { return !q.done; }).length + " photo(s)…");
+    toast("Uploading " + S.queue.filter(function (q) { return !q.done && !q.gaveUp; }).length + " photo(s)…");
     render(); pump();
   }
   function pump() {
     if (S.uploading) return;
     var q = S.queue.filter(function (x) { return !x.done && !x.gaveUp; })[0];
-    if (!q) { if (S.queue.length) { S.queue = S.queue.filter(function (x) { return !x.done; }); load(S.date); } return; }
+    if (!q) { if (S.queue.length) { S.queue = []; load(S.date); } return; }
     S.uploading = 1;
     shrink(q.file).then(b64).then(function (data) {
       return api("POST", "/guide/api/photo", { availability_pk: q.pk, data: data, content_type: "image/jpeg", client_id: q.id });
     }).then(function () { q.done = true; }).catch(function (e) {
       q.tries++; q.failed = true;
-      if (e.status && e.status < 500 && e.status !== 408) { q.gaveUp = true; toast(e.message); }
-      else if (q.tries >= 6) { q.gaveUp = true; toast("A photo didn't upload. Check your signal and add it again."); }
+      if (e.status && e.status < 500 && e.status !== 408) { q.gaveUp = true; toast(e.message); return; }
+      if (q.tries >= 6) { q.gaveUp = true; toast("A photo didn't upload. Check your signal and add it again."); return; }
       return new Promise(function (r) { setTimeout(r, Math.min(30000, 2000 * Math.pow(2, q.tries))); });   // weak signal: back off and retry
     }).then(function () { S.uploading = 0; render(); pump(); });
   }
