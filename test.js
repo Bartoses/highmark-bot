@@ -21039,6 +21039,33 @@ async function testRideRecap() {
       chk("photos page: the ride photo and the loop map, each with Save or share; no photo for an unsigned link",
         gallery.includes(X.SAMPLE_PHOTOS.full) && gallery.includes(X.GRAND_TOUR_MAP_URL) && (gallery.match(/Save or share/g) ?? []).length === 2
         && !R.renderPhotosPage({ ...guessed, baseUrl: "https://app.test" }).includes(X.SAMPLE_PHOTOS.full));
+      // every photo of the ride (Sean, 2026-11-24): Guide app uploads for the departure, cover first; tagged-to-others + hidden never
+      const u = (n) => `https://cdn.test/p${n}.jpg`;
+      const mediaDb = makeFhMockCrm({
+        bookings: [{ fareharbor_pk: "#392519085", company: "rabbitearsadventures", status: "booked", start_at: "2027-01-29T18:00:00Z", end_at: "2027-01-29T21:00:00Z", customer_count: 2,
+          raw_payload: { booking: { availability: { pk: 777, item: { name: "3 Hour Grand Tour" } }, contact: { name: "Kat", email: "k@x.test" } } } }],
+        recap_tours: TOURS.map((t, i) => ({ id: `t${i}`, client_id: "csr_rea", active: true, stops: [], ...t, ...(t.match === "Grand Tour" ? { map_url: X.GRAND_TOUR_MAP_URL } : {}) })),
+        recap_settings: [{ client_id: "csr_rea" }],
+        email_sends: [{ id: "e1", category: "recap", reference: "#392519085", created_at: "2027-01-30T01:00:00Z", photo_hint: { hosted: true, hosted_photo: { full: u(1), hero: u(1), thumbs: [u(1)] } } }],
+        ride_media: [
+          { id: "m1", availability_pk: "777", public_url: u(1), thumb_urls: [u("1t")], booking_pks: [], created_at: "2027-01-29T19:00:00Z" },
+          { id: "m2", availability_pk: "777", public_url: u(2), thumb_urls: [u("2t")], booking_pks: [], cover: true, created_at: "2027-01-29T20:00:00Z" },
+          { id: "m3", availability_pk: "777", public_url: u(3), booking_pks: ["#392519085"], created_at: "2027-01-29T20:30:00Z" },
+          { id: "m4", availability_pk: "777", public_url: u(4), booking_pks: ["#999"], created_at: "2027-01-29T20:40:00Z" },
+          { id: "m5", availability_pk: "777", public_url: u(5), booking_pks: [], hidden: true },
+          { id: "m6", availability_pk: "888", public_url: u(6), booking_pks: [] },
+          { id: "m7", availability_pk: "777", public_url: u(7), kind: "video", booking_pks: [] } ],
+      });
+      const all = await R.loadShareContext(mediaDb, { bookingId: "392519085", type: "rea", sig });
+      chk("photos page: every Guide app photo of the guest's ride (cover first); not other guests' tagged photos, hidden ones, videos or other rides",
+        JSON.stringify((all.photos ?? []).map(p => p.full)) === JSON.stringify([u(2), u(1), u(3)]), JSON.stringify(all.photos));
+      const allPage = R.renderPhotosPage({ ...all, baseUrl: "https://app.test" });
+      chk("photos page: shows all of them + the map, a 'Save all 3 photos' button, and nothing for an unsigned link",
+        [u(1), u(2), u(3), X.GRAND_TOUR_MAP_URL].every(x => allPage.includes(x)) && !allPage.includes(u(4)) && allPage.includes("Save all 3 photos")
+        && (allPage.match(/Save or share/g) ?? []).length === 4
+        && ((await R.loadShareContext(mediaDb, { bookingId: "392519085", type: "rea", sig: "x".repeat(22) })).photos ?? []).length === 0);
+      chk("photos list: the Drive recap photo is added when it isn't one of the app photos",
+        JSON.stringify(R.ridePhotoList({ bookingPk: "#1", media: [{ public_url: u(1), booking_pks: [] }], hostedPhoto: { full: u(9) } }).map(p => p.full)) === JSON.stringify([u(9), u(1)]));
       const ride = R.renderRidePage({ ...guessed, baseUrl: "https://app.test" });
       chk("ride page: the link preview image is the photo (signed) or the map, never a name/email; default card keeps 1200x630",
         ride.includes(`property="og:image" content="${X.GRAND_TOUR_MAP_URL}"`) && !ride.includes("k@x.test") && !ride.includes("Kat<")
