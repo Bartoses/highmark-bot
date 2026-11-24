@@ -674,7 +674,21 @@ export function shareMessage({ bookingId, type, settings }) {
 // ── ride share context: what a public page may show about a ride (no names, emails or phones) ──
 const MON_LONG = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const httpsUrl = (u) => (/^https:\/\/[^\s"'<>]+$/.test(String(u ?? "")) ? String(u) : null);
-export function shareContextFrom({ bookingId, type, row = null, tours = [], settings = null, hostedPhoto = null, sig = null }) {
+// Every photo of a guest's ride (Sean, 2026-11-24: "see all of the uploaded photos"): the Guide app uploads for the departure
+// (whole-group photos + ones tagged to this booking; hidden ones never), cover first, then the hosted recap photo if it's
+// not one of those. Pure. media = ride_media rows; → [{ full, thumb }] (https only).
+export function ridePhotoList({ bookingPk, media = [], hostedPhoto = null }) {
+  const pk = String(bookingPk ?? "");
+  const mine = (media ?? []).filter(m => !m.hidden && m.kind !== "video" && /^https:\/\//.test(String(m.public_url ?? ""))
+    && (!(m.booking_pks ?? []).length || (m.booking_pks ?? []).includes(pk)))
+    .sort((a, b) => (b.cover ? 1 : 0) - (a.cover ? 1 : 0) || String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+  const out = mine.map(m => ({ full: m.public_url, thumb: httpsUrl(m.thumb_urls?.[0]) ?? m.public_url }));
+  const h = httpsUrl(hostedPhoto?.full);
+  if (h && !out.some(x => x.full === h)) out.unshift({ full: h, thumb: httpsUrl(hostedPhoto?.thumbs?.[0]) ?? h });
+  return out.slice(0, 60);
+}
+
+export function shareContextFrom({ bookingId, type, row = null, tours = [], settings = null, hostedPhoto = null, sig = null, media = [] }) {
   const b = String(bookingId ?? ""), t = String(type ?? "");
   if (!/^\d{1,15}$/.test(b) || !RECAP_TYPES.includes(t)) return null;
   const s = normalizeRecapSettings(settings);
@@ -694,11 +708,12 @@ export function shareContextFrom({ bookingId, type, row = null, tours = [], sett
   if (facts?.pax > 0) stats.push([String(facts.pax), facts.pax === 1 ? "rider" : "riders"]);
   // photo: from the hosted recap photo (DB, email_sends.photo_hint.hosted_photo), only for a signed link. map: recap_tours.map_url (REA).
   return { bookingId: b, type: rtype, brand, label, dateLabel, stats: stats.slice(0, 4), settings: s,
-    sig: sig || null, photoUrl: sig ? httpsUrl(hostedPhoto?.full) : null, mapUrl: rtype === "rea" ? httpsUrl(tour?.map_url) : null };
+    sig: sig || null, photoUrl: sig ? httpsUrl(hostedPhoto?.full) : null, mapUrl: rtype === "rea" ? httpsUrl(tour?.map_url) : null,
+    photos: sig ? ridePhotoList({ bookingPk: `#${b}`, media, hostedPhoto }) : [] };
 }
 
 export async function loadShareContext(crm, { bookingId, type, sig = null, clientId = "csr_rea" }) {
-  let row = null, tours = [], settings = null, hostedPhoto = null;
+  let row = null, tours = [], settings = null, hostedPhoto = null, media = [];
   const signed = verifyRideLinkSig(bookingId, sig) ? sig : null;
   if (crm && /^\d{1,15}$/.test(String(bookingId ?? ""))) {
     try {
@@ -714,9 +729,14 @@ export async function loadShareContext(crm, { bookingId, type, sig = null, clien
         crm.from("recap_settings").select("*").eq("client_id", clientId).maybeSingle(),
       ]);
       row = bk.data ?? null; tours = (tr.data ?? []).filter(x => x.active !== false); settings = st.data ?? null;
+      // signed link: every Guide app photo of this booking's departure (ride_media; degrades to none if missing)
+      const avail = row ? bookingFacts(row).availabilityPk : null;
+      if (signed && avail) {
+        try { const { data, error } = await crm.from("ride_media").select("*").eq("availability_pk", String(avail)); media = error ? [] : (data ?? []); } catch { media = []; }
+      }
     } catch { /* generic page */ }
   }
-  return shareContextFrom({ bookingId, type, row, tours, settings, hostedPhoto, sig: signed });
+  return shareContextFrom({ bookingId, type, row, tours, settings, hostedPhoto, sig: signed, media });
 }
 
 export const ridePageUrl = (baseUrl, { bookingId, type, sig = null }) =>
@@ -837,15 +857,18 @@ export function renderPhotosPage(input) {
   if (!ctx) return null;
   const baseUrl = input?.baseUrl, C = ctx.brand, e = escapeHtml;
   const items = [];
-  if (ctx.photoUrl) items.push({ url: ctx.photoUrl, alt: `Photo from your ${ctx.label}`, name: `${ctx.label} photo.jpg` });
+  const photos = ctx.photos?.length ? ctx.photos : (ctx.photoUrl ? [{ full: ctx.photoUrl }] : []);
+  photos.forEach((p, i) => items.push({ url: p.full, alt: `Photo ${i + 1} from your ${ctx.label}`, name: `${ctx.label} photo ${i + 1}.jpg`, photo: true }));
   if (ctx.mapUrl) items.push({ url: ctx.mapUrl, alt: `Map of your ${ctx.label} loop`, name: `${ctx.label} map.png` });
+  const nPhotos = photos.length;
   const share = sharePageUrl(baseUrl, ctx);
   return pageHead(`Your ${ctx.label} photos`, C, `<meta name="robots" content="noindex">`) +
     `<div style="font:700 12px Arial,Helvetica,sans-serif;letter-spacing:2px;color:${C.acc}">${e(C.name.toUpperCase())}</div>` +
     `<h1 style="font:${C.key === "rea" ? "400 40px" : "700 30px"}/1.1 ${C.head};text-transform:${C.up};margin:8px 0 6px">Your ${e(ctx.label)}</h1>` +
     (ctx.dateLabel ? `<p style="color:#C9D6E3;margin:0 0 20px">${e(ctx.dateLabel)}</p>` : "") +
+    (nPhotos > 1 ? `<p style="color:#C9D6E3;margin:-8px 0 14px">${nPhotos} photos from your ride</p>` + pageButton(C, `Save all ${nPhotos} photos`, `id="saveAll" href="#"`, true) + `<div style="height:16px"></div>` : "") +
     (items.length ? items.map((it, i) => `<img src="${attr(it.url)}" alt="${attr(it.alt)}" style="display:block;width:100%;height:auto;border-radius:12px;margin:0 0 12px">` +
-      pageButton(C, "Save or share", `class="save" data-i="${i}" href="${attr(it.url)}" target="_blank" rel="noopener"`, i === 0)).join(`<div style="height:12px"></div>`)
+      pageButton(C, "Save or share", `class="save" data-i="${i}" href="${attr(it.url)}" target="_blank" rel="noopener"`, i === 0 && nPhotos <= 1)).join(`<div style="height:12px"></div>`)
       : `<p style="color:#C9D6E3">Your photos aren't ready yet. Check back soon.</p>`) +
     `<div style="height:16px"></div>` + pageButton(C, "Share your ride", `href="${attr(share)}#ride"`, false) + followUs(C) +
     `<p style="color:#9FB3C8;font-size:13px;margin:20px 0 0">${C.footer.map(e).join("<br>")}<br>${RECAP_PHONE}</p></div>` +
@@ -853,7 +876,12 @@ export function renderPhotosPage(input) {
     `var it=I[+a.getAttribute("data-i")];if(!window.fetch||!window.File)return;ev.preventDefault();fetch(it.url).then(function(r){return r.blob();}).then(function(b){` +
     `var f=new File([b],it.name,{type:b.type||"image/jpeg"});if(navigator.canShare&&navigator.canShare({files:[f]})){return navigator.share({files:[f]}).catch(function(){});}` +
     `var u=URL.createObjectURL(b),d=document.createElement("a");d.href=u;d.download=it.name;document.body.appendChild(d);d.click();d.remove();setTimeout(function(){URL.revokeObjectURL(u);},4000);` +
-    `}).catch(function(){window.open(it.url,"_blank");});});});})();</script></body></html>`;
+    `}).catch(function(){window.open(it.url,"_blank");});});});` +
+    `var sa=document.getElementById("saveAll");if(sa)sa.addEventListener("click",function(ev){ev.preventDefault();var P=I.filter(function(x){return x.photo;});` +
+    `Promise.all(P.map(function(it){return fetch(it.url).then(function(r){return r.blob();}).then(function(b){return new File([b],it.name,{type:b.type||"image/jpeg"});});})).then(function(F){` +
+    `if(navigator.canShare&&navigator.canShare({files:F})){return navigator.share({files:F}).catch(function(){});}` +
+    `F.forEach(function(f,k){setTimeout(function(){var u=URL.createObjectURL(f),d=document.createElement("a");d.href=u;d.download=f.name;document.body.appendChild(d);d.click();d.remove();setTimeout(function(){URL.revokeObjectURL(u);},4000);},k*400);});` +
+    `}).catch(function(){});});})();</script></body></html>`;
 }
 
 const jsonForScript = (v) => JSON.stringify(v).replace(/</g, "\\u003c");   // safe inside <script> (ES2019+ allows U+2028/2029 in strings)

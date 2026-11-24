@@ -13,10 +13,12 @@ owned by sean@coloradosledrentals.com. Local clone: `~/code/csr-emails` (clasp +
 - Keep `Higmark.gs` byte-identical to `docs/apps-script/Code.gs` in the highmark-bot repo (it's the source of truth,
   is pure ASCII, and has tests).
 
-## Status (checked 2026-11-23 via the Drive connector)
-The live `Higmark.gs` matches **change set 2** (repo commit `da31869`). **Change sets 3 and 4 are NOT live yet.** Both are applied by
-one step: replace `Higmark.js` with the current `docs/apps-script/Code.gs`. Until then: v1 photos are attached full-size (iPhone
-"Tap to download"), and simple-template recaps go out without the ride photo (REA Grand Tour shows the map). Waiting on Sean's Mac.
+## Status (checked 2026-11-24 via the Drive connector)
+**Change sets 1–4 are live.** The live `Higmark.gs` is byte-identical to `docs/apps-script/Code.gs` on main (commit `9b6dd77`),
+pushed 2026-11-24 from Sean's Mac (local `~/code/csr-emails` commit `112372e`; rollback to change set 2:
+`git checkout e5b2a4c && clasp push`). Verified end to end the same day: a [TEST] simple recap found
+`Tour photos/2026-11-22/Grand Tour 11am - test -01.png`, uploaded it to `/api/v1/recaps/photo` (1.8 MB PNG → 134 KB JPEG +
+3 thumbnails in Storage) and was sent with the photo inline. If `clasp pull` fails with `invalid_rapt`, run `clasp login` first.
 
 ## Change set 1 (2026-11-22)
 1. **`Higmark.gs`** ← replace the whole file with `docs/apps-script/Code.gs` from highmark-bot, branch
