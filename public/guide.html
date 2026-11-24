@@ -128,12 +128,16 @@
   function dayName(d) { try { return new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }); } catch (e) { return d; } }
   function addD(d, n) { var x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
   function canLog() { return S.date === S.today || S.date === addD(S.today, -1); }   // photos + ride details: today or the morning after
-  function api(method, path, body) {
+  // ── speed: days already seen show instantly (then refresh); neighbours + the season load quietly in the background ──
+  var DAYC = {};                                  // view|date → /day answer
+  function dayKey(date) { return (S.view || "") + "|" + date; }
+  function api(method, path, body, silent) {
+    if (method !== "GET") { DAYC = {}; S.seasonData = null; }   // any save: never show stale data afterwards
     var opts = { method: method, headers: { "Content-Type": "application/json" } };
     if (body) opts.body = JSON.stringify(Object.assign({ t: T, as: S.view }, body));
     var url = path + (method === "GET" ? (path.indexOf("?") > -1 ? "&" : "?") + "t=" + encodeURIComponent(T) + (S.view ? "&as=" + S.view : "") : "");
-    busy(1);
-    return fetch(url, opts).finally(function () { busy(-1); }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) { var e = new Error(j.error || "Something went wrong"); e.status = r.status; throw e; } return j; }); });
+    if (!silent) busy(1);
+    return fetch(url, opts).finally(function () { if (!silent) busy(-1); }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) { var e = new Error(j.error || "Something went wrong"); e.status = r.status; throw e; } return j; }); });
   }
   var pending = 0;
   function busy(n) { pending = Math.max(0, pending + n); $("busy").style.display = pending ? "block" : "none"; }
@@ -160,8 +164,27 @@
   function each(sel, fn) { Array.prototype.forEach.call(document.querySelectorAll(sel), fn); }
 
   // ── load + routing ──
+  function typing() { var a = document.activeElement; return !!(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.closest && a.closest("#main")); }
+  function prefetch(date) {
+    if (!date || !S.view || DAYC[dayKey(date)] || prefetch.busy[date]) return;
+    prefetch.busy[date] = 1;
+    api("GET", "/guide/api/day?d=" + date, null, true).then(function (j) { DAYC[dayKey(j.date)] = j; }).catch(function () {}).then(function () { delete prefetch.busy[date]; });
+  }
+  prefetch.busy = {};
+  function warmUp(j) {     // after a day shows: the days either side, the next booking day, and the season list
+    setTimeout(function () {
+      prefetch(addD(j.date, 1)); prefetch(addD(j.date, -1));
+      if (j.next && j.next.date) prefetch(j.next.date);
+      if (!S.seasonData && !warmUp.season) { warmUp.season = 1; api("GET", "/guide/api/season", null, true).then(function (sd) { S.seasonData = sd; }).catch(function () {}).then(function () { warmUp.season = 0; }); }
+    }, 150);
+  }
   function load(date) {
-    return api("GET", "/guide/api/day" + (date ? "?d=" + date : "")).then(function (j) {
+    var cached = date && S.view && DAYC[dayKey(date)];
+    if (cached) { S.day = cached; S.date = cached.date; S.today = cached.today; render(); }
+    return api("GET", "/guide/api/day" + (date ? "?d=" + date : ""), null, !!cached).then(function (j) {
+      if (S.view && j.me && j.me.view === S.view) DAYC[dayKey(j.date)] = j;
+      if (cached && S.date !== j.date) return;                   // moved on to another day meanwhile
+      if (cached && typing()) { S.day = j; return; }              // don't redraw under someone typing
       S.day = j; S.date = j.date; S.today = j.today;
       var views = (j.me && j.me.views) || [];
       if (!S.view) {
@@ -172,6 +195,7 @@
         if (j.me.view !== S.view) return load(date);              // first answer used the default view
       }
       render();
+      warmUp(j);
     }).catch(function (e) {
       if (T.indexOf("team:") === 0 && (e.status === 401 || e.status === 403)) { try { localStorage.removeItem("guideTeam"); } catch (x) {} T = ""; return renderTeamCode(e.message); }
       $("hd").innerHTML = "<h1>Ride Log</h1>";
