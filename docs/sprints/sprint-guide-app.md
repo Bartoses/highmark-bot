@@ -45,6 +45,16 @@ address), return minutes after the ride, seats per van. Table `shuttle_settings`
 `booking_staff_notes`. The sheet sync needs the "Weekly Shop Manifest" shared with the connected Google account (still
 "Permission denied" on 2026-11-23).
 
+## Speed (feedback 2026-11-24: "slow to load things and navigate between screens")
+Measured live: a day took 3.4–6.9 s, the season 1–2 s. Causes: ~10 sequential database round trips per day screen, a 120-day
+booking scan whenever a day was empty, and **the Railway services run in Singapore (asia-southeast1) while both Supabase
+databases are in Virginia (us-east-1)**, so every round trip crosses the Pacific. Fixed in code: a day loads in 2 parallel rounds; short-lived
+per-database caches (staff 60 s, tours 60 s, shuttle settings 60 s, unit names 60 s, the day's FareHarbor bookings 30 s, the
+season 2 min) that every save clears; "next booking" answered from the season list. Page: days already seen show instantly
+and refresh behind; the days either side, the next booking day and the season list load quietly in the background. Same
+machine, same data: 1.3–3.0 s → 0.6–0.8 s for a fresh day, ~50 ms for a prefetched one. **Still to do:** move both Railway
+services to a US-East region next to the databases (Sean's call; affects the SMS bot too).
+
 ## Sean's feedback on the slice 1 preview (2026-11-23) → plan
 
 **What the app is for:** each person's day: the bookings, tours, deliveries and jobs they're assigned, their schedule, and

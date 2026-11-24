@@ -19462,6 +19462,19 @@ async function testGuideApp() {
         pr.location === "north_routt" && pr.stops[0].address === "Steamboat shop" && pr.stops[0].meeting_spot === true && pr.start_point === "Shop");
     }
 
+    // ── speed: short-lived caches never hide a save (Sean, 2026-11-24 "slow to load") ──
+    {
+      const cb = mkDbs(), cd = { ...cb, now: NOW };
+      let staffReads = 0; const orig = cb.crm.from.bind(cb.crm);
+      cb.crm.from = (t) => { if (t === "staff") staffReads++; return orig(t); };
+      const d1 = await G.handleGuideDay(cd, { t: t(BOSS) }); await G.handleGuideDay(cd, { t: t(BOSS) });
+      chk("speed: the staff list is read once and reused across requests (not on every screen)", d1.status === 200 && staffReads === 1, String(staffReads));
+      const add = await G.handleGuideAdminStaff(cd, { t: t(BOSS), name: "Dana Driver", role: "driver", phone: "9705550199", home_location: "steamboat" });
+      const d3 = await G.handleGuideDay(cd, { t: t(BOSS) });
+      chk("speed: a save clears the cache, so the new person shows straight away", add.status === 200 && d3.body.staff.some(x => x.name === "Dana Driver"), JSON.stringify([add.status, staffReads]));
+      chk("speed: a day with nothing still finds the next booking (from the season list)", (await G.handleGuideDay(cd, { t: t(BOSS), d: "2026-12-12" })).body.departures.length === 0);
+    }
+
     // ── locations, staff, manager assignment ──
     chk("locations: REA tours = Rabbit Ears, guided backcountry = North Routt, rentals by the item's shop (Kremmling / Steamboat)",
       G.departureLocation({ type: "rea", item: "3 Hour - Grand Tour" }) === "rabbit_ears" && G.departureLocation({ type: "backcountry", item: "Pro-Ride Private Guided Backcountry" }) === "north_routt"

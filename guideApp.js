@@ -221,14 +221,44 @@ export async function loadOperator(db1, phone, clientId = "csr_rea") {
   return { ...data, access: accessFor(data.role) };
 }
 
-async function loadStaff(db1, clientId, crm = null) {
-  const { data } = await db1.from("operator_phones").select("phone, role, label, display_name").eq("client_id", clientId);
-  const ops = data ?? [];
-  if (!crm) return ops;
-  let staff = [];
-  try { const r = await crm.from("staff").select("*").eq("client_id", clientId); staff = r.error ? [] : (r.data ?? []); } catch { staff = []; }
-  return mergeStaff(staff, ops);
+// ── speed (Sean, 2026-11-24: "slow to load things and navigate between screens") ──
+// Short-lived cache per database client for things that rarely change (staff list, tours, shuttle settings, unit names,
+// a day's FareHarbor bookings). Concurrent callers share one in-flight read. Every write in this app that changes one of
+// them calls bust(); FareHarbor bookings simply refresh within 30 s.
+const CACHES = new WeakMap();
+const TTL = { staff: 60_000, tours: 60_000, shuttle: 60_000, units: 60_000, bookings: 30_000, season: 120_000 };
+function memo(db, key, ttl, fn) {
+  if (!db || typeof db !== "object") return fn();
+  let m = CACHES.get(db); if (!m) CACHES.set(db, m = new Map());
+  const hit = m.get(key);
+  if (hit && Date.now() - hit.at < ttl) return hit.p;
+  const p = Promise.resolve().then(fn);
+  m.set(key, { at: Date.now(), p });
+  p.catch(() => { if (m.get(key)?.p === p) m.delete(key); });
+  return p;
 }
+// A save that may change what's cached (staff, tours, shuttle settings, unit names, the season's assignments): clear the
+// short-lived caches so the next read is fresh. Day bookings come from FareHarbor and aren't changed here.
+function written(deps, body) {
+  for (const k of ["staff:", "tours:", "shuttle:", "units", "season:"]) bust(deps?.crm, k);
+  return { status: 200, body };
+}
+export function bust(db, prefix = "") {
+  const m = db && CACHES.get(db); if (!m) return;
+  for (const k of [...m.keys()]) if (k.startsWith(prefix)) m.delete(k);
+}
+
+async function loadStaff(db1, clientId, crm = null) {
+  if (!crm) { const { data } = await db1.from("operator_phones").select("phone, role, label, display_name").eq("client_id", clientId); return data ?? []; }
+  return memo(crm, `staff:${clientId}`, TTL.staff, async () => {
+    const [opsRes, staff] = await Promise.all([
+      db1.from("operator_phones").select("phone, role, label, display_name").eq("client_id", clientId),
+      (async () => { try { const r = await crm.from("staff").select("*").eq("client_id", clientId); return r.error ? [] : (r.data ?? []); } catch { return []; } })(),
+    ]);
+    return mergeStaff(staff, opsRes?.data ?? []);
+  });
+}
+const loadTours = (crm, clientId) => memo(crm, `tours:${clientId}`, TTL.tours, async () => (await crm.from("recap_tours").select("*").eq("client_id", clientId)).data ?? []);
 
 // One list: the app's staff table (name, role, home location, Google email) + anyone who only exists as an operator phone.
 const OP_ROLE_TO_STAFF = { guide: "guide", staff: "guide", reservations: "shop", sales: "shop", mechanic: "mechanic", fleet: "mechanic",
@@ -246,11 +276,14 @@ export function mergeStaff(staffRows, opRows) {
 export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE_TZ }) {
   const from = new Date(`${date}T00:00:00Z`); from.setUTCHours(from.getUTCHours() - 12);   // generous window, filtered by local date below
   const to = new Date(`${date}T00:00:00Z`); to.setUTCHours(to.getUTCHours() + 36);
-  const [{ data: rows, error }, { data: tours }, staff] = await Promise.all([
-    crm.from("bookings").select("fareharbor_pk, company, status, start_at, end_at, customer_count, product_title, updated_at, raw_payload")
-      .like("fareharbor_pk", "#%").gte("start_at", from.toISOString()).lt("start_at", to.toISOString()),
-    crm.from("recap_tours").select("*").eq("client_id", clientId),
+  // round A: everything that doesn't depend on the bookings, in parallel
+  const [{ data: rows, error }, tours, staff, runs, shuttle] = await Promise.all([
+    memo(crm, `bookings:${clientId}:${date}`, TTL.bookings, () => crm.from("bookings").select("fareharbor_pk, company, status, start_at, end_at, customer_count, product_title, updated_at, raw_payload")
+      .like("fareharbor_pk", "#%").gte("start_at", from.toISOString()).lt("start_at", to.toISOString()).then(r => { if (r.error) throw new Error(`bookings read failed: ${r.error.message}`); return r; })),
+    loadTours(crm, clientId),
     loadStaff(db1, clientId, crm),
+    (async () => { try { const { data, error: e } = await crm.from("shuttle_runs").select("*").eq("client_id", clientId).eq("run_date", date); return e ? [] : (data ?? []); } catch { return []; } })(),
+    loadShuttleSettings(crm, clientId),
   ]);
   if (error) throw new Error(`bookings read failed: ${error.message}`);
   const deps = groupDepartures((rows ?? []).filter(r => r.start_at && localDate(r.start_at, tz) === date), (tours ?? []).filter(t => t.active !== false), { tz });
@@ -259,13 +292,16 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     if (!avails.length) return [];
     try { const { data, error: e } = await crm.from(table).select(cols).in("availability_pk", avails); return e ? [] : (data ?? []); } catch { return []; }
   };
-  const [assignments, logs, media] = await Promise.all([pick("ride_assignments", "*"), pick("ride_logs", "*"), pick("ride_media", "*")]);
-  // waiver / check-in / balance due / equipment from the ops manifest (daily_manifest view), when the booking is linked
   const pks = deps.flatMap(d => d.booking_pks);
-  let mf = [];
-  if (pks.length) {
-    try { const { data } = await crm.from("daily_manifest").select("fareharbor_pk, waiver_signed, checked_in, balance_due_cents, equipment, booking_notes").in("fareharbor_pk", pks); mf = data ?? []; } catch { mf = []; }
-  }
+  const byPks = async (table) => {
+    if (!pks.length) return [];
+    try { const { data, error: e } = await crm.from(table).select("*").in("booking_pk", pks); return e ? [] : (data ?? []); } catch { return []; }
+  };
+  // round B: every read keyed by this day's departures / bookings, in parallel
+  // (waiver / check-in / balance due / equipment come from the ops manifest, the daily_manifest view, when the booking is linked)
+  const [assignments, logs, media, mf, equip, snotes] = await Promise.all([pick("ride_assignments", "*"), pick("ride_logs", "*"), pick("ride_media", "*"),
+    (async () => { if (!pks.length) return []; try { const { data } = await crm.from("daily_manifest").select("fareharbor_pk, waiver_signed, checked_in, balance_due_cents, equipment, booking_notes").in("fareharbor_pk", pks); return data ?? []; } catch { return []; } })(),
+    byPks("booking_equipment"), byPks("booking_staff_notes")]);
   const byPk = new Map(mf.map(m => [m.fareharbor_pk, m]));
   for (const d of deps) for (const b of d.bookings) {
     const m = byPk.get(b.pk);
@@ -276,12 +312,6 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     if (m.booking_notes) b.notes = [{ label: "Booking note", value: String(m.booking_notes).slice(0, 300), health: false }, ...b.notes].slice(0, 8);
   }
   // sled / trailer per booking, staff notes, van runs (db2_guide_ops.sql; each read degrades to empty if missing)
-  const byPks = async (table) => {
-    if (!pks.length) return [];
-    try { const { data, error: e } = await crm.from(table).select("*").in("booking_pk", pks); return e ? [] : (data ?? []); } catch { return []; }
-  };
-  const [equip, snotes, runs] = await Promise.all([byPks("booking_equipment"), byPks("booking_staff_notes"),
-    (async () => { try { const { data, error: e } = await crm.from("shuttle_runs").select("*").eq("client_id", clientId).eq("run_date", date); return e ? [] : (data ?? []); } catch { return []; } })()]);
   for (const d of deps) for (const b of d.bookings) {
     b.units = equip.filter(x => x.booking_pk === b.pk).map(x => ({ id: x.id, kind: x.kind, unit: x.unit, note: x.note ?? null, source: x.source }))
       .sort((x, y) => x.kind.localeCompare(y.kind) || x.unit.localeCompare(y.unit, undefined, { numeric: true }));
@@ -293,7 +323,7 @@ export async function loadDay(crm, db1, { date, clientId = "csr_rea", tz = GUIDE
     b.return_run = brief(on.find(x => x.kind === "from_trail") ?? null);
   }
   deps.runs = runs;
-  deps.shuttle = await loadShuttleSettings(crm, clientId);
+  deps.shuttle = shuttle;
   for (const d of deps) {
     d.assignees = resolveAssignees(d, assignments, staff);
     d.logs = logs.filter(l => String(l.availability_pk) === String(d.availability_pk));
@@ -397,9 +427,9 @@ const dayStartIso = (date, tz = GUIDE_TZ) => { const x = new Date(`${date}T00:00
 // Group many days of booking rows into { date: departures[] } with assignees resolved (one assignments read).
 async function loadDays(crm, db1, { from, to, clientId = "csr_rea", tz = GUIDE_TZ, staff = null }) {
   const end = new Date(`${addDays(to, 1)}T00:00:00Z`); end.setUTCHours(end.getUTCHours() + 12);
-  const [rows, { data: tours }, st] = await Promise.all([
+  const [rows, tours, st] = await Promise.all([
     loadBookingRows(crm, dayStartIso(from, tz), end.toISOString()),
-    crm.from("recap_tours").select("*").eq("client_id", clientId),
+    loadTours(crm, clientId),
     staff ? Promise.resolve(staff) : loadStaff(db1, clientId, crm),
   ]);
   const byDate = new Map();
@@ -435,9 +465,22 @@ export function summarizeDay(date, deps, phone) {
 }
 
 // The next day after `date` with something this person can see (looks ahead up to `days`).
+// The season (Nov 1 – Apr 30) as { days: Map(date → departures) }, cached 2 min per database (shared by the Season
+// screen and the "next booking" card). deps.cache === false (tests) always reads fresh.
+function seasonDays(deps, range) {
+  const load = () => loadDays(deps.crm, deps.db1, { from: range.from, to: range.to });
+  return deps.cache === false ? load() : memo(deps.crm, `season:${range.from}`, TTL.season, load);
+}
 export async function findNextDay(deps, { date, access, phone, days = 120 }) {
   const from = addDays(date, 1), to = addDays(date, days);
-  const { days: map } = await loadDays(deps.crm, deps.db1, { from, to });
+  const range = seasonRange(date);
+  // inside the season: answer from the (cached) season instead of reading 120 days of bookings again
+  const inSeason = from >= range.from && to <= range.to;
+  let map;
+  if (inSeason || (from >= range.from && from <= range.to)) {
+    map = new Map([...(await seasonDays(deps, range)).days].filter(([ld]) => ld >= from && ld <= to));
+    if (!map.size && !inSeason) map = (await loadDays(deps.crm, deps.db1, { from, to })).days;
+  } else map = (await loadDays(deps.crm, deps.db1, { from, to })).days;
   for (const ld of [...map.keys()].sort()) {
     const vis = visibleDepartures(map.get(ld), { access, phone });
     if (vis.length) return summarizeDay(ld, vis, phone);
@@ -475,17 +518,11 @@ export function seasonReport(daysMap, today) {
 
 // GET /guide/api/season — every day of the season with bookings. Managers: the whole season, past + future.
 // Guides / shop: from today on, only what they can see. Cached briefly (a season read is ~1–2k rows).
-const seasonCache = new Map();
 export async function handleGuideSeason(deps, { t, as = null }) {
   const a = await authed(deps, t); if (a.error) return a.error;
   const view = viewFor(a.me.access, as);
   const today = a.date, range = seasonRange(today);
-  const key = `${range.from}|${today}`;
-  let hit = deps.cache === false ? null : seasonCache.get(key);
-  if (!hit || Date.now() - hit.at > 120_000) {
-    hit = { at: Date.now(), data: await loadDays(deps.crm, deps.db1, { from: range.from, to: range.to }) };
-    if (deps.cache !== false) { seasonCache.clear(); seasonCache.set(key, hit); }
-  }
+  const hit = { data: await seasonDays(deps, range) };
   const out = [];
   for (const ld of [...hit.data.days.keys()].sort()) {
     if (view !== "manager" && ld < today) continue;
@@ -583,7 +620,10 @@ export function normalizeShuttleSetting(body) {
   return { row: { client_id: "csr_rea", location: loc, lead_minutes: lead, pickup_times: [...new Set(times.map(hhmm))].sort(), start_point: text(body.start_point, 160),
     meeting_spots: list(body.meeting_spots).map(x => x.slice(0, 120)).slice(0, 10), return_after_minutes: ret ?? 0, seats: seats ?? VAN_SEATS, active: body.active !== false } };
 }
-async function loadShuttleSettings(crm, clientId = "csr_rea") {
+function loadShuttleSettings(crm, clientId = "csr_rea") {
+  return memo(crm, `shuttle:${clientId}`, TTL.shuttle, () => loadShuttleSettingsNow(crm, clientId));
+}
+async function loadShuttleSettingsNow(crm, clientId) {
   try {
     const { data, error } = await crm.from("shuttle_settings").select("*").eq("client_id", clientId);
     if (error) return { ok: false, by: {} };
@@ -597,9 +637,11 @@ export async function handleGuideAdminShuttle(deps, body) {
   if (n.error) return { status: 400, body: { error: n.error } };
   const { error } = await deps.crm.from("shuttle_settings").upsert({ ...n.row, updated_by: a.me.phone, updated_at: new Date().toISOString() }, { onConflict: "client_id,location" });
   if (error) return { status: 500, body: { error: /shuttle_settings/.test(error.message ?? "") ? "Shuttle settings aren't switched on yet (db2_shuttle_settings.sql)" : "could not save" } };
-  return { status: 200, body: { ok: true } };
+  bust(deps.crm, "shuttle:");
+  return written(deps, { ok: true });
 }
-async function unitSuggestions(crm) {
+function unitSuggestions(crm) { return memo(crm, "units", TTL.units, () => unitSuggestionsNow(crm)); }
+async function unitSuggestionsNow(crm) {
   try {
     const { data, error } = await crm.from("booking_equipment").select("kind, unit").order("updated_at", { ascending: false }).limit(500);
     if (error) return { sled: [], trailer: [], other: [] };
@@ -626,7 +668,7 @@ export async function handleGuideEquipment(deps, { t, d = null, booking_pk, kind
   const f = await findBooking(deps, a, d, String(booking_pk ?? "")); if (f.error) return f.error;
   if (remove_id) {
     await deps.crm.from("booking_equipment").delete().eq("id", String(remove_id)).eq("booking_pk", f.booking.pk);
-    return { status: 200, body: { ok: true } };
+    return written(deps, { ok: true });
   }
   const u = String(unit ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
   if (!u) return { status: 400, body: { error: "Type the sled or trailer name" } };
@@ -634,7 +676,7 @@ export async function handleGuideEquipment(deps, { t, d = null, booking_pk, kind
   const { error } = await deps.crm.from("booking_equipment").upsert({ client_id: "csr_rea", booking_pk: f.booking.pk, ride_date: f.dep.ride_date, kind, unit: u,
     note: note ? String(note).slice(0, 200) : null, source: "app", updated_by: a.me.phone, updated_at: new Date().toISOString() }, { onConflict: "booking_pk,kind,unit" });
   if (error) return { status: 500, body: { error: "could not save" } };
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 // POST /guide/api/note — an internal note on a booking (anyone who sees the booking in full). { booking_pk, note } or { remove_id }
 export async function handleGuideNote(deps, { t, d = null, booking_pk, note, remove_id = null }) {
@@ -643,7 +685,7 @@ export async function handleGuideNote(deps, { t, d = null, booking_pk, note, rem
   if (remove_id) {
     const q = deps.crm.from("booking_staff_notes").update({ hidden: true }).eq("id", String(remove_id)).eq("booking_pk", f.booking.pk);
     await (a.me.access === "manager" ? q : q.eq("author_phone", a.me.phone));
-    return { status: 200, body: { ok: true } };
+    return written(deps, { ok: true });
   }
   const n = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
   if (!n) return { status: 400, body: { error: "Write a note first" } };
@@ -651,7 +693,7 @@ export async function handleGuideNote(deps, { t, d = null, booking_pk, note, rem
   const { error } = await deps.crm.from("booking_staff_notes").insert({ client_id: "csr_rea", booking_pk: f.booking.pk, ride_date: f.dep.ride_date, note: n,
     author_phone: a.me.phone, author_name: meStaff?.display_name ?? a.me.display_name ?? null });
   if (error) return { status: 500, body: { error: "could not save" } };
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 // POST /guide/api/run — managers: { d, action: "suggest" } makes runs for shuttle requests not on one;
 // { d, id?, kind, vehicle, seats, depart_time "HH:MM", driver_phone, booking_pks[], notes } saves one; { d, id, remove: true } deletes.
@@ -682,11 +724,11 @@ export async function handleGuideRun(deps, body) {
       let vehicle; do vehicle = `Van ${++n}`; while (vans.has(vehicle)); vans.add(vehicle);
       if (await insert(r, vehicle) || await insert(returnRunFor(r), vehicle)) return { status: 500, body: { error: "could not save" } };
     }
-    return { status: 200, body: { ok: true, created: made.length, returns: made.length } };
+    return written(deps, { ok: true, created: made.length, returns: made.length });
   }
   if (body.remove && body.id) {
     await deps.crm.from("shuttle_runs").delete().eq("id", String(body.id)).eq("run_date", date);
-    return { status: 200, body: { ok: true } };
+    return written(deps, { ok: true });
   }
   const kind = RUN_KINDS.includes(body.kind) ? body.kind : "to_trail";
   const dayPks = new Set(all.flatMap(x => x.booking_pks));
@@ -703,7 +745,7 @@ export async function handleGuideRun(deps, body) {
     : deps.crm.from("shuttle_runs").insert({ ...row, created_by: a.me.phone });
   const { error } = await q;
   if (error) return { status: 500, body: { error: "could not save" } };
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 
 export async function handleGuideDay(deps, { t, d, as = null }) {
@@ -745,14 +787,14 @@ export async function handleGuideClaim(deps, { t, availability_pk, booking_pks =
   const f = await findDeparture(deps, a.me, d ? allowedDate(d, a.date, a.me.access) : a.date, availability_pk); if (f.error) return f.error;   // future rides can be taken too
   if (release) {
     await deps.crm.from("ride_assignments").delete().eq("availability_pk", String(availability_pk)).eq("operator_phone", a.me.phone);
-    return { status: 200, body: { ok: true } };
+    return written(deps, { ok: true });
   }
   const pks = Array.isArray(booking_pks) ? booking_pks.filter(p => f.dep.booking_pks.includes(p)) : [];
   const row = { client_id: "csr_rea", availability_pk: String(availability_pk), ride_date: f.dep.ride_date, operator_phone: a.me.phone,
     guide_name: a.me.display_name ?? a.me.label ?? null, booking_pks: pks.length === f.dep.booking_pks.length ? [] : pks, source: "claim", assigned_by: a.me.phone };
   const { error } = await deps.crm.from("ride_assignments").upsert(row, { onConflict: "availability_pk,operator_phone" });
   if (error) return { status: 500, body: { error: "could not save" } };
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 
 // A manager puts a staff member on a departure (or only some of its riders), or takes them off.
@@ -807,21 +849,21 @@ export async function handleGuideAssignBooking(deps, { t, availability_pk, booki
       { onConflict: "availability_pk,operator_phone" });
     if (error) return { status: 500, body: { error: "could not save" } };
   }
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 async function assignTo(deps, a, dep, staff, { phone, booking_pks, remove }) {
   const person = (staff ?? []).find(x => x.phone === phone);
   if (!person) return { status: 400, body: { error: "pick someone from the staff list (with a phone number)" } };
   if (remove) {
     await deps.crm.from("ride_assignments").delete().eq("availability_pk", String(dep.availability_pk)).eq("operator_phone", phone);
-    return { status: 200, body: { ok: true } };
+    return written(deps, { ok: true });
   }
   const pks = Array.isArray(booking_pks) ? booking_pks.filter(p => dep.booking_pks.includes(p)) : [];
   const { error } = await deps.crm.from("ride_assignments").upsert({ client_id: "csr_rea", availability_pk: String(dep.availability_pk), ride_date: dep.ride_date,
     operator_phone: phone, guide_name: person.display_name, booking_pks: pks.length === dep.booking_pks.length ? [] : pks, source: "manager", assigned_by: a.me.phone },
     { onConflict: "availability_pk,operator_phone" });
   if (error) return { status: 500, body: { error: "could not save" } };
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 
 const num = (v, max) => { const n = Number(v); return Number.isFinite(n) && n > 0 && n < max ? Math.round(n * 10) / 10 : null; };
@@ -844,7 +886,7 @@ export async function handleGuideLog(deps, body) {
   if (error) return { status: 500, body: { error: "could not save" } };
   // Saving a log for a ride nobody claimed = claiming it (guides shouldn't need two taps)
   if (!mine && viewFor(a.me.access, body.as) !== "manager") await handleGuideClaim(deps, { t: body.t, availability_pk: body.availability_pk });
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 
 async function fetchBuf(url, fetchImpl) { try { const r = await fetchImpl(url); return r?.ok ? Buffer.from(await r.arrayBuffer()) : null; } catch { return null; } }
@@ -860,7 +902,7 @@ export async function handleGuidePhoto(deps, body, { process: proc = processRide
   const clientId = text(body.client_id, 64);
   if (clientId) {
     const { data: dup } = await deps.crm.from("ride_media").select("id").eq("availability_pk", String(f.dep.availability_pk)).eq("client_upload_id", clientId).limit(1).maybeSingle();
-    if (dup) return { status: 200, body: { ok: true, id: dup.id, duplicate: true } };
+    if (dup) return written(deps, { ok: true, id: dup.id, duplicate: true });
   }
   const mapBuf = f.dep.type === "rea" && /^https:\/\//.test(String(f.dep.tour?.map_url ?? "")) ? await fetchBuf(f.dep.tour.map_url, fetchImpl) : null;
   let set;
@@ -877,7 +919,7 @@ export async function handleGuidePhoto(deps, body, { process: proc = processRide
   const { data, error } = await deps.crm.from("ride_media").insert(row).select("id").single();
   if (error) return { status: 500, body: { error: "could not save the photo" } };
   if (!mine && viewFor(a.me.access, body.as) !== "manager") await handleGuideClaim(deps, { t: body.t, availability_pk: body.availability_pk });
-  return { status: 200, body: { ok: true, id: data.id, thumb: urls.thumbs[0] } };
+  return written(deps, { ok: true, id: data.id, thumb: urls.thumbs[0] });
 }
 
 // Star a cover, or remove (hide) a photo. Only the uploader or a manager.
@@ -891,7 +933,7 @@ export async function handleGuideMedia(deps, { t, id, action }) {
     await deps.crm.from("ride_media").update({ cover: false }).eq("availability_pk", m.availability_pk);
     await deps.crm.from("ride_media").update({ cover: true }).eq("id", id);
   } else return { status: 400, body: { error: "unknown action" } };
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 
 // ── admin (managers): tour routes + recap settings ──────────────────────────
@@ -952,7 +994,7 @@ export async function handleGuideAdminTour(deps, body) {
   }
   if (error) return { status: 500, body: { error: "could not save" } };
   if (!data?.length) return { status: 404, body: { error: "tour not found" } };
-  return { status: 200, body: { ok: true, rows: data.length } };
+  return written(deps, { ok: true, rows: data.length });
 }
 
 // Route map image (PNG/JPEG) → 1080px wide PNG in recap-maps/<tour-slug>.png → map_url on every row with that label.
@@ -974,7 +1016,7 @@ export async function handleGuideAdminMap(deps, body, { sharpImpl = null, storag
   const url = `${storagePublicUrl(MAP_BUCKET, path, storageBase)}?v=${Date.now()}`;   // new URL each upload so email clients don't show a cached old map
   const { data, error } = await deps.crm.from("recap_tours").update({ map_url: url, updated_at: new Date().toISOString() }).eq("client_id", "csr_rea").eq("label", label).select("id");
   if (error || !data?.length) return { status: error ? 500 : 404, body: { error: error ? "could not save" : "tour not found" } };
-  return { status: 200, body: { ok: true, map_url: url } };
+  return written(deps, { ok: true, map_url: url });
 }
 
 // Add or edit a staff member (Settings → Staff). Phone = how they get the briefing link and how assignments find them.
@@ -994,7 +1036,7 @@ export async function handleGuideAdminStaff(deps, body) {
   const q = body.id ? deps.crm.from("staff").update(row).eq("id", body.id).select("id") : deps.crm.from("staff").insert(row).select("id");
   const { data, error } = await q;
   if (error) return { status: /duplicate|unique/i.test(error.message) ? 409 : 500, body: { error: /duplicate|unique/i.test(error.message) ? "someone already has that phone number" : "could not save" } };
-  return { status: 200, body: { ok: true, id: Array.isArray(data) ? data[0]?.id : data?.id } };
+  return written(deps, { ok: true, id: Array.isArray(data) ? data[0]?.id : data?.id });
 }
 
 // Recap settings a manager may change from the app. dry_run is deliberately NOT here (Sean only).
@@ -1006,7 +1048,7 @@ export async function handleGuideAdminSettings(deps, body) {
   if (body.features !== undefined) patch.features = (Array.isArray(body.features) ? body.features : []).filter(f => RECAP_FEATURES.includes(f));
   const { error } = await deps.crm.from("recap_settings").update(patch).eq("client_id", "csr_rea");
   if (error) return { status: 500, body: { error: "could not save" } };
-  return { status: 200, body: { ok: true } };
+  return written(deps, { ok: true });
 }
 
 // ── recap side (pure): the ride log + hosted photo for one booking ───────────
